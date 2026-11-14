@@ -61,6 +61,10 @@ func notYet(e pinnedElement) bool {
 	return e.ID == "benchmarks" || contains(e.Class, "score-row")
 }
 
+// parityPages are the pages page_parity_test.rb asks the old site for.
+var parityPages = []string{"/", "/matrix", "/matrix?group=build", "/matrix?group=release", "/matrix?group=model&confirmed=1", "/matrix?group=build&state=works&layer=aurora",
+	"/models", "/models/j416c", "/models/j613", "/features", "/features?model=j416c", "/features/gpu", "/features/brightness"}
+
 func TestThePagesPinWhatTheOldSitesPin(t *testing.T) {
 	dir := os.Getenv("PAGE_PARITY_DIR")
 	if dir == "" {
@@ -96,11 +100,26 @@ func TestThePagesPinWhatTheOldSitesPin(t *testing.T) {
 	if err == nil {
 		err = json.Unmarshal(data, &old)
 	}
+	// The port's own, beside the old site's, to look at when they differ.
+	ours := map[string][]pinnedElement{}
+	targets := parityPages
+	if len(old) > 0 {
+		targets = nil
+		for target := range old {
+			targets = append(targets, target)
+		}
+	}
+	for _, target := range targets {
+		ours[target] = pinnedIn(l.page(target).sole(t, "main"))
+	}
+	if text, err := json.MarshalIndent(ours, "", "  "); err == nil {
+		os.WriteFile(filepath.Join(dir, "go-pages.json"), text, 0o644)
+	}
 	if err != nil || len(old) < 10 {
 		t.Fatalf("the old site's pages: %d, %v", len(old), err)
 	}
 	for target, want := range old {
-		got := pinnedIn(l.page(target).sole(t, "main"))
+		got := ours[target]
 		var kept []pinnedElement
 		for _, e := range want {
 			if !notYet(e) {
