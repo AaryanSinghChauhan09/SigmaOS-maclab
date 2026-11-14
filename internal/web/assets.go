@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
-	"mime"
 	"net/http"
 	"path"
 	"regexp"
@@ -36,6 +35,16 @@ type asset struct {
 // PNG) are compressed already.
 var compressed = map[string]bool{".css": true, ".js": true, ".svg": true}
 
+// contentTypes are the kinds of file static/ may hold. They are named here
+// because the machine labd runs on may say otherwise.
+var contentTypes = map[string]string{
+	".css":   "text/css; charset=utf-8",
+	".js":    "text/javascript; charset=utf-8",
+	".svg":   "image/svg+xml",
+	".png":   "image/png",
+	".woff2": "font/woff2",
+}
+
 // atRoot are the files crawlers ask for by a fixed name.
 var atRoot = []string{"robots.txt"}
 
@@ -49,7 +58,11 @@ func (s *Site) loadAssets() error {
 	}
 	var names []string
 	for _, e := range entries {
-		if ext := path.Ext(e.Name()); ext != ".br" && ext != ".txt" {
+		switch ext := path.Ext(e.Name()); {
+		case ext == ".br" || ext == ".txt":
+		case contentTypes[ext] == "":
+			return fmt.Errorf("web: static/%s is a kind of file the interface does not serve", e.Name())
+		default:
 			names = append(names, e.Name())
 		}
 	}
@@ -77,11 +90,8 @@ func (s *Site) loadAssets() error {
 			}
 		}
 		sum := sha256.Sum256(body)
-		a := &asset{name: name, body: body, ctype: mime.TypeByExtension(ext),
+		a := &asset{name: name, body: body, ctype: contentTypes[ext],
 			served: strings.TrimSuffix(name, ext) + "-" + hex.EncodeToString(sum[:8]) + ext}
-		if ext == ".woff2" {
-			a.ctype = "font/woff2"
-		}
 		if compressed[ext] {
 			if a.br, err = staticFiles.ReadFile("static/" + name + ".br"); err != nil {
 				a.br = nil

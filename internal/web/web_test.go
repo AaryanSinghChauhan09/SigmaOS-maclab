@@ -314,8 +314,8 @@ func TestAssetsAreFingerprintedKeptAYearAndShippedCompressed(t *testing.T) {
 		if cc := plain.Header().Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
 			t.Errorf("%s: Cache-Control %q, want public for one year", name, cc)
 		}
-		if plain.Header().Get("Content-Type") == "" {
-			t.Errorf("%s has no Content-Type", name)
+		if got, want := plain.Header().Get("Content-Type"), contentTypes[name[strings.LastIndex(name, "."):]]; got != want || want == "" {
+			t.Errorf("%s: Content-Type %q, want %q", name, got, want)
 		}
 		small := get(s, addr, "Accept-Encoding", "gzip, deflate, br, zstd")
 		if !compressed[name[strings.LastIndex(name, "."):]] {
