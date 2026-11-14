@@ -120,7 +120,7 @@ func TestLeavingTellsTheVolunteerWhatIsLeftToRemoveByHand(t *testing.T) {
 	l, _ := leavingLimineMac(t)
 	p, _ := leaveCleanup(l)
 	all := strings.ToLower(strings.Join(p.ByHand, "\n"))
-	if !strings.Contains(all, "tailscale") || !strings.Contains(all, "lab-agent") || !strings.Contains(all, "package") {
+	if strings.Contains(all, "tailscale") || strings.Contains(all, "tailnet") || !strings.Contains(all, "lab-agent") || !strings.Contains(all, "package") {
 		t.Fatalf("by hand: %q", p.ByHand)
 	}
 }

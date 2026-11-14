@@ -58,7 +58,7 @@ func TestTheTermsMustBeAcceptedExplicitly(t *testing.T) {
 		{"", false}, // the terminal closed
 	} {
 		tty := &fakeTTY{in: strings.NewReader(c.answer)}
-		err := acceptTerms(terms, "https://lab.example.com/maclab", "", tty)
+		err := acceptTerms(terms, "https://lab.example.com/maclab", "", newTerminal(tty))
 		if (err == nil) != c.ok {
 			t.Errorf("answer %q: %v", c.answer, err)
 		}
@@ -245,24 +245,6 @@ func (s *safeBuf) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
-}
-
-// A Tailscale join comes before labd can be reached, so with an enrollment
-// token setup wants the terms accepted beforehand, and stops before changing
-// anything without that.
-func TestTailscaleJoinWaitsForAcceptedTerms(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("setup runs as root (this runs in a user namespace in the sandbox)")
-	}
-	var said []string
-	err := Setup(context.Background(), SetupOptions{Server: "https://labd.example.com/maclab", Token: "enr_x", TailscaleAuthKey: "tskey-x",
-		Log: func(f string, a ...any) { said = append(said, f) }})
-	if err == nil || !strings.Contains(err.Error(), "--accept-terms") || !strings.Contains(err.Error(), "nothing was changed") {
-		t.Fatalf("setup: %v", err)
-	}
-	if len(said) != 0 {
-		t.Errorf("setup did something first: %q", said)
-	}
 }
 
 // Setup forgets the activation key only once everything has succeeded: a

@@ -89,3 +89,46 @@ type System interface {
 	// SnapshotEligible is nil when @ can be snapshotted, else why not.
 	SnapshotEligible() error
 }
+
+// SetupMac is the Mac under `lab-agent setup`: what the Join command reads
+// before it changes anything, and the changes joining makes. Linux is a real
+// Mac; Sim stands in for one in tests and in `lab-agent sim`.
+type SetupMac interface {
+	// JoinFacts reads what the pre-checks judge. It changes nothing and
+	// reaches no lab. token is the Join command's, to tell a setup that was
+	// interrupted from a Mac already in the lab.
+	JoinFacts(token string) JoinFacts
+	// Facts are the hardware facts an enrollment carries.
+	Facts() api.Facts
+	// Home is where the Mac keeps what makes it a lab device: agent.json and
+	// the work directory.
+	Home() (configPath, workDir string)
+	// LeaveOther leaves the lab cfg names, properly: that lab is told, then
+	// its boot entries, units, settings files and device secret go.
+	LeaveOther(ctx context.Context, cfg *Config) error
+	// SetUp makes the Mac a lab device enrolled as cfg and starts lab-agent.
+	SetUp(ctx context.Context, o SetupOptions, cfg *Config) error
+}
+
+// JoinFacts is a Mac as the Join command finds it.
+type JoinFacts struct {
+	OS         string   // runtime.GOOS
+	Compatible []string // the device tree's compatible strings
+	NotOmarchy string   // why the system is not Omarchy; "" when it is
+	EUID       int
+	SudoUID    string // sudo's SUDO_UID, who ran the Join command; "" without sudo
+	// Enrolled is agent.json as it is; nil on a Mac in no lab. Resuming is
+	// an earlier setup with this very token that never finished.
+	Enrolled *Config
+	Resuming bool
+	Cmdline  string
+	// Passphrase is why every start waits for a disk passphrase, Bootloader
+	// why the bootloader cannot restart the Mac unattended, Missing the tools
+	// the lab needs, Space why test kernels have no room; empty when fine.
+	Passphrase string
+	Bootloader []string
+	Missing    []string
+	Space      string
+	Snapshot   error // why the system cannot be snapshotted; nil when it can
+	OnBattery  bool
+}

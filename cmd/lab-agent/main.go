@@ -2,19 +2,16 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
-
-	"golang.org/x/term"
 
 	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
@@ -22,12 +19,14 @@ import (
 
 const usage = `lab-agent: the Mac side of the test lab
 
-  sudo lab-agent setup --server https://labd --token-stdin [--gui-user you --autologin|--stay-awake] [--volatile-journal]
-        [--ca-file <pem>] [--allow-plain-http] [--accept-terms <sha256>]
-        [--tailscale-authkey-file <file> | --tailscale-authkey - (key on stdin)] [--tailscale-hostname name]
-                                  (a Volunteer's Mac refuses --autologin and --stay-awake)
-  sudo lab-agent move --server <labd's new URL> [--ca-file <pem>] [--allow-plain-http] [--no-check]
-                                  point this enrolled Mac at labd's new address, and change nothing else
+  sudo lab-agent setup --server <Lab address> --token-stdin [--gui-user you] [--accept-terms <sha256>]
+        [--autologin|--stay-awake] [--volatile-journal] [--ca-file <pem>] [--allow-plain-http]
+                                  what the Join command runs on the Mac: the pre-checks, the lab's terms and a
+                                  typed yes, leaving any other lab, enrolling, and one question for the weekly
+                                  Availability window (a Volunteer's Mac refuses --autologin and --stay-awake)
+  sudo lab-agent move --server <the new Lab address> [--ca-file <pem>] [--allow-plain-http] [--no-check]
+                                  for a change of the Lab address only: point this enrolled Mac at it, and change
+                                  nothing else (a Mac joins another lab with that lab's Join command)
   sudo lab-agent status           what this Mac is enrolled as, its ntfy topic, its Availability window,
                                   Access level, Installed-run eligibility and latest Audit log entries
   sudo lab-agent window show|add|remove [<days> <HH:MM-HH:MM>]
@@ -71,55 +70,37 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "setup":
-		server := fs.String("server", "", "labd URL, e.g. https://maclab.example.com")
-		token := fs.String("token", "", "one-time enrollment token from `lab enroll` (shows in the process list and sudo's journal: prefer --token-stdin)")
+		server := fs.String("server", "", "the Lab address")
+		token := fs.String("token", "", "the Join command's one-time enrollment token (shows in the process list and sudo's journal: prefer --token-stdin)")
 		tokenStdin := fs.Bool("token-stdin", false, "read the one-time enrollment token from the first line of stdin")
-		acceptTerms := fs.String("accept-terms", "", "accept labd's participation terms without a terminal: the sha256 of the terms you read (GET <labd>/api/join/terms)")
+		acceptTerms := fs.String("accept-terms", "", "accept the lab's terms without a terminal: the sha256 of the terms you read (<Lab address>/terms)")
 		caFile := fs.String("ca-file", "", "PEM file of CA certificates for labd's https certificate, when the system doesn't trust it (kept in agent.json)")
 		plain := fs.Bool("allow-plain-http", false, "allow an http:// labd on another machine: the device secret then crosses the network unencrypted (recorded in agent.json)")
 		gui := fs.String("gui-user", "", "user whose Hyprland session GUI tests drive")
 		auto := fs.Bool("autologin", false, "log the GUI user into the desktop on boot and turn idle lock off")
 		stay := fs.Bool("stay-awake", false, "turn the GUI user's idle lock and screensaver off")
 		volatile := fs.Bool("volatile-journal", false, "leave journald alone: a failed lab boot's journal is lost")
-		tsKeyFile := fs.String("tailscale-authkey-file", "", "join the lab's tailnet first with the one-off auth key in this file (tagged tag:maclab, Tailscale SSH on); never stored")
-		tsKey := fs.String("tailscale-authkey", "", "- to read the one-off auth key from stdin; the key itself is refused here, since the process list and sudo's journal show it")
-		tsHost := fs.String("tailscale-hostname", "", "name on the tailnet (default maclab-<device name>, else this machine's hostname)")
 		fs.Parse(os.Args[2:])
-		var stdin io.Reader = os.Stdin
-		if *tsKey == "-" && term.IsTerminal(int(os.Stdin.Fd())) {
-			fmt.Fprint(os.Stderr, "Tailscale auth key: ")
-			b, e := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprintln(os.Stderr)
-			if e != nil {
-				log.Fatal(e)
-			}
-			stdin = bytes.NewReader(b)
-		}
 		if *tokenStdin {
-			if *token != "" || *tsKey == "-" {
-				err = fmt.Errorf("--token-stdin goes with neither --token nor --tailscale-authkey -")
+			if *token != "" {
+				err = fmt.Errorf("--token-stdin goes without --token")
 				break
 			}
 			if *token, err = agent.ReadToken(os.Stdin); err != nil {
 				break
 			}
 		}
-		key, e := agent.AuthKey(*tsKey, *tsKeyFile, stdin)
-		if e != nil {
-			err = e
-			break
-		}
 		err = agent.Setup(ctx, agent.SetupOptions{Server: *server, Token: *token, GUIUser: *gui, Autologin: *auto, StayAwake: *stay, VolatileJournal: *volatile,
-			TailscaleAuthKey: key, TailscaleHostname: *tsHost, CAFile: *caFile, AllowPlainHTTP: *plain, AcceptTerms: *acceptTerms,
+			CAFile: *caFile, AllowPlainHTTP: *plain, AcceptTerms: *acceptTerms,
 			Log: func(f string, a ...any) { fmt.Printf("  "+f+"\n", a...) }})
 	case "move":
-		server := fs.String("server", "", "labd's new URL, e.g. https://maclab.example.com")
+		server := fs.String("server", "", "the new Lab address")
 		caFile := fs.String("ca-file", "", "PEM file of CA certificates for the new labd's https certificate, when the system doesn't trust it")
 		plain := fs.Bool("allow-plain-http", false, "allow an http:// labd on another machine: the device secret then crosses the network unencrypted")
 		noCheck := fs.Bool("no-check", false, "don't ask the new labd whether it knows this Mac (a move staged before it answers)")
 		fs.Parse(os.Args[2:])
 		if *server == "" {
-			err = fmt.Errorf("usage: sudo lab-agent move --server <labd's new URL> [--ca-file <pem>] [--allow-plain-http] [--no-check]")
+			err = fmt.Errorf("usage: sudo lab-agent move --server <the new Lab address> [--ca-file <pem>] [--allow-plain-http] [--no-check]")
 			break
 		}
 		if os.Geteuid() != 0 {
@@ -190,22 +171,30 @@ func main() {
 				log.Fatal(err)
 			}
 		}
-		sim := agent.NewSim(os.TempDir())
+		dir, e := os.MkdirTemp("", "lab-agent-sim-")
+		if e != nil {
+			log.Fatal(e)
+		}
+		defer os.RemoveAll(dir)
+		sim := agent.NewSim(dir)
 		sim.RebootDelay = *delay
 		sim.Model = *model
-		pol := labhttp.Policy{CAPEM: caPEM, AllowPlainHTTP: *plain}
-		terms, e := agent.FetchTerms(ctx, *server, *token, pol)
+		terms, e := agent.FetchTerms(ctx, *server, *token, labhttp.Policy{CAPEM: caPEM, AllowPlainHTTP: *plain})
 		if e != nil {
 			log.Fatal(e)
 		}
-		// A simulated Mac has no owner to read the terms: it accepts them.
-		resp, e := agent.EnrollWith(ctx, *server, *token, sim.Facts(), pol, agent.Activation{Key: agent.NewActivationKey(), TermsSHA256: terms.SHA256})
-		if e != nil {
+		// A simulated Mac joins as a real one does, pre-checks and all, but
+		// has no owner to read the terms: it accepts them.
+		if e := agent.Setup(ctx, agent.SetupOptions{Server: *server, Token: *token, CAFile: *caFile, AllowPlainHTTP: *plain, AcceptTerms: terms.SHA256, Mac: sim,
+			Log: func(f string, a ...any) { log.Printf(f, a...) }}); e != nil {
 			log.Fatal(e)
 		}
-		log.Printf("simulated Mac enrolled as %s", resp.Name)
-		err = agent.New(&agent.Config{Server: *server, DeviceID: resp.DeviceID, Name: resp.Name, Secret: resp.Secret, WorkDir: os.TempDir(),
-			ServerCA: string(caPEM), AllowPlainHTTP: plain}, sim, nil).Run(ctx)
+		var cfg *agent.Config
+		if cfg, err = agent.LoadConfig(filepath.Join(dir, "agent.json")); err != nil {
+			break
+		}
+		log.Printf("simulated Mac enrolled as %s", cfg.Name)
+		err = agent.New(cfg, sim, nil).Run(ctx)
 	case "version":
 		fmt.Println(agent.Version)
 		fmt.Println("Lab release", agent.LabRelease)
@@ -240,8 +229,8 @@ func main() {
 
 // signalContext ends when lab-agent is told to stop: Ctrl-C, systemd, or
 // the terminal going away (SIGHUP, as when the SSH session that runs setup
-// drops). Each ends ctx instead of killing the process, so what setup has
-// to undo, such as the Tailscale key file, gets undone.
+// drops). Each ends ctx instead of killing the process, so a command stops
+// where it can be run again.
 func signalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 }

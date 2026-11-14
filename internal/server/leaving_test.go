@@ -153,8 +153,8 @@ func TestVolunteerLeavingRemovesTheMacFromLabdAndRevokesItsDeviceSecret(t *testi
 func TestVolunteerLeavingPrintsWhatIsLeftToRemoveByHand(t *testing.T) {
 	n, _ := leavingLab(t, labConfig{})
 	out := strings.ToLower(n.mustVolunteer("leave", "--yes"))
-	if !strings.Contains(out, "tailscale") {
-		t.Fatalf("leave does not mention the Tailscale node left to remove:\n%s", out)
+	if strings.Contains(out, "tailscale") || strings.Contains(out, "tailnet") {
+		t.Fatalf("leave still names Tailscale, which the lab does not use:\n%s", out)
 	}
 	if !strings.Contains(out, "lab-agent") || !strings.Contains(out, "package") {
 		t.Fatalf("leave does not mention the lab-agent package left to remove:\n%s", out)

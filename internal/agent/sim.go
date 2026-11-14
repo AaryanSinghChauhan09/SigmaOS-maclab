@@ -128,6 +128,13 @@ type Sim struct {
 	endBoot   context.CancelFunc
 	down      chan struct{} // closed when the current boot ends
 
+	// What `lab-agent setup` meets on this Mac; see SetJoinFacts, FailSetUp,
+	// SetUps and Left.
+	joinFacts func(*JoinFacts)
+	setUpErr  error
+	setUps    int
+	leftLabs  int
+
 	testLength time.Duration    // see SetTestLength
 	inhibitors map[int][]string // held inhibitors' --what names, by token; a boot clears them
 	inhibitSeq int
@@ -1061,4 +1068,95 @@ func (s *Sim) simMesaProvider(job string, t api.TestSpec) api.TestResult {
 	}
 	m := &api.MesaResult{Mode: api.MesaStaged, Semantics: mesa.Semantics, Job: job, BootID: boot, Kernel: k, ManifestSHA256: mesa.Sum(mesa.JSON(spec)), CleanupVerified: true, Simulated: true, Packages: append([]api.MesaPackage{}, spec.Packages...), Provider: map[string]string{"gl": "NATIVE_STAGED", "vulkan": "NATIVE_STAGED"}, Verdict: "PASS"}
 	return api.TestResult{Name: t.Name, Passed: true, ExitCode: 0, Seconds: .01, Mesa: m, Tail: "SIMULATED staged Mesa provider (not hardware evidence)"}
+}
+
+// Home is the simulated Mac's agent.json and work directory.
+func (s *Sim) Home() (configPath, work string) {
+	return filepath.Join(s.WorkDir, "agent.json"), s.WorkDir
+}
+
+// JoinFacts are those of a Mac every pre-check passes, an Omarchy MacBook
+// whose owner ran the Join command with sudo, with the enrollment and the
+// interrupted setup its work directory holds. SetJoinFacts changes them.
+func (s *Sim) JoinFacts(token string) JoinFacts {
+	config, work := s.Home()
+	f := JoinFacts{OS: "linux", Compatible: []string{"apple,j314s", "apple,t6000", "apple,arm-platform"}, SudoUID: "1000",
+		Resuming: resuming(work, token), Snapshot: s.SnapshotEligible(), OnBattery: s.Health().OnBattery}
+	_, _, f.Cmdline = s.Identity()
+	if cfg, err := LoadConfig(config); err == nil {
+		f.Enrolled = cfg
+	}
+	s.mu.Lock()
+	edit := s.joinFacts
+	s.mu.Unlock()
+	if edit != nil {
+		edit(&f)
+	}
+	return f
+}
+
+// SetJoinFacts has edit change what the pre-checks read on this Mac.
+func (s *Sim) SetJoinFacts(edit func(*JoinFacts)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.joinFacts = edit
+}
+
+// LeaveOther tells the lab cfg names that the Mac left, then removes that
+// lab from it.
+func (s *Sim) LeaveOther(ctx context.Context, cfg *Config) error {
+	return leaveOtherLab(ctx, cfg, func() error {
+		config, _ := s.Home()
+		s.mu.Lock()
+		s.leftLabs++
+		s.mu.Unlock()
+		if err := s.LeaveLab(false); err != nil {
+			return err
+		}
+		return os.Remove(config)
+	})
+}
+
+// Left is how many times the Mac left a lab to join another.
+func (s *Sim) Left() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.leftLabs
+}
+
+// SetUp records the enrollment where a real Mac keeps agent.json.
+func (s *Sim) SetUp(ctx context.Context, o SetupOptions, cfg *Config) error {
+	s.mu.Lock()
+	err := s.setUpErr
+	if err == nil {
+		s.setUps++
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	config, work := s.Home()
+	cfg.WorkDir = work
+	if err := cfg.Save(config); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(work, leftFile)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// FailSetUp makes setup fail with err after the Mac has enrolled, as a
+// setup cut off half way does; nil lets it through again.
+func (s *Sim) FailSetUp(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setUpErr = err
+}
+
+// SetUps is how many times setup made this Mac a lab device.
+func (s *Sim) SetUps() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setUps
 }

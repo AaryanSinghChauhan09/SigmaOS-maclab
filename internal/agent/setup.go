@@ -3,16 +3,17 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	osuser "os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
-	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
@@ -58,38 +59,49 @@ type SetupOptions struct {
 	// VolatileJournal leaves journald alone; preflight then warns that a
 	// failed lab boot's journal is lost.
 	VolatileJournal bool
-	// TailscaleAuthKey, a one-off key a maintainer made by hand, joins the
-	// lab's tailnet before anything else. It is never printed or stored, and
-	// reaches tailscale in a file, not argv; lab-agent reads it with AuthKey.
-	TailscaleAuthKey  string
-	TailscaleHostname string // default maclab-<device name>, else this machine's hostname
 	// CAFile is a PEM file of CA certificates for labd's https certificate,
 	// kept in agent.json; empty keeps what it holds. AllowPlainHTTP allows an
 	// http:// labd on another machine on purpose. Setup always records it,
 	// so a Mac set up again chooses again (see transport.go).
 	CAFile         string
 	AllowPlainHTTP bool
-	// AcceptTerms is the owner's acceptance of labd's participation terms
-	// given beforehand, for a run without a terminal: their sha256. Without
-	// it, setup shows the terms on TTY (nil: the controlling terminal) and
-	// the owner types yes, before setup changes anything.
+	// AcceptTerms is the owner's acceptance of the lab's terms given
+	// beforehand, for a run without a terminal: their sha256. Without it,
+	// setup shows the terms on TTY (nil: the controlling terminal) and the
+	// owner types yes, before setup changes anything.
 	AcceptTerms string
 	TTY         io.ReadWriter
-	Log         func(format string, args ...any)
+	// Mac is the Mac to set up; nil is this one.
+	Mac SetupMac
+	Log func(format string, args ...any)
 }
 
-// Setup makes this Mac a lab device. Every step is idempotent, and every
-// file it changes outside the lab's own paths is backed up first.
+// Setup makes this Mac a lab device. With a token it is the Join command:
+// the pre-checks, the terms, leaving another lab and the enrollment come
+// first (see join.go), and nothing on the Mac changes before the terms are
+// accepted. Every step is idempotent, and every file it changes outside the
+// lab's own paths is backed up first.
 func Setup(ctx context.Context, o SetupOptions) error {
+	if o.Log == nil {
+		o.Log = func(string, ...any) {}
+	}
 	say := o.Log
-	if os.Geteuid() != 0 {
+	m := o.Mac
+	if m == nil {
+		m = &Linux{WorkDir: workDir, GUIUser: o.GUIUser}
+	}
+	_, work := m.Home()
+	f := m.JoinFacts(o.Token)
+	if o.Token == "" && f.EUID != 0 {
 		return fmt.Errorf("setup must run as root")
 	}
-	l := &Linux{WorkDir: workDir, GUIUser: o.GUIUser}
 
-	cfg, _ := LoadConfig(ConfigPath)
+	cfg := f.Enrolled
 	if err := refuseMoveInSetup(cfg, o.Token, o.Server); err != nil {
 		return err
+	}
+	if o.Token != "" && o.Server == "" {
+		return fmt.Errorf("--token needs --server")
 	}
 	// How this Mac reaches labd, settled before anything is sent to it.
 	server := o.Server
@@ -103,7 +115,7 @@ func Setup(ctx context.Context, o SetupOptions) error {
 			return err
 		}
 		caPEM = b
-	} else if cfg != nil && (o.Server == "" || o.Server == cfg.Server) {
+	} else if cfg != nil && (o.Server == "" || sameLab(o.Server, cfg.Server)) {
 		caPEM = []byte(cfg.ServerCA)
 	}
 	if server != "" {
@@ -111,88 +123,21 @@ func Setup(ctx context.Context, o SetupOptions) error {
 			return fmt.Errorf("%w\n(setup records this choice in agent.json; a Mac that used plain http before needs --allow-plain-http to keep it)", err)
 		}
 	}
-	policy := labhttp.Policy{CAPEM: caPEM, AllowPlainHTTP: o.AllowPlainHTTP}
-	// Joining with a token: the owner accepts labd's participation terms
-	// before setup changes anything on the Mac. With --tailscale-authkey labd
-	// is reachable only after the join, so the terms are accepted beforehand
-	// by their sha256 (checked below), and labd's are checked against it once
-	// the join has made it reachable.
-	if o.Token != "" && o.Server == "" {
-		return fmt.Errorf("--token needs --server")
-	}
-	// labd is reachable only after the Tailscale join, so its terms can't be
-	// shown first: they must have been accepted already, by their sha256,
-	// and the join waits for that. After it, labd's terms must be those.
-	if o.Token != "" && o.TailscaleAuthKey != "" && o.AcceptTerms == "" {
-		return fmt.Errorf("with --tailscale-authkey, accept labd's participation terms first with --accept-terms <sha256> (read them at %s/api/join/terms): nothing was changed", strings.TrimRight(o.Server, "/"))
-	}
-	var terms *api.JoinTerms
-	takeTerms := func() error {
-		if o.Token == "" {
-			return nil
-		}
-		t, err := FetchTerms(ctx, o.Server, o.Token, policy)
-		if err != nil {
-			return err
-		}
-		tty := o.TTY
-		if tty == nil && o.AcceptTerms == "" {
-			if f := openTTY(); f != nil {
-				defer f.Close()
-				tty = f
-			}
-		}
-		if err := acceptTerms(t, o.Server, o.AcceptTerms, tty); err != nil {
-			return err
-		}
-		say("participation terms %s accepted", short(t.SHA256))
-		terms = t
-		return nil
-	}
-	if o.TailscaleAuthKey == "" {
-		if err := takeTerms(); err != nil {
-			return err
+	// The owner answers on the terminal, never on stdin, which may carry the
+	// token. Acceptance given beforehand is a run without one.
+	tty := newTerminal(o.TTY)
+	if o.TTY == nil && o.AcceptTerms == "" && o.Token != "" {
+		if t := openTTY(); t != nil {
+			defer t.Close()
+			tty = newTerminal(t)
 		}
 	}
-	if err := os.MkdirAll(l.WorkDir, 0o755); err != nil {
-		return err
-	}
-	if o.TailscaleAuthKey != "" {
-		host := o.TailscaleHostname
-		if host == "" {
-			host = tailnetHostname(cfg)
-		}
-		tn := newTailnet(say)
-		tn.reach = func(ctx context.Context, server string) error { return reachableWith(ctx, server, caPEM) }
-		if err := tn.join(ctx, o.TailscaleAuthKey, host, server); err != nil {
-			return err
-		}
-		if err := takeTerms(); err != nil {
-			return err
-		}
-	} else if o.TailscaleHostname != "" {
-		return fmt.Errorf("--tailscale-hostname needs --tailscale-authkey-file or --tailscale-authkey -")
-	}
-
-	// Enroll first: the token says what kind of Mac this is, and a Volunteer's
-	// Mac refuses some of the changes below before any of them is made. The
-	// token is used up by this Mac's activation key, which setup keeps until
-	// the Mac is set up: run again after an interruption, setup enrolls with
-	// the same key, which labd takes until the Mac's first check-in.
 	if o.Token != "" {
-		facts := l.Facts()
-		facts.AgentVersion = Version
-		facts.LabRelease = LabRelease
-		key, err := activationKey(l.WorkDir, o.Token)
+		joined, err := join(ctx, o, m, f, labhttp.Policy{CAPEM: caPEM, AllowPlainHTTP: o.AllowPlainHTTP}, tty)
 		if err != nil {
 			return err
 		}
-		resp, err := EnrollWith(ctx, o.Server, o.Token, facts, policy, Activation{Key: key, TermsSHA256: terms.SHA256})
-		if err != nil {
-			return fmt.Errorf("enroll: %w", err)
-		}
-		cfg = &Config{Server: o.Server, DeviceID: resp.DeviceID, Name: resp.Name, Secret: resp.Secret, Enrollment: resp.AgentEnrollment}
-		say("enrolled as %s: %s", resp.Name, kindName(resp.Enrollment))
+		cfg = joined
 	}
 	if cfg == nil {
 		return fmt.Errorf("not enrolled: pass --server and --token")
@@ -203,6 +148,102 @@ func Setup(ctx context.Context, o SetupOptions) error {
 			return err
 		}
 	}
+	if err := m.SetUp(ctx, o, cfg); err != nil {
+		return err
+	}
+	if o.Token != "" && cfg.Enrollment.IsVolunteer() {
+		var code strings.Builder
+		if err := printTopicQR(&code, cfg.Enrollment.Subscribe()); err != nil {
+			return err
+		}
+		say("%s", code.String())
+		askWindow(tty, cfg, say)
+	}
+	// Only now is the activation key no longer needed: a setup that stopped
+	// anywhere before here can run again with the same token and enroll with
+	// the same key, until lab-agent's first check-in uses the token up.
+	activationDone(work)
+	return nil
+}
+
+// Home is where a Mac keeps agent.json and the lab's work directory.
+func (l *Linux) Home() (configPath, work string) {
+	if l.WorkDir != "" {
+		return ConfigPath, l.WorkDir
+	}
+	return ConfigPath, workDir
+}
+
+// JoinFacts reads this Mac for the Join command's pre-checks. It changes
+// nothing: files are read, and findmnt and the PATH are asked.
+func (l *Linux) JoinFacts(token string) JoinFacts {
+	_, work := l.Home()
+	f := JoinFacts{OS: runtime.GOOS, EUID: os.Geteuid(), SudoUID: os.Getenv("SUDO_UID")}
+	if c := readTrim("/proc/device-tree/compatible"); c != "" {
+		f.Compatible = strings.Split(c, "\x00")
+	}
+	home := ""
+	if u, err := osuser.Lookup(os.Getenv("SUDO_USER")); err == nil {
+		home = u.HomeDir
+	}
+	f.NotOmarchy = notOmarchy("/", home)
+	if cfg, err := LoadConfig(ConfigPath); err == nil {
+		f.Enrolled = cfg
+	}
+	f.Resuming = resuming(work, token)
+	_, _, f.Cmdline = l.Identity()
+	if f.OS != "linux" {
+		return f
+	}
+	b, err := detectBootloader()
+	if err != nil {
+		f.Bootloader = []string{"it was not found (" + err.Error() + ")"}
+	} else {
+		root, _ := findMount("/")
+		boot, _ := findMount("/boot")
+		_, grub := b.(*grubLayout)
+		f.Passphrase = encryptedRoot("/", root.Source, boot.Source, grub)
+		if lim, ok := b.(*limineLayout); ok {
+			if why := lim.enrollment("/etc/default/limine"); why != "" {
+				f.Bootloader = append(f.Bootloader, why)
+			}
+			// What setup itself puts right is no reason to stop before it.
+			for _, why := range lim.problems() {
+				if !strings.Contains(why, "run lab-agent setup") {
+					f.Bootloader = append(f.Bootloader, why)
+				}
+			}
+		}
+	}
+	f.Missing = missingTools(b)
+	f.Space = stageRoom(b)
+	f.Snapshot = l.SnapshotEligible()
+	f.OnBattery = onBattery("/sys/class/power_supply")
+	return f
+}
+
+// LeaveOther leaves the lab cfg names as `lab-agent leave` does, that lab
+// told first. Its lab-agent is stopped before anything is removed, so that
+// it arms no boot entry and removes nothing behind setup.
+func (l *Linux) LeaveOther(ctx context.Context, cfg *Config) error {
+	if insideAgentUnit() {
+		return errors.New("run the Join command in a terminal on the Mac or over SSH, not through the other lab: leaving stops its lab-agent, which would end this command. Nothing was changed")
+	}
+	return leaveOtherLab(ctx, cfg, func() error {
+		if exists(unitPath) {
+			if err := run("systemctl", "stop", "lab-agent.service"); err != nil {
+				return fmt.Errorf("that lab was told this Mac left, but its lab-agent did not stop: %w. Finish with `sudo lab-agent leave`, then run the Join command again", err)
+			}
+		}
+		return l.LeaveLab(false)
+	})
+}
+
+// SetUp makes the changes that turn this Mac into a lab device enrolled as
+// cfg: the one-shot boot, the known-good kernel, the watchdog, the journal,
+// agent.json and the lab's units.
+func (l *Linux) SetUp(ctx context.Context, o SetupOptions, cfg *Config) error {
+	say := o.Log
 	if err := l.SnapshotEligible(); err != nil {
 		say("NOT ELIGIBLE for Installed runs: @ cannot be snapshotted, so it could not be rolled back (%v)", err)
 	} else {
@@ -331,14 +372,6 @@ func Setup(ctx context.Context, o SetupOptions) error {
 	say("%s and %s enabled: a Lab boot of a Volunteer's Mac logs the GUI user in, locked at once", labBootSessionUnitName, labBootLockUnitName)
 	say("%s enabled: a Lab boot that misses its deadline reboots to the known-good kernel", labBootDeadlineUnitName)
 
-	if e := cfg.Enrollment; e.IsVolunteer() {
-		var code strings.Builder
-		if err := printTopicQR(&code, e.Subscribe()); err != nil {
-			return err
-		}
-		say("%s", code.String())
-	}
-
 	p, w := l.Preflight()
 	if len(p) > 0 {
 		say("preflight problems:\n  - %s", strings.Join(p, "\n  - "))
@@ -348,10 +381,6 @@ func Setup(ctx context.Context, o SetupOptions) error {
 	if len(w) > 0 {
 		say("preflight warnings:\n  - %s", strings.Join(w, "\n  - "))
 	}
-	// Only now is the activation key no longer needed: a setup that stopped
-	// anywhere before here can run again with the same token and enroll with
-	// the same key, until lab-agent's first check-in uses the token up.
-	activationDone(l.WorkDir)
 	return nil
 }
 

@@ -136,7 +136,6 @@ func leftByHand(workDir string) []string {
 	}
 	return []string{
 		"The lab-agent package: remove it with your package manager (or delete /usr/local/bin/lab-agent). It no longer runs, but the program is still installed.",
-		"The Tailscale node: run `sudo tailscale logout`, and ask a Maintainer to delete the node from the tailnet if it is still listed.",
 		"Your Audit log, " + filepath.Join(workDir, auditFile) + ", stays on your Mac for you to read with `sudo lab-agent log`; delete it yourself if you want it gone.",
 	}
 }

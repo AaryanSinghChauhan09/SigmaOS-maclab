@@ -142,24 +142,40 @@ func (l *Linux) Preflight() (problems, warnings []string) {
 	if os.Geteuid() != 0 {
 		p = append(p, "lab-agent is not running as root")
 	}
-	bins := []string{"findmnt", "tar", "depmod", "journalctl"}
-	minFree := uint64(300 << 20)
-	var lim *limineLayout
 	b, err := detectBootloader()
 	if err != nil {
 		p = append(p, "bootloader: "+err.Error())
 	} else {
 		p = append(p, b.problems()...)
-		switch b := b.(type) {
-		case *grubLayout:
-			bins = append(bins, "grub-editenv")
-		case *limineLayout:
-			bins = append(bins, "chattr", "objcopy")
-			lim = b
-		}
 	}
 	hard, warnings := unattended(b)
 	p = append(p, hard...)
+	p = append(p, missingTools(b)...)
+	if n, _ := strconv.Atoi(readTrim("/proc/sys/kernel/panic")); n <= 0 {
+		p = append(p, "kernel.panic is 0: a panic would hang instead of rebooting (run lab-agent setup)")
+	}
+	if kg, err := l.knownGood(); err != nil {
+		p = append(p, err.Error())
+	} else if _, err := os.Stat("/usr/lib/modules/" + kg.Kernel); err != nil {
+		p = append(p, "known-good kernel "+kg.Kernel+" is no longer installed")
+	}
+	if why := stageRoom(b); why != "" {
+		p = append(p, why)
+	}
+	return p, warnings
+}
+
+// missingTools names each tool the lab needs to stage and boot a test kernel
+// under bootloader b (nil: not found) that this Mac lacks.
+func missingTools(b bootloader) []string {
+	bins := []string{"findmnt", "tar", "depmod", "journalctl"}
+	switch b.(type) {
+	case *grubLayout:
+		bins = append(bins, "grub-editenv")
+	case *limineLayout:
+		bins = append(bins, "chattr", "objcopy")
+	}
+	var p []string
 	for _, bin := range bins {
 		if _, err := exec.LookPath(bin); err != nil {
 			p = append(p, "missing "+bin)
@@ -170,16 +186,19 @@ func (l *Linux) Preflight() (problems, warnings []string) {
 			p = append(p, "no initramfs generator (mkinitcpio or dracut)")
 		}
 	}
-	if n, _ := strconv.Atoi(readTrim("/proc/sys/kernel/panic")); n <= 0 {
-		p = append(p, "kernel.panic is 0: a panic would hang instead of rebooting (run lab-agent setup)")
-	}
-	if kg, err := l.knownGood(); err != nil {
-		p = append(p, err.Error())
-	} else if _, err := os.Stat("/usr/lib/modules/" + kg.Kernel); err != nil {
-		p = append(p, "known-good kernel "+kg.Kernel+" is no longer installed")
-	}
+	return p
+}
+
+// stageRoom says why test kernels have no room where they are staged, ""
+// when they have: 300 MB, or under Limine what a UKI needs on the ESP.
+func stageRoom(b bootloader) string {
+	const minFree = uint64(300 << 20)
 	var st syscall.Statfs_t
 	stage := stageDir()
+	lim, _ := b.(*limineLayout)
+	if lim != nil && stage == defaultStage && lim.Stage != "" {
+		stage = lim.Stage // before setup has recorded where this Mac stages
+	}
 	probe := stage
 	if _, err := os.Stat(probe); err != nil {
 		probe = filepath.Dir(probe)
@@ -187,18 +206,18 @@ func (l *Linux) Preflight() (problems, warnings []string) {
 	// Test kernels already staged there are deleted before the next job stages
 	// (a job starts by cleaning up its Mac), so they count as free: otherwise
 	// one staged job would block queueing the next.
-	if syscall.Statfs(probe, &st) == nil {
-		free := st.Bavail*uint64(st.Bsize) + dirSize(stage)
-		if lim != nil {
-			// Under Limine, staging needs what writeUKIWith checks, not just the reserve.
-			if msg := limineStageProblem(lim.ESP.Target, stage, free, uint64(st.Bsize)); msg != "" {
-				p = append(p, msg)
-			}
-		} else if free < minFree {
-			p = append(p, fmt.Sprintf("less than %d MB free where test kernels are staged (%s)", minFree>>20, stage))
-		}
+	if syscall.Statfs(probe, &st) != nil {
+		return ""
 	}
-	return p, warnings
+	free := st.Bavail*uint64(st.Bsize) + dirSize(stage)
+	if lim != nil {
+		// Under Limine, staging needs what writeUKIWith checks, not just the reserve.
+		return limineStageProblem(lim.ESP.Target, stage, free, uint64(st.Bsize))
+	}
+	if free < minFree {
+		return fmt.Sprintf("less than %d MB free where test kernels are staged (%s)", minFree>>20, stage)
+	}
+	return ""
 }
 
 // WatchKernel reads /dev/kmsg from the start of this boot and follows it.
