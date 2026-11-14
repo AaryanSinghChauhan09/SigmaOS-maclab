@@ -230,6 +230,10 @@ func (s *Server) edge(h http.Handler) http.Handler {
 			if !s.sameOriginOK(w, r, origin) {
 				return
 			}
+			r, ok := s.browserSession(w, r, origin)
+			if !ok {
+				return
+			}
 			h.ServeHTTP(w, r)
 		})
 	})

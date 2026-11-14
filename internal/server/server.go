@@ -66,10 +66,10 @@ type Config struct {
 	RebootWarning time.Duration
 	NtfyURL       string
 	NotifyCmd     string
-	// Person names the person a request without a Maintainer's token comes
-	// from, by their login, "" for nobody: such a person may look at their
-	// own Macs (see scope.go). labd itself sets none, so nothing gets in
-	// without a token; tests name people with it.
+	// Person names the person a request without a Maintainer's token or a
+	// browser session comes from, by their login, "" for nobody: such a
+	// person may look at their own Macs (see scope.go). labd itself sets
+	// none; tests of scope name people with it.
 	Person func(r *http.Request) string
 	// OOBFactory builds a controller for a device; tests swap in fakes.
 	OOBFactory func(*api.Device) (oob.Controller, error)
@@ -110,6 +110,13 @@ type Config struct {
 	// Terms is what a Mac's owner accepts before it joins the lab; empty is
 	// DefaultTerms (see terms.go).
 	Terms string
+	// GitHub is the OAuth app people sign in through with a browser; nil
+	// leaves sign-in off (see ReadSignIn).
+	GitHub *GitHubApp
+	// Admins are the GitHub account ids of the lab's Admins: Maintainers
+	// who may also add and remove Maintainers. They are named here and on
+	// no screen.
+	Admins []int64
 	// Clock is where labd reads time; nil is the wall clock.
 	Clock agent.Clock
 }
@@ -132,6 +139,7 @@ type Server struct {
 	bconns      maintainerConns // named builders' open requests, by generation
 	serialMu    sync.Mutex
 	callers     *callerLog
+	signIns     signInStates
 }
 
 // clock is where labd reads time: Config.Clock, or the wall clock when unset.
@@ -557,6 +565,9 @@ func (s *Server) routes() []route {
 		{"GET /api/agent/published", ownMac, s.hAgentPublished},
 
 		{"GET /api/auth", anyone, s.hAuth},
+		{"GET /sign-in", anyone, s.hSignIn},
+		{"GET /auth/github/callback", anyone, s.hSignInCallback},
+		{"POST /sign-out", anyone, s.hSignOut},
 		// healthz answers that labd is up, to anyone: a Kubernetes probe. It
 		// says nothing else.
 		{"GET /healthz", anyone, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok\n") }},
@@ -647,11 +658,17 @@ func bearer(r *http.Request) string {
 	return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 }
 
-// hAuth tells the UI whether this client needs a token at all, and whether
-// it may only look. Sent with a Maintainer's token, it names its Maintainer.
-// While labd knows nobody without a token (Config.Person) there is nothing
-// to ask: labd answers 404, and the UI asks for the token.
+// hAuth tells a browser who it is to labd. Signed in, it names the person,
+// their kind and whether they are a Maintainer. Sent with a Maintainer's
+// token, it names its Maintainer. With neither, and while labd knows nobody
+// any other way (Config.Person), there is nothing to say: labd answers 404.
 func (s *Server) hAuth(w http.ResponseWriter, r *http.Request) {
+	if si := signedInOf(r); si != nil {
+		role := map[bool]string{true: "admin"}[si.isMaintainer()]
+		writeJSON(w, map[string]any{"trusted": si.isMaintainer(), "token_required": !si.isMaintainer(), "role": role,
+			"login": si.Handle, "kind": si.Kind(), "account_id": si.AccountID})
+		return
+	}
 	if s.cfg.Person == nil {
 		http.NotFound(w, r)
 		return

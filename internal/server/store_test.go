@@ -108,7 +108,11 @@ func snap(t *testing.T, path string) snapshot {
 		cols := list(`SELECT name || ' ' || type || ' ' || "notnull" || ' ' || coalesce(dflt_value, 'NULL') || ' ' || pk FROM pragma_table_info(?) ORDER BY cid`, table)
 		shape = append(shape, "table "+table+": "+strings.Join(cols, ", "))
 		names := list(`SELECT '"' || name || '"' FROM pragma_table_info(?) ORDER BY cid`, table)
-		rows = append(rows, table+": "+list(`SELECT json_group_array(json_array(` + strings.Join(names, ",") + `)) FROM "` + table + `"`)[0])
+		// A table with no row says nothing of what is stored: later
+		// migrations add tables, and maclab's rows must read the same.
+		if all := list(`SELECT json_group_array(json_array(` + strings.Join(names, ",") + `)) FROM "` + table + `"`)[0]; all != "[]" {
+			rows = append(rows, table+": "+all)
+		}
 	}
 	s.shape, s.rows = strings.Join(shape, "\n"), strings.Join(rows, "\n")
 	return s

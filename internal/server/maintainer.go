@@ -107,6 +107,8 @@ func (s *Server) maintainer(h http.HandlerFunc) http.HandlerFunc {
 			s.asMaintainer(w, r, who, h)
 		case viewAccess:
 			httpErr(w, 403, "%s may only look; this needs a Maintainer's token", who)
+		case signedInAccess:
+			httpErr(w, 403, "@%s is signed in with no role in the lab; this needs a Maintainer", who)
 		default:
 			httpErr(w, 401, "not a Maintainer's token")
 		}
@@ -122,6 +124,8 @@ func (s *Server) viewer(h http.HandlerFunc) http.HandlerFunc {
 			s.asMaintainer(w, r, who, h)
 		case viewAccess:
 			asPerson(w, r, who, h)
+		case signedInAccess:
+			httpErr(w, 403, "@%s is signed in with no role in the lab, which shows the public site only", who)
 		default:
 			httpErr(w, 401, "not a Maintainer's token")
 		}
@@ -134,15 +138,24 @@ const (
 	noAccess access = iota
 	viewAccess
 	adminAccess
+	signedInAccess // signed in with a browser, with no role: the public site only
 )
 
 // access decides what a request may do. A Maintainer's token gives admin,
-// and who is that Maintainer's name. A person labd knows without one
+// and who is that Maintainer's name. So does the browser session of an Admin
+// or of a person with the Maintainer role, and who is their handle; anyone
+// else's session opens no route here. A person labd knows any other way
 // (Config.Person) is a viewer, and who is their login. A Mac, Lab-owned or a
 // Volunteer's, talks to labd with its own device secret.
 func (s *Server) access(r *http.Request) (a access, who string) {
 	if name, err := s.store.maintainerByToken(hashSecret(bearer(r))); err == nil {
 		return adminAccess, name
+	}
+	if si := signedInOf(r); si != nil {
+		if si.isMaintainer() {
+			return adminAccess, si.Handle
+		}
+		return signedInAccess, si.Handle
 	}
 	if s.cfg.Person != nil {
 		if login := s.cfg.Person(r); login != "" {
@@ -153,11 +166,15 @@ func (s *Server) access(r *http.Request) (a access, who string) {
 }
 
 // asMaintainer serves r for the Maintainer name until it ends or they're
-// removed.
+// removed: for a signed-in person, until their role or their session goes.
 func (s *Server) asMaintainer(w http.ResponseWriter, r *http.Request, name string, h http.HandlerFunc) {
 	noteCaller(r, "person:"+name)
 	ctx, cancel := context.WithCancel(context.WithValue(r.Context(), maintainerKey{}, name))
-	defer s.conns.add(name, cancel)()
+	key := name
+	if si := signedInOf(r); si != nil {
+		key = si.connKey()
+	}
+	defer s.conns.add(key, cancel)()
 	h(w, r.WithContext(ctx))
 }
 
