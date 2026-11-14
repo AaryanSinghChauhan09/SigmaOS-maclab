@@ -59,27 +59,27 @@
 {"case":"keys/002-test-machine-b","machine_id":"key:c304e82cb13ec6520177"}
 {"case":"keys/003-cli-fixture","machine_id":"key:2b91cc19290a39e7e0df"}
 {"case":"reports/001-golden-unsigned-m1-pro-converged-fresh","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
-{"case":"reports/002-golden-m1-pro-converged-fresh","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"95118244be6c67aa8ffbec0372e3febf0a9c2722b592df567a35c3406064dff0"}
+{"case":"reports/002-golden-m1-pro-converged-fresh","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"dd5c1475ecd3226ef7181ad5bc7682b13bdc90d0f4f0ccf55052cb70278ee3f7"}
 {"case":"reports/003-golden-unsigned-m1-pro-converged","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
-{"case":"reports/004-golden-m1-pro-converged","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"4132ee9e79a57634fa3cc6971d349e8ce6bf04f9a4b89b7bbe3f86a70f04a636"}
+{"case":"reports/004-golden-m1-pro-converged","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"d39cf191b9c53d035ac6a55ca31665fe5ad6914a1af9eefaf7a816841c0c34d9"}
 {"case":"reports/005-golden-unsigned-m1-pro-mx-mac","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
-{"case":"reports/006-golden-m1-pro-mx-mac","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"6d059d417f6e9ce7fa4aaa2ba328d6a7885ea9a5a9860edab3b77c2d0b6b2c2b"}
+{"case":"reports/006-golden-m1-pro-mx-mac","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"8267ee956817bf1935f34971967a374e66ec0c9523d31d297076e464e64d01ec"}
 {"case":"reports/007-golden-unsigned-m2-max-converged","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
-{"case":"reports/008-golden-m2-max-converged","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"1a863aa8ca8688f01d3758a354859e7d742c07659988e92f0bcdc0a5be2083de"}
+{"case":"reports/008-golden-m2-max-converged","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"1a16fbac11cbd960b4c1d65954fc29ddf8e1b4174b88500a7b1e0f70303b5289"}
 {"case":"reports/009-golden-unsigned-m2-max-image2","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
-{"case":"reports/010-golden-m2-max-image2","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
+{"case":"reports/010-golden-m2-max-image2","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"7f952c351f598666f153fec177040d025444f1eefd22d10614587f86e963adcd"}
 {"case":"reports/011-golden-unsigned-m2-max-converged","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
-{"case":"reports/012-golden-m2-max-converged","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"372878f2626f873f5e89a887c3b3baad9cfbf1731c85d3203516dda6fe4a6c4f"}
-{"case":"reports/013-cli-signed-m2-max-image2-awkward-kernel","status":201,"machine_id":"key:2b91cc19290a39e7e0df","canonical_sha256":"30d0f063a8d262f0331115699f5ad0f6d83cc662cbc07f2f6a46b5631e95a85a"}
-{"case":"reports/014-cli-signed-m2-max-image2","status":201,"machine_id":"key:2b91cc19290a39e7e0df","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
-{"case":"reports/015-machine-b","status":201,"machine_id":"key:c304e82cb13ec6520177","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
-{"case":"reports/016-large-integers","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"7ebca6f21c82b056812153e2a6c8bdf30c2bb15f31a7201d4c5a8e674964525a"}
-{"case":"reports/017-awkward-text","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"845b9a81c4a7dcf3e233f02a066f5b8a42c06396a7b40b388a365a09c511161e"}
-{"case":"reports/018-evidence-64-kib","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"2a908a4b15cc354639d2607d85b82746099295861be2d8e6d279af9b66b97da0"}
-{"case":"reports/019-model-120-characters","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"9b6293c061fd290a0913b74f1981d0e7ba4c4e45ba1013600130e77f7c7c67b8"}
-{"case":"reports/020-unattended","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"90b593c8dc9d6a21b5f23a096581fa1e14ff842254487d586f9b404adfabc8df"}
-{"case":"reports/021-sha256-signature","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
-{"case":"reports/022-reserved-signed","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
+{"case":"reports/012-golden-m2-max-converged","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"9615245688c476bc242f40914e21dcd8c9909f0a55ffd16d0fc79caaad787e1d"}
+{"case":"reports/013-cli-signed-m2-max-image2-awkward-kernel","status":201,"machine_id":"key:2b91cc19290a39e7e0df","canonical_sha256":"fc7665b736a312b2f136e07bc00fda93557b13b619937ca18df188b3b5ba6076"}
+{"case":"reports/014-cli-signed-m2-max-image2","status":201,"machine_id":"key:2b91cc19290a39e7e0df","canonical_sha256":"7f952c351f598666f153fec177040d025444f1eefd22d10614587f86e963adcd"}
+{"case":"reports/015-machine-b","status":201,"machine_id":"key:c304e82cb13ec6520177","canonical_sha256":"7f952c351f598666f153fec177040d025444f1eefd22d10614587f86e963adcd"}
+{"case":"reports/016-large-integers","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"90478b58ba583f87e594725d4cdaa0b0326d85f78c33cca4a8057f8053e10156"}
+{"case":"reports/017-awkward-text","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"2ac699243baed97dd50f2433ec4bf6d73a38838af4158000f448f14c570b064b"}
+{"case":"reports/018-evidence-64-kib","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"2c6d781aae78e6237b2e41b7040e1c6207b34221f4980d8c45214cda79da849e"}
+{"case":"reports/019-model-120-characters","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"5d648870c7eacab4209606aac45e6d3c3fda1392e1399ed542e65a792316822e"}
+{"case":"reports/020-unattended","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"9065e5a60ad35d61fc0eb4d86f84ce824667ef981ef090d8f3cf2bc81c2047ab"}
+{"case":"reports/021-sha256-signature","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"7f952c351f598666f153fec177040d025444f1eefd22d10614587f86e963adcd"}
+{"case":"reports/022-reserved-signed","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"7f952c351f598666f153fec177040d025444f1eefd22d10614587f86e963adcd"}
 {"case":"reports/023-not-json-empty","status":400}
 {"case":"reports/024-not-json-cut","status":400}
 {"case":"reports/025-not-json-comment","status":400}
@@ -160,7 +160,7 @@
 {"case":"reports/100-signature-armor-bad-base64","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't an armored SSH signature"]}
 {"case":"reports/101-signature-armor-padding-bits","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't an armored SSH signature"]}
 {"case":"reports/102-signature-armor-only-newlines","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it is cut short"]}
-{"case":"reports/103-signature-armor-one-line","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
+{"case":"reports/103-signature-armor-one-line","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"7f952c351f598666f153fec177040d025444f1eefd22d10614587f86e963adcd"}
 {"case":"reports/104-signature-sign-in-namespace","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't a report signature (namespace)"]}
 {"case":"reports/105-signature-unknown-hash","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it uses an unknown hash (md5)"]}
 {"case":"reports/106-signature-not-sshsig","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't an SSH signature"]}

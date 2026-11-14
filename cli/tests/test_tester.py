@@ -1,4 +1,4 @@
-"""Seam A: tester sign-in (omarchy-m-test --sign-in), GitHub's device flow.
+"""Seam A: Mac sign-in (omarchy-m-test --sign-in), GitHub's device flow.
 
 GitHub's answers are scripted form POSTs; the site's answer is a scripted
 upload response. The sign-in the CLI sends the site is signed for real, with
@@ -97,13 +97,13 @@ class SignInTest(unittest.TestCase):
         mac.forms = list(forms)
         return main(["--sign-in", "--site", SITE], mac), mac
 
-    def test_the_tester_enters_a_code_on_github_and_the_site_binds_the_mac(self):
+    def test_the_person_enters_a_code_on_github_and_the_lab_ties_the_mac_to_them(self):
         status, mac = self.sign_in([device(), PENDING, PENDING, GRANTED], [bound()])
 
         self.assertEqual(status, 0)
-        self.assertIn("https://github.com/login/device", mac.output)
+        self.assertIn("github.com/login/device", mac.output)
         self.assertIn("WDJB-MJHT", mac.output)
-        self.assertIn("Signed in as @maralcbr. From now on this Mac's runs count as tester runs", mac.output)
+        self.assertIn("Signed in as @maralcbr. This Mac's runs are published as Verified runs.", mac.output)
         self.assertEqual(mac.unused_script(), [])
 
     def test_it_uses_only_the_client_id_and_polls_at_githubs_interval(self):
@@ -144,7 +144,7 @@ class SignInTest(unittest.TestCase):
         status, mac = self.sign_in([device(), GRANTED], [bound("someone", allowlisted=False)])
 
         self.assertEqual(status, 0)
-        self.assertIn("@someone isn't on the tester allowlist yet: ask the maintainer to add you as a tester", mac.output)
+        self.assertIn("Signed in as @someone. This Mac's runs are published as Community runs; Verified runs come from Macs of the Omarchy M team.", mac.output)
 
     def test_cancelling_on_github_binds_nothing(self):
         status, mac = self.sign_in([device(), PENDING, github(error="access_denied")])
@@ -251,7 +251,7 @@ class OfferTest(unittest.TestCase):
         self.assert_offered_before_the_sections(mac)
         self.assertEqual([p.url for p in mac.posts], [f"{SITE}{tester.REQUEST_PATH}", f"{SITE}{tester.BINDING_PATH}"])
         self.assertIn("WDJB-MJHT", mac.output)
-        self.assertIn("Signed in as @maralcbr. From now on this Mac's runs count as tester runs", mac.output)
+        self.assertIn("Signed in as @maralcbr. This Mac's runs are published as Verified runs.", mac.output)
         self.assertEqual(link_of(mac, self.state), {"link_version": 1, "login": "maralcbr", "tester": True})
         # Second by second, with the time left, 5 minutes at most; two polls 5 s apart.
         self.assertEqual(len(mac.waited), 10)
@@ -264,8 +264,7 @@ class OfferTest(unittest.TestCase):
     def test_an_allowlist_miss_is_said_after_signing_in(self):
         _, mac = self.run_offer(["y"], forms=[device(), GRANTED], responses=[NOT_SIGNED_IN, bound("someone", allowlisted=False)])
 
-        self.assertIn("Signed in as @someone, but @someone isn't on the tester allowlist yet: ask the maintainer to add you as a tester",
-                      mac.output)
+        self.assertIn("Signed in as @someone. This Mac's runs are published as Community runs; Verified runs come from Macs of the Omarchy M team.", mac.output)
         self.assertEqual(link_of(mac, self.state)["tester"], False)
 
     def test_no_is_remembered_and_never_asked_again(self):
@@ -292,7 +291,7 @@ class OfferTest(unittest.TestCase):
         _, mac = self.run_offer([], responses=[signed_in()])
 
         self.assertNotIn(OFFER_PROMPT, mac.output)
-        self.assertIn("Signed in as @maralcbr (tester: yes)", mac.output)
+        self.assertIn("Signed in as @maralcbr. This Mac's runs are published as Verified runs.", mac.output)
         self.assertEqual(link_of(mac, self.state), {"link_version": 1, "login": "maralcbr", "tester": True})
         self.assertEqual(json.loads(mac.posts[0].body), json.loads(read(GOLDEN_STATUS)))
 
@@ -302,7 +301,7 @@ class OfferTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(len(mac.waited), tester.OFFER_WAIT_SECONDS)
         self.assertEqual(mac.waited[-1][1], "  Waiting for GitHub: 0:01 left. Press any key to skip.")
-        self.assertIn("Couldn't sign in (no code was entered within 5 minutes): carrying on as a community run", mac.output)
+        self.assertIn("Couldn't sign in (no code was entered within 5 minutes): this run is published as a Community run", mac.output)
         self.assertEqual(link_of(mac, self.state), {"declined": True, "link_version": 1})
         self.assertIn("Checking ", mac.output)
         self.assertEqual(mac.unused_script(), [])
@@ -313,14 +312,14 @@ class OfferTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(len(mac.waited), 3)
         self.assertEqual(mac.form_posts[1:], [])  # skipped before the first poll
-        self.assertIn("Skipped signing in: this run is a community run", mac.output)
+        self.assertIn("Skipped signing in: this run is published as a Community run", mac.output)
         self.assertEqual(link_of(mac, self.state), {"declined": True, "link_version": 1})
         self.assertIn("Checking ", mac.output)
 
     def test_github_failing_carries_on_with_one_line(self):
         _, mac = self.run_offer(["y"], forms=[NetworkError("name resolution failed")], responses=[NOT_SIGNED_IN])
 
-        self.assertIn("Couldn't sign in (couldn't reach GitHub (name resolution failed)): carrying on as a community run", mac.output)
+        self.assertIn("Couldn't sign in (couldn't reach GitHub (name resolution failed)): this run is published as a Community run", mac.output)
         self.assertIn("Checking ", mac.output)
 
     def test_when_the_site_cant_say_whether_the_mac_is_signed_in_the_offer_waits_for_a_later_run(self):
@@ -379,7 +378,7 @@ class StatusAndSignOutTest(unittest.TestCase):
         status, mac = self.run_cli("--status", [signed_in()])
 
         self.assertEqual(status, 0)
-        self.assertIn("Signed in as @maralcbr (tester: yes).", mac.output)
+        self.assertIn("Signed in as @maralcbr. This Mac's runs are published as Verified runs.", mac.output)
         self.assertEqual([p.url for p in mac.posts], [f"{SITE}{tester.REQUEST_PATH}"])
         sent = json.loads(mac.posts[0].body)
         self.assertEqual(sent, json.loads(read(GOLDEN_STATUS)))
@@ -389,13 +388,13 @@ class StatusAndSignOutTest(unittest.TestCase):
     def test_status_for_a_handle_not_on_the_allowlist(self):
         _, mac = self.run_cli("--status", [signed_in("someone", allowlisted=False)])
 
-        self.assertIn("Signed in as @someone (tester: no): ask the maintainer to add you as a tester.", mac.output)
+        self.assertIn("Signed in as @someone. This Mac's runs are published as Community runs; Verified runs come from Macs of the Omarchy M team.", mac.output)
 
     def test_status_not_signed_in_forgets_a_stale_record(self):
         status, mac = self.run_cli("--status", [NOT_SIGNED_IN], link={"text": '{"link_version": 1, "login": "maralcbr", "tester": true}\n'})
 
         self.assertEqual(status, 0)
-        self.assertIn("Not signed in.", mac.output)
+        self.assertIn("Not signed in:", mac.output)
         self.assertIn(self.link, mac.removed)
 
     def test_status_without_the_site_says_what_the_mac_remembers(self):
@@ -403,7 +402,7 @@ class StatusAndSignOutTest(unittest.TestCase):
                                    link={"text": '{"link_version": 1, "login": "maralcbr", "tester": true}\n'})
 
         self.assertEqual(status, tester.EXIT_FAILED)
-        self.assertIn("This Mac was signed in as @maralcbr when it last checked; couldn't check with the site now: The site is down.", mac.output)
+        self.assertIn("This Mac was signed in as @maralcbr when it last checked; couldn't check with Omarchy Mac Lab now: The site is down.", mac.output)
 
     def test_sign_out_unbinds_on_the_site_and_the_next_run_offers_again(self):
         status, mac = self.run_cli("--sign-out", [signed_in(), answer(signed_in=False, signed_out="maralcbr")],
@@ -416,7 +415,7 @@ class StatusAndSignOutTest(unittest.TestCase):
         self.assertEqual(sent, json.loads(read(GOLDEN_SIGN_OUT)))
         self.assertTrue(verifies(sent, tester.NAMESPACE))
         self.assertIn(self.link, mac.removed)
-        self.assertIn("Signed out @maralcbr: this Mac's runs no longer count as tester runs", mac.output)
+        self.assertIn("Signed out @maralcbr. From now on this Mac's runs are published as Community runs", mac.output)
         self.assertIsNone(tester.read_link(mac))
 
     def test_sign_out_the_site_refuses_changes_nothing(self):
@@ -442,7 +441,7 @@ class StatusAndSignOutTest(unittest.TestCase):
 
 
 class TesterRunTest(unittest.TestCase):
-    def test_an_upload_the_site_counts_as_a_tester_run_says_so(self):
+    def test_an_upload_the_lab_counts_as_a_verified_run_says_so(self):
         from tests.desktop import UNANSWERED
         from tests.test_seam_a import ENTER, created, host
 
@@ -450,16 +449,118 @@ class TesterRunTest(unittest.TestCase):
         mac = host("m2-max-image2", answers=[ENTER, *UNANSWERED, "y"], responses=[HttpResponse(201, json.dumps({**response, "tester": True}))])
 
         self.assertEqual(main(["--site", SITE], mac), 0)
-        self.assertIn("It counts as a tester run.", mac.output)
+        self.assertIn("It counts as a Verified run.", mac.output)
 
-    def test_a_community_upload_says_nothing_about_testers(self):
+    def test_a_community_upload_says_nothing_more(self):
         from tests.desktop import UNANSWERED
         from tests.test_seam_a import ENTER, created, host
 
         mac = host("m2-max-image2", answers=[ENTER, *UNANSWERED, "y"], responses=[created()])
 
         main(["--site", SITE], mac)
-        self.assertNotIn("tester", mac.output.split("Accept and start?")[1])
+        self.assertNotIn("It counts as", mac.output)
+
+
+BLOCKED = "This GitHub account is blocked from Omarchy Mac Lab."
+EDGE_PAGE = "<!DOCTYPE html>\n<html><head><title>530: Origin is unreachable</title></head><body>error code: 1033</body></html>\n"
+PREVIEW = "Omarchy Mac Lab is not open yet and signs no Mac in. Until it opens, omarchy-m-testing.org is the live site: sign in there."
+
+
+class LabRefusalTest(unittest.TestCase):
+    """What Omarchy Mac Lab's refusals of a Mac sign-in look like to the person."""
+
+    def setUp(self):
+        self.state = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.state)
+        with_fixture_key(self.state)
+        self.link = f"{self.state}/{tester.LINK_NAME}"
+
+    def run_cli(self, flag, responses, forms=(), link=None):
+        mac = signing_mac(self.state, answers=[], responses=list(responses))
+        mac.recording["files"][self.link] = link
+        mac.forms = list(forms)
+        return main([flag, "--site", SITE], mac), mac
+
+    def test_a_blocked_person_gets_the_blocked_sentence_and_nothing_else(self):
+        status, mac = self.run_cli("--sign-in", [answer(403, error=BLOCKED)], [device(), GRANTED])
+
+        self.assertEqual(status, tester.EXIT_FAILED)
+        self.assertEqual(mac.output.strip().splitlines()[-1], BLOCKED)
+        self.assertNotIn("Sign-in failed", mac.output)
+        self.assertIsNone(link_of(mac, self.state))
+
+    def test_a_blocked_person_offered_the_sign_in_runs_on_as_a_community_run(self):
+        from tests.desktop import UNANSWERED
+        from tests.test_seam_a import ENTER
+
+        mac = signing_mac(self.state, answers=[ENTER, "y", *UNANSWERED, "n"], responses=[NOT_SIGNED_IN, answer(403, error=BLOCKED)])
+        mac.recording["files"][self.link] = None
+        mac.forms = [device(), GRANTED]
+
+        self.assertEqual(main(["--site", SITE], mac), 0)
+        self.assertIn(f"{BLOCKED} This run is published as a Community run.", mac.output)
+        self.assertEqual(link_of(mac, self.state), {"declined": True, "link_version": 1})
+        self.assertIn("Checking ", mac.output)
+
+    def test_in_preview_the_sign_in_is_refused_with_the_line_pointing_at_the_old_site(self):
+        status, mac = self.run_cli("--sign-in", [answer(403, error=PREVIEW)], [device(), GRANTED])
+
+        self.assertEqual(status, tester.EXIT_FAILED)
+        self.assertIn("Sign-in failed: Omarchy Mac Lab is not open yet and signs no Mac in. "
+                      "Until it opens, omarchy-m-testing.org is the live site: sign in there.", mac.output)
+
+    def test_while_dark_each_command_says_so_and_never_prints_the_error_page(self):
+        signed = {"text": '{"link_version": 1, "login": "maralcbr", "tester": true}\n'}
+        for flag, forms, said in (
+            ("--status", [], "This Mac was signed in as @maralcbr when it last checked; couldn't check with Omarchy Mac Lab now: "
+                             "Omarchy Mac Lab cannot be reached right now."),
+            ("--sign-out", [], "Sign-out failed: Omarchy Mac Lab cannot be reached right now. Nothing changed"),
+            ("--sign-in", [device(), GRANTED], "Sign-in failed: Omarchy Mac Lab cannot be reached right now. Nothing changed"),
+        ):
+            for dark in (HttpResponse(530, EDGE_PAGE), HttpResponse(502, "<html>Bad gateway</html>")):
+                with self.subTest(flag=flag, status=dark.status):
+                    status, mac = self.run_cli(flag, [dark], forms, link=signed)
+
+                    self.assertEqual(status, tester.EXIT_FAILED)
+                    self.assertIn(said, mac.output)
+                    self.assertNotIn("<", mac.output)
+                    self.assertNotIn(self.link, mac.removed)
+
+    def test_an_unreachable_lab_is_dark_too(self):
+        class Unreachable(RecordedHost):
+            def post_json(self, url, body):
+                raise NetworkError("[Errno 111] Connection refused")
+
+        mac = signing_mac(self.state, answers=[])
+        mac = Unreachable(mac.recording, signer=mac.signer)
+        mac.recording["files"][self.link] = None
+
+        self.assertEqual(main(["--status", "--site", SITE], mac), tester.EXIT_FAILED)
+        self.assertEqual(mac.output.strip(), "Couldn't check the sign-in with Omarchy Mac Lab: Omarchy Mac Lab cannot be reached right now.")
+
+    def test_at_the_alias_the_refusal_names_the_lab_address(self):
+        status, mac = self.run_cli("--status", [HttpResponse(421, "Omarchy Mac Lab is at lab.omarchy-mac.org: use that address\n")])
+
+        self.assertEqual(status, tester.EXIT_FAILED)
+        self.assertIn("Omarchy Mac Lab is at lab.omarchy-mac.org: use that address.", mac.output)
+        self.assertEqual(mac.written, {})
+
+    def test_an_edge_challenge_is_a_plain_error(self):
+        status, mac = self.run_cli("--status", [HttpResponse(403, "<html><title>Just a moment...</title></html>")])
+
+        self.assertEqual(status, tester.EXIT_FAILED)
+        self.assertEqual(mac.output.strip(), f"Couldn't check the sign-in with Omarchy Mac Lab: {SITE} answered HTTP 403.")
+
+    def test_not_signed_in_says_what_that_means(self):
+        _, mac = self.run_cli("--status", [NOT_SIGNED_IN])
+
+        self.assertEqual(mac.output.strip(), "Not signed in: this Mac's runs are published as Community runs. "
+                                             "omarchy-m-test --sign-in signs this Mac in with GitHub.")
+
+    def test_the_sign_in_asks_for_the_code_in_one_line(self):
+        _, mac = self.run_cli("--sign-in", [bound()], [device(), GRANTED])
+
+        self.assertIn("Sign this Mac in with GitHub. Open github.com/login/device on any device and enter: WDJB-MJHT", mac.output)
 
 
 def regenerate() -> None:

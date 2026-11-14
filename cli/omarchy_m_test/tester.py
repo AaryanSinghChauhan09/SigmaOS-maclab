@@ -1,31 +1,41 @@
-"""Tester sign-in: `omarchy-m-test --sign-in`, once per Mac, or when a run offers it.
+"""Mac sign-in: `omarchy-m-test --sign-in`, once per Mac, or when a run offers it.
 
 GitHub's device flow, with only the OAuth app's client ID (no secret ever
-ships in the tool): GitHub gives a short code, the tester enters it at
+ships in the tool): GitHub gives a short code, the person enters it at
 github.com/login/device, and the CLI polls until GitHub hands it a token.
-The CLI then sends the site that token in a sign-in signed with this Mac's
-machine key (signing.py, namespace NAMESPACE). The site asks GitHub whose
-token it is, checks this app issued it, binds that GitHub handle to the
+The CLI then sends Omarchy Mac Lab that token in a sign-in signed with this
+Mac's machine key (signing.py, namespace NAMESPACE). The lab asks GitHub whose
+token it is, checks this app issued it, ties that GitHub account to the
 machine key and revokes the token. The token is never written anywhere.
 
-From then on every report this Mac signs counts as a tester run while the
-handle is on the site's tester allowlist; nothing else changes in a run.
+From then on every report this Mac signs is published as a Verified run
+while its person is a member of the Omarchy M team, and as a Community run
+otherwise: the lab decides at each upload; nothing else changes in a run.
+A first sign-in makes the lab know the person and gives nothing more.
+
+The wire keeps the names it had (BINDING_PATH, REQUEST_PATH, the "tester"
+key, LINK_NAME); no line a person reads uses them.
 
 The Mac remembers the sign-in in the state directory (LINK_NAME: the handle
-and whether it's a tester, never a token). A run (not --dry-run or --record)
-whose Mac has no such record first asks the site whether this machine key is
-signed in already (a Mac signed in before the record existed), and otherwise
-offers, once per Mac, to sign in (OFFER_QUESTION). When the site can't be
-asked, the run isn't offered it; a later run is. A "no", a skip, a timeout
-or a failure is remembered too, so the offer never comes back; --sign-in
-still works any time. While the offer waits for the code, a countdown runs
-for up to OFFER_WAIT_SECONDS and any key skips it: the run goes on unsigned.
+and whether its runs are Verified, never a token). A run (not --dry-run or
+--record) whose Mac has no such record first asks the lab whether this
+machine key is signed in already (a Mac signed in before the record
+existed), and otherwise offers, once per Mac, to sign in (OFFER_QUESTION).
+When the lab can't be asked, the run isn't offered it; a later run is. A
+"no", a skip, a timeout or a failure is remembered too, so the offer never
+comes back; --sign-in still works any time. While the offer waits for the
+code, a countdown runs for up to OFFER_WAIT_SECONDS and any key skips it:
+the run goes on unsigned.
 
-`--status` and `--sign-out` send the site a small request signed with the
+`--status` and `--sign-out` send the lab a small request signed with the
 machine key (namespace NAMESPACE, dated requested_at; a sign-out names the
-sign-in it ends, which the status gives, so a copy of it can't end a later one): the site says whose handle the key is bound to, or unbinds
-it. Signing out removes the record, so the next run offers the sign-in again.
-Runs already uploaded keep the handle they were uploaded under.
+sign-in it ends, which the status gives, so a copy of it can't end a later
+one): the lab says whose handle the key is tied to, or ends the sign-in.
+Signing out removes the record, so the next run offers the sign-in again.
+Runs already uploaded stay as they were published.
+
+An answer that is not the lab's own is never shown: while the lab is Dark
+the edge answers with a page, and the person gets one line (DARK).
 """
 
 from __future__ import annotations
@@ -34,11 +44,12 @@ import json
 
 from typing import Callable
 
+from . import LAB_NAME
 from .host import Host, HttpResponse, NetworkError
 from .session import state_dir
 from .signing import sign_document
 
-# The omarchy-m-testing OAuth app (owned by the site's owner), device flow enabled.
+# Omarchy Mac Lab's OAuth app (the client id the old site had), device flow enabled.
 GITHUB_CLIENT_ID = "Ov23liyct9clXDWu2d42"
 DEVICE_CODE_URL = "https://github.com/login/device/code"
 TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -54,7 +65,10 @@ STATUS, SIGN_OUT = "status", "sign-out"
 # {"link_version", "declined": true}. In the state directory, next to the machine key.
 LINK_NAME = "omarchy-m-test/tester.json"
 LINK_VERSION = 1
-OFFER_QUESTION = "Sign in with GitHub so your runs count as a tester?"
+OFFER_QUESTION = "Sign in with GitHub? Runs from Omarchy M team members' Macs are published as Verified."
+BLOCKED = f"This GitHub account is blocked from {LAB_NAME}."
+DARK = f"{LAB_NAME} cannot be reached right now"
+COMMUNITY_RUN = "this run is published as a Community run"
 OFFER_WAIT_SECONDS = 300
 # GitHub's defaults, when its answer leaves them out.
 DEFAULT_INTERVAL = 5
@@ -66,11 +80,11 @@ EXIT_FAILED = 5
 
 
 class SignInFailed(Exception):
-    """Why the sign-in stopped, in words for the tester."""
+    """Why the sign-in stopped, in words for the person."""
 
 
 def _reason(failed: SignInFailed) -> str:
-    """The reason as part of a sentence (the site's own errors end with a full stop)."""
+    """The reason as part of a sentence (the lab's own errors end with a full stop)."""
     return str(failed).rstrip(".")
 
 
@@ -110,6 +124,33 @@ def _json(response: HttpResponse) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+def unreachable(response: HttpResponse) -> bool:
+    """Whether an answer came from in front of the lab, not from it: while the lab is Dark the edge answers 5xx
+    with a page or with words of its own; the lab's own refusals always carry "error"."""
+    return response.status >= 500 and not isinstance(_json(response).get("error"), str)
+
+
+def refusal(response: HttpResponse, site: str) -> str:
+    """Why the lab refused, in its own words; never a page. labd refuses in JSON, and at the Alias in one plain line."""
+    error = _json(response).get("error")
+    if isinstance(error, str) and error:
+        return error
+    line = response.body.strip()
+    if line and len(line) <= 300 and "\n" not in line and "<" not in line and line[0] not in "{[":
+        return line
+    return f"{site} answered HTTP {response.status}."
+
+
+def _lab(host: Host, url: str, document: dict) -> HttpResponse:
+    try:
+        response = host.post_json(url, json.dumps(document, ensure_ascii=False))
+    except NetworkError as error:
+        raise SignInFailed(DARK) from error
+    if unreachable(response):
+        raise SignInFailed(DARK)
+    return response
+
+
 def _github(host: Host, url: str, fields: dict[str, str]) -> dict:
     try:
         response = host.post_form(url, fields)
@@ -135,7 +176,7 @@ def _number(value, default: int) -> int:
 
 
 def _poll(host: Host, device: dict, wait: Wait | None = None) -> str:
-    """Wait for the tester to enter the code; the token GitHub hands back."""
+    """Wait for the person to enter the code; the token GitHub hands back."""
     interval = _number(device.get("interval"), DEFAULT_INTERVAL)
     left = _number(device.get("expires_in"), DEFAULT_EXPIRES_IN)
     fields = {"client_id": GITHUB_CLIENT_ID, "device_code": device["device_code"], "grant_type": DEVICE_GRANT}
@@ -167,14 +208,11 @@ def _bind(host: Host, site: str, token: str) -> dict:
     signed, unsigned_because = sign_document(host, {"binding_version": BINDING_VERSION, "github_token": token}, NAMESPACE)
     if unsigned_because:
         raise SignInFailed(f"this Mac's key can't sign the sign-in: {unsigned_because}")
-    try:
-        response = host.post_json(site + BINDING_PATH, json.dumps(signed, ensure_ascii=False))
-    except NetworkError as error:
-        raise SignInFailed(f"couldn't reach {site} ({error})") from error
+    response = _lab(host, site + BINDING_PATH, signed)
     body = _json(response)
     if response.status == 201 and isinstance(body.get("login"), str):
         return body
-    raise SignInFailed(body.get("error") or f"{site} answered HTTP {response.status}")
+    raise SignInFailed(refusal(response, site))
 
 
 def _link_path(host: Host) -> str | None:
@@ -207,44 +245,36 @@ def _forget(host: Host) -> None:
 
 
 def _request(host: Host, site: str, request: str, **fields: str) -> dict:
-    """The site's answer to a signed status or sign-out request: {"signed_in", "login", "tester", "sign_in", ...}."""
+    """The lab's answer to a signed status or sign-out request: {"signed_in", "login", "tester", "sign_in", ...}."""
     document = {"request_version": REQUEST_VERSION, "request": request, "requested_at": host.now(), **fields}
     signed, unsigned_because = sign_document(host, document, NAMESPACE)
     if unsigned_because:
         raise SignInFailed(f"this Mac's key can't sign the request: {unsigned_because}")
-    try:
-        response = host.post_json(site + REQUEST_PATH, json.dumps(signed, ensure_ascii=False))
-    except NetworkError as error:
-        raise SignInFailed(f"couldn't reach {site} ({error})") from error
+    response = _lab(host, site + REQUEST_PATH, signed)
     body = _json(response)
     if response.status == 200 and isinstance(body.get("signed_in"), bool):
         if body["signed_in"] and not isinstance(body.get("login"), str):
-            raise SignInFailed(f"{site}'s answer didn't name the handle")
+            raise SignInFailed(f"{LAB_NAME}'s answer didn't name the handle")
         return body
-    raise SignInFailed(body.get("error") or f"{site} answered HTTP {response.status}")
+    raise SignInFailed(refusal(response, site))
 
 
-def signed_in_line(login: str, is_tester: bool) -> str:
-    if is_tester:
-        return f"Signed in as @{login} (tester: yes). This Mac's runs count as tester runs."
-    return f"Signed in as @{login} (tester: no): ask the maintainer to add you as a tester."
+def signed_in_line(login: str, verified: bool) -> str:
+    """What a sign-in means for this Mac's runs, as --sign-in, --status and the offer say it."""
+    if verified:
+        return f"Signed in as @{login}. This Mac's runs are published as Verified runs."
+    return f"Signed in as @{login}. This Mac's runs are published as Community runs; Verified runs come from Macs of the Omarchy M team."
 
 
 def _bound_line(bound: dict) -> str:
-    login = bound["login"]
-    if bound.get("tester"):
-        return f"Signed in as @{login}. From now on this Mac's runs count as tester runs; there's nothing else to do."
-    return (f"Signed in as @{login}, but @{login} isn't on the tester allowlist yet: ask the maintainer to add you as a tester. "
-            "Once they do, this Mac's runs count as tester runs.")
+    return signed_in_line(bound["login"], bool(bound.get("tester")))
 
 
 def _sign_in(host: Host, site: str, say: Callable[[str], None], waiting: str, wait: Wait | None = None) -> dict:
     device = _device_code(host)
     say(
-        "Tester sign-in with GitHub.\n"
-        f"Open {device['verification_uri']} (on any device) and enter this code:\n\n"
-        f"    {device['user_code']}\n\n"
-        + waiting
+        f"Sign this Mac in with GitHub. Open {device['verification_uri'].removeprefix('https://')} on any device "
+        f"and enter: {device['user_code']}\n" + waiting
     )
     bound = _bind(host, site, _poll(host, device, wait))
     _remember(host, login=bound["login"], tester=bool(bound.get("tester")))
@@ -252,10 +282,13 @@ def _sign_in(host: Host, site: str, say: Callable[[str], None], waiting: str, wa
 
 
 def sign_in(host: Host, site: str) -> int:
-    """Sign this Mac in as a tester on `site`; the exit status."""
+    """Sign this Mac in on `site`; the exit status."""
     try:
         bound = _sign_in(host, site, host.show, "Waiting for GitHub... (Ctrl-C cancels)")
     except SignInFailed as failed:
+        if str(failed) == BLOCKED:
+            host.show(BLOCKED)
+            return EXIT_FAILED
         host.show(f"Sign-in failed: {_reason(failed)}. Nothing changed; run omarchy-m-test --sign-in to try again.")
         return EXIT_FAILED
     except KeyboardInterrupt:
@@ -272,52 +305,55 @@ def offer(host: Host, say: Callable[[str], None], confirm: Callable[[str], bool]
     try:
         known = _request(host, site, STATUS)
     except SignInFailed:
-        return  # the site can't say whether this Mac is signed in already (an older CLI's sign-in): offer on a later run
+        return  # the lab can't say whether this Mac is signed in already (an older CLI's sign-in): offer on a later run
     if known["signed_in"]:
         _remember(host, login=known["login"], tester=bool(known.get("tester")))
         say(signed_in_line(known["login"], bool(known.get("tester"))))
         return
     if not confirm(OFFER_QUESTION):
         _remember(host, declined=True)
-        say("Not signing in: this run is a community run. omarchy-m-test --sign-in signs this Mac in any time.")
+        say(f"Not signing in: {COMMUNITY_RUN}. omarchy-m-test --sign-in signs this Mac in any time.")
         return
     waiting = f"Waiting up to {OFFER_WAIT_SECONDS // 60} minutes; press any key to skip and run without signing in."
     try:
         bound = _sign_in(host, site, say, waiting, Countdown(host))
     except SignInSkipped:
         _remember(host, declined=True)
-        say("Skipped signing in: this run is a community run. omarchy-m-test --sign-in signs this Mac in any time.")
+        say(f"Skipped signing in: {COMMUNITY_RUN}. omarchy-m-test --sign-in signs this Mac in any time.")
         return
     except SignInFailed as failed:
         _remember(host, declined=True)
-        say(f"Couldn't sign in ({_reason(failed)}): carrying on as a community run. omarchy-m-test --sign-in tries again any time.")
+        if str(failed) == BLOCKED:
+            say(f"{BLOCKED} {COMMUNITY_RUN[0].upper()}{COMMUNITY_RUN[1:]}.")
+        else:
+            say(f"Couldn't sign in ({_reason(failed)}): {COMMUNITY_RUN}. omarchy-m-test --sign-in tries again any time.")
         return
     say(_bound_line(bound))
 
 
 def status(host: Host, site: str) -> int:
-    """omarchy-m-test --status: whose handle this Mac is signed in as, as the site knows it."""
+    """omarchy-m-test --status: whose handle this Mac is signed in as, as the lab knows it."""
     try:
         known = _request(host, site, STATUS)
     except SignInFailed as failed:
         link = read_link(host) or {}
         if isinstance(link.get("login"), str):
-            host.show(f"This Mac was signed in as @{link['login']} when it last checked; couldn't check with the site now: {_reason(failed)}.")
+            host.show(f"This Mac was signed in as @{link['login']} when it last checked; couldn't check with {LAB_NAME} now: {_reason(failed)}.")
         else:
-            host.show(f"Couldn't check the sign-in with the site: {_reason(failed)}.")
+            host.show(f"Couldn't check the sign-in with {LAB_NAME}: {_reason(failed)}.")
         return EXIT_FAILED
     if known["signed_in"]:
         _remember(host, login=known["login"], tester=bool(known.get("tester")))
         host.show(signed_in_line(known["login"], bool(known.get("tester"))))
     else:
         if isinstance((read_link(host) or {}).get("login"), str):
-            _forget(host)  # unbound on the site (the admin, or another sign-out): the next run offers the sign-in again
-        host.show("Not signed in. omarchy-m-test --sign-in signs this Mac in as a tester.")
+            _forget(host)  # ended at the lab (its person, a Maintainer, or another sign-out): the next run offers the sign-in again
+        host.show("Not signed in: this Mac's runs are published as Community runs. omarchy-m-test --sign-in signs this Mac in with GitHub.")
     return EXIT_OK
 
 
 def sign_out(host: Host, site: str) -> int:
-    """omarchy-m-test --sign-out: unbind this Mac's key from its handle on the site and forget the sign-in.
+    """omarchy-m-test --sign-out: end this Mac's sign-in at the lab and forget it here.
     The sign-out names the sign-in it ends (the status says which), so a copy of it can't end a later one."""
     try:
         known = _request(host, site, STATUS)
@@ -326,13 +362,13 @@ def sign_out(host: Host, site: str) -> int:
             host.show("This Mac wasn't signed in. The next run offers to sign in.")
             return EXIT_OK
         if not isinstance(known.get("sign_in"), str):
-            raise SignInFailed(f"{site}'s answer didn't say which sign-in to end")
+            raise SignInFailed(f"{LAB_NAME}'s answer didn't say which sign-in to end")
         answer = _request(host, site, SIGN_OUT, sign_in=known["sign_in"])
     except SignInFailed as failed:
         host.show(f"Sign-out failed: {_reason(failed)}. Nothing changed; run omarchy-m-test --sign-out to try again.")
         return EXIT_FAILED
     _forget(host)
     login = answer.get("signed_out") or known["login"]
-    host.show(f"Signed out @{login}: this Mac's runs no longer count as tester runs (runs already uploaded keep theirs). "
-              "The next run offers to sign in again.")
+    host.show(f"Signed out @{login}. From now on this Mac's runs are published as Community runs; runs already uploaded stay as "
+              "they were published. The next run offers to sign in again.")
     return EXIT_OK

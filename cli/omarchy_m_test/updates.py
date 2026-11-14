@@ -1,20 +1,21 @@
 """Tell the user, before a run, when a newer release of the tool exists.
 
-Every tagged release publishes its version as a VERSION asset, so the latest
-release's version is one small GET. Any failure (offline, GitHub down, an
-odd answer) stays silent: the check must never stop or slow a run.
+Every Lab release publishes its number as a VERSION asset, so the latest
+one's is one small GET. A Release candidate is never GitHub's latest, and a
+number that is not X.Y.Z is never announced. Any failure (offline, GitHub
+down, an odd answer) stays silent: the check must never stop or slow a run.
 """
 
 from __future__ import annotations
 
 import re
 
-from . import TOOL_NAME, TOOL_VERSION
+from . import LAB_ADDRESS, TOOL_NAME, TOOL_VERSION
 from .host import Host, NetworkError
 
-RELEASES = "https://github.com/maralcbr/omarchy-m-testing/releases"
+RELEASES = "https://github.com/omacom/omarchy-maclab/releases"
 LATEST_VERSION_URL = RELEASES + "/latest/download/VERSION"
-INSTALL_COMMAND = "curl -fsSL https://omarchy-m-testing.org/install | bash"
+INSTALL_COMMAND = f"curl -fsSL {LAB_ADDRESS}/install | bash"
 
 _VERSION = re.compile(r"\A(\d+)\.(\d+)\.(\d+)\Z")
 

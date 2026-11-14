@@ -228,7 +228,7 @@ class UnsignedTest(unittest.TestCase):
         self.assertEqual(mac.written[REPORT_FILE], golden("m2-max-image2"))
         self.assertEqual([call[0] for call in mac.signed], ["/home/<user>/.local/state/omarchy-m-test/machine-key"])
         self.assertIn("This report isn't signed with this Mac's key: ssh-keygen isn't installed (it comes with openssh). "
-                      "The site only accepts signed reports.", mac.output)
+                      "Omarchy Mac Lab only accepts signed reports.", mac.output)
 
     def test_without_a_home_directory_there_is_nowhere_to_keep_the_key(self):
         mac = RecordedHost(recording(), answers=[ENTER, ENDED])

@@ -91,7 +91,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
-from . import bundled
+from . import TOOL_NAME, TOOL_VERSION, bundled
 
 COMMAND_TIMEOUT_SECONDS = 60
 # IPC to a session server (PipeWire, PulseAudio, D-Bus, systemd): an answer takes well under a second, or never comes.
@@ -122,6 +122,8 @@ QUIET_ENV = {"PAGER": "cat", "SYSTEMD_PAGER": "cat", "GIT_PAGER": "cat", "SYSTEM
 # Installing and removing temporary test packages downloads them first.
 PACKAGE_TIMEOUT_SECONDS = 1800
 HTTP_TIMEOUT_SECONDS = 30
+# Every request names the tool: the lab and its edge tell it from a browser and from other clients.
+USER_AGENT = f"{TOOL_NAME}/{TOOL_VERSION}"
 # GETs only look up the latest release; a slow or absent network must not hold up a run.
 GET_TIMEOUT_SECONDS = 5
 # File reads (sysfs, debugfs, configuration): a driver that never answers or a FIFO a config names must not hold the run.
@@ -519,7 +521,7 @@ class RealHost:
             url,
             data=data,
             method="POST",
-            headers={"Content-Type": content_type, "Accept": "application/json"},
+            headers={"Content-Type": content_type, "Accept": "application/json", "User-Agent": USER_AGENT},
         )
         try:
             with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
@@ -561,7 +563,7 @@ class RealHost:
         return done.stdout.decode("utf-8", "replace")
 
     def get(self, url: str) -> HttpResponse:
-        request = urllib.request.Request(url, headers={"Accept": "text/plain"})
+        request = urllib.request.Request(url, headers={"Accept": "text/plain", "User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(request, timeout=GET_TIMEOUT_SECONDS) as response:
                 return HttpResponse(response.status, response.read(4096).decode("utf-8", "replace"))

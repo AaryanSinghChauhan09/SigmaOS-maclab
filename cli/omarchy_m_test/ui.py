@@ -297,7 +297,7 @@ class StyledUi(Ui):
             self.host.show("\n" + self.paint("green", self._centred(self.theme.logo)) + "\n")
         else:
             self.host.show("\n" + self.pad + BOLD + self.paint("green", TOOL_NAME) + "\n")
-        caption = f"{TOOL_NAME} {TOOL_VERSION}: hardware test for Omarchy on Apple Silicon"
+        caption = f"{TOOL_NAME} {TOOL_VERSION}: Omarchy Mac Lab's hardware test for Apple Silicon"
         self.host.show(self.paint("dark_foreground", self._centred(caption)) + "\n")
 
     def text(self, text: str) -> None:

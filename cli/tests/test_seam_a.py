@@ -83,7 +83,7 @@ class FullRunTest(unittest.TestCase):
         main(["--dry-run"], mac)
 
         self.assertEqual(json.loads(mac.written[REPORT_FILE])["consent_version"], CONSENT_VERSION)
-        self.assertEqual(CONSENT_VERSION, 6)  # the disclaimer says a run offers the tester sign-in once
+        self.assertEqual(CONSENT_VERSION, 6)  # the disclaimer says a run offers the sign-in once
 
     def test_output_option_chooses_where_the_report_is_written(self):
         mac = host("m2-max-image2", answers=[ENTER, ENDED])
@@ -146,7 +146,7 @@ class UploadDeclinedOrFailedTest(unittest.TestCase):
         status = main(["--site", SITE], mac)
 
         self.assertEqual(status, 3)
-        self.assertIn("couldn't reach", mac.output)
+        self.assertIn(f"Omarchy Mac Lab cannot be reached right now. Your report is saved at {REPORT_FILE}.", mac.output)
 
 
 class DisclaimerTest(unittest.TestCase):

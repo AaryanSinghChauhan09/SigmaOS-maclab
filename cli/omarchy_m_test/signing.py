@@ -11,7 +11,7 @@ canonical form: the report without its "signature" member, as JSON with keys
 sorted, no whitespace and non-ASCII kept as UTF-8, exactly what
 json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False) gives.
 Reports have no floating-point numbers, so this form is the same in any
-language; the site (site/app/models/machine_signature.rb) rebuilds it to verify.
+language; Omarchy Mac Lab (internal/reports) rebuilds it to verify.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def sign(host: Host, report: dict) -> tuple[dict, str | None]:
 
 def sign_document(host: Host, document: dict, namespace: str) -> tuple[dict, str | None]:
     """`document` with the machine key's signature over its canonical form under
-    `namespace` (a report, or a tester sign-in), or as it was and why not."""
+    `namespace` (a report, or a Mac sign-in), or as it was and why not."""
     path = key_path(host)
     if path is None:
         return document, "there's no home directory to keep this Mac's key in"

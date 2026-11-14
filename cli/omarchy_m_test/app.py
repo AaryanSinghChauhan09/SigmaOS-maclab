@@ -13,7 +13,7 @@ import argparse
 import json
 from typing import Sequence
 
-from . import TOOL_NAME, TOOL_VERSION, presence, privacy, report, signing, system, tester, updates
+from . import LAB_ADDRESS, LAB_NAME, TOOL_NAME, TOOL_VERSION, presence, privacy, report, signing, system, tester, updates
 from .catalogue import CatalogueError
 from .consent import ACCEPT_PROMPT, DISCLAIMER, accepted
 from .explain import explain, line, load_catalogue
@@ -25,7 +25,7 @@ from .sections import APPLE
 from .session import PROGRESS, Changes, Checkpoint, Context, Section, State, run_key, skipped
 from .ui import Ui, progress_of
 
-DEFAULT_SITE = "https://omarchy-m-testing.org"
+DEFAULT_SITE = LAB_ADDRESS
 DEFAULT_OUTPUT = "omarchy-m-test-report.json"
 UPLOAD_PATH = "/api/v1/reports"
 
@@ -60,18 +60,19 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parse(argv: Sequence[str], host: Host) -> argparse.Namespace:
-    parser = _Parser(host, prog=TOOL_NAME, description="Test this Mac's hardware under Omarchy.")
+    parser = _Parser(host, prog=TOOL_NAME, description=f"{LAB_NAME}'s hardware test: test this Mac's hardware under Omarchy.")
     parser.add_argument("--dry-run", action="store_true", help="run and write the report, but never upload it")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help=f"where to write the report (default: {DEFAULT_OUTPUT})")
-    parser.add_argument("--site", default=DEFAULT_SITE, help=f"site to upload to (default: {DEFAULT_SITE})")
+    parser.add_argument("--site", default=DEFAULT_SITE, help=f"the {LAB_NAME} address to upload and sign in to (default: {DEFAULT_SITE})")
     parser.add_argument("--catalogue", metavar="FILE", help="use this feature catalogue instead of the bundled one (for trying a catalogue change)")
     parser.add_argument("--explain", metavar="REPORT", help="explain a saved report's results against the catalogue; runs no checks")
     parser.add_argument("--record", metavar="FILE", help="also save what this Mac answered, scrubbed, as a test recording")
     parser.add_argument("--unattended", action="store_true", help="nobody is at the Mac: run the automatic checks only, ask nothing about the hardware and skip anything disruptive; the report says so")
     parser.add_argument("--skip", metavar="SECTION", action="append", default=[], help="skip a section (repeat, or separate with commas); the run lists them")
-    parser.add_argument("--sign-in", action="store_true", help="testers: sign this Mac in with GitHub, once; its runs then count as tester runs. Runs no checks")
-    parser.add_argument("--sign-out", action="store_true", help="testers: unlink this Mac from its GitHub handle; its later runs are community runs. Runs no checks")
-    parser.add_argument("--status", action="store_true", help="show whether this Mac is signed in as a tester, and as whom. Runs no checks")
+    parser.add_argument("--upload", metavar="REPORT", help="upload a report an earlier run saved, as it is; Verified or Community is decided by this Mac's sign-in now. Runs no checks")
+    parser.add_argument("--sign-in", action="store_true", help="sign this Mac in with GitHub, once; runs from Omarchy M team members' Macs are published as Verified runs. Runs no checks")
+    parser.add_argument("--sign-out", action="store_true", help="end this Mac's sign-in; its later runs are published as Community runs. Runs no checks")
+    parser.add_argument("--status", action="store_true", help="show whether this Mac is signed in, as whom, and how its runs are published. Runs no checks")
     parser.add_argument("--version", action="version", version=f"{TOOL_NAME} {TOOL_VERSION}")
     gpu=parser.add_mutually_exclusive_group()
     gpu.add_argument("--gpu-benchmark",action="store_true",help="GPU-only versioned experiment; saves a separate local signed document and never uploads")
@@ -93,7 +94,7 @@ def main(argv: Sequence[str], host: Host, sections: Sequence[Section] = APPLE) -
     if args.gpu_benchmark or args.gpu_compare:
         from . import gpu_benchmark
         # Dedicated mode cannot fall through to hardware/disruptive sections,
-        # online update notices, tester sign-in or the upload path.
+        # online update notices, Mac sign-in or the upload path.
         return gpu_benchmark.cli(args,Guarded(host))
 
     if args.sign_in:
@@ -102,6 +103,8 @@ def main(argv: Sequence[str], host: Host, sections: Sequence[Section] = APPLE) -
         return tester.sign_out(Guarded(host), args.site.rstrip("/"))
     if args.status:
         return tester.status(Guarded(host), args.site.rstrip("/"))
+    if args.upload:
+        return _upload_saved(Guarded(host), args)
 
     if not args.record:
         return _interruptible(args, Guarded(host), sections)
@@ -271,7 +274,7 @@ def _run(args: argparse.Namespace, host: Host, sections: Sequence[Section]) -> i
     if unsigned_because:
         host.show(
             f"This report isn't signed with this Mac's key: {unsigned_because}. "
-            "The site only accepts signed reports."
+            f"{LAB_NAME} only accepts signed reports."
         )
 
     if args.dry_run:
@@ -283,7 +286,7 @@ def _run(args: argparse.Namespace, host: Host, sections: Sequence[Section]) -> i
         host.show(f"Not uploaded. The report is saved at {args.output}.")
         return EXIT_OK
 
-    return _upload(host, site, text)
+    return _upload(host, site, text, args.output)
 
 
 def _report_failed_restores(host: Host, changes: Changes) -> None:
@@ -335,12 +338,41 @@ def _choose(ui: Ui, sections: Sequence[Section], skip: set[str], blocked: dict[s
     return [section.id for section in offered if section.title in kept]
 
 
-def _upload(host: Host, site: str, text: str) -> int:
+def _upload_saved(host: Host, args: argparse.Namespace) -> int:
+    """--upload REPORT: send a report a run saved earlier, exactly as it was saved (signed at that run)."""
+    path = args.upload
+    if args.dry_run:
+        host.show("--upload sends a saved report and --dry-run never uploads: use one of them. Nothing was uploaded.")
+        return EXIT_BAD_INPUT
+    try:
+        text = host.read_file(path).decode("utf-8")
+    except (OSError, ValueError) as problem:
+        host.show(f"Can't read {path} ({getattr(problem, 'strerror', None) or problem}). Nothing was uploaded.")
+        return EXIT_BAD_INPUT
+    try:
+        saved = json.loads(text)
+    except ValueError:
+        saved = None
+    if not isinstance(saved, dict):
+        host.show(f"{path} isn't a report {TOOL_NAME} saved. Nothing was uploaded.")
+        return EXIT_BAD_INPUT
+    return _upload(host, args.site.rstrip("/"), text, path)
+
+
+def _dark(host: Host, site: str, path: str) -> int:
+    """The lab can't be reached: the report is safe on the Mac and goes up later."""
+    host.show(f"{tester.DARK}. Your report is saved at {path}.")
+    host.show(f"Upload it later: {TOOL_NAME} --upload {path}" + ("" if site == DEFAULT_SITE else f" --site {site}"))
+    return EXIT_UPLOAD_FAILED
+
+
+def _upload(host: Host, site: str, text: str, path: str) -> int:
     try:
         response = host.post_json(site + UPLOAD_PATH, text)
-    except NetworkError as error:
-        host.show(f"Upload failed: couldn't reach {site} ({error}). The report is saved locally.")
-        return EXIT_UPLOAD_FAILED
+    except NetworkError:
+        return _dark(host, site, path)
+    if tester.unreachable(response):
+        return _dark(host, site, path)
 
     try:
         body = json.loads(response.body)
@@ -353,11 +385,13 @@ def _upload(host: Host, site: str, text: str) -> int:
         host.show(f"Uploaded. Your report: {body['report_url']}")
         host.show(f"Keep this link to delete it later: {body['deletion_url']}")
         if body.get("tester") is True:
-            host.show("It counts as a tester run.")
+            host.show("It counts as a Verified run.")
+        return EXIT_OK
+    if response.status == 409 and isinstance(body.get("report_url"), str) and body["report_url"]:
+        host.show(f"{body.get('error') or 'Already uploaded'}. Your report: {body['report_url']}")
         return EXIT_OK
 
-    message = body.get("error") or f"the site answered HTTP {response.status}"
-    host.show(f"Upload failed: {message}")
+    host.show(f"Upload failed: {tester.refusal(response, site)}")
     details = body.get("details")
     for detail in details[:10] if isinstance(details, list) else []:
         host.show(f"  - {detail}")

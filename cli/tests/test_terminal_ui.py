@@ -146,7 +146,7 @@ class OmarchyLookTest(unittest.TestCase):
         self.assertIn("--no-limit", choose)
         self.assertEqual(choose[choose.index("--selected") + 1], "*")
         self.assertEqual(choose[-len(OFFERED_OVER_SSH):], OFFERED_OVER_SSH)
-        self.assertEqual(confirm[:3], ["gum", "confirm", "Upload this report to https://omarchy-m-testing.org? [Y/n]"])
+        self.assertEqual(confirm[:3], ["gum", "confirm", "Upload this report to https://lab.omarchy-mac.org? [Y/n]"])
         self.assertNotIn("--default=false", confirm)
         self.assertIn("Not uploaded", mac.output)
         self.assertEqual(mac.written, {REPORT_FILE: GOLDEN})

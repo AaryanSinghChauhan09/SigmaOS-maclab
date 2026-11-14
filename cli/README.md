@@ -4,9 +4,10 @@ The `omarchy-m-test` command. Python 3 standard library only.
 
     bin/omarchy-m-test [--dry-run] [--output FILE] [--site URL] [--catalogue FILE] [--record FILE] [--skip SECTION] [--unattended]
     bin/omarchy-m-test --explain REPORT [--catalogue FILE]
+    bin/omarchy-m-test --upload REPORT [--site URL]
     bin/omarchy-m-test --sign-in | --sign-out | --status [--site URL]
 
-It refuses non-Apple machines, shows the disclaimer (Enter accepts), runs the checks, writes the report, shows it and asks before uploading it to the site (`--site http://localhost:3000` for a local site).
+It refuses non-Apple machines, shows the disclaimer (Enter accepts), runs the checks, writes the report, shows it and asks before uploading it to Omarchy Mac Lab, `https://lab.omarchy-mac.org` (`--site http://127.0.0.1:8080` for a lab under development). A test needs no lab: it runs in full on any Mac, and when the lab can't be reached only the upload waits. The run then ends with `Omarchy Mac Lab cannot be reached right now. Your report is saved at <path>.` and `Upload it later: omarchy-m-test --upload <path>`.
 
 ## Automatic checks
 
@@ -108,7 +109,7 @@ The run names its build before the checks and again with the report: the Omarchy
 
 Every result is explained against the feature catalogue (`../catalogue/catalogue.json`; a release ships it as `omarchy_m_test/catalogue.json`): works, not yet supported by Aurora, not yet supported by Asahi, unknown hardware and so on. The report records the catalogue version. `--catalogue FILE` runs with a draft catalogue; `--explain REPORT` re-explains a saved report against the current catalogue without running anything.
 
-Before each run it looks up the latest release's version (`releases/latest/download/VERSION` on GitHub, 5 s timeout) and says so when a newer one exists, with the command to upgrade. Offline or any odd answer: it says nothing and carries on.
+Before each run it looks up the latest Lab release's number (`releases/latest/download/VERSION` of `omacom/omarchy-maclab` on GitHub, 5 s timeout) and says so when a newer one exists, with the lab's install line (`curl -fsSL https://lab.omarchy-mac.org/install | bash`). A Release candidate is never GitHub's latest, and a number that isn't `X.Y.Z` is never announced. Offline or any odd answer: it says nothing and carries on.
 
 ## SEP and Touch ID diagnostics
 
@@ -212,19 +213,54 @@ Every report passes `omarchy_m_test/privacy.py` before it is written, shown or u
 
 ## Machine key
 
-On its first run the CLI creates an ed25519 key for this Mac at `$XDG_STATE_HOME/omarchy-m-test/machine-key` (`~/.local/state/...`; 0600, in a 0700 directory) with `ssh-keygen`, asking nothing, and reuses it on every later run. Every report carries its public key and a signature (`ssh-keygen -Y sign`, namespace `omarchy-m-test-report`) over its canonical form: the report without `signature`, as JSON with keys sorted, no whitespace and non-ASCII as UTF-8 (`omarchy_m_test/signing.py`). The private key never leaves the Mac, and record mode never records the key. The site refuses unsigned or tampered reports, groups reports by a keyed digest of the public key and never shows or exports the key. Without `ssh-keygen` the report is written unsigned and the run says the site won't take it.
+On its first run the CLI creates an ed25519 key for this Mac at `$XDG_STATE_HOME/omarchy-m-test/machine-key` (`~/.local/state/...`; 0600, in a 0700 directory) with `ssh-keygen`, asking nothing, and reuses it on every later run. Every report carries its public key and a signature (`ssh-keygen -Y sign`, namespace `omarchy-m-test-report`) over its canonical form: the report without `signature`, as JSON with keys sorted, no whitespace and non-ASCII as UTF-8 (`omarchy_m_test/signing.py`). The private key never leaves the Mac, and record mode never records the key. The lab refuses unsigned or tampered reports, groups reports by a keyed digest of the public key and never shows or exports the key. Without `ssh-keygen` the report is written unsigned and the run says Omarchy Mac Lab won't take it.
 
-## Tester sign-in
+## Mac sign-in
 
     bin/omarchy-m-test --sign-in [--site URL]
     bin/omarchy-m-test --status [--site URL]
     bin/omarchy-m-test --sign-out [--site URL]
 
-Once per Mac, a tester signs in with GitHub's device flow (`omarchy_m_test/tester.py`): the CLI asks GitHub for a short code with only the `omarchy-m-testing` OAuth app's client ID (no secret ships in the tool), shows it with github.com/login/device, and polls at GitHub's interval (slower on `slow_down`) until the code is entered, cancelled or expires. It then sends the site the token in a small document signed by the machine key under the namespace `omarchy-m-test-tester` (so it can't pass for a report). The site checks the token with GitHub, binds the GitHub handle to the machine key and revokes the token; the CLI never writes the token anywhere. From then on nothing changes in a run: the site counts every report that machine signs as a tester run while the handle is on its tester allowlist, and says so after the upload. It runs no checks. A handle that isn't on the allowlist is still bound, and the CLI says to ask the maintainer to add it.
+Once per Mac, a person signs it in with GitHub's device flow (`omarchy_m_test/tester.py`): the CLI asks GitHub for a short code with only the lab's OAuth app's client ID (no secret ships in the tool), prints `Sign this Mac in with GitHub. Open github.com/login/device on any device and enter: XXXX-XXXX`, and polls at GitHub's interval (slower on `slow_down`) until the code is entered, cancelled or expires. It then sends Omarchy Mac Lab the token in a small document signed by the machine key under the namespace `omarchy-m-test-tester` (so it can't pass for a report). The lab checks the token with GitHub, ties the GitHub account to the machine key and revokes the token; the CLI never writes the token anywhere. It then prints one line:
 
-The Mac stays signed in across runs: the CLI remembers the handle (never a token) in `$XDG_STATE_HOME/omarchy-m-test/tester.json` (0600). A run (not `--dry-run` or `--record`) on a Mac with no such record first asks the site whether its key is signed in already (a Mac signed in with an older CLI; when the site can't be asked, the offer waits for a later run), and otherwise asks once, after the disclaimer and before the sections: `Sign in with GitHub so your runs count as a tester? [Y/n]`. Over SSH too: the device flow only shows the code and URL, to open on any device. On yes the code waits at most 5 minutes, with a countdown, and any key skips it; a skip, a timeout or a failure carries on as a community run with a one-line note. Any answer is remembered, so the offer never comes back; `--sign-in` works any time.
+- a member of the Omarchy M team: `Signed in as @x. This Mac's runs are published as Verified runs.`
+- anyone else: `Signed in as @x. This Mac's runs are published as Community runs; Verified runs come from Macs of the Omarchy M team.`
+- a Blocked person: `This GitHub account is blocked from Omarchy Mac Lab.`
 
-`--status` says whom the Mac is signed in as and whether that handle is a tester (`Signed in as @handle (tester: yes)`, or `Not signed in.`), as the site knows it. `--sign-out` unbinds the machine key from its handle on the site and forgets the local record: later runs are community runs (runs already uploaded keep theirs), and the next run offers the sign-in again. Both send `POST /api/v1/tester_requests` a small document signed by the machine key under `omarchy-m-test-tester` (`{"request_version": 1, "request": "status" | "sign-out", "requested_at": <unix seconds>}`, which the site refuses when dated more than a day from its clock). The status names the sign-in (`sign_in`), and `--sign-out` asks for the status first and names that sign-in in its request, so a copy of a sign-out can't end a later sign-in. Neither runs checks.
+From then on nothing changes in a run: the lab decides Verified or Community at each upload, from the Mac's sign-in at that moment, and after a Verified upload the CLI says `It counts as a Verified run.` A first sign-in makes the lab know the person; it gives no browser session, no Lab token and no leave to lend. It runs no checks.
+
+The wire and the Mac keep the names they had: `/api/v1/tester_bindings`, `/api/v1/tester_requests`, the `tester` key, `tester.json` and the state folder. No line a person reads says "tester".
+
+The Mac stays signed in across runs: the CLI remembers the handle (never a token) in `$XDG_STATE_HOME/omarchy-m-test/tester.json` (0600). A run (not `--dry-run`, `--record` or `--unattended`) on a Mac with no such record first asks the lab whether its key is signed in already (when the lab can't be asked, the offer waits for a later run), and otherwise asks once, after the disclaimer and before the sections: `Sign in with GitHub? Runs from Omarchy M team members' Macs are published as Verified. [Y/n]`. Over SSH too: the device flow only shows the code and address, to open on any device. On yes the code waits at most 5 minutes, with a countdown, and any key skips it; a skip, a timeout or a failure carries on with a one-line note that the run is published as a Community run. Any answer is remembered, so the offer never comes back; `--sign-in` works any time.
+
+`--status` says whom the Mac is signed in as, in the same words as `--sign-in`, or `Not signed in: ...`, as the lab knows it. `--sign-out` ends the sign-in at the lab and forgets the local record: later runs are published as Community runs (runs already uploaded stay as they were published), and the next run offers the sign-in again. Both send `POST /api/v1/tester_requests` a small document signed by the machine key under `omarchy-m-test-tester` (`{"request_version": 1, "request": "status" | "sign-out", "requested_at": <unix seconds>}`, refused when dated more than a day from the lab's clock). The status names the sign-in (`sign_in`), and `--sign-out` asks for the status first and names that sign-in in its request, so a copy of a sign-out can't end a later sign-in. Neither runs checks.
+
+## A saved report
+
+    bin/omarchy-m-test --upload REPORT [--site URL]
+
+Sends a report an earlier run saved, exactly as the file is: it runs no checks, asks nothing, and the report is the one the Mac's key signed at that run. Verified or Community is decided by that Mac's sign-in at the moment of upload. A file that can't be read or isn't a JSON object sends nothing (exit 4).
+
+## What the lab answers
+
+Every request carries `User-Agent: omarchy-m-test/<version>` and `Accept: application/json`. The CLI reads only JSON objects and one-line plain answers; a page is never printed.
+
+| Request | Answer | What the CLI does |
+|---|---|---|
+| `POST /api/v1/reports` (the report) | 201 `{"id", "report_url", "deletion_url", "tester"}` | prints both links; with `"tester": true`, `It counts as a Verified run.` |
+| | 409 `{"error": "Already uploaded", "report_url"}` | `Already uploaded. Your report: <link>`, exit 0 |
+| | 409 `{"error": "Already uploaded", "details": ["The report was deleted since."]}` | `Upload failed: Already uploaded` and the detail, exit 3 |
+| | 403 `{"error": <the line pointing at the old site>}` in Preview; 400, 411, 413, 422, 429, 503 `{"error", "details"?}` | `Upload failed: <error>` and up to ten details, exit 3 |
+| `POST /api/v1/tester_bindings` `{"binding_version": 1, "github_token", "signature"}` | 201 `{"login", "tester"}` | writes `tester.json`, prints the Verified or the Community line |
+| | 403 `{"error": "This GitHub account is blocked from Omarchy Mac Lab."}` | prints that sentence alone, exit 5 |
+| | any other status with `{"error"}` (403 in Preview, 401, 413, 422, 429, 503) | `Sign-in failed: <error> Nothing changed; ...`, exit 5 |
+| `POST /api/v1/tester_requests` `{"request_version": 1, "request": "status", "requested_at", "signature"}` | 200 `{"signed_in": true, "login", "tester", "sign_in"}` or `{"signed_in": false}` | the same lines; forgets a stale `tester.json` |
+| `POST /api/v1/tester_requests` `{..., "request": "sign-out", "sign_in"}` | 200 `{"signed_in": false, "signed_out": <handle or null>}`; 409 `{"error"}` when the Mac signed in again since | `Signed out @x. ...`; or `Sign-out failed: <error>` |
+| any of them, at the Alias | 421, one plain line naming the Lab address | prints that line as the reason |
+| any of them, while the lab is Dark | no answer, or a 5xx with no `error` in a JSON object (the edge's page or its own words) | `Omarchy Mac Lab cannot be reached right now.`; after a run or `--upload`, also `Your report is saved at <path>.` and `Upload it later: omarchy-m-test --upload <path>` |
+| any of them, anything else that is not JSON (an edge challenge) | a page | `<address> answered HTTP <status>.` |
+
+`tests/fake_lab.py` answers this way, and `tests/test_lab_wire.py` runs the real host against it over HTTP; with `OMARCHY_M_TEST_LABD=<a built labd>` the upload also runs against that labd.
 
 ## Recording a Mac
 

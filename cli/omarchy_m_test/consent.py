@@ -3,7 +3,8 @@
 CONSENT_VERSION = 6
 
 DISCLAIMER = """\
-omarchy-m-test checks how well Omarchy supports this Mac's hardware.
+omarchy-m-test is Omarchy Mac Lab's hardware test: it checks how well
+Omarchy supports this Mac's hardware.
 
 What it does:
   - Reads facts about this Mac (model, chip, kernel) and runs checks.
@@ -16,10 +17,12 @@ What it does:
     packages (installed without asking again, shown as they're installed,
     never a kernel, firmware or boot package and never an upgrade; only
     the ones it installed are removed when their section ends).
-  - Offers once to sign this Mac in with GitHub, so its runs count as a
-    tester's (omarchy-m-test --status shows it, --sign-out undoes it).
+  - Offers once to sign this Mac in with GitHub: runs from Omarchy M team
+    members' Macs are published as Verified runs, everyone else's as
+    Community runs (omarchy-m-test --status shows it, --sign-out undoes it).
   - Writes a report file and shows you the exact report.
-  - Uploads the report only if you say yes after seeing it (never with --dry-run).
+  - Uploads the report to Omarchy Mac Lab only if you say yes after seeing
+    it (never with --dry-run).
 
 What it never does:
   - Reboot your Mac, or touch disk encryption or boot files.
