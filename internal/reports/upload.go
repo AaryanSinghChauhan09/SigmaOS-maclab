@@ -3,6 +3,7 @@ package reports
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,10 +61,25 @@ func NewUploads(store *Store, rules *Rules, now func() time.Time) *Uploads {
 }
 
 // Receive takes a report from its text on: steps 4 to 11. It is the one way
-// in for a report, the lab's own included; installURL is where the refusals
-// that ask for an update send the user. The error is the lab's own failure
-// to store, and comes with a refusal of status 500.
+// in for a report; installURL is where the refusals that ask for an update
+// send the user. The error is the lab's own failure to store, and comes with
+// a refusal of status 500.
 func (u *Uploads) Receive(body []byte, installURL string) (*Stored, *Refusal, error) {
+	return u.receive(body, installURL, nil)
+}
+
+// ReceiveFromLab is Receive for the report of a lab job's own run, handed
+// over inside labd: the same steps and the Mac's limit, and no address to
+// count. What it adds is the record of how the report arrived. Nothing a
+// request carries leads here: an upload is Handle's, whatever it claims.
+func (u *Uploads) ReceiveFromLab(body []byte, installURL string, lab Lab) (*Stored, *Refusal, error) {
+	if lab.Job == "" {
+		return nil, notStored, errors.New("reports: a report from the lab names its job")
+	}
+	return u.receive(body, installURL, &lab)
+}
+
+func (u *Uploads) receive(body []byte, installURL string, lab *Lab) (*Stored, *Refusal, error) {
 	judged, refusal := u.rules.Judge(body, installURL)
 	if refusal != nil {
 		return nil, refusal, nil
@@ -80,7 +96,7 @@ func (u *Uploads) Receive(body []byte, installURL string) (*Stored, *Refusal, er
 		return nil, &Refusal{Status: http.StatusTooManyRequests,
 			Error: fmt.Sprintf("Too many uploads from this Mac: at most %d an hour. Try again later; the report is saved on your Mac.", UploadsPerHourPerMachine)}, nil
 	}
-	stored, heldAs, repeat, err := u.store.add(judged, now, u.OnMTeam)
+	stored, heldAs, repeat, err := u.store.add(judged, now, u.OnMTeam, lab)
 	if err != nil {
 		return nil, notStored, err
 	}

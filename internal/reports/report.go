@@ -28,9 +28,20 @@ type Report struct {
 	// Verified is the verdict stamped when the report came: a Verified run,
 	// from a Mac signed in as an M team member then. Otherwise a Community run.
 	Verified bool
+	// LabJob is the job whose run the lab published the report from, "" for
+	// a report that came by its Mac's own tool. AskedHandle and
+	// AskedAccountID are who asked for it to be published, "" and 0 when the
+	// lab published it by itself.
+	LabJob         string
+	AskedHandle    string
+	AskedAccountID int64
 
 	deletionTokenDigest string
 }
+
+// ByLab reports whether the lab published the report from a job's run; a
+// report that is not came by its Mac's own tool.
+func (r *Report) ByLab() bool { return r.LabJob != "" }
 
 // ErrNoReport is the answer for a report that is not there, and for a
 // deletion link whose secret is not the report's.
@@ -94,7 +105,7 @@ func newDeletionToken() string {
 
 type scanner interface{ Scan(...any) error }
 
-const reportColumns = `id, public_id, deletion_token_digest, schema_version, body, created_at, hidden_at, machine_id, handle, account_id, verified`
+const reportColumns = `id, public_id, deletion_token_digest, schema_version, body, created_at, hidden_at, machine_id, handle, account_id, verified, lab_job, asked_handle, asked_account_id`
 
 func scanReport(row scanner) (*Report, error) {
 	var (
@@ -105,8 +116,11 @@ func scanReport(row scanner) (*Report, error) {
 		machine   sql.NullString
 		handle    sql.NullString
 		accountID sql.NullInt64
+		labJob    sql.NullString
+		asked     sql.NullString
+		askedID   sql.NullInt64
 	)
-	err := row.Scan(&r.ID, &r.PublicID, &r.deletionTokenDigest, &r.SchemaVersion, &body, &created, &hidden, &machine, &handle, &accountID, &r.Verified)
+	err := row.Scan(&r.ID, &r.PublicID, &r.deletionTokenDigest, &r.SchemaVersion, &body, &created, &hidden, &machine, &handle, &accountID, &r.Verified, &labJob, &asked, &askedID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoReport
 	}
@@ -115,6 +129,7 @@ func scanReport(row scanner) (*Report, error) {
 	}
 	r.Body, r.CreatedAt, r.Hidden = []byte(body), time.UnixMicro(created).UTC(), hidden.Valid
 	r.MachineID, r.Handle, r.AccountID = machine.String, handle.String, accountID.Int64
+	r.LabJob, r.AskedHandle, r.AskedAccountID = labJob.String, asked.String, askedID.Int64
 	return &r, nil
 }
 
@@ -132,6 +147,17 @@ type Stored struct {
 	AccountID     int64
 	// Verified is the verdict the report was stamped with.
 	Verified bool
+	// MachineID tells the report's Mac from another: of its Machine key.
+	MachineID string
+}
+
+// Lab is how a report the lab publishes arrived: the job whose run made it,
+// and who asked for it to be published, "" and 0 when the lab published it
+// by itself.
+type Lab struct {
+	Job       string
+	Handle    string
+	AccountID int64
 }
 
 // held tells of the report with that digest: whether the lab has stored it,
@@ -160,8 +186,10 @@ func heldIn(db queryer, digest string) (publicID string, held bool, err error) {
 // team member at upload, whoever uploads it; onMTeam says who is one, and
 // nil says nobody. The stamp is never recomputed. repeat is true, and
 // nothing is stored, when the lab has stored the report before; heldAs is
-// then its public id, "" once it was deleted.
-func (s *Store) add(judged *Judged, at time.Time, onMTeam func(accountID int64) bool) (stored *Stored, heldAs string, repeat bool, err error) {
+// then its public id, "" once it was deleted. lab is how the report arrived
+// when the lab publishes it, nil for one that came by its Mac's own tool: it
+// changes nothing else.
+func (s *Store) add(judged *Judged, at time.Time, onMTeam func(accountID int64) bool, lab *Lab) (stored *Stored, heldAs string, repeat bool, err error) {
 	digest := Digest(judged.MachineID, judged.Body)
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -179,7 +207,7 @@ func (s *Store) add(judged *Judged, at time.Time, onMTeam func(accountID int64) 
 		heldAs, _, err := heldIn(tx, digest)
 		return nil, heldAs, true, err
 	}
-	stored = &Stored{PublicID: newPublicID(), DeletionToken: newDeletionToken()}
+	stored = &Stored{PublicID: newPublicID(), DeletionToken: newDeletionToken(), MachineID: judged.MachineID}
 	var handle sql.NullString
 	var accountID sql.NullInt64
 	err = tx.QueryRow(`SELECT handle, account_id FROM mac_sign_ins WHERE machine_id = ?`, judged.MachineID).Scan(&handle, &accountID)
@@ -188,8 +216,14 @@ func (s *Store) add(judged *Judged, at time.Time, onMTeam func(accountID int64) 
 	}
 	stored.Handle, stored.AccountID = handle.String, accountID.Int64
 	stored.Verified = accountID.Valid && onMTeam != nil && onMTeam(accountID.Int64)
-	res, err = tx.Exec(`INSERT INTO reports (public_id, deletion_token_digest, schema_version, body, created_at, updated_at, machine_id, handle, account_id, verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		stored.PublicID, tokenDigest(stored.DeletionToken), judged.SchemaVersion, string(judged.Body), now, now, judged.MachineID, handle, accountID, stored.Verified)
+	var labJob, asked sql.NullString
+	var askedID sql.NullInt64
+	if lab != nil {
+		labJob = sql.NullString{String: lab.Job, Valid: true}
+		asked, askedID = sql.NullString{String: lab.Handle, Valid: lab.AccountID != 0}, sql.NullInt64{Int64: lab.AccountID, Valid: lab.AccountID != 0}
+	}
+	res, err = tx.Exec(`INSERT INTO reports (public_id, deletion_token_digest, schema_version, body, created_at, updated_at, machine_id, handle, account_id, verified, lab_job, asked_handle, asked_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		stored.PublicID, tokenDigest(stored.DeletionToken), judged.SchemaVersion, string(judged.Body), now, now, judged.MachineID, handle, accountID, stored.Verified, labJob, asked, askedID)
 	if err != nil {
 		return nil, "", false, err
 	}
