@@ -77,7 +77,7 @@ func serveMCP(ctx context.Context) error {
 		BootTimeoutSec    int           `json:"boot_timeout_sec,omitempty"`
 		ScriptTimeoutSec  int           `json:"script_timeout_sec,omitempty" jsonschema:"time each script test may run (default 300, at most 14400), e.g. 5400 for a hands-on session that waits for a person"`
 		OMTAllow          []string      `json:"omt_allow,omitempty" jsonschema:"omarchy-m-test checks this kernel is expected to fail; hardware.drivers:<compatible> allows one unbound node"`
-		Publish           bool          `json:"publish,omitempty" jsonschema:"publish the omarchy-m-test report to omarchy-m-testing.org; only runs on the Mac's known-good kernel qualify"`
+		Publish           bool          `json:"publish,omitempty" jsonschema:"publish the run's omarchy-m-test report on the lab, as asked by you; only a Known-good run qualifies, never a test kernel"`
 		WaitSec           int           `json:"wait_sec,omitempty" jsonschema:"wait up to this long for the result (max 900); 0 returns once queued"`
 	}
 	mcp.AddTool(s, &mcp.Tool{Name: "lab_run", Description: "Boot a kernel on a Mac once and run tests. Give source (a GitHub URL) to build it first, or a kernel artifact. Returns the job; use lab_wait for the result."},
@@ -129,7 +129,7 @@ func serveMCP(ctx context.Context) error {
 			return submitAndWait(ctx, c, spec, a.WaitSec, text)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "lab_publish", Description: "Upload a finished job's omarchy-m-test report to omarchy-m-testing.org. Only runs on the Mac's known-good (packaged) kernel qualify; lab kernels are refused because the site would file them under the wrong kernel."},
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_publish", Description: "Publish a finished job's omarchy-m-test report on the lab: a Maintainer any job's, an M team member their own job's. Only a Known-good run on a packaged kernel qualifies; a test-kernel run is refused because it would be filed under the wrong kernel, and an Installed run is never published. A repeat answers Already uploaded with the report's link."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a struct {
 			JobID string `json:"job_id"`
 		}) (*mcp.CallToolResult, any, error) {

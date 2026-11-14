@@ -67,7 +67,8 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
                                       set a finished job aside in every lab gate report, e.g. a failure the lab
                                       caused; the gate lists who set it aside, why and when. --clear counts it again
   lab retry <job> [--no-wait]         run a finished job again: same Mac, kernel (or source commit), tests and cmdline
-  lab publish <job>                   upload a known-good run's omarchy-m-test report to omarchy-m-testing.org
+  lab publish <job>                   publish a Known-good run's omarchy-m-test report on the lab: a Maintainer any
+                                      job's, an M team member their own job's. Never a test-kernel or an Installed run
   lab lease <device> [--ttl 4h] | lab release <device> [--force]
                                       take a Lease on a Mac, for 4 hours unless --ttl says otherwise (a Maintainer
                                       up to 24h): until it ends only your jobs run on it, and others' queued
@@ -306,7 +307,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		noWait := fs.Bool("no-wait", false, "queue and return")
 		scriptTimeout := fs.Duration("script-timeout", 0, "time each --script/--gui-script test may run, e.g. 90m for a hands-on session (default 5m, at most 4h)")
 		omtAllow := fs.String("omt-allow", "", "omarchy-m-test checks this kernel is expected to fail, comma-separated (hardware.drivers:<compatible> for one unbound node)")
-		publish := fs.Bool("publish", false, "publish the omarchy-m-test report to omarchy-m-testing.org (known-good kernel runs only)")
+		publish := fs.Bool("publish", false, "publish the run's omarchy-m-test report on the lab, as asked by you (a Known-good run only: never a test kernel)")
 		installedMan := fs.String("installed", "", "boot the INSTALLED release through its installer entry and check it against a frozen expected manifest (file or sha256); see `lab installed`")
 		mesaMode := fs.String("mesa-mode", api.MesaStaged, "with --mesa-package: staged (a diagnostic of the packages in a private prefix; the desktop keeps the installed Mesa)")
 		mesaOfficial := fs.Bool("mesa-official-gpu", false, "optional reviewed official65 GPU suite after staged native provider checks (requires adapter support)")
@@ -541,9 +542,9 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 			return err
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-		fmt.Fprintln(w, "JOB\tDEVICE\tSTATE\tOUTCOME\tCREATED\tSUMMARY")
+		fmt.Fprintln(w, "JOB\tDEVICE\tSTATE\tOUTCOME\tREPORT\tCREATED\tSUMMARY")
 		for _, j := range jobs {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.Spec.Device, j.State, j.Outcome, j.Created.Format("01-02 15:04"), trunc(j.Summary, 70))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.Spec.Device, j.State, j.Outcome, orDash(reportState(j.Result.OMT), "-"), j.Created.Format("01-02 15:04"), trunc(j.Summary, 70))
 		}
 		return w.Flush()
 
@@ -881,6 +882,21 @@ func follow(ctx context.Context, c *client.Client, id string) error {
 	}
 }
 
+// reportState is what became of a job's omarchy-m-test report, in one of
+// four words; "" for a job with no report. A lab that does not say it yet
+// leaves what the job carries.
+func reportState(o *api.OMTResult) string {
+	switch {
+	case o == nil:
+		return ""
+	case o.ReportState != "":
+		return o.ReportState
+	case o.Published != "":
+		return api.ReportPublished
+	}
+	return api.ReportNotPublished
+}
+
 func printJob(j *api.Job, events bool) {
 	fmt.Printf("job %s on %s: %s\n", j.ID, j.Spec.Device, strings.ToUpper(orDash(j.Outcome, string(j.State))))
 	if j.Summary != "" {
@@ -930,11 +946,15 @@ func printJob(j *api.Job, events bool) {
 		for _, c := range o.LabBoot {
 			fmt.Printf("    lab boot  %s (fails for any kernel that isn't an installed package)\n", c.ID)
 		}
-		switch {
-		case o.Published != "":
-			fmt.Printf("    published: %s\n", o.Published)
-		case o.PublishNote != "":
-			fmt.Printf("    not published: %s\n", o.PublishNote)
+		switch state := reportState(o); {
+		case state == api.ReportPublished:
+			fmt.Printf("    report: %s %s\n", state, o.Published)
+		case state == api.ReportIsDeleted && o.ReportDeleted != nil:
+			fmt.Printf("    report: %s by %s on %s\n", state, o.ReportDeleted.By, o.ReportDeleted.Time.Local().Format("2006-01-02 15:04"))
+		case state == api.ReportNotPublished && o.PublishNote != "":
+			fmt.Printf("    report: %s (%s)\n", state, o.PublishNote)
+		default:
+			fmt.Printf("    report: %s\n", state)
 		}
 	}
 	for _, e := range r.KernelEvents {
