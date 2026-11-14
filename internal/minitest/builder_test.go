@@ -32,8 +32,9 @@ mkdir -p "$s"
 case "$1 $2" in
   "system status") [[ -f $s/up ]] || { echo "apiserver is not running and not registered with launchd" >&2; exit 1; } ;;
   "system start") [[ ! -f $s/broken ]] || { echo "could not start" >&2; exit 1; }; touch "$s/up" ;;
-  "volume inspect") [[ -f $s/up && -f $s/volume.$3 ]] || exit 1 ;;
-  "volume create") [[ -f $s/up ]] || exit 1; echo "$4" > "$s/volume.$5" ;;
+  "volume inspect") [[ -f $s/up && -f $s/volume.$3 ]] || exit 1; printf '[{"name":"%s","source":"%s"}]\n' "$3" "$s/$3.img" ;;
+  "volume create") [[ -f $s/up && ! -f $s/full ]] || exit 1; echo "$4" > "$s/volume.$5" ;;
+  "volume delete") [[ -f $s/up && -f $s/volume.$3 ]] || exit 1; rm "$s/volume.$3" ;;
   "image inspect") [[ -f $s/up && -f $s/image.$3 ]] || exit 1 ;;
   build\ *) [[ -f $s/up && -f $4/Containerfile ]] || exit 1
     while read -r verb file _; do

@@ -1,0 +1,178 @@
+#!/bin/bash
+# The mini's side of the Builder's gate test (spec section 16, Ready item
+# 9). scripts/cutover/builder-gate, on the owner's Mac, asks labd for the
+# builds; this watches the mini while the Builder runs them:
+#
+#   sudo scripts/mini/build-watch --cpus 10|8|6 [--cold] [--builds N]
+#                                 [--every SECONDS] [--wait SECONDS]
+#
+# First, with no build running:
+#   - the Builder gets --cpus cores a build, through the set-up, when it
+#     runs with another number;
+#   - with --cold the kernel cache volume is deleted and made again, empty,
+#     so that the next kernel build is a cold one.
+# Then, for each of N builds (3: the cold kernel build, the warm rebuild
+# and the package build), it waits for the Builder's VM and, while it is up:
+#   - reads pf's state and the NAT rules a VM leaves the mini through,
+#     once: what to read when a build cannot reach the internet;
+#   - every --every seconds (10) has page-times ask labd for its pages and
+#     read how long labd took;
+#   - keeps the most memory the VM's own process held, and the most the
+#     whole machine had in use.
+# Last, how full each of the Builder's volumes is, and the artifact store.
+#
+# A line for the gate test starts with "@gate"; the others are for whoever
+# watches. It starts no build and no VM. With no VM in sight for --wait
+# seconds (1800) it ends.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+cpus="" cold=0 builds=3 every=10 patience=1800
+while (( $# )); do
+  case "$1" in
+    --cpus) [[ $# -ge 2 ]] || usage; cpus="$2"; shift ;;
+    --cold) cold=1 ;;
+    --builds) [[ $# -ge 2 ]] || usage; builds="$2"; shift ;;
+    --every) [[ $# -ge 2 ]] || usage; every="$2"; shift ;;
+    --wait) [[ $# -ge 2 ]] || usage; patience="$2"; shift ;;
+    *) usage ;;
+  esac
+  shift
+done
+case "$cpus" in
+  10 | 8 | 6) ;;
+  *) fail "--cpus ${cpus:-(not given)}: a build gets 10 cores, or 8 or 6. Nothing was changed" ;;
+esac
+[[ $builds =~ ^[1-9]$ && $every =~ ^[0-9]{1,4}$ && $patience =~ ^[1-9][0-9]{0,5}$ ]] || usage
+need_root
+tick="${LAB_WATCH_TICK:-2}"
+
+plist="$LAUNCHD_DIR/$BUILDER_LABEL.plist"
+watch="$here/container"
+user="$(cat "$CONTAINER_USER_FILE" 2>/dev/null || true)"
+[[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ && -f $plist ]] || fail "the Builder is not set up on this machine (scripts/mini/setup --container-user NAME): nothing was changed"
+
+gate() { echo "@gate $*"; }
+
+# seen: the Builder's VM in the process list, as "BUILD CORES MEMORY KB":
+# the build it is named after, what lab-builder gave it, and the memory the
+# VM's own process holds. Nothing while no build runs.
+seen() {
+  sys ps -axww -o rss=,command= | awk '
+    !vm && match($0, / run --rm --name maclab-[^ ]+ --cpus [0-9]+ --memory [0-9]+[A-Za-z]* /) {
+      split(substr($0, RSTART, RLENGTH), f, " ")
+      vm = substr(f[4], 8) " " f[6] " " f[8]
+    }
+    /com\.apple\.Virtualization\.VirtualMachine/ { kb += $1 }
+    END { if (vm != "") print vm, kb + 0 }' || true
+}
+
+# in_use: the memory the whole machine has in use, in kB: active, wired and
+# compressed pages.
+in_use() {
+  sys vm_stat | awk '
+    /page size of/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) size = $i }
+    /^Pages active:|^Pages wired down:|^Pages occupied by compressor:/ { gsub(/\./, "", $NF); pages += $NF }
+    END { printf "%d\n", pages * size / 1024 }' || true
+}
+
+# runs_with: the cores the Builder's installed file gives a build.
+runs_with() {
+  awk '/<string>--cpus<\/string>/ && !seen { sub(/.*<string>--cpus<\/string><string>/, ""); sub(/<.*/, ""); print; seen = 1 }' "$plist" 2>/dev/null || true
+}
+
+# kb SIZE: a volume's size as the set-up gives it (40G), in kB.
+kb() { echo $(( ${1%G} * 1024 * 1024 )); }
+
+[[ -z "$(seen)" ]] || fail "a build is running on the Builder: nothing was changed. Run it again when lab builds shows none queued or running"
+"$watch" status "$user" || fail "container's server does not answer under $user: nothing was changed. The watch starts it again within a minute; see $CONTAINER_LOG"
+
+had="$(runs_with)"
+if [[ $had != "$cpus" ]]; then
+  say "the Builder runs with ${had:-no} cores a build: the set-up gives it $cpus"
+  "$here/setup" --builder-cpus "$cpus" || say "the set-up ended with a failure of its own, above"
+  [[ "$(runs_with)" == "$cpus" ]] || fail "the Builder does not run with $cpus cores a build after the set-up: look at what it said above"
+fi
+loaded "$BUILDER_LABEL" || fail "the Builder is not running ($BUILDER_LABEL): the set-up starts it once it has its token (scripts/mini/setup)"
+
+if (( cold )); then
+  pair="${BUILDER_VOLUMES%% *}"
+  name="${pair%%:*}" size="${pair##*:}"
+  say "the kernel cache volume $name is emptied: deleted and made again ($size)"
+  "$watch" as "$user" volume delete "$name" >/dev/null || fail "container did not delete the volume $name: nothing else was changed"
+  "$watch" as "$user" volume create -s "$size" "$name" >/dev/null ||
+    fail "container did not make the volume $name again ($size): the Builder has no kernel cache until the set-up has run (scripts/mini/setup)"
+fi
+gate ready "cpus=$cpus"
+
+# pf: what the ticket on container's VMs says to read while a VM is up, when
+# a build reaches nothing past the mini: whether pf is on, and the NAT rules
+# Internet Sharing loads for the VMs' network.
+pf() {
+  local line
+  {
+    echo "\$ pfctl -s info"
+    sys pfctl -s info 2>&1 || echo "(pfctl ended with status $?)"
+    echo "\$ pfctl -a com.apple.internet-sharing/shared_v4 -s nat"
+    sys pfctl -a com.apple.internet-sharing/shared_v4 -s nat 2>&1 || echo "(pfctl ended with status $?)"
+  } | while IFS= read -r line; do gate pf "$line"; done
+}
+
+# probe: labd's own times for its pages, now.
+probes=0
+probe() {
+  local numbers
+  probes=$((probes + 1))
+  gate probe "$probes" begin
+  numbers="$(as_lab "$here/page-times" 2>/dev/null | grep -E '^probe_(p95_ms|max_ms|requests|pages)=[0-9]+$' | tr '\n' ' ' || true)"
+  gate probe "$probes" end "${numbers% }"
+}
+
+last=""
+for (( k = 1; k <= builds; k++ )); do
+  since="$(date +%s)"
+  while :; do
+    now="$(seen)"
+    if [[ -n $now && ${now%% *} != "$last" ]]; then break; fi
+    if (( $(date +%s) - since >= patience )); then
+      gate failed "no VM of the Builder was seen in $patience s"
+      fail "no build came: the Builder's VM was not seen in $patience s"
+    fi
+    sleep "$tick"
+  done
+  read -r build vm_cpus vm_memory vm_kb <<<"$now"
+  began="$(date +%s)" probed=0 vm_peak=0 machine_peak=0 count="$probes"
+  gate build "$k" begin "id=$build" "cpus=$vm_cpus" "memory=$vm_memory"
+  pf
+  while [[ -n $now && ${now%% *} == "$build" ]]; do
+    read -r _ _ _ vm_kb <<<"$now"
+    (( vm_kb <= vm_peak )) || vm_peak="$vm_kb"
+    machine="$(in_use)"
+    (( ${machine:-0} <= machine_peak )) || machine_peak="$machine"
+    if (( $(date +%s) - probed >= every )); then
+      probe
+      probed="$(date +%s)"
+    fi
+    sleep "$tick"
+    now="$(seen)"
+  done
+  gate build "$k" end "id=$build" "seconds=$(( $(date +%s) - began ))" "vm_peak_kb=$vm_peak" "machine_peak_kb=$machine_peak" "probes=$((probes - count))"
+  last="$build"
+done
+
+# How full a volume is: the blocks its image holds on the mini's disk. The
+# image only grows, so this is the most the volume ever held.
+for pair in $BUILDER_VOLUMES; do
+  name="${pair%%:*}"
+  image="$("$watch" as "$user" volume inspect "$name" 2>/dev/null | jq -r '.[0].source // empty' 2>/dev/null || true)"
+  used=""
+  if [[ -n $image && -f $image ]]; then used="$(du -k "$image" 2>/dev/null | awk '{ print $1 }' || true)"; fi
+  gate volume "$name" "used_kb=$used" "size_kb=$(kb "${pair##*:}")"
+done
+store="$(as_lab du -sk "$LAB_DATA/artifacts" 2>/dev/null | awk '{ print $1 }' || true)"
+gate store artifacts "used_kb=$store" "budget_kb=$(kb 20G)"
+gate "done"

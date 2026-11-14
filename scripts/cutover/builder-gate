@@ -1,0 +1,439 @@
+#!/bin/bash
+# The Builder's gate test (spec section 16, Ready item 9; section 8, "Limits
+# on a build" and "Sizes"), through lab-builder against labd on the mini:
+#
+#   builder-gate [--dry-run]
+#   builder-gate --lab --mini USER@HOST --kernel URL --recipe DIR
+#                [--mac NAME | --config FILE] [--cores 10|8|6] [--size BYTES]
+#   builder-gate --results
+#
+# It runs on the owner's Mac under the saved login of a Maintainer, who
+# alone builds, and reaches the mini over SSH. At 10 cores a build (or what
+# deploy/builder-cpus says, or --cores):
+#
+#   1. ssh -t MINI sudo scripts/mini/build-watch --cpus N --cold --builds 3
+#      The owner types the password sudo asks for, once. The mini gives the
+#      Builder N cores if it runs with another number, empties the kernel
+#      cache volume, and watches the three builds from there.
+#   2. The cold kernel build: lab build URL --device MAC --force. While it
+#      builds, 1 GiB goes up through the Lab address with lab upload, again
+#      until the mini has read labd's page times once wholly inside a
+#      transfer.
+#   3. The warm rebuild: the same build once more.
+#   4. The package build: lab package DIR --force, with the transfer as in 2.
+#   5. The mini says how long each VM was up, the most memory it held,
+#      labd's page times all along, and how full each volume is.
+#
+# Pass: the three builds succeed; labd's pages stay under 100 ms at the 95th
+# percentile during the cold kernel build and during the package build; each
+# volume stays inside its size. If not, the same again at 8 cores a build,
+# then at 6 (front-door/settle cores holds the rule). The cores that passed
+# are written in deploy/builder-cpus. When 6 does not pass either it stops
+# for the owner with status 3, and nothing is written.
+#
+# A build that cannot reach the internet, as container's VMs once could
+# not, stops the run at once with status 3: fewer cores do not mend that.
+# What the mini read of pf while that VM was up is saved beside the record.
+#
+#   --mini USER@HOST   the mini, as the owner reaches it over SSH with a key
+#   --kernel URL       the linux-aurora source to build: a repository,
+#                      branch, commit or pull request on GitHub
+#   --mac NAME         the Mac whose running config the kernel is built
+#                      with (m1-pro)
+#   --config FILE      or: a .config to build with
+#   --recipe DIR       the folder of linux-aurora's PKGBUILD
+#   --cores N          start at N cores a build
+#   --size BYTES       the size of each transfer (1 GiB)
+#
+# The record is docs/acceptance/YYYY-MM-DD-builder-gate.md, ending in
+# "Result: pass", "Result: fail" or "Result: stopped", with its line in
+# docs/acceptance/builder-gate.results: "builder-gate RESULT DATE RECORD
+# CORES". The Ready list reads that file: --results is green (status 0)
+# when it says pass.
+#
+# It holds no token (lab reads the saved login), types no password and
+# prints no error page.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/front-door/lib.sh"
+usage() { sed -n '2,55p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+RESULTS_NAME=builder-gate.results
+# How often labd is asked for a build's state, how long the mini may take
+# to get ready (the password, the set-up), how long one build may take, and
+# how often the mini reads labd's page times: seconds.
+POLL="${GATE_POLL:-10}"
+READY_WAIT="${GATE_READY_WAIT:-900}"
+BUILD_WAIT="${GATE_BUILD_WAIT:-14400}"
+EVERY="${GATE_PROBE_EVERY:-10}"
+TRANSFERS=3
+FINISHED=0
+PASSED="-"
+WATCH_PID=""
+STREAM=""
+
+today() { TZ=Australia/Brisbane date +%Y-%m-%d; }
+
+fd_options "$@"
+kernel="" recipe="" config="" cores="" results=0
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --kernel) (( $# >= 2 )) || usage; kernel="$2"; shift ;;
+    --recipe) (( $# >= 2 )) || usage; recipe="$2"; shift ;;
+    --config) (( $# >= 2 )) || usage; config="$2"; shift ;;
+    --cores) (( $# >= 2 )) || usage; cores="$2"; shift ;;
+    --results) results=1 ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+
+if (( results )); then
+  file="${RECORDS:-$REPO/docs/acceptance}/$RESULTS_NAME"
+  [[ -f $file ]] || fail "no run of the Builder's gate test is recorded ($file)"
+  read -r name word day record passed < "$file" || true
+  [[ $name == builder-gate && $word =~ ^(pass|fail|stopped)$ ]] || fail "$file does not hold the gate test's line"
+  if [[ $word == pass ]]; then
+    say "pass on $day, at $passed cores a build: $record"
+    exit 0
+  fi
+  say "$word on $day: $record"
+  exit 1
+fi
+
+[[ $MODE != local ]] || fail "there is no --local run: the test measures the mini's Builder, and no Builder runs here. Nothing was done."
+if [[ -z $cores ]]; then
+  cores="$(sed -e 's/#.*//' "$DEPLOY/builder-cpus" 2>/dev/null | awk 'NF && !seen { print $1; seen = 1 }')"
+fi
+case "$cores" in
+  10 | 8 | 6) ;;
+  *) fail "${cores:-nothing} is not a number of cores a build gets (10, 8 or 6): see --cores and $DEPLOY/builder-cpus. Nothing was done." ;;
+esac
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, at $cores cores a build it would:
+  1. ssh -t MINI sudo $MINI_SCRIPTS/build-watch --cpus $cores --cold --builds 3 --every $EVERY: the Builder at $cores cores, the kernel cache volume emptied, the mini watching
+  2. lab build URL --device $MAC --force (the cold kernel build), with lab upload FILE (${SIZE:-$GIB} bytes) in flight while labd's page times are read
+  3. lab build URL --device $MAC --force again (the warm rebuild)
+  4. lab package DIR --force (the package build), with lab upload FILE in flight likewise
+  5. read from the mini: each VM's time and peak memory, labd's page times, how full maclab-cache (40 GB) and maclab-pkgcache (120 GB) are
+  6. pass with the three builds done, the pages under 100 ms at the 95th percentile during 2 and 4, each volume inside its size
+  7. if not: again at 8 cores a build, then 6; stop for the owner (status 3) when 6 does not pass, or at once when a build cannot reach the internet
+  8. write the cores that passed in deploy/builder-cpus, docs/acceptance/$(today)-builder-gate.md and docs/acceptance/$RESULTS_NAME
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+[[ -n $MINI ]] || fail "--lab needs --mini USER@HOST. Nothing was done."
+[[ $kernel =~ ^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/#~+-]+$ ]] || fail "--kernel needs the linux-aurora source as labd takes it: https://github.com/OWNER/REPO, or a branch, commit or pull request there. Nothing was done."
+[[ -n $recipe && -f $recipe/PKGBUILD ]] || fail "--recipe needs the folder that holds linux-aurora's PKGBUILD. Nothing was done."
+[[ -z $config || -f $config ]] || fail "--config $config is no file. Nothing was done."
+[[ -n $SIZE ]] || SIZE=$GIB
+ask_kernel=(build "$kernel")
+if [[ -n $config ]]; then ask_kernel+=(--config "$config"); else ask_kernel+=(--device "$MAC"); fi
+ask_package=(package "$recipe")
+
+# The record, and the one line the Ready list reads.
+
+# While the watch runs, ssh holds this terminal raw, as it does for any
+# remote terminal: a line of this script's own then needs its own return.
+say() {
+  if [[ -n $WATCH_PID && -t 1 ]]; then printf '%s: %s\r\n' "$ME" "$*"; else echo "$ME: $*"; fi
+}
+
+fail() {
+  echo "$ME: $*" >&2
+  [[ -z $RECORD || $FINISHED == 1 ]] || echo "- FAILED: $*" >> "$RECORD"
+  exit 1
+}
+
+# gate_done WORD STATUS: pass, fail or stopped.
+gate_done() {
+  local results
+  { echo; echo "Result: $1"; } >> "$RECORD"
+  results="$(dirname "$RECORD")/$RESULTS_NAME"
+  echo "builder-gate $1 $(today) $(basename "$RECORD") $PASSED" > "$results.new"
+  mv "$results.new" "$results"
+  FINISHED=1
+  say "$1. The record is $RECORD"
+  exit "$2"
+}
+
+give_up() { rec "FAILED: $1"; gate_done fail 1; }
+
+stop_watch() {
+  [[ -z $WATCH_PID ]] || kill "$WATCH_PID" 2>/dev/null || true
+  WATCH_PID=""
+}
+
+ended() {
+  local status=$?
+  stop_watch
+  if [[ -n $RECORD && $FINISHED == 0 ]]; then
+    FINISHED=1
+    { echo "- the run ended before it was done"; echo; echo "Result: fail"; } >> "$RECORD"
+    echo "builder-gate fail $(today) $(basename "$RECORD") -" > "$(dirname "$RECORD")/$RESULTS_NAME"
+  fi
+  cleanup
+  exit "$status"
+}
+
+# The mini's side: its lines for the test, each with the second it came.
+
+stamp() {
+  local line
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    case "$line" in
+      *"@gate "*) echo "$(date +%s) ${line#*@gate }" ;;
+    esac
+  done
+}
+
+# start_watch CORES: the watch on the mini, as root there; the owner types
+# the password sudo asks for at this terminal.
+start_watch() {
+  STREAM="$WORK/watch.$1"
+  : > "$STREAM"
+  ssh -t -o ServerAliveInterval=30 "$MINI" sudo "$MINI_SCRIPTS/build-watch" --cpus "$1" --cold --builds 3 --every "$EVERY" <&3 > >(tee /dev/stderr | stamp >> "$STREAM") 2>&1 &
+  WATCH_PID=$!
+}
+
+# await PATTERN SECONDS: until the mini has said a line that starts so.
+await() {
+  local until=$(( $(date +%s) + $2 ))
+  while ! grep -qE "^[0-9]+ $1" "$STREAM"; do
+    if grep -qE '^[0-9]+ failed ' "$STREAM"; then return 1; fi
+    if ! kill -0 "$WATCH_PID" 2>/dev/null; then
+      sleep 1
+      grep -qE "^[0-9]+ $1" "$STREAM"
+      return
+    fi
+    (( $(date +%s) < until )) || return 1
+    sleep 1
+  done
+}
+
+# said PATTERN KEY: the value of KEY in the last line of the mini that starts so.
+said() { grep -E "^[0-9]+ $1" "$STREAM" | tail -n 1 | tr ' ' '\n' | sed -n "s/^$2=//p" | head -n 1; }
+
+# pages K [FROM TO]: labd's page times while build K's VM was up, or only
+# the readings that began after FROM and ended before TO: how many, how many
+# of them gave no time, the slowest 95th percentile and the slowest request.
+pages() {
+  awk -v k="$1" -v from="${2:-0}" -v to="${3:-99999999999}" '
+    $2 == "build" && $4 == "begin" { cur = $3 }
+    $2 == "build" && $4 == "end" { cur = "" }
+    $2 == "probe" && $4 == "begin" { began = $1 }
+    $2 == "probe" && $4 == "end" && cur == k && began > from && $1 < to {
+      n++; p = ""; m = 0
+      for (i = 5; i <= NF; i++) {
+        if ($i ~ /^probe_p95_ms=/) p = substr($i, 14)
+        if ($i ~ /^probe_max_ms=/) m = substr($i, 14)
+      }
+      if (p == "") { bad++; next }
+      if (p + 0 > worst) worst = p + 0
+      if (m + 0 > slow) slow = m + 0
+    }
+    END { print n + 0, bad + 0, worst + 0, slow + 0 }' "$STREAM"
+}
+
+gb() { awk -v kb="${1:-0}" 'BEGIN { printf "%.1f", kb / 1048576 }'; }
+
+# build_state ID: queued, running, done, failed or canceled; nothing when
+# lab did not answer.
+build_state() {
+  "$LAB_CMD" builds 2> /dev/null | awk -v id="$1" '$1 == id && !seen { s = $2; sub(/:$/, "", s); print s; seen = 1 }' || true
+}
+
+# network_stop K ID TITLE STAGE: a build that reached nothing past the mini.
+# What the ticket says to read was read while its VM was up; it is saved,
+# and the run stops for the owner.
+network_stop() {
+  local file
+  file="$(dirname "$RECORD")/$(today)-builder-gate-network.txt"
+  {
+    echo "What the mini read of pf while the VM of build $2 was up ($(TZ=Australia/Brisbane date '+%Y-%m-%d %H:%M') Brisbane)."
+    echo "The NAT rules are a VM's way out of the mini: with none, or with pf off, a build reaches nothing past it."
+    echo
+    awk -v k="$1" '$2 == "build" && $4 == "begin" { cur = $3 } $2 == "build" && $4 == "end" { cur = "" }
+      $2 == "pf" && cur == k { sub(/^[0-9]+ pf ?/, ""); print; n++ }
+      END { if (!n) print "(the mini read nothing: the VM was gone before it was seen)" }' "$STREAM"
+  } > "$file"
+  rec "STOPPED: $3 (build $2) could not reach the internet: it failed in its ${4:-first} stage. Fewer cores do not mend that, so no other run was made and nothing was written in deploy/. What the mini read of pf while that VM was up is in $(basename "$file"): read it before restarting anything on the mini. If the rules are gone by now, read them again while a VM is up: sudo pfctl -s info; sudo pfctl -a com.apple.internet-sharing/shared_v4 -s nat"
+  gate_done stopped 3
+}
+
+# build K TITLE TRANSFER COMMAND...: one build asked for and waited for.
+# Leaves STATE[K] (built or failed) and what the record says of it.
+STATE=("" "" "" "")
+build() {
+  local k="$1" title="$2" transfer="$3" id state="" t0 seconds stage file from to proved=0 tries=0 silent=0 row labd_time up=""
+  local readings unread worst slow inflight
+  shift 3
+  t0="$(date +%s)"
+  "$LAB_CMD" "$@" --force --no-wait > "$WORK/ask.$k" 2> "$WORK/ask.$k.err" \
+    || give_up "$title could not be asked for: $(plain "$WORK/ask.$k.err")"
+  id="$(sed -n 's/^build \(b[0-9a-z-]*\)[: ].*/\1/p' "$WORK/ask.$k" | head -n 1)"
+  [[ -n $id ]] || give_up "lab did not name the build it asked for ($title)"
+  say "$title: build $id asked for"
+  while :; do
+    state="$(build_state "$id")"
+    case "$state" in
+      done | failed | canceled) break ;;
+      "") silent=$((silent + 1)); (( silent < 30 )) || give_up "lab builds stopped answering while $title ran (build $id)" ;;
+      *) silent=0 ;;
+    esac
+    (( $(date +%s) - t0 < BUILD_WAIT )) || give_up "$title (build $id) did not end in $BUILD_WAIT s"
+    kill -0 "$WATCH_PID" 2> /dev/null || give_up "the watch on the mini ended while $title ran (build $id, which labd goes on with): what it said is above"
+    if [[ $transfer == yes ]] && (( ! proved && tries < TRANSFERS )) && grep -qE "^[0-9]+ build $k begin id=$id " "$STREAM"; then
+      tries=$((tries + 1))
+      file="$WORK/transfer.bin"
+      random_file "$file" "$SIZE"
+      from="$(date +%s)"
+      upload_timed "$file"
+      to="$(date +%s)"
+      rm -f "$file"
+      up="$UP_MBIT"
+      read -r readings unread worst slow <<<"$(pages "$k" "$from" "$to")"
+      if (( readings > unread )); then proved=1 inflight="$worst"; fi
+      continue
+    fi
+    sleep "$POLL"
+  done
+  seconds=$(( $(date +%s) - t0 ))
+
+  if [[ $state != "done" ]]; then
+    STATE[k]=failed
+    "$LAB_CMD" build-log "$id" > "$WORK/log.$k" 2> /dev/null || true
+    stage="$(sed -n 's/^==> \([a-z][a-z]*\)\( .*\)\{0,1\}$/\1/p' "$WORK/log.$k" | tail -n 1)"
+    if [[ $stage == fetch ]] || tail -n 40 "$WORK/log.$k" | grep -qiE 'could not resolve host|temporary failure in name resolution|network is unreachable|no route to host|failed to connect to|connection timed out|failure while downloading'; then
+      await "build $k end id=$id " 60 || true
+      network_stop "$k" "$id" "$title" "$stage"
+    fi
+    rec "$title (build $id): $state after $seconds s, in its ${stage:-first} stage"
+    return 0
+  fi
+
+  STATE[k]=built
+  grep -qE "^[0-9]+ build $k begin id=$id " "$STREAM" || give_up "$title (build $id) is done, and the mini saw no VM for it: its numbers are missing"
+  await "build $k end id=$id " 120 || give_up "$title (build $id) is done, and the mini did not see its VM go"
+  [[ "$(said "build $k begin " cpus)" == "$CORES" ]] || give_up "the Builder gave $title $(said "build $k begin " cpus) cores, not $CORES"
+  row="$("$LAB_CMD" builds 2> /dev/null | awk -v id="$id" '$1 == id && !seen { print $NF; seen = 1 }' || true)"
+  labd_time=""
+  [[ ! $row =~ ^[0-9hms.]+$ ]] || labd_time=", $row by labd's"
+  rec "$title (build $id): done in $seconds s by this Mac's clock$labd_time; its VM was up $(said "build $k end " seconds) s with $CORES cores and $(said "build $k begin " memory); the VM's process held $(gb "$(said "build $k end " vm_peak_kb)") GB at most, and the whole mini had $(gb "$(said "build $k end " machine_peak_kb)") GB in use at most"
+
+  read -r readings unread worst slow <<<"$(pages "$k")"
+  (( readings > unread )) || give_up "labd's page times could not be read while $title ran: $unread of $readings readings gave none. Run scripts/mini/page-times on the mini as the lab account to see why"
+  if [[ $transfer == yes ]]; then
+    (( proved )) || give_up "labd's page times were not read with a transfer in flight during $title: $tries transfer(s) and the build ended first"
+    rec "labd's pages during $title: $worst ms at the 95th percentile at the slowest of $readings readings, the slowest request $slow ms; with ${SIZE} bytes going up at $up Mbit/s, $inflight ms"
+    if (( unread )); then
+      rec "$unread of those readings gave no time at all: labd did not answer its pages. That misses the target"
+      PAGE[k]=fail
+    else
+      PAGE[k]="$worst"
+    fi
+  else
+    rec "labd's pages during $title: $worst ms at the 95th percentile at the slowest of $readings readings (told, not judged)"
+  fi
+}
+
+# attempt CORES: the three builds at that many cores a build. Leaves RESULT:
+# the slowest 95th percentile of the two judged builds, or "fail".
+PAGE=("" "" "" "")
+attempt() {
+  local name used size over=0 k
+  CORES="$1"
+  STATE=("" "" "" "")
+  PAGE=("" "" "" "")
+  rec "At $CORES cores a build:"
+  start_watch "$CORES"
+  await "ready " "$READY_WAIT" || give_up "the mini did not get ready for the builds at $CORES cores: what it said is above"
+  [[ "$(said "ready " cpus)" == "$CORES" ]] || give_up "the mini says the Builder runs with $(said "ready " cpus) cores, not $CORES"
+
+  build 1 "the cold kernel build" yes "${ask_kernel[@]}"
+  [[ ${STATE[1]} != built ]] || build 2 "the warm rebuild" no "${ask_kernel[@]}"
+  [[ ${STATE[2]} != built ]] || build 3 "the package build" yes "${ask_package[@]}"
+  if [[ ${STATE[3]} != built ]]; then
+    stop_watch
+    RESULT=fail
+    return 0
+  fi
+
+  await "done" 300 || give_up "the mini did not say how full the volumes are: what it said is above"
+  stop_watch
+  while read -r _ _ name used size; do
+    used="${used#used_kb=}" size="${size#size_kb=}"
+    [[ $used =~ ^[0-9]+$ && $size =~ ^[1-9][0-9]*$ ]] || give_up "the mini could not say how full the volume $name is: container volume inspect $name there should name its image"
+    if (( used < size )); then
+      rec "the volume $name holds $(gb "$used") GB of its $(gb "$size") GB"
+    else
+      rec "the volume $name holds $(gb "$used") GB, and its size is $(gb "$size") GB: it did not stay inside"
+      over=1
+    fi
+  done < <(grep -E '^[0-9]+ volume ' "$STREAM")
+  (( "$(grep -cE '^[0-9]+ volume ' "$STREAM")" == 2 )) || give_up "the mini did not name both of the Builder's volumes"
+  used="$(said "store artifacts " used_kb)"
+  [[ ! $used =~ ^[0-9]+$ ]] || rec "the artifact store holds $(gb "$used") GB; its budget is $(gb "$(said "store artifacts " budget_kb)") GB (told, not judged: labd clears it by itself)"
+
+  RESULT="$(awk -v a="${PAGE[1]}" -v b="${PAGE[3]}" 'BEGIN { if (a == "fail" || b == "fail") print "fail"; else print (a + 0 > b + 0 ? a : b) }')"
+  (( ! over )) || RESULT=fail
+}
+
+workspace
+trap ended EXIT
+exec 3<&0
+logged_in
+"$LAB_CMD" builds > "$WORK/builds" 2> "$WORK/builds.err" || fail "lab builds: $(plain "$WORK/builds.err")"
+if grep -qE '^b[0-9a-z-]+ +(queued|running)' "$WORK/builds"; then
+  fail "a build is queued or running on the lab: the test needs the Builder to itself. Nothing was asked of the mini."
+fi
+
+RECORD="${RECORDS:-$REPO/docs/acceptance}"
+mkdir -p "$RECORD"
+RECORD="$RECORD/$(today)-builder-gate.md"
+{
+  echo "# The Builder's gate test"
+  echo
+  echo "Run $(TZ=Australia/Brisbane date '+%Y-%m-%d %H:%M') (Brisbane) by \`scripts/cutover/builder-gate --lab\`, through $ADDRESS: the builds asked of labd, built by lab-builder on the mini, the mini watched over SSH by \`scripts/mini/build-watch\`."
+  echo
+} > "$RECORD"
+rec "the kernel is built from $kernel with $(if [[ -n $config ]]; then echo "the config $(basename "$config")"; else echo "$MAC's running config"; fi); the packages from the recipe $(basename "$recipe")"
+
+ran10="-" ran8="-" ran6="-"
+n="$cores"
+while :; do
+  attempt "$n"
+  case "$n" in
+    10) ran10="$RESULT" ;;
+    8) ran8="$RESULT" ;;
+    6) ran6="$RESULT" ;;
+  esac
+  status=0
+  "$FD_HERE/settle" cores "$ran10" "$ran8" "$ran6" --deploy "$DEPLOY" > "$WORK/settle" 2>&1 || status=$?
+  case "$status" in
+    0)
+      PASSED="$n"
+      # The folder is said as the repository's: the record names no home.
+      while IFS= read -r line; do
+        line="${line#settle: }"
+        rec "${line//"$DEPLOY"\//deploy/}"
+      done < "$WORK/settle"
+      gate_done pass 0
+      ;;
+    4)
+      rec "$(sed -n 's/^settle: not settled: //p' "$WORK/settle")"
+      if [[ $n == 10 ]]; then n=8; else n=6; fi
+      ;;
+    3)
+      rec "$(sed -n 's/^settle: STOP: /STOPPED: /p' "$WORK/settle")"
+      gate_done stopped 3
+      ;;
+    *) give_up "the rule gave no decision: $(tail -n 1 "$WORK/settle")" ;;
+  esac
+done
