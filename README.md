@@ -748,7 +748,15 @@ number, list the `groups` it was added to, give labd a `group`'s id, and
 
 Everything a UI needs is on the API. The web UI uses it now, and a TUI can use it later.
 
+A Mac's page (`/macs/<name>`, the Mac's name on Macs) has three tabs. Overview: its facts, its Lease
+with Lease, Renew and Release, its jobs, and the way to "Boot a kernel". Live: its screen and its
+logs. Records: the Lease record, the Mac's record, the Audit log (Maintainers and the Mac's
+Volunteer) and the Exec record. An M team member has Live only under their own Lease, and is
+otherwise told who holds the Mac and until when; a Volunteer's Live of their own Mac is view only.
+The page has no serial console.
+
 - `GET /api/stream`: server-sent events for `device`, `job`, `serial`, `kevent` and `screen` (`?device=` limits it to one Mac).
+  A Mac's `kevent` and `screen` events reach an M team member only under their own Lease; `serial` only Maintainers.
 - `POST /api/devices/{n}/screenshot`, `GET .../screen`, `.../screens`: captures come from the display
   controller via `ffmpeg kmsgrab`. That works from the moment the display driver loads (boot splash,
   text console, emergency shell, login screen, desktop), with `grim` as a fallback. Jobs capture

@@ -32,11 +32,18 @@
     if (note) note.textContent = text;
   }
 
+  // A time as the page's records say it: in Brisbane, which keeps one offset.
+  function when(time) {
+    var t = new Date(time).getTime();
+    if (isNaN(t)) return "";
+    return new Date(t + 10 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ") + " AEST";
+  }
+
   function showScreen(name, time) {
     if (!img || !name) return;
     img.src = data.api + "/screens/" + encodeURIComponent(name);
     img.hidden = false;
-    say("Latest capture: " + new Date(time).toLocaleString() + ".");
+    say("Latest capture: " + when(time) + ".");
   }
 
   function capture() {
@@ -114,10 +121,10 @@
     var e = parsed(event);
     if (!events || !e) return;
     var li = document.createElement("li");
-    var when = document.createElement("span");
-    when.className = "when";
-    when.textContent = new Date(e.time).toLocaleString();
-    li.appendChild(when);
+    var at = document.createElement("span");
+    at.className = "when";
+    at.textContent = when(e.time);
+    li.appendChild(at);
     li.appendChild(document.createTextNode(" " + e.kind + ": " + e.line));
     events.insertBefore(li, events.firstChild);
   });

@@ -203,6 +203,14 @@ func TestOverviewHasTheFactsTheLeaseItsButtonsTheJobsAndBootAKernel(t *testing.T
 	if !strings.Contains(own, "j-air") {
 		t.Errorf("a Volunteer is not shown their Mac's jobs: %s", own)
 	}
+	// A job of an earlier enrollment under the same name is the fleet's, not theirs.
+	earlier := &api.Job{ID: "j-earlier", Spec: api.JobSpec{Device: "vol-air"}, DeviceID: "d-someone-elses", State: api.JobDone, Outcome: api.OutcomePass, Created: l.s.now(), Updated: l.s.now()}
+	if err := l.s.store.saveJob(earlier); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(linus.macPage("vol-air", ""), "j-earlier") || !strings.Contains(grace.macPage("vol-air", ""), "j-earlier") {
+		t.Error("a job of an earlier enrollment: shown to the Mac's Volunteer, or kept from the M team")
+	}
 }
 
 // An M team member sees Live only under their own Lease, and otherwise who

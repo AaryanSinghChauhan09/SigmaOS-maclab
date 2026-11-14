@@ -875,6 +875,7 @@ form.inline { display: inline; }
 .fence .form-inline { margin-top: 0.5rem; }
 .facts .form-inline { margin-top: 0.4rem; }
 .screen { border: 1px solid var(--border); border-radius: var(--radius); display: block; height: auto; max-width: min(100%, 64rem); }
+.screen[hidden] { display: none; }
 .term { background: var(--deep); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg-dim); font-size: 0.85em; margin: 0; max-height: 30rem; overflow: auto; padding: 0.6em 0.8em; white-space: pre-wrap; word-break: break-all; }
 button.chip { background: transparent; cursor: pointer; font-family: inherit; }
 
