@@ -45,8 +45,18 @@ plist="$LAUNCHD_DIR/$LABD_LABEL.plist"
 work="$(mktemp -d "${TMPDIR:-/tmp}/lab-deploy.XXXXXX")"
 lock=""
 stage=""
+previous=""
+# Set while labd is stopped for a switch whose check has not passed: an exit
+# then, whatever failed, puts the previous build back.
+switching=0
 # shellcheck disable=SC2317,SC2329
 cleanup() {
+  local status=$?
+  trap - EXIT
+  if (( switching )); then
+    say "the Deploy of $tag stopped part-way (exit $status)"
+    (set +e; way_back) || true
+  fi
   rm -rf "$work"
   [[ -z $stage ]] || rm -rf "$stage"
   [[ -z $lock ]] || rmdir "$lock" 2>/dev/null || true
@@ -113,6 +123,23 @@ verify() {
     as_lab tail -n 20 "$LABD_LOG" | sed 's/^/    /'
   fi
   return 1
+}
+
+# way_back: the build that was running runs again, or, with none before it,
+# labd stays stopped. It always ends the Deploy as failed.
+# shellcheck disable=SC2317,SC2329
+way_back() {
+  switching=0
+  if [[ -n $previous ]]; then
+    switch_to "$previous"
+    rm -rf "${LAB_BUILDS:?}/$tag"
+    verify || fail "$tag was not Deployed, and $previous, put back, does not answer either: the lab is Dark"
+    fail "$tag was not Deployed: $previous is back and answers"
+  fi
+  stop_labd
+  rm -f "$LAB_CURRENT" "$plist"
+  rm -rf "${LAB_BUILDS:?}/$tag"
+  fail "$tag was not Deployed: there was no build before it, so labd is stopped"
 }
 
 # The last three builds stay; the running one always does.
@@ -186,21 +213,14 @@ rm -rf "${LAB_BUILDS:?}/$tag"
 mv "$new" "$LAB_BUILDS/$tag"
 say "unpacked $tag to $LAB_BUILDS/$tag"
 
+switching=1
 switch_to "$tag"
 if verify; then
+  switching=0
   prune
   say "Deployed $tag: labd answers $where${previous:+; $previous is kept as the way back}"
   exit 0
 fi
 
 say "labd of $tag failed its check"
-if [[ -n $previous ]]; then
-  switch_to "$previous"
-  rm -rf "${LAB_BUILDS:?}/$tag"
-  verify || fail "$tag was not Deployed, and $previous, put back, does not answer either: the lab is Dark"
-  fail "$tag was not Deployed: $previous is back and answers"
-fi
-stop_labd
-rm -f "$LAB_CURRENT" "$plist"
-rm -rf "${LAB_BUILDS:?}/$tag"
-fail "$tag was not Deployed: there was no build before it, so labd is stopped"
+way_back
