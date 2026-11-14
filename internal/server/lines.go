@@ -106,6 +106,32 @@ func (l *groupLines) markOnce(key, value string) bool {
 	return n > 0
 }
 
+// mark is the note under key.
+func (l *groupLines) mark(key string) (value string, ok bool) {
+	value, _, ok = l.markAt(key)
+	return value, ok
+}
+
+// markAt is the note under key and when it was made.
+func (l *groupLines) markAt(key string) (value string, at time.Time, ok bool) {
+	var micro int64
+	if err := l.st.db.QueryRow(`SELECT value, at FROM line_marks WHERE key = ?`, key).Scan(&value, &micro); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			l.log.Printf("line mark %s: %v", key, err)
+		}
+		return "", time.Time{}, false
+	}
+	return value, time.UnixMicro(micro), true
+}
+
+// setMark notes value under key, whatever was there.
+func (l *groupLines) setMark(key, value string) {
+	if _, err := l.st.db.Exec(`INSERT INTO line_marks (key, value, at) VALUES (?, ?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value, at = excluded.at`, key, value, l.clock.Now().UnixMicro()); err != nil {
+		l.log.Printf("line mark %s: %v", key, err)
+	}
+}
+
 // unmark drops the note under key and says whether there was one.
 func (l *groupLines) unmark(key string) bool {
 	res, err := l.st.db.Exec(`DELETE FROM line_marks WHERE key = ?`, key)

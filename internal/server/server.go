@@ -141,6 +141,9 @@ type Config struct {
 	// (see groupFiles): a group with no id there gets nothing.
 	Signal    Sender
 	SignalDir string
+	// Watch is what labd watches the lab's own parts with, for "Agents"
+	// and /status (see watch.go); nil watches nothing.
+	Watch *Watch
 	// Clock is where labd reads time; nil is the wall clock.
 	Clock agent.Clock
 }
@@ -182,6 +185,9 @@ type Server struct {
 	lines    *groupLines
 	labGroup labGroupLines
 	agents   agentsLines
+
+	// watch is what labd saw of the lab's own parts (watch.go).
+	watch watcher
 
 	// leaseMu makes taking a Lease one step: the count of a person's Leases
 	// per Configuration is read on other Macs than the one leased.
@@ -385,6 +391,12 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	go s.buildMonitor()
 	go s.lines.run(ctx)
 	go s.summaryLoop()
+	if cfg.Watch != nil {
+		s.startWatch()
+		if !cfg.Watch.ByHand {
+			go s.watchLoop()
+		}
+	}
 	go s.gcLoop()
 	go s.omtScheduler()
 	go s.callerLogLoop()

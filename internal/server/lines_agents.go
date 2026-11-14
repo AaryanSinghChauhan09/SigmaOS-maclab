@@ -95,3 +95,26 @@ func (a agentsLines) Recovered(key, text string) bool {
 	a.l.post(lineAgents, text)
 	return true
 }
+
+// BackAfterRestart is the lab running again after the mini restarted, with
+// how long it was Dark: from when labd was last known to run to this start.
+func (a agentsLines) BackAfterRestart(from, to time.Time) {
+	a.l.post(lineAgents, "The mini restarted and the lab is back. It was Dark for "+howLong(to.Sub(from))+", from "+when(from)+" to "+when(to)+".")
+}
+
+// LimiterRefusing is the refused-credential limiter starting to refuse an
+// address; LimiterQuiet is it refusing none any more. The line names no
+// address: the caller log does.
+func (a agentsLines) LimiterRefusing() {
+	a.Trouble("limiter", "The refused-credential limiter is refusing an address: over 10 refused credentials came from it in 10 minutes, and further bad ones get 429 for 15 minutes. The caller log names it.")
+}
+
+func (a agentsLines) LimiterQuiet() {
+	a.Recovered("limiter", "The refused-credential limiter refuses nobody now.")
+}
+
+// WeeklyDigest is the one message of Monday 09:00 Brisbane, as
+// postWeeklyDigest wrote it, a line for each thing.
+func (a agentsLines) WeeklyDigest(text string) {
+	a.l.record(lineAgents, text)
+}

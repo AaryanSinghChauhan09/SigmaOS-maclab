@@ -235,7 +235,7 @@ func TestADamagedCopyFailsTheDrill(t *testing.T) {
 
 			out := d.refused("restore-drill")
 
-			if got := d.told(); !strings.Contains(got, " agents The Restore drill failed: ") || !strings.Contains(got, c.want) || strings.Count(got, "\n") != 1 {
+			if got := d.told(); !strings.Contains(got, " trouble:restore-drill The Restore drill failed: ") || !strings.Contains(got, c.want) || strings.Count(got, "\n") != 1 {
 				t.Errorf("the owner is told %q, want one line with %q\n%s", got, c.want, out)
 			}
 			if exists(d.path("var/lab/log/restore-drill.ok")) {

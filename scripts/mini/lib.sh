@@ -24,6 +24,13 @@ DRILL_LABEL="org.omarchy-mac.lab.restore-drill"
 DEAD_MAN_LABEL="org.omarchy-mac.lab.dead-man"
 # Where the checks kept outside the house are pinged: healthchecks.io.
 CHECKS_AT="https://hc-ping.com"
+# cloudflared's own answer to whether it holds a connection to Cloudflare,
+# on the port its LaunchDaemon file gives it (--metrics).
+TUNNEL_READY="http://127.0.0.1:20241/ready"
+# Where the newest version of a Homebrew formula is read, by address and
+# with no Homebrew: the list Homebrew publishes, and a tap's own file.
+FORMULA_LIST="https://formulae.brew.sh/api/formula"
+TAP_FILES="https://raw.githubusercontent.com"
 # The Builder, and the daemon that starts container's server for it and
 # keeps it up. The volumes are the sizes of the spec.
 CONTAINER_LABEL="org.omarchy-mac.lab.container"
@@ -53,6 +60,9 @@ if [[ -n $SYSROOT ]]; then
   FRONT_DOOR="${LAB_FRONT_DOOR:-$FRONT_DOOR}"
   BACKUP_HOUSE="${LAB_BACKUP_HOUSE:-$BACKUP_HOUSE}"
   CHECKS_AT="${LAB_CHECKS_AT:-$CHECKS_AT}"
+  TUNNEL_READY="${LAB_TUNNEL_READY:-$TUNNEL_READY}"
+  FORMULA_LIST="${LAB_FORMULA_LIST:-$FORMULA_LIST}"
+  TAP_FILES="${LAB_TAP_FILES:-$TAP_FILES}"
 else
   PATH=/usr/bin:/bin:/usr/sbin:/sbin
   export PATH
@@ -72,6 +82,9 @@ RESET_TOOL="$LAB_CURRENT/bin/$RESET_TOOL_NAME"
 # The lab account's, and only it reads there: data, secrets, the socket, logs.
 LAB_HOME="$SYSROOT/var/lab"
 LABD_SOCKET="$LAB_HOME/run/labd.sock"
+# labd's second socket, where a script of the mini leaves a line for
+# "Agents" (scripts/mini/notify). It is not the tunnel's.
+OPS_SOCKET="$LAB_HOME/run/ops.sock"
 LABD_LOG="$LAB_HOME/log/labd.log"
 LABD_OOBD_TOKEN="$LAB_HOME/secrets/oobd.token"
 # The tunnel's credential, as cloudflared reads it with --token-file.
@@ -251,6 +264,23 @@ notify() {
   hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/notify"
   say "$1"
   [[ ! -x $hook ]] || "$hook" agents "$1" || say "that line was not sent"
+}
+
+# trouble KEY TEXT: the same for a trouble that lasts. "Agents" is told once,
+# however often this is said, until recovered KEY says it is over.
+trouble() {
+  local hook
+  hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/notify"
+  say "$2"
+  [[ ! -x $hook ]] || "$hook" trouble "$1" "$2" || say "that line was not sent"
+}
+
+# recovered KEY TEXT: the trouble named KEY is over. "Agents" is told only
+# if it was told of the trouble, so this prints nothing.
+recovered() {
+  local hook
+  hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/notify"
+  [[ ! -x $hook ]] || "$hook" recovered "$1" "$2" >/dev/null 2>&1 || true
 }
 
 # ping_check NAME: tell that check the lab did what the check waits for. The

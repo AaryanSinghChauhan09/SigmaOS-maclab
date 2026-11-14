@@ -1,18 +1,50 @@
 #!/bin/bash
-# Tell the owner one operations line:
+# Tell the owner's Signal group "Agents" one operations line, through labd:
 #
 #   scripts/mini/notify agents TEXT
+#   scripts/mini/notify trouble KEY TEXT
+#   scripts/mini/notify recovered KEY TEXT
 #
-# "agents" is the Signal group "Agents". Until the lab's Signal sender is on
-# the mini this only writes the line to /var/lab/log/notify.log, with its
-# time; nothing is sent anywhere.
+# agents is a line for something that happened. trouble is told once while
+# the trouble named KEY lasts, and recovered only if "Agents" was told of
+# that trouble: labd remembers which.
+#
+# The line goes to labd on its ops socket, which only the lab account can
+# open, as the body of the request: there is no token, and nothing is an
+# argument that is not printed here. labd records the line and its Signal
+# sender posts it.
+#
+# A line and a trouble are also written to /var/lab/log/notify.log with
+# their time, sent or not; a recovery only when labd told it. Exit 1 when
+# labd did not take the line.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/lib.sh
 . "$here/lib.sh"
 
-[[ $# == 2 && $1 == agents && -n $2 ]] || { sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+case "${1:-}" in
+  agents)
+    [[ $# == 2 && -n $2 ]] || usage
+    what=agents route=/agents/line text="$2"
+    ;;
+  trouble | recovered)
+    [[ $# == 3 && $2 =~ ^[a-z0-9][a-z0-9-]{0,39}$ && -n $3 ]] || usage
+    what="$1:$2" route="/agents/$1/$2" text="$3"
+    ;;
+  *) usage ;;
+esac
+
 log="$LAB_HOME/log/notify.log"
-no_link "$log"
-printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$(tr '\n' ' ' <<<"$2")" >> "$log" || fail "could not write $log"
+written() {
+  no_link "$log"
+  printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$(tr '\n' ' ' <<<"$text")" >> "$log" || fail "could not write $log"
+}
+
+[[ $1 == recovered ]] || written
+[[ -S $OPS_SOCKET ]] || fail "labd's ops socket is not at $OPS_SOCKET: the line was not sent"
+answer="$(tr '\n' ' ' <<<"$text" | curl -fsS --max-time 10 --unix-socket "$OPS_SOCKET" -H 'Content-Type: text/plain' --data-binary @- "http://labd$route")" ||
+  fail "labd did not take the line on $OPS_SOCKET: it was not sent"
+if [[ $1 == recovered && $answer == recorded ]]; then written; fi

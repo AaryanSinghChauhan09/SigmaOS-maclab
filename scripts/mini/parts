@@ -1,0 +1,64 @@
+#!/bin/bash
+# What labd cannot see of the mini by itself, a line for each thing:
+#
+#   scripts/mini/parts
+#
+#   boot SECONDS                        when the mini started
+#   tunnel up|down                      whether cloudflared holds a connection to Cloudflare
+#   litestream running|stopped ERRORS   Litestream, and the errors in its log so far
+#   service NAME STARTS                 how often launchd started a daemon it keeps alive
+#
+# labd runs it once a minute, as the lab account, for its alerts to "Agents"
+# and for /status. A daemon launchd does not have on this machine has no
+# line. It changes nothing and needs no root.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+
+[[ $# == 0 ]] || { sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+if [[ -n $SYSROOT && -n ${LAB_BOOT:-} ]]; then
+  boot="$LAB_BOOT"
+else
+  boot="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9]*\),.*/\1/p')"
+fi
+[[ $boot =~ ^[0-9]+$ ]] || fail "this machine does not say when it started"
+echo "boot $boot"
+
+# facts LABEL: what launchd says of that daemon, in STATE and STARTS; 1 when
+# launchd does not have it.
+facts() {
+  local out
+  out="$(launchctl print "system/$1" 2>/dev/null)" || return 1
+  STATE="$(awk '$1 == "state" && $2 == "=" { print $3; exit }' <<<"$out")"
+  STARTS="$(awk '$1 == "runs" && $2 == "=" { print $3; exit }' <<<"$out")"
+  [[ $STARTS =~ ^[0-9]+$ ]] || STARTS=0
+}
+
+if facts "$CLOUDFLARED_LABEL"; then
+  if curl -fsS -o /dev/null --max-time 5 "$TUNNEL_READY" 2>/dev/null; then
+    echo "tunnel up"
+  else
+    echo "tunnel down"
+  fi
+  echo "service cloudflared $STARTS"
+fi
+
+if facts "$LITESTREAM_LABEL"; then
+  errors=0
+  log="$LAB_HOME/log/litestream.log"
+  if [[ -f $log ]]; then errors="$(grep -c 'level=ERROR' "$log" || true)"; fi
+  [[ $errors =~ ^[0-9]+$ ]] || errors=0
+  if [[ $STATE == running ]]; then
+    echo "litestream running $errors"
+  else
+    echo "litestream stopped $errors"
+  fi
+  echo "service litestream $STARTS"
+fi
+
+if facts "$SIGNAL_LABEL"; then echo "service signal-cli $STARTS"; fi
+if facts "$OOBD_LABEL"; then echo "service oobd $STARTS"; fi
+if facts "$BUILDER_LABEL"; then echo "service lab-builder $STARTS"; fi

@@ -61,6 +61,9 @@ func main() {
 	signalSocket := flag.String("signal-socket", "", "signal-cli's daemon socket on this machine, the lab's Signal sender. With none, every line for the two groups is recorded and none is posted")
 	signalDir := flag.String("signal", "", `the folder with the ids of the lab's two Signal groups, one id in each file: signal-lab-group (the Lab group, "Omarchy Mac Lab") and signal-agents-group (the owner's "Agents"). A group with no file gets nothing: its lines are recorded and not posted`)
 	signalTest := flag.Bool("signal-test", false, "send one test line to each Signal group that has an id, say what became of it, and stop")
+	opsSocket := flag.String("ops-socket", "", `the socket the mini's own scripts tell "Agents" a line through (scripts/mini/notify): made for the account labd runs as alone, which is its whole credential. It takes a line and nothing else`)
+	opsMarks := flag.String("ops-marks", "", "the folder where the nightly backup and the Restore drill leave backup.ok and restore-drill.ok, for the alerts, the weekly digest and /status")
+	opsScripts := flag.String("ops-scripts", "", "the folder of the mini's scripts: labd runs parts every minute (the tunnel, Litestream, restarts) and pending-updates for the weekly digest. With none, labd watches only what it sees by itself")
 	rebootWarning := flag.Duration("reboot-warning", 5*time.Minute, "how long before a Volunteer job's first reboot its Mac shows the Volunteer a notice, which the job then waits for; 0 shows none and waits for none")
 	flag.Parse()
 	var sender server.Sender
@@ -124,6 +127,18 @@ func main() {
 	if err := lc.Check(); err != nil {
 		log.Fatal(err)
 	}
+	if *opsSocket != "" && *opsSocket == *socket {
+		log.Fatal("--ops-socket and --socket are two sockets: what comes through the tunnel's is from the internet")
+	}
+	watch := &server.Watch{Marks: *opsMarks}
+	if *opsScripts != "" {
+		watch.Mini = server.MiniParts(filepath.Join(*opsScripts, "parts"))
+		watch.Updates = server.PendingUpdates(filepath.Join(*opsScripts, "pending-updates"))
+	}
+	// Only a labd behind the tunnel asks the Alias from outside.
+	if *alias != "" && *socket != "" {
+		watch.Ask = server.AskOutside("labd/" + version)
+	}
 
 	if err := os.MkdirAll(*data, 0o700); err != nil {
 		log.Fatal(err)
@@ -138,7 +153,7 @@ func main() {
 	// ./volunteer downloads the lab-agent built alongside labd.
 	exe, _ := os.Executable()
 	s, err := server.New(ctx, server.Config{DataDir: *data,
-		PublicURL: pub, Alias: *alias, Preview: *preview, Release: version, Terms: terms, GitHub: app, Admins: admins, OOB: controller, MachineIDKey: idKey, Signal: sender, SignalDir: *signalDir,
+		PublicURL: pub, Alias: *alias, Preview: *preview, Release: version, Terms: terms, GitHub: app, Admins: admins, OOB: controller, MachineIDKey: idKey, Signal: sender, SignalDir: *signalDir, Watch: watch,
 		OMT: *omt, OMTSite: *omtSite, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
 		BootTimeout: *bootTimeout, OfflineAfter: *offlineAfter, AliveWindow: *aliveWindow, QuietGrace: *quietGrace, StageTimeout: *stageTimeout, WatchdogOpenTimeout: *watchdogOpenTimeout, RebootWarning: *rebootWarning, NtfyURL: *ntfy, NotifyCmd: *notifyCmd,
 		SourceHosts: hosts, ArtifactBudget: *artifactGB << 30, Transfers: server.Transfers{AtOnce: *partsAtOnce},
@@ -154,6 +169,22 @@ func main() {
 	lns, err := lc.Listen()
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *opsSocket != "" {
+		ln, err := server.ListenOps(*opsSocket)
+		if err != nil {
+			log.Fatal(err)
+		}
+		ops := s.OpsServer()
+		go func() {
+			if err := ops.Serve(ln); err != http.ErrServerClosed {
+				log.Fatalf("the ops socket %s: %v", *opsSocket, err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			ops.Close()
+		}()
 	}
 	go func() {
 		<-ctx.Done()

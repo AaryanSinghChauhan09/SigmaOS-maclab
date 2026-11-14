@@ -101,13 +101,17 @@ type mini struct {
 
 // launchctl keeps one file for each loaded daemon: "loaded" for labd,
 // "loaded.<label>" for any other. The daemon is what the last argument names.
+// A test may write beside it the state and the count of starts print shows.
 const launchctlStub = `#!/bin/bash
 echo "launchctl $*" >> "$STUB_LOG"
 label="$(basename "${!#}" .plist)"
 state="$STUB_STATE/loaded"
 [[ $label == org.omarchy-mac.lab.labd ]] || state="$STUB_STATE/loaded.$label"
 case "$1" in
-  print) [[ -f $state ]] || exit 113; echo "state = running" ;;
+  print)
+    [[ -f $state ]] || exit 113
+    echo "state = $(cat "$state.state" 2>/dev/null || echo running)"
+    echo "runs = $(cat "$state.runs" 2>/dev/null || echo 1)" ;;
   bootout) rm -f "$state" ;;
   bootstrap) [[ -f $3 ]] || exit 5; cp "$3" "$state" ;;
   kickstart) [[ -f $state && ! -f $STUB_STATE/kickstart.fails ]] || exit 113 ;;

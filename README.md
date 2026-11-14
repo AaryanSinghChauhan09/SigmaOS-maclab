@@ -744,6 +744,49 @@ sender. `sudo scripts/mini/signal` does the rest at a prompt: `register` the
 number, list the `groups` it was added to, give labd a `group`'s id, and
 `test` with one line to each group.
 
+### What labd watches, and `/status`
+
+Once a minute labd looks at the lab's own parts. "Agents" gets one line when
+a part goes wrong and one when it is well again, never the same thing twice,
+and it holds across a restart of labd:
+
+- the lab is back after the mini restarted, with how long it was Dark;
+- labd, or a daemon launchd keeps alive, started 3 times in 10 minutes;
+- the tunnel disconnected for over 5 minutes;
+- Litestream not running, or logging errors, for 2 minutes;
+- the last good backup older than 36 hours;
+- a failed Restore drill, and the next one that passes;
+- the disk under 15 % free;
+- the Builder silent, or the Out-of-band controller not answering, for 2 minutes;
+- the Alias no longer leading to the Lab address, once it has;
+- `container`'s server found stopped and started again, each Deploy and each
+  Maintenance run, which the mini's scripts say themselves.
+
+On Monday at 09:00 Brisbane a weekly digest goes there too: what waits for a
+Maintenance run (macOS, and the lab's Homebrew tools that have a newer
+version), and the dates of the last good backup and Restore drill.
+
+`/status` shows the server, the tunnel, the Builder, the Out-of-band
+controller, the last good backup, the last Restore drill and the last
+restart, as labd last saw them. Anyone may open it, so it carries states and
+times and no reason, address or path; it is never cached.
+
+- labd sees the disk, the Builder, the controller and the marker files
+  (`--ops-marks /var/lab/log`: `backup.ok`, `restore-drill.ok`) by itself.
+  What only the mini can say comes from two scripts labd runs as the `lab`
+  account (`--ops-scripts`): `scripts/mini/parts` every minute (the boot
+  time, the tunnel as `cloudflared` itself answers on its loopback port,
+  Litestream, how often launchd started each daemon) and
+  `scripts/mini/pending-updates` for the digest. Neither changes anything,
+  needs root or runs Homebrew.
+- A script of the mini tells "Agents" a line with
+  `scripts/mini/notify agents TEXT`, or `notify trouble KEY TEXT` and
+  `notify recovered KEY TEXT` for something that lasts. The line goes to labd
+  on a second socket only `lab` can open (`--ops-socket
+  /var/lab/run/ops.sock`), as the request's body: no token, and nothing in
+  an argument. That socket takes a line and nothing else; the tunnel's has no
+  such route. The line is also written to `/var/lab/log/notify.log`.
+
 ## Live data: stream, screen, logs, shell
 
 Everything a UI needs is on the API. The web UI uses it now, and a TUI can use it later.

@@ -241,7 +241,8 @@ func TestTheMinisScriptsNeedOnlyWhatMacOSHas(t *testing.T) {
 			if m := banned.FindStringSubmatch(code); m != nil {
 				t.Errorf("%s:%d needs %s: %s", name, n+1, m[2], strings.TrimSpace(line))
 			}
-			if brew.MatchString(code) && name != "setup" {
+			// The address of the list Homebrew publishes is no call of brew.
+			if brew.MatchString(strings.ReplaceAll(code, "//formulae.brew.sh/", "")) && name != "setup" {
 				t.Errorf("%s:%d calls brew: %s", name, n+1, strings.TrimSpace(line))
 			}
 			if strings.Contains(code, "/bin/brew") && !strings.Contains(text, "brew_as_owner() {") {

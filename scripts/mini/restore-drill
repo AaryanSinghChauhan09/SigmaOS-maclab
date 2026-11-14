@@ -243,7 +243,7 @@ TOLD=0
 ended() {
   local status=$?
   rm -rf "$lock" ${SCRATCH:+"$SCRATCH"}
-  (( status == 0 || TOLD )) || notify "The Restore drill failed: it stopped before it was done."
+  (( status == 0 || TOLD )) || trouble restore-drill "The Restore drill failed: it stopped before it was done."
 }
 trap ended EXIT
 # What a drill that was cut short restored holds the lab's data.
@@ -255,9 +255,10 @@ drill offsite "the off-site copy"
 
 if [[ -n $FAILED ]]; then
   TOLD=1
-  notify "The Restore drill failed: $FAILED."
+  trouble restore-drill "The Restore drill failed: $FAILED."
   exit 1
 fi
 date -u +%Y-%m-%dT%H:%M:%SZ > "$DRILL_OK"
+recovered restore-drill "The Restore drill passed again."
 ping_check restore-drill || true
 say "done"
