@@ -1,0 +1,123 @@
+#!/bin/bash
+# What the Front door's tests ask the mini itself (tests 8, 9 and 10 of spec
+# section 16, Ready item 1). It changes nothing and prints numbers and words
+# only: never an address, never a line of the caller log.
+#
+#   sudo scripts/mini/edge-facts origin
+#   sudo scripts/mini/edge-facts callers PATH [FORGED [SHA256]]
+#
+# origin: where the tunnel leads and who listens.
+#
+#   tunnel_origin=socket|other  every name of the Deployed route file leads
+#                               to labd's Unix socket, and the rest to 404
+#   socket=ok|missing|open      the socket is there, the lab account's, and
+#                               nobody else's to open
+#   lab_listeners=N             TCP ports the lab's own daemons listen on
+#   beyond_loopback=N           how many of those are open beyond this machine
+#   beyond_loopback_ports=...   which, as daemon:port
+#
+# tailscaled is not counted: it is the tailnet, and SSH comes in through it.
+#
+# callers: labd's caller log, today's and yesterday's, for requests to PATH.
+#
+#   lines=N        requests to PATH
+#   with_ray=N     of those, the ones with the edge's ray id, which labd
+#                  keeps only for a request that came in on the tunnel's socket
+#   forged=N       the ones logged as coming from the address FORGED
+#   addresses=N    how many different addresses they were logged from
+#   as_expected=N  the ones logged from the address whose SHA-256 is SHA256
+#
+# The caller log is read as the lab account. Needs only what macOS has.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+
+usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+# The lab's daemons as lsof names them: everything the lab account runs,
+# and the two that run as root and listen.
+LISTENER_ACCOUNT=lab
+ROOT_LISTENERS='^(oobd|lab-build)'
+
+origin() {
+  local routes="$LAB_CURRENT/deploy/cloudflared.yml" socket="${LABD_SOCKET#"$SYSROOT"}" services other others listening total=0 beyond=0 names="" command user name port
+  need_root
+  [[ -f $routes ]] || fail "no route file at $routes: the first Deploy brings it"
+  services="$(sed -n 's/^[[:space:]]*\(- \)\{0,1\}service:[[:space:]]*//p' "$routes")"
+  other="$(grep -vxF -e "unix:$socket" -e "http_status:404" <<<"$services" || true)"
+  if [[ -n $services && -z $other ]] && grep -qxF "unix:$socket" <<<"$services"; then
+    echo "tunnel_origin=socket"
+  else
+    echo "tunnel_origin=other"
+  fi
+
+  # shellcheck disable=SC2012
+  others="$(ls -ld "$LABD_SOCKET" 2>/dev/null | cut -c5-10 || true)"
+  if [[ ! -S $LABD_SOCKET ]]; then
+    echo "socket=missing"
+  elif [[ "$(owner_of "$LABD_SOCKET")" == "$LAB_OWNER" && $others == "------" ]]; then
+    echo "socket=ok"
+  else
+    echo "socket=open"
+  fi
+
+  listening="$(sys lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { print $1, $3, $9 }' | sort -u || true)"
+  while read -r command user name; do
+    [[ -n $command ]] || continue
+    [[ $user == "$LISTENER_ACCOUNT" || $command =~ $ROOT_LISTENERS ]] || continue
+    total=$((total + 1))
+    port="${name##*:}"
+    case "$name" in
+      127.0.0.1:* | "[::1]:"* | localhost:*) ;;
+      *) beyond=$((beyond + 1)); names="${names:+$names,}${command//[^A-Za-z0-9_-]/}:${port//[^0-9]/}" ;;
+    esac
+  done <<<"$listening"
+  echo "lab_listeners=$total"
+  echo "beyond_loopback=$beyond"
+  echo "beyond_loopback_ports=$names"
+}
+
+callers() {
+  local path="${1:-}" forged="${2:-}" expect="${3:-}" dir="$LAB_DATA/callers" day logs=() addresses
+  [[ $path =~ ^/[A-Za-z0-9._/-]{1,200}$ ]] || usage
+  [[ -z $forged || $forged =~ ^[0-9A-Fa-f.:]{2,45}$ ]] || usage
+  [[ -z $expect || $expect =~ ^[0-9a-f]{64}$ ]] || usage
+  need_root
+  no_link "$dir"
+  for day in "$(date -u -v-1d +%Y-%m-%d 2>/dev/null || date -u -d yesterday +%Y-%m-%d)" "$(date -u +%Y-%m-%d)"; do
+    logs+=("$dir/$day.log")
+  done
+  # The address of each request to PATH, and whether it has a ray id.
+  addresses="$(as_lab cat "${logs[@]}" 2>/dev/null | grep -F "\"path\":\"$path\"," | awk '
+    { addr = ""; ray = 0
+      if (match($0, /"addr":"[^"]*"/)) addr = substr($0, RSTART + 8, RLENGTH - 9)
+      if ($0 ~ /"ray":"[^"]+"/) ray = 1
+      print ray, addr }' || true)"
+  if [[ -z $addresses ]]; then
+    as_lab test -r "$dir" || fail "the caller log ($dir) cannot be read as $LAB_OWNER"
+    printf 'lines=0\nwith_ray=0\nforged=0\naddresses=0\nas_expected=0\n'
+    return 0
+  fi
+  echo "lines=$(wc -l <<<"$addresses" | tr -d ' ')"
+  echo "with_ray=$(grep -c '^1 ' <<<"$addresses" || true)"
+  echo "forged=$(awk -v f="$forged" 'f != "" && $2 == f' <<<"$addresses" | wc -l | tr -d ' ')"
+  echo "addresses=$(awk '{ print $2 }' <<<"$addresses" | sort -u | wc -l | tr -d ' ')"
+  local same=0 addr
+  if [[ -n $expect ]]; then
+    while read -r _ addr; do
+      [[ "$(printf '%s' "$addr" | shasum -a 256 | cut -d' ' -f1)" != "$expect" ]] || same=$((same + 1))
+    done <<<"$addresses"
+  fi
+  echo "as_expected=$same"
+}
+
+(( $# >= 1 )) || usage
+what="$1"
+shift
+case "$what" in
+  origin) (( $# == 0 )) || usage; origin ;;
+  callers) (( $# >= 1 && $# <= 3 )) || usage; callers "$@" ;;
+  *) usage ;;
+esac
