@@ -131,7 +131,10 @@ for p in darwin-arm64 linux-arm64 linux-amd64; do
   stamped "$f" "$tag" || fail "lab-$p doesn't carry $tag"
   if runs "$f"; then
     [[ -x $f ]] || fail "lab-$p is not executable"
-    said="$(HOME="$t/nobody" XDG_CONFIG_HOME="$t/nobody/.config" MACLAB_URL= MACLAB_TOKEN= "$f" version | head -n 1)"
+    # Not through head: lab says a second line, and a pipe closed before it
+    # is written ends lab on SIGPIPE and this check with it, without a word.
+    said="$(HOME="$t/nobody" XDG_CONFIG_HOME="$t/nobody/.config" MACLAB_URL= MACLAB_TOKEN= "$f" version)" || fail "lab-$p version failed"
+    said="${said%%$'\n'*}"
     [[ $said == "lab $tag" ]] || fail "lab-$p version says $said, not lab $tag"
     ran=$((ran + 1))
   fi
