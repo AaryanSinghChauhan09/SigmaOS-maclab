@@ -74,11 +74,28 @@ func (h *hub) unsubscribe(s *sub) {
 	h.mu.Unlock()
 }
 
+// streamsTo is whether an event of this kind about the Mac called device
+// goes to c. A caller gets only the events of the Macs they see (see sees),
+// and the fleet's own (builds) only as a Maintainer. Serial lines carry the
+// console, so only Maintainers get them, as with the stored serial log. A
+// Mac's kernel events and new screens are its live views: an M team member
+// gets them only where they may watch, under their own Lease.
+func (s *Server) streamsTo(c caller, kind, device string) bool {
+	switch {
+	case !s.sees(c, device):
+		return false
+	case kind == "serial":
+		return c.maintainer != ""
+	case (kind == "kevent" || kind == "screen") && c.team != "":
+		return s.mayDo(c, s.dev(device), actWatch) == nil
+	}
+	return true
+}
+
 // hStream serves server-sent events: device, job, serial, kevent, screen,
-// build. ?device= limits it to one Mac. A caller gets only the events of the
-// Macs they see (see sees), and the fleet's own (builds) only as a
-// Maintainer. Browsers read it with fetch (EventSource cannot send the
-// Authorization header).
+// build. ?device= limits it to one Mac, and streamsTo says what of it a
+// caller gets. A page reads it with its browser's session; a program with
+// fetch and its Lab token.
 func (s *Server) hStream(w http.ResponseWriter, r *http.Request) {
 	fl, ok := w.(http.Flusher)
 	if !ok {
@@ -88,10 +105,7 @@ func (s *Server) hStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
-	// Serial lines carry the console (lab shell, serial lab exec), so only
-	// Maintainers get them, as with the stored serial log.
 	c := callerOf(r)
-	serial := c.maintainer != ""
 	sb := s.hub.subscribe(r.URL.Query().Get("device"))
 	defer s.hub.unsubscribe(sb)
 	keep := s.clock().NewTicker(15 * time.Second)
@@ -107,7 +121,7 @@ func (s *Server) hStream(w http.ResponseWriter, r *http.Request) {
 		case <-keep.C():
 			fmt.Fprint(w, ": keepalive\n\n")
 		case e := <-sb.ch:
-			if (e.kind == "serial" && !serial) || !s.sees(c, e.device) {
+			if !s.streamsTo(c, e.kind, e.device) {
 				continue
 			}
 			if e.kind == "device" && c.team != "" {
