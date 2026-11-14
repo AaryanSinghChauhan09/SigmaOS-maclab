@@ -1409,27 +1409,35 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person, by string) (
 	if err != nil {
 		return "", refuse(http.StatusNotFound, "%v", err)
 	}
-	// From here the Mac is being recovered: a second press sends no second
-	// reset while the lab waits for the first to bring it back.
+	// One at a time: a second press sends no second reset while the first
+	// is on its way, nor while the lab waits for it to bring the Mac back.
 	why := "Hard reset by " + orStr(by, "a Maintainer")
 	v.mu.Lock()
 	prev, reason := v.d.State, v.d.StateReason
-	switch prev {
-	case api.StateBusy:
+	switch {
+	case prev == api.StateBusy:
 		v.mu.Unlock()
 		return "", refuse(http.StatusConflict, "%s is busy; cancel its job instead", name)
-	case api.StateRecovering:
+	case prev == api.StateRecovering:
 		v.mu.Unlock()
 		return "", refuse(http.StatusConflict, "%s is being recovered already (%s)", name, reason)
+	case v.resetting:
+		v.mu.Unlock()
+		return "", refuse(http.StatusConflict, "a Hard reset of %s is on its way already", name)
 	}
-	v.setStateLocked(api.StateRecovering, why)
+	v.resetting = true
 	v.mu.Unlock()
 	rctx, cancel := context.WithTimeout(ctx, resetWait)
 	sent := sentReset{at: s.now(), prev: prev}
 	sent.port, err = v.resetOOB(rctx)
 	cancel()
+	v.mu.Lock()
+	v.resetting = false
+	if err == nil {
+		v.setStateLocked(api.StateRecovering, why)
+	}
+	v.mu.Unlock()
 	if err != nil {
-		v.setState(prev, reason)
 		return "", err
 	}
 	go func() {

@@ -291,6 +291,40 @@ func TestWithNoSightingTheLadderSkipsTheHardResetRung(t *testing.T) {
 	}
 }
 
+// The Mac's own watchdog comes before a person exactly where no Hard reset
+// reaches the Mac: labd's wait for a boot it lost allows for the watchdog
+// with no Sighting and with the controller stopped, and for none while the
+// Mac is sighted, when the Hard reset is the next rung.
+func TestTheMacsOwnWatchdogGetsItsTimeWhereNoHardResetReaches(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	go l.sim.Quiet(time.Minute)
+	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+	r := &jobRun{s: l.s, v: l.s.dev(l.name), boot: 4 * time.Second}
+	const watchdog = 2*time.Second + 4*time.Second // lab-agent's idle reset here, and a boot
+	check := func(when string, waits bool) {
+		t.Helper()
+		allowance, more := r.watchdogAllowance(), r.watchdogRecovery(time.Second)
+		if waits && (allowance != watchdog || more <= 0) || !waits && (allowance != 0 || more != 0) {
+			t.Fatalf("%s: labd allows the watchdog %s and waits %s more for it; waits for it: %v", when, allowance, more, waits)
+		}
+	}
+	check("sighted", false)
+	l.oob.stop(true)
+	l.sight()
+	check("the controller stopped", true)
+	l.oob.stop(false)
+	l.sight()
+	check("the controller back", false)
+	l.oob.shows(portRight, "")
+	l.oob.plug(portRight, l.sim, "", productM1Pro)
+	l.sight()
+	check("not sighted", true)
+	l.oob.unplug(portRight)
+	l.sight()
+	check("no cable", true)
+}
+
 // swapped serves whichever labd the test has put behind the lab's address.
 type swapped struct {
 	mu sync.Mutex

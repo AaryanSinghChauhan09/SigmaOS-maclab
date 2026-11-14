@@ -30,16 +30,13 @@ func (r *jobRun) networkOnly() bool {
 func (r *jobRun) serialEnabled() bool { return !r.networkOnly() && r.v.snapshot().OOB != nil }
 
 // resetOOB sends v's Mac a Hard reset and says through which port. It
-// serializes with a policy transition, which cancels it: a call that waited
-// behind one is never sent under the network-only policy.
+// serializes with a policy transition, which cancels it; one that waited
+// behind a transition to the network-only policy is refused under it (see
+// cableLocked).
 func (v *dev) resetOOB(ctx context.Context) (port string, err error) {
 	v.oobCallMu.Lock()
 	defer v.oobCallMu.Unlock()
 	v.mu.Lock()
-	if v.networkOnlyLocked() {
-		v.mu.Unlock()
-		return "", errors.New("no Hard reset was sent: network-only recovery is selected for it")
-	}
 	op, cancel := context.WithCancel(ctx)
 	v.oobCallCancel = cancel
 	v.mu.Unlock()

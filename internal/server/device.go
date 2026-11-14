@@ -55,6 +55,8 @@ type dev struct {
 	recoveryMu    sync.Mutex
 	oobCallMu     sync.Mutex
 	oobCallCancel context.CancelFunc
+	// resetting: a person's Hard reset is on its way to the controller.
+	resetting bool
 
 	// forgotten: lab forget deleted the device's row. Set under mu, which
 	// every save holds, so nothing still holding the device writes it back.

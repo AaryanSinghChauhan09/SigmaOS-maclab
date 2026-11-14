@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
 )
 
 const token = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
