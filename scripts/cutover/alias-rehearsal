@@ -155,8 +155,10 @@ check_forward() {
     n=$((n + 1))
     if [[ $STATUS != 308 || "$(header location)" != "$want" ]]; then
       if [[ $STATUS == 308 ]]; then bad+="${bad:+; }$path led elsewhere than $want"; else bad+="${bad:+; }$path answered $STATUS ($(error_of))"; fi
-    elif [[ -n "$(header cache-control)" && "$(header cache-control)" != *no-store* ]]; then
-      bad+="${bad:+; }the forward of $path may be cached ($(header cache-control))"
+    elif [[ "$(header cache-control)" != *no-store* ]]; then
+      bad+="${bad:+; }the forward of $path may be cached (Cache-Control \"$(header cache-control)\")"
+    elif [[ "$(header cf-cache-status)" == HIT ]]; then
+      bad+="${bad:+; }the forward of $path came from the edge's cache"
     fi
   done
   if [[ -z $bad ]]; then
@@ -320,7 +322,7 @@ teardown() {
 }
 on_exit() {
   local rc=$?
-  if (( ! torn )); then
+  if (( ! torn && (made || switched) )); then
     say "stopped midway: taking the rehearsal down"
     set +e
     teardown
