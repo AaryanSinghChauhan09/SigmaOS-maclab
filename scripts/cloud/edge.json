@@ -1,0 +1,82 @@
+{
+  "settings": [
+    {"name": "Bot Fight Mode", "state": "off", "path": "/zones/{zone}/bot_management", "read": ".result.fight_mode", "accept": ["false"], "method": "PUT", "body": {"fight_mode": false, "ai_bots_protection": "disabled", "crawler_protection": "disabled"}},
+    {"name": "AI-bot blocking", "state": "off", "path": "/zones/{zone}/bot_management", "read": ".result.ai_bots_protection", "accept": ["disabled"], "method": "PUT", "body": {"fight_mode": false, "ai_bots_protection": "disabled", "crawler_protection": "disabled"}},
+    {"name": "AI Labyrinth", "state": "off", "path": "/zones/{zone}/bot_management", "read": ".result.crawler_protection", "accept": ["disabled"], "method": "PUT", "body": {"fight_mode": false, "ai_bots_protection": "disabled", "crawler_protection": "disabled"}},
+    {"name": "Rocket Loader", "state": "off", "path": "/zones/{zone}/settings/rocket_loader"},
+    {"name": "email obfuscation", "state": "off", "path": "/zones/{zone}/settings/email_obfuscation"},
+    {"name": "Always Online", "state": "off", "path": "/zones/{zone}/settings/always_online"},
+    {"name": "automatic HTTPS rewrites", "state": "off", "path": "/zones/{zone}/settings/automatic_https_rewrites"},
+    {"name": "Cloudflare Fonts", "state": "off", "path": "/zones/{zone}/settings/fonts"},
+    {"name": "the analytics script injection", "state": "off", "path": "/zones/{zone}/settings/rum"},
+    {"name": "Always Use HTTPS", "state": "on", "path": "/zones/{zone}/settings/always_use_https"},
+    {"name": "HTTP/3", "state": "on", "path": "/zones/{zone}/settings/http3"},
+    {"name": "TLS 1.3", "state": "on", "path": "/zones/{zone}/settings/tls_1_3", "accept": ["on", "zrt"]},
+    {"name": "0-RTT", "state": "on", "path": "/zones/{zone}/settings/0rtt"},
+    {"name": "Early Hints", "state": "on", "path": "/zones/{zone}/settings/early_hints"},
+    {"name": "Smart Tiered Cache (tiered caching)", "state": "on", "path": "/zones/{zone}/argo/tiered_caching"},
+    {"name": "Smart Tiered Cache (the Smart topology)", "state": "on", "path": "/zones/{zone}/cache/tiered_cache_smart_topology_enable"},
+    {"name": "Speed Brain", "state": "on", "path": "/zones/{zone}/settings/speed_brain"}
+  ],
+  "rules": [
+    {
+      "name": "the skip rule on /api/*",
+      "phase": "http_request_firewall_custom",
+      "want": [
+        {
+          "description": "Under /api/: no Browser Integrity Check, no managed rules",
+          "expression": "(http.host eq \"lab.omarchy-mac.org\" and starts_with(http.request.uri.path, \"/api/\"))",
+          "action": "skip",
+          "action_parameters": {"phases": ["http_request_firewall_managed"], "products": ["bic"]},
+          "logging": {"enabled": true},
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "name": "the rate rule",
+      "phase": "http_ratelimit",
+      "want": [
+        {
+          "description": "Flood cap: 300 requests in 10 s per address, whole site",
+          "expression": "true",
+          "action": "block",
+          "ratelimit": {"characteristics": ["cf.colo.id", "ip.src"], "period": 10, "requests_per_period": 300, "mitigation_timeout": 10},
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "name": "the cache rules",
+      "phase": "http_request_cache_settings",
+      "never": ["edge_ttl", "browser_ttl"],
+      "want": [
+        {
+          "description": "Public pages, for a request without the session cookie, may be cached as labd says",
+          "expression": "(http.host eq \"lab.omarchy-mac.org\" and not http.cookie contains \"lab_session=\" and not ends_with(http.request.uri.path, \"/deletion\") and (http.request.uri.path in {\"/\" \"/matrix\" \"/models\" \"/features\" \"/gaps\" \"/aurora\" \"/benchmarks\" \"/candidates\" \"/reports\" \"/data\" \"/install\" \"/terms\" \"/privacy\"} or starts_with(http.request.uri.path, \"/models/\") or starts_with(http.request.uri.path, \"/features/\") or starts_with(http.request.uri.path, \"/candidates/\") or starts_with(http.request.uri.path, \"/reports/\")))",
+          "action": "set_cache_settings",
+          "action_parameters": {"cache": true},
+          "enabled": true
+        },
+        {
+          "description": "Under /api/: never cached",
+          "expression": "(http.host eq \"lab.omarchy-mac.org\" and starts_with(http.request.uri.path, \"/api/\"))",
+          "action": "set_cache_settings",
+          "action_parameters": {"cache": false},
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "name": "no redirect rule",
+      "phase": "http_request_dynamic_redirect",
+      "want": []
+    }
+  ],
+  "mail": {"address": "privacy@omarchy-mac.org", "name": "privacy"},
+  "owner": [
+    {"name": "DNSSEC", "path": "/zones/{zone}/dnssec", "read": ".result.status", "accept": ["active"], "how": "Cloudflare: DNS > Settings > DNSSEC > Enable, then the DS record it shows goes in at Porkbun"},
+    {"name": "the tunnel-health alert", "path": "/accounts/{account}/alerting/v3/policies", "read": "[.result[]? | select(.alert_type == \"tunnel_health_event\" and .enabled == true and ((.mechanisms.email // []) | length) > 0)] | length > 0", "accept": ["true"], "how": "Cloudflare: Notifications > Add > Tunnel Health Alert, by email"},
+    {"name": "the \"tunnel created or deleted\" alert", "path": "/accounts/{account}/alerting/v3/policies", "read": "[.result[]? | select(.alert_type == \"tunnel_update_event\" and .enabled == true and ((.mechanisms.email // []) | length) > 0)] | length > 0", "accept": ["true"], "how": "Cloudflare: Notifications > Add > Tunnel Creation or Deletion Event, by email"}
+  ]
+}
