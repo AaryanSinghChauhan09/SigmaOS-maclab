@@ -43,6 +43,11 @@ const (
 // Uploads takes reports in. Its counts are in memory, as the old site's
 // were: they start again when labd does.
 type Uploads struct {
+	// OnMTeam reports whether the person with that account id is on the
+	// Omarchy M team now: what makes the report of a Mac signed in as them
+	// a Verified run. Nil is nobody: every run is a Community run.
+	OnMTeam func(accountID int64) bool
+
 	store     *Store
 	rules     *Rules
 	now       func() time.Time
@@ -75,7 +80,7 @@ func (u *Uploads) Receive(body []byte, installURL string) (*Stored, *Refusal, er
 		return nil, &Refusal{Status: http.StatusTooManyRequests,
 			Error: fmt.Sprintf("Too many uploads from this Mac: at most %d an hour. Try again later; the report is saved on your Mac.", UploadsPerHourPerMachine)}, nil
 	}
-	stored, heldAs, repeat, err := u.store.add(judged, now)
+	stored, heldAs, repeat, err := u.store.add(judged, now, u.OnMTeam)
 	if err != nil {
 		return nil, notStored, err
 	}
@@ -129,8 +134,8 @@ func (u *Uploads) Handle(w http.ResponseWriter, r *http.Request, addr, site stri
 			"id":           stored.PublicID,
 			"report_url":   site + "/reports/" + stored.PublicID,
 			"deletion_url": site + "/reports/" + stored.PublicID + "/deletion?token=" + stored.DeletionToken,
-			// Whether the run is a Verified run is decided by the Mac's sign-in; nothing decides it yet.
-			"tester": false,
+			// The wire's name for a Verified run.
+			"tester": stored.Verified,
 		})
 	}
 	return err

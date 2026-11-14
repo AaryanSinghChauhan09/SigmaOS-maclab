@@ -130,6 +130,8 @@ type Stored struct {
 	DeletionToken string
 	Handle        string
 	AccountID     int64
+	// Verified is the verdict the report was stamped with.
+	Verified bool
 }
 
 // held tells of the report with that digest: whether the lab has stored it,
@@ -151,12 +153,15 @@ func heldIn(db queryer, digest string) (publicID string, held bool, err error) {
 	return id.String, err == nil, err
 }
 
-// add stores a judged report, stamped with whoever its Mac is signed in as,
-// in one write transaction: a sign-out or another upload of the same report
-// at the same moment waits for it. repeat is true, and nothing is stored,
-// when the lab has stored the report before; heldAs is then its public id,
-// "" once it was deleted.
-func (s *Store) add(judged *Judged, at time.Time) (stored *Stored, heldAs string, repeat bool, err error) {
+// add stores a judged report, stamped with whoever its Mac is signed in as
+// and with the verdict, in one write transaction: a sign-out or another
+// upload of the same report at the same moment waits for it. The one rule:
+// a run is a Verified run when its Mac's Machine key is signed in as an M
+// team member at upload, whoever uploads it; onMTeam says who is one, and
+// nil says nobody. The stamp is never recomputed. repeat is true, and
+// nothing is stored, when the lab has stored the report before; heldAs is
+// then its public id, "" once it was deleted.
+func (s *Store) add(judged *Judged, at time.Time, onMTeam func(accountID int64) bool) (stored *Stored, heldAs string, repeat bool, err error) {
 	digest := Digest(judged.MachineID, judged.Body)
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -182,8 +187,9 @@ func (s *Store) add(judged *Judged, at time.Time) (stored *Stored, heldAs string
 		return nil, "", false, err
 	}
 	stored.Handle, stored.AccountID = handle.String, accountID.Int64
-	res, err = tx.Exec(`INSERT INTO reports (public_id, deletion_token_digest, schema_version, body, created_at, updated_at, machine_id, handle, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		stored.PublicID, tokenDigest(stored.DeletionToken), judged.SchemaVersion, string(judged.Body), now, now, judged.MachineID, handle, accountID)
+	stored.Verified = accountID.Valid && onMTeam != nil && onMTeam(accountID.Int64)
+	res, err = tx.Exec(`INSERT INTO reports (public_id, deletion_token_digest, schema_version, body, created_at, updated_at, machine_id, handle, account_id, verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		stored.PublicID, tokenDigest(stored.DeletionToken), judged.SchemaVersion, string(judged.Body), now, now, judged.MachineID, handle, accountID, stored.Verified)
 	if err != nil {
 		return nil, "", false, err
 	}
