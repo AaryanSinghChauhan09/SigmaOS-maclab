@@ -370,6 +370,10 @@ func TestFreezeEntryReadsTheMacThroughTheIdentityCheckUnderTheCallersOwnLease(t 
 		t.Fatalf("the freeze queued a job: %+v", jobs[0])
 	}
 
+	if execs, err := l.s.store.execRecord(l.s.dev("sim-mac").snapshot().ID, 0, 100); err != nil || len(execs) != 0 {
+		t.Fatalf("the freeze wrote to the Exec record: %+v (%v)", execs, err)
+	}
+
 	// Who froze the entry, and when, is recorded.
 	mac := l.release(grace.Token, "9.9").Macs[0]
 	if mac.EntryFrozenBy != "grace" || mac.EntryFrozenAt == nil || mac.EntryFrozenAt.Before(before) {
