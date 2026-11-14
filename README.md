@@ -367,10 +367,13 @@ lab login https://lab.omarchy-mac.org    # asks for a Lab token; it is never an 
 lab status
 ```
 
-The install line checks what it downloads against the pinned release key, and
-running it again updates `lab`. It never replaces a `lab` that is not Omarchy
-Mac Lab's: a person who also works in maclab's own lab keeps that build under
-a name they choose. `lab version` prints its release and the lab's. The lab
+The install line takes the latest Lab release's `lab` for the machine (macOS
+on Apple Silicon, Linux on arm64 or x86-64), checks it against the pinned
+release key, and running it again updates `lab`. While the lab is in Preview
+it serves the Release candidate the mini runs, as `/install` does for the
+test tool. It never replaces a `lab` that is not Omarchy Mac Lab's: the
+install stops, and a person who also works in maclab's own lab keeps that
+build under a name they choose. `lab version` prints its release and the lab's. The lab
 refuses a `lab` older than its minimum release in one line, with the install
 line, and `lab status` and `lab login` add a line when the lab runs a newer
 release.
@@ -560,21 +563,30 @@ known-good, and labd's once it passes. Until it passes, the Mac has no known-goo
 kernel on labd and takes no other job. The baseline passes only if a plain reboot
 comes back on that kernel, so it must be the bootloader's default entry.
 
-lab-agent itself comes from the lab server only. Every install of it checks its
-signature against the release key pinned in the lab-agent already running, and
-refuses an agent older than the one installed.
+lab-agent itself comes from the lab server only, signed, and never from GitHub.
+The Join command checks the first one against the release key written into the
+line. An update checks the new agent's signature against the release key pinned
+in the lab-agent already running and refuses an agent older than the one
+installed; a refusal says "Nothing was changed."
 
 ```sh
 sudo lab-agent update      # at the Mac: take the lab's lab-agent
-lab agent-update m1air     # a Maintainer, for a Lab-owned Mac, while it is idle (no job, no Lease)
+lab agent-update m1air     # a Maintainer, for a Lab-owned Mac, while it is idle: no job running or waiting, no Lease
 lab-agent version          # its own number, the Lab release it came from, the release key it trusts
 ```
 
-Nothing pushes an agent to a Volunteer's Mac: its Volunteer runs `sudo lab-agent
-update`. Each check-in carries the agent's number and its Lab release, and `lab
-status` and Macs show an agent older than the lab's with its version. There is no
-fleet-wide minimum: the lab refuses only a job that needs a newer agent, naming
-the version.
+`lab agent-update` has the Mac's running agent do what `update` does, so the
+check is the Mac's own in both. It needs lab-agent 0.10.0 or later on the Mac,
+the first that updates itself; a Mac with an older one Joins again. `update`
+is refused on a Lab boot.
+
+Nothing pushes an agent to a Volunteer's Mac: `lab agent-update` is refused
+there. Its Volunteer gets one Notice, "An update is waiting for this Mac. Open
+My Macs.", with no command in it, sees the line on the Mac's own page, and runs
+`sudo lab-agent update` at the Mac. The agent's check-ins carry its number and
+its Lab release, and `lab status` and Macs show an agent older than the lab's
+with its version and who updates it. There is no fleet-wide minimum: the lab
+refuses only a job that needs a newer agent, naming the version.
 
 To take a Mac out of the lab, `sudo lab-agent uninstall` undoes every change `setup` made. First it
 tells labd the Mac is leaving: labd cancels the Mac's running and queued jobs, saying why, lists it as
@@ -1189,8 +1201,9 @@ On a Mac with a desktop user, every job also runs
 [omarchy-m-test](docs/omarchy-m-test.md) in the desktop
 session: about 70 checks of the boot chain, drivers, GPU, video decode, display,
 audio, Wi-Fi, power and CPU, and short benchmarks. Before each run the agent installs
-the latest tool from the lab's own install line (`<Lab address>/install`), whose
-script checks the release signature. It runs with
+the latest tool from the lab's own install line (`<Lab address>/install`): it runs
+that script only if it pins lab-agent's own release key, and the script checks the
+release's signature. It runs with
 `--unattended`: it answers the disclaimer and gets no more input, every check meant
 for a person is skipped, and the speaker tone, brightness steps, camera window and
 disruptive sections (lid, Wi-Fi reload) don't happen. The run takes 1 to 3 minutes.

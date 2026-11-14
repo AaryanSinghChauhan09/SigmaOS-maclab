@@ -110,17 +110,20 @@ read `lab exec` in its silent form, which only the loopback port gives: they run
 - The line holds a one-time enrollment token, `enr_…`. The token travels only in an `Authorization` header, never in an
   address, and is in no process's arguments: curl reads that header on stdin (`-H @-`), and setup reads the token on
   stdin too. The line starts with a space, so a shell that skips such lines leaves it out of its history.
-- It downloads lab-agent from the lab, checks it against the release key pinned in the line's own script, and runs
-  `sudo lab-agent setup --server https://lab.omarchy-mac.org --token-stdin`.
+- It downloads lab-agent and its signature from the lab, checks the sha256 and then the signature against the release
+  key written into the line itself (`ssh-keygen -Y verify`), before anything runs as root, and runs
+  `sudo lab-agent setup --server https://lab.omarchy-mac.org --token-stdin`. A lab with no signed agent makes no Join
+  command.
 - `lab-agent setup` runs its pre-checks, then shows the terms and needs a typed `yes` on the terminal before it changes
   anything or tells the lab anything about the Mac. Without a terminal it stops, unless `--accept-terms <sha256>` names
   the exact terms read at `/terms`. The lab records the acceptance with the person, the Mac, the time and that sha256.
 - The token is used up by the first enrollment and bound to that Mac; another Mac with a copy is refused. A setup that
   stopped half way can run again on the same Mac until its first check-in.
 - `lab enroll <name> --revoke`, or Cancel on the page, withdraws an unused Join command.
-- `sudo lab-agent update`, at the Mac, takes a newer agent from the lab. An agent with a bad signature, or one older
-  than the agent installed, is refused. Nothing pushes an agent to a Volunteer's Mac; a Maintainer updates a Lab-owned
-  Mac's while it is idle with `lab agent-update <mac>`.
+- `sudo lab-agent update`, at the Mac, takes a newer agent from the lab with the Mac's own device secret. An agent with a
+  bad signature, or one older than the agent installed, is refused, and nothing is changed. Nothing pushes an agent to a
+  Volunteer's Mac; a Maintainer updates a Lab-owned Mac's while it is idle with `lab agent-update <mac>`, which needs
+  lab-agent 0.10.0 or later on the Mac.
 
 ## If the Lab address ever changes
 
@@ -154,7 +157,8 @@ labd states a policy on every response; the default is `no-store`.
 - A public page or export, for a visitor with no session: cached at the edge, fresh for 60 s, then served stale while the
   edge refreshes, for up to a day. A browser always revalidates.
 - Anything rendered for a session: `private, no-store`.
-- `/install`: public, 5 minutes. Fingerprinted assets: public, one year.
+- `/install` and `/install/lab`: public, 5 minutes, the same for whoever asks. In Preview both serve the Release
+  candidate the mini runs; after the opening, the latest Lab release. Fingerprinted assets: public, one year.
 - `/api/*` is never cached, the exports under `/api/v1/` excepted. Artifacts say `private` themselves.
 
 ## A labd of your own
