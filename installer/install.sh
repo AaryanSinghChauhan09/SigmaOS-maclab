@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Install or upgrade omarchy-m-test, the hardware test for Omarchy on Apple Silicon Macs.
+# Install or upgrade omarchy-m-test, Omarchy Mac Lab's hardware test for Omarchy on Apple Silicon Macs.
 #
-#   curl -fsSL https://omarchy-m-testing.org/install | bash
+#   curl -fsSL https://lab.omarchy-mac.org/install | bash
 #
-# Downloads the latest tagged release, verifies its signature against the
+# Downloads the latest Lab release, verifies its signature against the
 # release key pinned below (ssh-keygen -Y verify), installs it under
 # ~/.local/share/omarchy-m-test and links ~/.local/bin/omarchy-m-test.
 # Running it again upgrades in place. Nothing outside those two paths changes,
@@ -16,7 +16,7 @@
 main() {
   set -euo pipefail
 
-  local releases="${OMARCHY_M_TEST_RELEASES:-https://github.com/maralcbr/omarchy-m-testing/releases/latest/download}"
+  local releases="${OMARCHY_M_TEST_RELEASES:-https://github.com/omacom/omarchy-maclab/releases/latest/download}"
   local signer="release@omarchy-m-testing.org"
   local namespace="omarchy-m-test-release"
   # The release signing public key. Also published in the README; they must match.

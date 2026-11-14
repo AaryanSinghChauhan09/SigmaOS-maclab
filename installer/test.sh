@@ -22,11 +22,18 @@ release() { # release DIR: build and sign the current tree into DIR
 }
 install_from() { HOME="$t/home" XDG_DATA_HOME= PATH="$t/home/.local/bin:$PATH" OMARCHY_M_TEST_RELEASES="file://$1" bash "$t/install.sh"; }
 
+# The install line is the lab's, and the release is this repository's latest Lab release.
+grep -qF 'curl -fsSL https://lab.omarchy-mac.org/install | bash' "$repo/installer/install.sh" || fail "the installer doesn't name the Lab address"
+grep -qF 'https://github.com/omacom/omarchy-maclab/releases/latest/download' "$repo/installer/install.sh" || fail "the installer doesn't take the release from this repository"
+if grep -qE 'omarchy-m-testing\.org/install|maralcbr/omarchy-m-testing' "$repo/installer/install.sh"; then fail "the installer still names the old site"; fi
+
 release "$t/r1"
 out="$(install_from "$t/r1")"
 grep -q "Installed omarchy-m-test" <<<"$out" || fail "fresh install: $out"
 "$t/home/.local/bin/omarchy-m-test" --version | grep -q "omarchy-m-test $(<"$t/r1/VERSION")" || fail "installed CLI doesn't run"
 [[ -f "$t/home/.local/share/omarchy-m-test/omarchy_m_test/catalogue.json" ]] || fail "catalogue not bundled"
+"$t/home/.local/bin/omarchy-m-test" --help | grep -q -- '--upload REPORT' || fail "the installed CLI can't upload a saved report"
+[[ "$("$t/home/.local/bin/omarchy-m-test" --upload "$t/none.json" 2>&1)" == "Can't read $t/none.json (No such file or directory). Nothing was uploaded." ]] || fail "--upload of a missing file"
 
 # Upgrade in place: a stray file from the old version must not survive.
 touch "$t/home/.local/share/omarchy-m-test/stray"
