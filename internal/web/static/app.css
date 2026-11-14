@@ -879,6 +879,33 @@ form.inline { display: inline; }
 .term { background: var(--deep); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg-dim); font-size: 0.85em; margin: 0; max-height: 30rem; overflow: auto; padding: 0.6em 0.8em; white-space: pre-wrap; word-break: break-all; }
 button.chip { background: transparent; cursor: pointer; font-family: inherit; }
 
+/* Jobs, Builds and "Boot a kernel" */
+
+.job-ok { color: var(--green); }
+.job-bad { color: var(--red); }
+.job-warn { color: var(--yellow); }
+.job-live { color: var(--blue); }
+.job-dim { color: var(--comment); }
+.log { font-size: 0.85em; margin: 0.5rem 0 0; max-height: 24rem; overflow: auto; }
+.boot { display: grid; gap: 1.2rem; }
+.boot fieldset { border: 0; display: grid; gap: 0.45rem; margin: 0; min-width: 0; padding: 0; }
+.boot legend { color: var(--comment); font-size: 0.85em; margin-bottom: 0.35rem; padding: 0; text-transform: lowercase; }
+.boot p { margin: 0; }
+.boot input[type="text"], .boot select, .boot textarea {
+  background: var(--deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--white);
+  color-scheme: dark;
+  font: inherit;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.45em 0.7em;
+}
+.boot input[type="text"]:focus, .boot select:focus, .boot textarea:focus { border-color: var(--green); outline: none; }
+.boot input[type="checkbox"], .boot input[type="radio"] { accent-color: var(--green); }
+.boot-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 0.75rem; }
+
 /* phone width: each row of the header scrolls sideways, tables stack */
 
 @media (max-width: 760px) {

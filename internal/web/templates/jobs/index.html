@@ -1,0 +1,21 @@
+{{define "main"}}{{with .Data}}<h1>Jobs</h1>
+<p class="subtitle">{{if .Mac}}Jobs on {{.Mac}}. <a href="{{href "/jobs"}}">Every job</a>{{else if .Member}}Jobs on the Macs you lease, and everyone else's to read.{{else}}Every job on every Mac.{{end}}</p>
+<section class="card">
+<h2 class="card-title">jobs ({{len .Jobs}})</h2>
+<p class="card-tools"><a class="button button-small" href="{{if .Mac}}{{href (print "/boot?mac=" .Mac)}}{{else}}{{href "/boot"}}{{end}}">Boot a kernel</a></p>
+{{if .Jobs}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Job</th><th>Mac</th><th>What</th><th>By</th><th>State</th><th>When</th></tr></thead>
+<tbody>
+{{range .Jobs}}<tr id="job-{{.ID}}">
+<td data-label="Job" class="nowrap"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td>
+<td data-label="Mac"><a href="{{href (print "/macs/" .Mac)}}">{{.Mac}}</a></td>
+<td data-label="What">{{.What}}</td>
+<td data-label="By">{{if .By}}@{{.By}}{{else}}<span class="dim">the lab</span>{{end}}</td>
+<td data-label="State"><span class="badge {{.StateClass}}">{{.State}}</span></td>
+<td data-label="When" class="nowrap">{{.When}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+{{else}}<p class="dim">{{if .Mac}}No job has run on {{.Mac}} yet.{{else}}No job has run yet.{{end}}</p>
+{{end}}</section>
+{{end}}{{end}}

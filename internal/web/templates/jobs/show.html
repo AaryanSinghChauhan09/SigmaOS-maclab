@@ -1,0 +1,73 @@
+{{define "head"}}{{with .Data}}{{if .Reloads}}<meta http-equiv="refresh" content="10">
+{{end}}{{end}}{{end}}
+
+{{define "main"}}{{with .Data}}<p class="dim"><a href="{{href "/jobs"}}">Jobs</a> /</p>
+<h1>{{.ID}}</h1>
+<p class="subtitle">{{.What}} on {{.Mac}}, asked by {{if .By}}@{{.By}}{{else}}the lab{{end}}.</p>
+{{if .Flash}}<p class="flash flash-alert" role="alert">{{.Flash}}</p>
+{{end}}<section class="card">
+<h2 class="card-title">job</h2>
+<p><span class="badge {{.StateClass}}">{{.State}}</span> {{.Says}}</p>
+<dl class="facts">
+<dt>Mac</dt><dd><a href="{{href (print "/macs/" .Mac)}}">{{.Mac}}</a></dd>
+<dt>Asked</dt><dd>{{.Asked}}, by {{if .By}}@{{.By}}{{else}}the lab{{end}}{{if .UnderLease}} <span class="dim">under a Lease</span>{{end}}</dd>
+{{if .Took}}<dt>Took</dt><dd>{{.Took}}</dd>
+{{end}}{{if .BootedIn}}<dt>Booted in</dt><dd>{{.BootedIn}}</dd>
+{{end}}<dt>Kernel</dt><dd>{{if .Source}}built from {{.Source}}{{if .Build}}, build {{if .BuildOpens}}<a href="{{href (print "/builds/" .Build)}}">{{.Build}}</a>{{else}}{{.Build}}{{end}}{{end}}{{if .Kernel}}<br><code>{{.Kernel}}</code>{{end}}{{else if .Kernel}}<code>{{.Kernel}}</code>{{else}}the Mac's Known-good kernel{{end}}</dd>
+{{if .Cmdline}}<dt>Arguments</dt><dd><code>{{.Cmdline}}</code></dd>
+{{end}}{{if .Tests}}<dt>Tests</dt><dd>{{.Tests}}</dd>
+{{end}}{{if .Timeout}}<dt>Boot timeout</dt><dd>{{.Timeout}} s</dd>
+{{end}}{{if .RetryOf}}<dt>Retries</dt><dd><a href="{{href (print "/jobs/" .RetryOf)}}">{{.RetryOf}}</a></dd>
+{{end}}{{if .FellBack}}<dt>Fell back</dt><dd>the Mac came back on its Known-good kernel</dd>
+{{end}}</dl>
+{{if or .CanCancel .Retry}}<p>{{if .CanCancel}}{{template "take" ($.Take (print "/jobs/" .ID "/cancel") "Cancel" .CancelSentence)}}{{end}}{{if .Retry}}<form class="inline" method="post" action="{{href (print "/jobs/" .ID "/retry")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Retry</button></form> <span class="dim">Queues the same Mac, kernel, tests and arguments again, as you.</span>{{end}}</p>
+{{end}}</section>
+{{if .Results}}<section class="card">
+<h2 class="card-title">tests</h2>
+<div class="scroll"><table class="list stack">
+<thead><tr><th>Test</th><th>Result</th></tr></thead>
+<tbody>
+{{range .Results}}<tr>
+<td data-label="Test">{{.Name}}</td>
+<td data-label="Result"><span class="{{.Class}}">{{.Verdict}}</span>{{if .Tail}}<pre class="command log">{{.Tail}}</pre>{{end}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+</section>
+{{end}}{{with .OMT}}<section class="card">
+<h2 class="card-title">omarchy-m-test</h2>
+<p>{{.Tool}}: {{.Pass}} pass, {{.Fail}} fail, {{.Skip}} skipped. <span class="dim">Compared with {{if .ComparedTo}}{{.ComparedTo}}{{else}}nothing{{end}}.</span></p>
+{{if .Changed}}<ul class="record">
+{{range .Changed}}<li><span class="{{.Class}}">{{.Tag}}</span> <b>{{.ID}}</b>{{if .Evidence}} · {{.Evidence}}{{end}}</li>
+{{end}}</ul>
+{{end}}</section>
+{{end}}{{if or .Recovery .KernelEvents .NewErrors}}<section class="card">
+<h2 class="card-title">what the kernel did</h2>
+{{if .Recovery}}<p class="dim">Recovery the lab needed:</p>
+<ul class="record">
+{{range .Recovery}}<li class="job-warn">{{.}}</li>
+{{end}}</ul>
+{{end}}{{if .KernelEvents}}<p class="dim">Kernel events:</p>
+<ul class="record">
+{{range .KernelEvents}}<li><span class="job-bad">{{.Kind}}</span> <span class="dim">{{.Source}}</span> {{.Line}}</li>
+{{end}}</ul>
+{{end}}{{if .NewErrors}}<p class="dim">Kernel lines the baseline does not have:</p>
+<ul class="record">
+{{range .NewErrors}}<li>{{.}}</li>
+{{end}}</ul>
+{{if .NewErrorsLeftOut}}<p class="dim">And {{.NewErrorsLeftOut}} more, in the files.</p>
+{{end}}{{end}}</section>
+{{end}}<section class="card">
+<h2 class="card-title">timeline</h2>
+{{if .Events}}<ol class="record">
+{{range .Events}}<li><span class="when">{{.When}}</span> {{.Msg}}</li>
+{{end}}</ol>
+{{else}}<p class="dim">Nothing yet.</p>
+{{end}}</section>
+{{if .Files}}<section class="card">
+<h2 class="card-title">files ({{len .Files}})</h2>
+<ul class="links">
+{{range .Files}}<li><a href="{{href (print "/api/jobs/" $.Data.ID "/files/" .)}}">{{.}}</a></li>
+{{end}}</ul>
+</section>
+{{end}}{{end}}{{end}}

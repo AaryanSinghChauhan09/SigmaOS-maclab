@@ -222,30 +222,13 @@ func (s *Server) macJobs(c caller, d DeviceView) []macJobRow {
 		if !c.reads() && (j.DeviceID == "" || j.DeviceID != d.ID) {
 			continue
 		}
-		row := macJobRow{ID: j.ID, What: jobWhat(j.Spec), By: j.Maintainer, State: string(j.State), When: whenDay(j.Created)}
+		row := macJobRow{ID: j.ID, What: jobWhat(j), By: j.Maintainer, State: string(j.State), When: whenDay(j.Created)}
 		if j.State == api.JobDone {
 			row.State = strings.ReplaceAll(j.Outcome, "_", " ")
 		}
 		out = append(out, row)
 	}
 	return out
-}
-
-// jobWhat is what a job does, in a few words.
-func jobWhat(spec api.JobSpec) string {
-	switch {
-	case spec.Baseline:
-		return "Baseline"
-	case spec.InstalledManifest != "":
-		return "Installed run"
-	case spec.Mesa != nil:
-		return "Mesa test"
-	case spec.Source != "":
-		return "Build and boot " + spec.Source
-	case spec.Kernel != "":
-		return "Boot kernel " + spec.Kernel[:min(12, len(spec.Kernel))]
-	}
-	return "Restart on its own kernel"
 }
 
 // macEventsShown is how many kernel events Live starts with.
