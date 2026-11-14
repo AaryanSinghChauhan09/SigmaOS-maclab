@@ -432,6 +432,16 @@ func TestTheDeletionLinkAsksBeforeDeleting(t *testing.T) {
 		return v.Encode()
 	}
 	urlencoded := []string{"Content-Type", "application/x-www-form-urlencoded", "Origin", labAddress}
+	// What a browser sends with the confirmation's form: the page sends no
+	// referrer, so the Origin of its POST is null, and Sec-Fetch-Site says
+	// where the form was.
+	noReferrer := func(site string) []string {
+		hdr := []string{"Content-Type", "application/x-www-form-urlencoded", "Origin", "null"}
+		if site != "" {
+			hdr = append(hdr, "Sec-Fetch-Site", site)
+		}
+		return hdr
+	}
 	// What does not delete: a wrong secret, none, another report's, the
 	// form without its method, the secret in the address, another site's page.
 	for name, c := range map[string]struct {
@@ -439,19 +449,23 @@ func TestTheDeletionLinkAsksBeforeDeleting(t *testing.T) {
 		hdr                  []string
 		status               int
 	}{
-		"a wrong secret on the link":              {"GET", report + "/deletion?token=wrong", "", nil, 404},
-		"no secret on the link":                   {"GET", report + "/deletion", "", nil, 404},
-		"another report's secret":                 {"GET", report + "/deletion?token=" + other.token(t), "", nil, 404},
-		"sending a wrong secret":                  {"POST", report, form("_method", "delete", "token", "wrong"), urlencoded, 404},
-		"sending no secret":                       {"POST", report, form("_method", "delete"), urlencoded, 404},
-		"sending another's secret":                {"POST", report, form("_method", "delete", "token", other.token(t)), urlencoded, 404},
-		"the form without its method":             {"POST", report, form("token", token), urlencoded, 404},
-		"the secret in the address":               {"POST", report + "?_method=delete&token=" + token, "", urlencoded, 404},
-		"the form with its secret in the address": {"POST", report + "?token=" + token, form("_method", "delete"), urlencoded, 404},
-		"a DELETE with the secret":                {"DELETE", report + "?token=" + token, "", nil, 405},
-		"a POST to the link itself":               {"POST", link, form("_method", "delete", "token", token), urlencoded, 405},
-		"another site's page":                     {"POST", report, form("_method", "delete", "token", token), []string{"Content-Type", "application/x-www-form-urlencoded", "Origin", "https://evil.example"}, 403},
-		"another site's page, no Origin":          {"POST", report, form("_method", "delete", "token", token), []string{"Content-Type", "application/x-www-form-urlencoded", "Sec-Fetch-Site", "cross-site"}, 403},
+		"a wrong secret on the link":                 {"GET", report + "/deletion?token=wrong", "", nil, 404},
+		"no secret on the link":                      {"GET", report + "/deletion", "", nil, 404},
+		"another report's secret":                    {"GET", report + "/deletion?token=" + other.token(t), "", nil, 404},
+		"sending a wrong secret":                     {"POST", report, form("_method", "delete", "token", "wrong"), urlencoded, 404},
+		"sending no secret":                          {"POST", report, form("_method", "delete"), urlencoded, 404},
+		"sending another's secret":                   {"POST", report, form("_method", "delete", "token", other.token(t)), urlencoded, 404},
+		"the form without its method":                {"POST", report, form("token", token), urlencoded, 404},
+		"the secret in the address":                  {"POST", report + "?_method=delete&token=" + token, "", urlencoded, 404},
+		"the form with its secret in the address":    {"POST", report + "?token=" + token, form("_method", "delete"), urlencoded, 404},
+		"a DELETE with the secret":                   {"DELETE", report + "?token=" + token, "", nil, 405},
+		"a POST to the link itself":                  {"POST", link, form("_method", "delete", "token", token), urlencoded, 405},
+		"another site's page":                        {"POST", report, form("_method", "delete", "token", token), []string{"Content-Type", "application/x-www-form-urlencoded", "Origin", "https://evil.example"}, 403},
+		"another site's page, no Origin":             {"POST", report, form("_method", "delete", "token", token), []string{"Content-Type", "application/x-www-form-urlencoded", "Sec-Fetch-Site", "cross-site"}, 403},
+		"another site's page that sends no referrer": {"POST", report, form("_method", "delete", "token", token), noReferrer("cross-site"), 403},
+		"a page of a neighbour of the lab's name":    {"POST", report, form("_method", "delete", "token", token), noReferrer("same-site"), 403},
+		"a null Origin and nothing else":             {"POST", report, form("_method", "delete", "token", token), noReferrer(""), 403},
+		"a null Origin from no page":                 {"POST", report, form("_method", "delete", "token", token), noReferrer("none"), 403},
 	} {
 		if w := l.do(c.method, c.target, c.body, c.hdr...); w.Code != c.status {
 			t.Errorf("%s: %d, want %d", name, w.Code, c.status)
@@ -461,7 +475,7 @@ func TestTheDeletionLinkAsksBeforeDeleting(t *testing.T) {
 		}
 	}
 
-	w := l.do("POST", report, form("_method", "delete", "token", token), urlencoded...)
+	w := l.do("POST", report, form("_method", "delete", "token", token), noReferrer("same-origin")...)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<h1>Report deleted</h1>") || !strings.Contains(w.Body.String(), "The report and its evidence have been removed.") {
 		t.Fatalf("sending the confirmation: %d %s", w.Code, w.Body)
 	}
@@ -592,14 +606,20 @@ func TestASignedInPersonDeletesByTheLinkToo(t *testing.T) {
 	if cc := page.Header().Get("Cache-Control"); cc != "private, no-store" {
 		t.Errorf("Cache-Control %q", cc)
 	}
-	send := func(values url.Values) int {
-		return b.do("POST", pathOf(t, got.ReportURL), values.Encode(), "Content-Type", "application/x-www-form-urlencoded", "Origin", labAddress).Code
+	send := func(values url.Values, site string) int {
+		return b.do("POST", pathOf(t, got.ReportURL), values.Encode(), "Content-Type", "application/x-www-form-urlencoded", "Origin", "null", "Sec-Fetch-Site", site).Code
 	}
-	if code := send(url.Values{"_method": {"delete"}, "token": {got.token(t)}}); code != http.StatusForbidden {
+	whole := url.Values{"_method": {"delete"}, "token": {got.token(t)}, "csrf_token": {b.csrf()}}
+	if code := send(url.Values{"_method": {"delete"}, "token": {got.token(t)}}, "same-origin"); code != http.StatusForbidden {
 		t.Errorf("without the session's token: %d", code)
 	}
-	if code := send(url.Values{"_method": {"delete"}, "token": {got.token(t)}, "csrf_token": {b.csrf()}}); code != http.StatusOK {
-		t.Errorf("with the session's token: %d", code)
+	for _, site := range []string{"cross-site", "same-site", "none", ""} {
+		if code := send(whole, site); code != http.StatusForbidden {
+			t.Errorf("with the session's token, a null Origin and Sec-Fetch-Site %q: %d", site, code)
+		}
+	}
+	if code := send(whole, "same-origin"); code != http.StatusOK {
+		t.Errorf("with the session's token, as a browser sends the page's form: %d", code)
 	}
 	if w := b.do("GET", pathOf(t, got.ReportURL), ""); w.Code != http.StatusNotFound {
 		t.Errorf("the report after the deletion: %d", w.Code)

@@ -18,24 +18,42 @@ import (
 // it relates to labd; a page can set neither. The Origin must be the very
 // origin the request reached labd at (see externalOrigin): scheme, host and
 // port, so an http:// page on labd's own host name is another origin than
-// labd at https://. The lab CLI, agents, builders and curl send neither
-// header and are let through: what guards them is the token or device secret
-// they come with.
+// labd at https://. An Origin of "null" names no page: such a request is
+// labd's own only when Sec-Fetch-Site says same-origin. The lab CLI, agents,
+// builders and curl send neither header and are let through: what guards
+// them is the token or device secret they come with.
 func (s *Server) sameOriginOK(w http.ResponseWriter, r *http.Request, origin string) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return true
 	}
-	o := r.Header.Get("Origin")
-	if o != "" && !sameOriginAs(o, origin) {
+	o, site := r.Header.Get("Origin"), r.Header.Get("Sec-Fetch-Site")
+	switch {
+	case o == "null":
+		if site != "same-origin" {
+			httpErr(w, 403, "refused: a page that does not say where it is asked labd at %s to change something. Use labd's own UI at its address, or the lab CLI", origin)
+			return false
+		}
+	case o != "" && !sameOriginAs(o, origin):
 		httpErr(w, 403, "refused: a page from %s asked labd at %s to change something. Use labd's own UI at its address, or the lab CLI", o, origin)
 		return false
-	}
-	if site := r.Header.Get("Sec-Fetch-Site"); o == "" && (site == "cross-site" || site == "same-site") {
+	case o == "" && (site == "cross-site" || site == "same-site"):
 		httpErr(w, 403, "refused: a %s page asked labd at %s to change something. Use labd's own UI at its address, or the lab CLI", site, origin)
 		return false
 	}
 	return true
+}
+
+// ownPage reports whether a browser says r comes from a page at origin: by
+// Origin, or by Sec-Fetch-Site when Origin names nothing. That is no Origin
+// at all, and "null", which a browser sends with a form from a page that
+// sends no referrer, as the deletion confirmation is, and from any page
+// that hides where it is.
+func ownPage(r *http.Request, origin string) bool {
+	if o := r.Header.Get("Origin"); o != "" && o != "null" {
+		return sameOriginAs(o, origin)
+	}
+	return r.Header.Get("Sec-Fetch-Site") == "same-origin"
 }
 
 // loopbackName reports whether host, a request's Host header, names this

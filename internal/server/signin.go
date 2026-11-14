@@ -226,11 +226,10 @@ func (s *Server) hSignOut(w http.ResponseWriter, r *http.Request) {
 
 // browserSession finds the person signed in on r's browser and passes them
 // on (see signedInOf). A signed-in request that can change something must
-// say it comes from the lab's own page, by Origin, or by Sec-Fetch-Site when
-// the browser sent no Origin, and carry the session's CSRF token, in
-// X-CSRF-Token or a form's csrf_token field; otherwise it answers w and
-// reports false. A request with its own credential in Authorization is not
-// the browser session's: the cookie is not read for it.
+// say it comes from the lab's own page (see ownPage) and carry the session's
+// CSRF token, in X-CSRF-Token or a form's csrf_token field; otherwise it
+// answers w and reports false. A request with its own credential in
+// Authorization is not the browser session's: the cookie is not read for it.
 func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin string) (*http.Request, bool) {
 	if r.Header.Get("Authorization") != "" {
 		return r, true
@@ -247,11 +246,7 @@ func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin s
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 	default:
-		own := r.Header.Get("Sec-Fetch-Site") == "same-origin"
-		if o := r.Header.Get("Origin"); o != "" {
-			own = sameOriginAs(o, origin)
-		}
-		if !own {
+		if !ownPage(r, origin) {
 			httpErr(w, 403, "refused: a signed-in browser changes things only from the lab's own pages at %s", origin)
 			return r, false
 		}
