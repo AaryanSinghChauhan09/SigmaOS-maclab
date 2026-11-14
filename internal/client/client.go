@@ -463,13 +463,13 @@ func (c *Client) Builds(ctx context.Context, limit int) ([]*api.Build, error) {
 	return out, c.do(ctx, "GET", fmt.Sprintf("/api/builds?limit=%d", limit), nil, &out)
 }
 
-// BuildLog writes the build log to w; with follow it streams until the build ends.
+// BuildLog writes the build log to w; with follow it goes on, polling from
+// where the log ended, until the build ends.
 func (c *Client) BuildLog(ctx context.Context, id string, follow bool, w io.Writer) error {
-	q := ""
 	if follow {
-		q = "?follow=1"
+		return c.followBuildLog(ctx, id, w)
 	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", c.URL+"/api/builds/"+url.PathEscape(id)+"/log"+q, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", c.URL+"/api/builds/"+url.PathEscape(id)+"/log", nil)
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	resp, err := c.http.Do(req)
 	if err != nil {

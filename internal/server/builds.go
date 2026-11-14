@@ -595,7 +595,11 @@ func (s *Server) hBuild(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, b)
 }
 
-// hBuildLog serves the build log; ?follow=1 keeps streaming until the build ends.
+// hBuildLog serves the build log: all of it, or with ?offset= what it holds
+// from that byte on, with where it now ends (X-Log-Offset) and the build's
+// state (X-Build-State). A caller following a build asks again from there.
+// With ?wait= (seconds, 50 at most) an answer with nothing new is held until
+// the log grows or the build ends.
 func (s *Server) hBuildLog(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := s.getBuild(id); err != nil {
@@ -604,29 +608,45 @@ func (s *Server) hBuildLog(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Accel-Buffering", "no") // a reverse proxy passes it on as it comes
 	path := filepath.Join(s.buildDir(id), "build.log")
-	if r.URL.Query().Get("follow") != "1" {
+	q := r.URL.Query()
+	if !q.Has("offset") {
 		http.ServeFile(w, r, path)
 		return
 	}
-	fl, _ := w.(http.Flusher)
-	var off int64
+	from, _ := strconv.ParseInt(q.Get("offset"), 10, 64)
+	deadline := s.now().Add(waitFor(r, "wait", 0))
 	for {
-		if f, err := os.Open(path); err == nil {
-			f.Seek(off, io.SeekStart)
-			n, _ := io.Copy(w, f)
-			off += n
-			f.Close()
-			if fl != nil {
-				fl.Flush()
-			}
-		}
+		// The state first: a build that has ended has its whole log on disk.
 		b, err := s.getBuild(id)
-		if err != nil || (b.State != api.BuildQueued && b.State != api.BuildRunning) {
+		if err != nil {
+			httpErr(w, 404, "%v", err)
 			return
 		}
-		s.builds.wait(r.Context(), 2*time.Second)
+		var size int64
+		if info, err := os.Stat(path); err == nil {
+			size = info.Size()
+		}
+		from = max(0, min(from, size))
+		left := deadline.Sub(s.now())
+		if size > from || left <= 0 || (b.State != api.BuildQueued && b.State != api.BuildRunning) {
+			var f *os.File
+			if size > from {
+				if f, err = os.Open(path); err != nil {
+					size = from
+				}
+			}
+			w.Header().Set("X-Log-Offset", strconv.FormatInt(size, 10))
+			w.Header().Set("X-Build-State", string(b.State))
+			w.Header().Set("Content-Length", strconv.FormatInt(size-from, 10))
+			if f != nil {
+				f.Seek(from, io.SeekStart)
+				io.CopyN(w, f, size-from)
+				f.Close()
+			}
+			return
+		}
+		s.builds.wait(r.Context(), min(2*time.Second, left))
 		if r.Context().Err() != nil {
 			return
 		}
