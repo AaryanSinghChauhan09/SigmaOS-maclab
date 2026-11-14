@@ -118,7 +118,7 @@ func TestAboveTheCardsAreTheJoinCommandAndLendAnotherMac(t *testing.T) {
 		t.Error("My Macs shows the Join command's line, which the lab shows once")
 	}
 	lend := page.sole(t, "#lend-another")
-	if said := lend.words(); !strings.Contains(said, "Lend another Mac") || !strings.Contains(said, "2 of 5") {
+	if said := lend.words(); !strings.Contains(said, "Lend another Mac") || !strings.Contains(said, "2 of 5, the unused Join command among them") {
 		t.Errorf("under the Join command: %q, want Lend another Mac, 2 of 5", said)
 	}
 	if href := lend.sole(t, "a").attr("href"); !strings.HasPrefix(href, "/lend") {
@@ -129,6 +129,10 @@ func TestAboveTheCardsAreTheJoinCommandAndLendAnotherMac(t *testing.T) {
 	}
 	if got := ids(page.all(t, "section")); got != "join-command lend-another mac-shelf-mac" {
 		t.Errorf("the page's parts, in order: %q", got)
+	}
+	// A Mac that just Joined: its stage in the words of the flow, and none of labd's notes to Maintainers.
+	if facts := factsOf(t, page.sole(t, "#mac-shelf-mac")); !strings.Contains(facts, "State "+ArrivalNoWindow+" Availability window none yet") || strings.Contains(facts, "run a baseline") {
+		t.Errorf("a Mac that just Joined: %s", facts)
 	}
 
 	// Cancel asks twice and comes back to My Macs.
@@ -363,6 +367,10 @@ func TestTheVolunteerDeletesALabPublishedReportFromMyMacs(t *testing.T) {
 	l.ran("j-labs", "m2-max", 0, nil, nil)
 	one, two, others, labs := ravi.published("j-one"), ravi.published("j-two"), ravi.published("j-others"), ravi.published("j-labs")
 	ownID := l.storedReport(l.macUpload("vol-air", "m2-max-converged")).PublicID
+	// The Mac's name was another person's Mac before: what the lab published then is not this Mac's.
+	l.ran("j-earlier", "vol-air", 0, nil, func(j *api.Job) {
+		j.DeviceID, j.Result.OMT.ReportID, j.Result.OMT.Published = "d-earlier", labs, labAddress+"/reports/"+labs
+	})
 
 	card := linus.myMacs().sole(t, "#mac-vol-air")
 	rows := card.all(t, "#reports-vol-air li")
@@ -377,14 +385,15 @@ func TestTheVolunteerDeletesALabPublishedReportFromMyMacs(t *testing.T) {
 	if del.attr("action") != "/my-macs/vol-air/reports/"+one+"/delete" || del.sole(t, "button").words() != "Delete" || !strings.Contains(rows[1].words(), "j-one") {
 		t.Errorf("the older report's Delete: %q in %q", del.attr("action"), rows[1].words())
 	}
-	if body := linus.page("/my-macs"); strings.Contains(body, "deletion?token=") || strings.Contains(body, ownID) || strings.Contains(body, others) {
-		t.Error("My Macs shows a deletion link, the Mac's own upload or another Mac's report")
+	if body := linus.page("/my-macs"); strings.Contains(body, "deletion?token=") || strings.Contains(body, ownID) || strings.Contains(body, others) || strings.Contains(body, labs) {
+		t.Error("My Macs shows a deletion link, the Mac's own upload, another Mac's report or an earlier enrollment's")
 	}
 
 	at := func(mac, id string) string { return "/my-macs/" + mac + "/reports/" + id + "/delete" }
 	// Nobody else, and nothing else: another Volunteer, a Maintainer who
-	// lends no such Mac, another Mac's report, a Lab-owned Mac's, the Mac's
-	// own upload, a report that is not there.
+	// lends no such Mac, another Mac's report, one the lab published when
+	// the name was another enrollment's, the Mac's own upload, a report that
+	// is not there.
 	for why, c := range map[string]struct {
 		b      *browser
 		target string
@@ -393,7 +402,7 @@ func TestTheVolunteerDeletesALabPublishedReportFromMyMacs(t *testing.T) {
 		"a Maintainer, from My Macs":          {ravi, at("vol-air", one)},
 		"another Mac's report":                {linus, at("vol-air", others)},
 		"a report under another's Mac's name": {linus, at("other-air", others)},
-		"a Lab-owned Mac's report":            {linus, at("vol-air", labs)},
+		"an earlier enrollment's report":      {linus, at("vol-air", labs)},
 		"the Mac's own upload":                {linus, at("vol-air", ownID)},
 		"no such report":                      {linus, at("vol-air", "nope")},
 	} {
@@ -472,6 +481,12 @@ func TestMineOnMacsHasTheSameCardsAndAnExternalVolunteerSeesOnlyTheirOwn(t *test
 	l.lentMac("linus-air", linusID, api.AccessQualification, open)
 	l.lentMac("ravis-air", maintainerID, api.AccessQualification, open)
 	l.lrMac("m1-pro", "j316s", nil)
+	for _, name := range []string{"graces-air", "linus-air", "ravis-air"} {
+		v := l.s.dev(name)
+		v.mu.Lock()
+		v.d.NtfyOwnURL = "https://ntfy.example/topic-of-" + name
+		v.mu.Unlock()
+	}
 	grace, linus, ravi := l.lrMember(graceID), l.signedIn(linusID), l.lrMaintainer()
 
 	if w := l.browser().do("GET", "/my-macs", ""); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/sign-in?return="+url.QueryEscape("/my-macs") {
@@ -520,6 +535,10 @@ func TestMineOnMacsHasTheSameCardsAndAnExternalVolunteerSeesOnlyTheirOwn(t *test
 		if page.count(t, "#lend-another") != 1 {
 			t.Errorf("%s's Mine lacks Lend another Mac", who)
 		}
+		// What is the Volunteer's own is on their card, whatever else they are.
+		if facts := factsOf(t, card); !strings.Contains(facts, "Notices https://ntfy.example/topic-of-"+c.mac) {
+			t.Errorf("%s's card lacks their Mac's topic: %s", who, facts)
+		}
 		// A button pressed there comes back there.
 		if w := c.b.post("/my-macs/" + c.mac + "/pause"); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/macs?show=mine#mac-"+c.mac {
 			t.Errorf("%s's Pause: %d to %q", who, w.Code, w.Header().Get("Location"))
@@ -539,6 +558,10 @@ func TestMineOnMacsHasTheSameCardsAndAnExternalVolunteerSeesOnlyTheirOwn(t *test
 	}
 	if said := ravi.mine().sole(t, "#lend-another").words(); !strings.Contains(said, "no cap") {
 		t.Errorf("a Maintainer's count: %q", said)
+	}
+	// The M team is shown whose Mac it is and no more of what is its Volunteer's.
+	if body := grace.page("/macs") + grace.page("/macs/linus-air") + grace.page("/macs?show=mine"); strings.Contains(body, "topic-of-linus-air") || strings.Contains(body, "topic-of-ravis-air") {
+		t.Error("an M team member is shown the topic of a Mac they do not lend")
 	}
 	// All and Leased by me are the fleet's table still.
 	if page := mainOf(t, grace.page("/macs")); page.count(t, "section.mac-card") != 0 || page.count(t, "tr#mac-m1-pro") != 1 {

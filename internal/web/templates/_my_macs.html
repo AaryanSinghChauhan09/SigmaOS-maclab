@@ -17,7 +17,7 @@
 {{end}}<section id="lend-another">
 {{if not .Leave}}<p><a class="button" href="{{href "/lend"}}">Lend a Mac</a></p>
 {{else if .AtCap}}<p>You lend {{.Cap}} Macs, which is your cap: {{.Lends}} of {{.Cap}}. One has to Leave first, or a Maintainer raises your cap.</p>
-{{else}}<p><a class="button" href="{{href "/lend"}}#lend">{{if .Lends}}Lend another Mac{{else}}Lend a Mac{{end}}</a> <span class="dim">{{.Lends}} of {{if .Cap}}{{.Cap}}{{else}}no cap{{end}}{{if .Unused}}, the unused Join command among them{{end}}</span></p>
+{{else}}<p><a class="button" href="{{href "/lend"}}#lend">{{if .Cards}}Lend another Mac{{else}}Lend a Mac{{end}}</a> <span class="dim">{{.Lends}} of {{if .Cap}}{{.Cap}}{{else}}no cap{{end}}{{if .Unused}}, the unused Join command among them{{end}}</span></p>
 {{end}}</section>
 {{if not .Cards}}<p class="dim">You lend no Mac.</p>
 {{end}}{{range $card := .Cards}}<section class="card mac-card" id="mac-{{.Name}}">
@@ -34,7 +34,7 @@
 {{end}}<dl class="facts">
 <dt>Configuration</dt><dd>{{.Configuration}}</dd>
 <dt>State</dt><dd>{{.State}}{{if .Reason}} <span class="dim">{{.Reason}}</span>{{end}}</dd>
-<dt>Availability window</dt><dd>{{if .Schedule}}{{.Schedule}}{{if .Zone}} <span class="dim">({{.Zone}})</span>{{end}}{{else}}none yet{{end}} <span class="nowrap">{{.Window}}</span></dd>
+<dt>Availability window</dt><dd>{{if .Schedule}}{{.Schedule}}{{if .Zone}} <span class="dim">({{.Zone}})</span>{{end}}{{else}}none yet{{end}} <br>{{.Window}}</dd>
 <dt>Access level</dt><dd>{{.AccessLevel}}</dd>
 <dt>Publishing</dt><dd>{{if .Publishing}}on <span class="dim">the lab may publish this Mac's reports</span>{{else}}off <span class="dim">the lab publishes none of this Mac's reports</span>{{end}}</dd>
 <dt>Installed runs</dt><dd>{{if .Eligible}}Eligible{{else}}not Eligible <span class="dim">its system cannot be captured first</span>{{end}} <span class="dim">Installed runs are not offered on a Volunteer's Mac yet.</span></dd>
@@ -54,9 +54,9 @@
 <div id="jobs-{{.Name}}">
 {{if .Jobs}}<div class="scroll">
 <table class="stack">
-<thead><tr><th>Job</th><th>What</th><th>Asked by</th><th>How it ended</th><th>When</th></tr></thead>
+<thead><tr><th>Job</th><th>What</th><th>Asked by</th><th>State</th><th>When</th></tr></thead>
 <tbody>
-{{range .Jobs}}<tr><td data-label="Job"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td><td data-label="What">{{.What}}</td><td data-label="Asked by">{{if .By}}@{{.By}}{{else}}<span class="dim">the lab</span>{{end}}</td><td data-label="How it ended">{{.State}}</td><td data-label="When" class="nowrap">{{.When}}</td></tr>
+{{range .Jobs}}<tr><td data-label="Job"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td><td data-label="What">{{.What}}</td><td data-label="Asked by">{{if .By}}@{{.By}}{{else}}<span class="dim">the lab</span>{{end}}</td><td data-label="State">{{.State}}</td><td data-label="When" class="nowrap">{{.When}}</td></tr>
 {{end}}</tbody>
 </table>
 </div>

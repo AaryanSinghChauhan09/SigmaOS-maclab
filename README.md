@@ -861,6 +861,32 @@ asks; `lab publish` is refused too. Turning it off again leaves the reports
 already published up. Each `publish on` lists the deletion link of every
 report published so far and not deleted since.
 
+### My Macs
+
+`/my-macs` is an External volunteer's page: one card per Mac they lend, and
+nobody else's Mac anywhere on it. An M team member or a Maintainer who lends
+a Mac has the same cards under "Mine" on Macs (`/macs?show=mine`), where
+`/my-macs` leads them. Above the cards: an unused Join command with its
+expiry and Cancel (its line is shown only once, when it is made), and "Lend
+another Mac, n of 5".
+
+A card has the Mac's name, Configuration and state in plain words, with the
+steps, the reason and the last log line when it Needs hands; its Availability
+window, Access level, publishing and whether it is Eligible; its ntfy topic
+and whether job Notices are on; who holds a Lease, their kind and until when;
+its newest jobs with who asked and how each ended; the newest lines of the
+Mac's record, the Audit log and the Exec record, each leading to the whole on
+the Mac's own page; and the reports the lab published from it, each with
+Delete, which asks twice and deletes for good. The job then says "deleted by
+the Mac's Volunteer" and when, and the lab does not publish it again. Pause,
+Limit and Leave are the card's buttons. What only the Mac can give is shown
+as the command typed there, `sudo lab-agent update` among them.
+
+A Mac whose enrollment ended is no card: the page keeps its name, when it
+left and who ended it. The link a Notice carries is `/my-macs/<name>`, which
+opens that Mac's card for its Volunteer once signed in, and says nothing to
+anyone else of whether such a Mac is there.
+
 ### The mini's set-up and its check
 
 `sudo scripts/mini/setup` sets the whole machine up in one run, in the order

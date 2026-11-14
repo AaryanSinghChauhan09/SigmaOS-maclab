@@ -226,6 +226,11 @@ func (s *Server) macCard(v *dev, p Person) macCard {
 		Limited: d.Limited, Publishing: d.Publish, Eligible: d.SnapshotEligible, Topic: s.macTopicURL(d.Enrollment), JobNotices: d.JobNotices,
 		Holder: row.Holder, HolderKind: row.HolderKind, HolderClass: row.HolderClass, Until: row.Until,
 		Agent: d.Facts.AgentVersion, Commands: onlyAtTheMac, LeaveSentence: leaveSentence(d.Name)}
+	// Until its first baseline has passed, the stage says what the Mac
+	// waits for; labd's own note then is a Maintainer's.
+	if d.Arrival != "" && d.Arrival != ArrivalReady {
+		c.Reason = ""
+	}
 	if a := d.Action; a != nil && d.State == api.StateNeedsHands {
 		c.Hands = &cardHands{Title: a.Title, Why: a.Why, LastLog: a.LastLog, Steps: a.Steps}
 		if !a.Since.IsZero() {
