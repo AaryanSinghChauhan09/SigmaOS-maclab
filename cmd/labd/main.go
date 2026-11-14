@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -217,14 +216,6 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
-}
-
-func randHex() string {
-	b := make([]byte, 20)
-	f, _ := os.Open("/dev/urandom")
-	f.Read(b)
-	f.Close()
-	return fmt.Sprintf("%x", b)
 }
 
 // hostList is a flag given once for each host.
