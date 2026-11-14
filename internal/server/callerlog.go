@@ -52,6 +52,9 @@ type callerLog struct {
 	mu  sync.Mutex
 	day string
 	f   *os.File
+
+	// pruning is held by the one prune at a time; mu only while it must be.
+	pruning sync.Mutex
 }
 
 func openCallerLog(dir string, logger *log.Logger, stopped <-chan struct{}) (*callerLog, error) {
@@ -104,8 +107,8 @@ func (l *callerLog) write(line callerLine) {
 // when all of it is, and the older lines of the one day that straddles.
 func (l *callerLog) prune(now time.Time) {
 	cutoff := now.UTC().Add(-callerLogKeep)
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.pruning.Lock()
+	defer l.pruning.Unlock()
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
 		l.log.Printf("caller log: %v", err)
@@ -117,14 +120,10 @@ func (l *callerLog) prune(now time.Time) {
 		if err != nil || !strings.HasSuffix(name, ".log") || !day.Before(cutoff) {
 			continue
 		}
-		if name == l.day+".log" {
-			l.closeLocked()
-		}
-		file := filepath.Join(l.dir, name)
 		if !day.Add(24 * time.Hour).After(cutoff) {
-			err = os.Remove(file)
+			err = l.removeDay(name)
 		} else {
-			err = dropOlderLines(file, cutoff)
+			err = l.dropOlderLines(name, cutoff)
 		}
 		if err != nil {
 			l.log.Printf("caller log: %v", err)
@@ -132,36 +131,112 @@ func (l *callerLog) prune(now time.Time) {
 	}
 }
 
-// dropOlderLines rewrites file without the lines from before cutoff. A line
-// that can't be read as one has no time to keep it by, and goes too.
-func dropOlderLines(file string, cutoff time.Time) error {
-	data, err := os.ReadFile(file)
+func (l *callerLog) removeDay(name string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if name == l.day+".log" {
+		l.closeLocked()
+	}
+	return os.Remove(filepath.Join(l.dir, name))
+}
+
+// dropOlderLines rewrites a day's file without the lines from before cutoff.
+// The file is read as a stream into a new one, with no request waiting; only
+// the lines written meanwhile, and the new file taking the name, hold the
+// lock a request's line needs.
+func (l *callerLog) dropOlderLines(name string, cutoff time.Time) error {
+	file := filepath.Join(l.dir, name)
+	src, err := os.Open(file)
 	if err != nil {
 		return err
 	}
-	var kept bytes.Buffer
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(nil, 1<<20)
-	for sc.Scan() {
-		var line struct {
-			Time time.Time `json:"time"`
-		}
-		if json.Unmarshal(sc.Bytes(), &line) == nil && !line.Time.Before(cutoff) {
-			kept.Write(sc.Bytes())
-			kept.WriteByte('\n')
-		}
+	defer src.Close()
+	tmp := file + ".tmp"
+	dst, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
 	}
-	if kept.Len() == 0 {
-		return os.Remove(file)
+	defer os.Remove(tmp)
+	defer dst.Close()
+	c := &lineCopy{src: src, rd: bufio.NewReaderSize(src, lineCopyBuffer), w: bufio.NewWriterSize(dst, lineCopyBuffer), cutoff: cutoff}
+	if err := c.copy(false); err != nil {
+		return err
 	}
-	if kept.Len() == len(data) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := c.copy(true); err != nil {
+		return err
+	}
+	if c.dropped == 0 {
 		return nil
 	}
-	tmp := file + ".tmp"
-	if err := os.WriteFile(tmp, kept.Bytes(), 0o600); err != nil {
+	if name == l.day+".log" {
+		l.closeLocked()
+	}
+	if c.kept == 0 {
+		return os.Remove(file)
+	}
+	if err := c.w.Flush(); err != nil {
+		return err
+	}
+	if err := dst.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, file)
+}
+
+// lineCopyBuffer is all of a day a prune holds at a time. A line is far
+// shorter: its fields are clipped where it is written.
+const lineCopyBuffer = 64 << 10
+
+// lineCopy copies the lines of src from cutoff on to w. A line that can't
+// be read as one, however long, has no time to keep it by, and is dropped.
+type lineCopy struct {
+	src           *os.File
+	rd            *bufio.Reader
+	w             *bufio.Writer
+	cutoff        time.Time
+	kept, dropped int
+}
+
+// copy reads on to the end of src. Unless last, an end with no newline is
+// left for the next copy: its line may still be being written.
+func (c *lineCopy) copy(last bool) error {
+	for {
+		n, whole := 0, true
+		b, err := c.rd.ReadSlice('\n')
+		for err == bufio.ErrBufferFull {
+			n, whole = n+len(b), false
+			b, err = c.rd.ReadSlice('\n')
+		}
+		n += len(b)
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if err == io.EOF && n == 0 {
+			return nil
+		}
+		if err == io.EOF && !last {
+			if _, err := c.src.Seek(-int64(n), io.SeekCurrent); err != nil {
+				return err
+			}
+			c.rd.Reset(c.src)
+			return nil
+		}
+		var line struct {
+			Time time.Time `json:"time"`
+		}
+		if whole && json.Unmarshal(b, &line) == nil && !line.Time.Before(c.cutoff) {
+			c.w.Write(bytes.TrimSuffix(b, []byte("\n")))
+			c.w.WriteByte('\n')
+			c.kept++
+		} else {
+			c.dropped++
+		}
+		if err == io.EOF {
+			return nil
+		}
+	}
 }
 
 // callerLogLoop prunes the caller log at start and every hour.

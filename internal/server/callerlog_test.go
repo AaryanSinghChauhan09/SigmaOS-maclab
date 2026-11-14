@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -295,5 +296,147 @@ func TestAStoppingLabdMakesNoCallerLogFile(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", labdAt+"/healthz", nil))
 	if _, err := os.Stat(s.callers.dir); !os.IsNotExist(err) {
 		t.Errorf("a request after labd stopped wrote the caller log again: %v", err)
+	}
+}
+
+// dayLine is a caller log line as it is on disk.
+func dayLine(t *testing.T, at time.Time, path string) string {
+	t.Helper()
+	b, err := json.Marshal(callerLine{Time: at, Addr: "203.0.113.9", Method: "GET", Path: path, Status: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b) + "\n"
+}
+
+// The day that straddles 30 days is pruned as a stream, and no request waits
+// for it: here the day is a pipe whose lines have not come yet, and a request
+// is logged meanwhile.
+func TestAPruneReadingADayDoesNotMakeARequestWait(t *testing.T) {
+	l, err := openCallerLog(t.TempDir(), log.New(io.Discard, "", 0), make(chan struct{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	day := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	file := filepath.Join(l.dir, day.Format(callerLogDay)+".log")
+	if err := syscall.Mkfifo(file, 0o600); err != nil {
+		t.Skipf("no pipe here: %v", err)
+	}
+	pruned := make(chan struct{})
+	go func() {
+		l.prune(now)
+		close(pruned)
+	}()
+	// The pipe opens for writing once the prune has it open for reading.
+	pipe, err := os.OpenFile(file, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrote := make(chan struct{})
+	go func() {
+		l.write(callerLine{Time: now, Method: "GET", Path: "/healthz", Status: 200})
+		close(wrote)
+	}()
+	select {
+	case <-wrote:
+	case <-time.After(5 * time.Second):
+		t.Error("a request's line waited for the prune to read a day")
+	}
+	io.WriteString(pipe, dayLine(t, day.Add(10*time.Hour), "/old")+dayLine(t, day.Add(13*time.Hour), "/kept"))
+	pipe.Close()
+	select {
+	case <-pruned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the prune did not end")
+	}
+	<-wrote
+	var paths []string
+	for _, line := range l.linesForTest(t) {
+		paths = append(paths, line.Path)
+	}
+	if got := strings.Join(paths, " "); got != "/kept /healthz" {
+		t.Errorf("after the prune the caller log holds %q, want /kept /healthz", got)
+	}
+	if st, err := os.Stat(file); err != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0o600 {
+		t.Errorf("the pruned day: %v %v", st, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(l.dir, "*.tmp")); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+// A day's file is never held whole: what cannot be a line, however long, is
+// dropped, and the lines after it are still read.
+func TestAPruneKeepsTheLinesAfterWhatIsTooLongToBeALine(t *testing.T) {
+	l, err := openCallerLog(t.TempDir(), log.New(io.Discard, "", 0), make(chan struct{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	day := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	file := filepath.Join(l.dir, day.Format(callerLogDay)+".log")
+	text := dayLine(t, day.Add(10*time.Hour), "/old") + strings.Repeat("x", 2<<20) + "\n" +
+		dayLine(t, day.Add(13*time.Hour), "/kept") + "\n" + dayLine(t, day.Add(14*time.Hour), "/kept-too")
+	if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l.prune(now)
+	want := dayLine(t, day.Add(13*time.Hour), "/kept") + dayLine(t, day.Add(14*time.Hour), "/kept-too")
+	if got := l.rawForTest(t); got != want {
+		t.Errorf("after the prune the day holds %d bytes, want the two lines from 12:00 on:\n%.300s", len(got), got)
+	}
+}
+
+// A line written to the day while it is being pruned is not lost: the copy
+// goes on from where it stopped, and a line still half written waits for its end.
+func TestALineWrittenWhileItsDayIsPrunedIsKept(t *testing.T) {
+	dir := t.TempDir()
+	day := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	file := filepath.Join(dir, "day.log")
+	add := func(text string) {
+		t.Helper()
+		f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if _, err := io.WriteString(f, text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(dayLine(t, day.Add(10*time.Hour), "/old") + dayLine(t, day.Add(13*time.Hour), "/kept"))
+	src, err := os.Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	var out strings.Builder
+	c := &lineCopy{src: src, rd: bufio.NewReaderSize(src, lineCopyBuffer), w: bufio.NewWriter(&out), cutoff: day.Add(12 * time.Hour)}
+	copied := func(last bool, want string) {
+		t.Helper()
+		if err := c.copy(last); err != nil {
+			t.Fatal(err)
+		}
+		c.w.Flush()
+		if out.String() != want {
+			t.Fatalf("copied so far:\n%s\nwant:\n%s", out.String(), want)
+		}
+	}
+	want := dayLine(t, day.Add(13*time.Hour), "/kept")
+	copied(false, want)
+
+	late := dayLine(t, day.Add(23*time.Hour), "/late")
+	torn := dayLine(t, day.Add(23*time.Hour+time.Minute), "/torn")
+	add(late + torn[:20])
+	want += late
+	copied(false, want)
+	add(torn[20:] + torn[:20])
+	want += torn
+	copied(false, want)
+	// What never got its end is no line.
+	copied(true, want)
+	if c.kept != 3 || c.dropped != 2 {
+		t.Errorf("kept %d and dropped %d lines, want 3 and 2", c.kept, c.dropped)
 	}
 }
