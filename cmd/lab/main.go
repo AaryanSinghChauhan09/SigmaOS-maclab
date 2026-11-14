@@ -46,6 +46,9 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
   lab remove <mac>                    end a Mac's enrollment: its device secret stops working at once, and lab-agent
                                       removes the lab from the Mac at its next check-in (a Volunteer is told)
   lab device <name> [--label ..] [--model ..]
+  lab agent-update <mac>              update a Lab-owned Mac's lab-agent to the lab's, while the Mac is idle
+                                      (Maintainers). The Mac checks the new agent's signature itself. A
+                                      Volunteer's Mac is never sent one: its Volunteer runs sudo lab-agent update
   lab baseline <device>               prove the one-shot boot works; required once per Mac
   lab build <github-url> --device <mac> | --config <file>   build a kernel from a repo, branch, commit or PR URL (reused if built before)
   lab package <recipe-dir> [--commit <github-url>] [--pkgrel 11.14] [-o dir]
@@ -222,10 +225,36 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 	switch cmd {
 	case "status", "devices":
 		pos := parse(fs, args)
+		var err error
 		if len(pos) > 0 {
-			return showDevice(ctx, c, pos[0])
+			err = showDevice(ctx, c, pos[0])
+		} else {
+			err = showDevices(ctx, c)
 		}
-		return showDevices(ctx, c)
+		if err == nil {
+			newerRelease(os.Stdout, c.LabRelease(), c.URL)
+		}
+		return err
+
+	case "agent-update":
+		pos := parse(fs, args)
+		if err := need(pos, 1, "lab agent-update <mac>"); err != nil {
+			return err
+		}
+		res, err := c.AgentUpdate(ctx, pos[0])
+		if err != nil {
+			return err
+		}
+		from := ""
+		if res.LabRelease != "" {
+			from = " (Lab release " + res.LabRelease + ")"
+		}
+		if !res.Changed {
+			fmt.Printf("%s: lab-agent %s%s is already the lab's\n", pos[0], res.To, from)
+			return nil
+		}
+		fmt.Printf("%s: lab-agent %s -> %s%s, its signature checked on the Mac\n", pos[0], res.From, res.To, from)
+		return nil
 
 	case "enroll":
 		o := enrollFlags(fs)
@@ -1116,11 +1145,33 @@ func showDevices(ctx context.Context, c *client.Client) error {
 		}
 	}
 	for _, d := range devs {
+		if d.LabAgent != "" {
+			fmt.Printf("%s runs lab-agent %s, older than the lab's %s: %s\n", d.Name, d.Facts.AgentVersion, d.LabAgent, agentUpdateBy(d))
+		}
+	}
+	for _, d := range devs {
 		if d.Action != nil {
 			fmt.Printf("\n>>> %s\n%s\n", strings.ToUpper(d.Action.Title), indent(d.Action.Text()))
 		}
 	}
 	return nil
+}
+
+// agentUpdateBy is who brings a Mac's older lab-agent up to the lab's: a
+// Maintainer a Lab-owned Mac's, its Volunteer their own.
+func agentUpdateBy(d client.Device) string {
+	if d.IsVolunteer() {
+		return "its Volunteer updates it at the Mac"
+	}
+	return "lab agent-update " + d.Name
+}
+
+// newerRelease adds the one line when the lab runs a newer release than
+// this lab.
+func newerRelease(out io.Writer, labRelease, address string) {
+	if api.ReleaseOlder(version, labRelease) {
+		fmt.Fprintf(out, "Omarchy Mac Lab runs a newer release, %s. Update lab: curl -fsSL %s/install/lab | bash\n", labRelease, address)
+	}
 }
 
 // cableWord is a Mac's cable in the fleet's table: sighted, not sighted or
@@ -1206,6 +1257,11 @@ func showDevice(ctx context.Context, c *client.Client, name string) error {
 		fmt.Printf("  config:      %s\n", d.Configuration)
 	}
 	fmt.Printf("  kernel:      %s (known-good: %s)\n", d.Kernel, orDash(d.KnownGood, "no baseline yet"))
+	if d.LabAgent != "" {
+		fmt.Printf("  lab-agent:   %s, older than the lab's %s (%s)\n", d.Facts.AgentVersion, d.LabAgent, agentUpdateBy(*d))
+	} else {
+		fmt.Printf("  lab-agent:   %s\n", orDash(d.Facts.AgentVersion, "unknown"))
+	}
 	fmt.Printf("  last seen:   %s, uptime %.0fs, systemd %s\n", ago(d.LastSeen), d.Health.Uptime, d.Health.SystemState)
 	tiers := []string{"panic reboot + one-shot fallback", "+ hardware watchdog", "+ out-of-band reset"}
 	fmt.Printf("  recovery:    tier %d (%s)\n", d.Tier, tiers[d.Tier])
@@ -1342,9 +1398,7 @@ func login(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "Logged in to Omarchy Mac Lab as @%s.\n", who.Handle)
-	if api.ReleaseOlder(version, who.LabRelease) {
-		fmt.Fprintf(out, "Omarchy Mac Lab runs a newer release, %s. Update lab: curl -fsSL %s/install/lab | bash\n", who.LabRelease, who.Address)
-	}
+	newerRelease(out, who.LabRelease, who.Address)
 	return nil
 }
 

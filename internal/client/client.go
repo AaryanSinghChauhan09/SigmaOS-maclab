@@ -110,6 +110,8 @@ type Device struct {
 	// Cable is a Lab-owned Mac's place on the lab server's cables; nil for
 	// a Volunteer's Mac.
 	Cable *api.Cable `json:"cable,omitempty"`
+	// LabAgent is the number of the lab's lab-agent when the Mac's is older.
+	LabAgent string `json:"lab_agent,omitempty"`
 }
 
 func (c *Client) Devices(ctx context.Context) ([]Device, error) {
@@ -166,6 +168,12 @@ func (c *Client) RemoveBuilderGeneration(ctx context.Context, name, generation s
 		path += "?generation=" + url.QueryEscape(generation)
 	}
 	return &out, c.do(ctx, "DELETE", path, nil, &out)
+}
+
+// AgentUpdate has a Lab-owned Mac that is idle take the lab's lab-agent.
+func (c *Client) AgentUpdate(ctx context.Context, name string) (*api.AgentUpdate, error) {
+	var out api.AgentUpdate
+	return &out, c.do(ctx, "POST", "/api/devices/"+url.PathEscape(name)+"/agent-update", nil, &out)
 }
 
 // EndEnrollment ends a Mac's enrollment: labd forgets it and revokes its device secret at once.
