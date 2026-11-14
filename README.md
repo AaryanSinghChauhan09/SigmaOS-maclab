@@ -1,4 +1,24 @@
-# maclab
+# Omarchy Mac Lab
+
+Omarchy Mac Lab tests Omarchy on real Apple Silicon Macs and publishes what it finds. This repository, `omarchy-maclab`, holds all of it.
+
+The code began as [maclab](https://github.com/chriskearney/maclab) by Chris Kearney and as omarchy-m-testing; both histories are kept here.
+
+| Path | Holds |
+|---|---|
+| `cmd/`, `internal/` | the lab's Go programs: `labd`, `lab`, `lab-agent`, `lab-builder`, `oobd` and the rest |
+| `builder/`, `specs/`, `tools/` | the Builder's images, the TLA+ specs, the boot-test tools |
+| `cli/` | the `omarchy-m-test` command ([docs/omarchy-m-test.md](docs/omarchy-m-test.md)) |
+| `schema/`, `catalogue/` | the report schema with its golden reports, and the feature catalogue |
+| `installer/`, `release/` | the install line's script and the release build |
+| `deploy/`, `scripts/` | what is installed on the lab's server, and what is run |
+| `docs/` | decisions (`adr/`), the spec (`spec/`), acceptance records (`acceptance/`), guides, history |
+| `site/` | the Rails site the Go port is checked against; it goes when the port passes |
+| `GLOSSARY.md` | the words the lab uses |
+
+`scripts/ci-local` runs what the tests workflow runs.
+
+## The lab
 
 A test lab for Omarchy Macs. Hand it a kernel, and it boots that kernel exactly
 once on a real Apple Silicon Mac. It then runs tests (including Wayland GUI

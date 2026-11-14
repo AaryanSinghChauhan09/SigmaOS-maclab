@@ -1,7 +1,12 @@
 # Third-party notices
 
-maclab's own code is MIT licensed (see LICENSE). The web UI under
-`internal/web/static` bundles these third-party files, which keep their own licenses.
+Omarchy Mac Lab's own code is MIT licensed (see LICENSE). It began as
+[maclab](https://github.com/chriskearney/maclab) by Chris Kearney and as
+omarchy-m-testing; both are MIT and their histories are kept in this repository.
+
+## The lab's interface
+
+The web UI under `internal/web/static` bundles these third-party files, which keep their own licenses.
 
 | Files | What | License |
 |---|---|---|
@@ -12,7 +17,15 @@ maclab's own code is MIT licensed (see LICENSE). The web UI under
 
 `scripts/fonts.py` rebuilds the font subsets.
 
-maclab isn't an official Omarchy project. The Omarchy name and logo belong to
+## The test tool and the Rails reference
+
+| Files | What | License |
+|---|---|---|
+| `cli/omarchy_m_test/vendor/omarchy-mac/` | The check scripts of [omarchy-mac](https://github.com/omacom/omarchy-mac), unmodified; commit and hashes in `ORIGIN` | MIT, Copyright (c) David Heinemeier Hansson, see `LICENSE` beside them |
+| `cli/omarchy_m_test/gl_spec/glprobe.py`, the tables in `cli/omarchy_m_test/gpu_spec.py`, the Neural Engine probe in `engines.py`, the discovery in `hwread.py`, `catalogue/macos-reference/j616s.json` | From [aurora-diag](https://github.com/aurora-silicon/aurora-diag): its probe, tables and macOS baseline | MIT, Copyright (c) 2026 Aurora Silicon, see `cli/omarchy_m_test/gl_spec/LICENSE-aurora-diag` |
+| `site/app/assets/fonts/JetBrainsMono-*.woff2` | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | SIL OFL 1.1, see `JetBrainsMono-OFL.txt` beside them |
+
+Omarchy Mac Lab isn't an official Omarchy project. The Omarchy name and logo belong to
 their owners and are used here to match the desktop the lab's Macs run.
 
 ## Omarchy license
