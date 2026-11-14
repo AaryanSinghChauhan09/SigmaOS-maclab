@@ -263,7 +263,7 @@ func handleTyped(raw string) (string, error) {
 
 // pin asks GitHub which account a handle names now and keeps that account,
 // so a mark or an Invite hangs on the account id from the start and waits
-// for no sign-in. first reports that the person has never signed in.
+// for no sign-in.
 func (s *Server) pin(ctx context.Context, raw string) (k knownPerson, err error) {
 	handle, err := handleTyped(raw)
 	if err != nil {
@@ -530,5 +530,5 @@ func (p Person) access() access {
 func (s *Server) endMacSignInsOf(accountID int64) {}
 
 // endEnrollmentsOf has the Macs the person lends Leave. Until it does, a
-// Blocked person's Macs stay enrolled and nobody but Maintainers sees them.
+// Blocked person's Macs stay enrolled, and the person no longer sees them.
 func (s *Server) endEnrollmentsOf(accountID int64) {}
