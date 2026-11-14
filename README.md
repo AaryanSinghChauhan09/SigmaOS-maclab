@@ -1026,7 +1026,7 @@ times and no reason, address or path; it is never cached.
 
 ## Live data: stream, screen, logs
 
-Everything a UI needs is on the API. The web UI uses it now, and a TUI can use it later.
+Everything a page needs is on the API. The site uses it now, and a TUI can use it later.
 
 A Mac's page (`/macs/<name>`, the Mac's name on Macs) has three tabs. Overview: its facts, its Lease
 with Lease, Renew and Release, its jobs, and the way to "Boot a kernel". Live: its screen and its
@@ -1156,7 +1156,7 @@ known-good reference updates. Such a run may pass its executed tests, but it
 cannot qualify as a fully compared release-gate pass until those checks run.
 
 On a Mac with a desktop user, every job also runs
-[omarchy-m-test](https://github.com/maralcbr/omarchy-m-testing) in the desktop
+[omarchy-m-test](docs/omarchy-m-test.md) in the desktop
 session: about 70 checks of the boot chain, drivers, GPU, video decode, display,
 audio, Wi-Fi, power and CPU, and short benchmarks. The agent installs or upgrades
 the tool with its own installer, which checks the release signature. It runs with
@@ -1387,7 +1387,7 @@ that decide nothing, each with its reason (`volunteer` marks a volunteer's Mac, 
 `--exclude` or `lab exclude` set aside, and `exclusion` the latter's mark). Then `volunteers` names
 the volunteers' Macs, `volunteers_counted` says whether they counted, `excluded` lists the jobs
 `--exclude` set aside, `exclusions` those `lab exclude` did (job, device, outcome, by, reason,
-time), `not_counted` holds the runs of forgotten Macs whose jobs didn't record their family, and the
+time), `not_counted` holds the runs of Macs the lab no longer has whose jobs didn't record their family, and the
 labd host. The API is
 `GET /api/gate/{kernel}?families=m1,m2&volunteers=1&exclude=j1,j2`; agents use `lab_gate`.
 
