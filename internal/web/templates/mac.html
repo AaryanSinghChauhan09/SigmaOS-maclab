@@ -1,0 +1,154 @@
+{{define "head"}}<script src="{{asset "live.js"}}" defer></script>
+{{end}}
+
+{{define "lines"}}<ol class="record">
+{{range .}}<li>{{if .When}}<span class="when">{{.When}}</span> {{end}}{{.Line}}</li>
+{{end}}</ol>{{end}}
+
+{{define "main" -}}
+{{with .Data -}}
+<p class="crumb"><a href="{{href .Back}}">{{.BackLabel}}</a> /</p>
+<h1>{{.Mac.Name}}</h1>
+<p class="subtitle">{{.Mac.Configuration}} · {{.Mac.Kind}}{{if .Mac.Volunteer}} of @{{.Mac.Volunteer}}{{end}} · {{.Mac.State}}{{if .Mac.Holder}} · Lease of @{{.Mac.Holder}} until {{.Mac.Until}}{{end}}</p>
+{{- if .Flash}}
+<p class="flash flash-alert" role="alert">{{.Flash}}</p>
+{{- end}}
+<nav class="tabs" aria-label="This Mac">
+<a{{if eq .Tab "overview"}} class="current" aria-current="page"{{end}} href="{{href .Path}}">Overview</a>
+<a{{if eq .Tab "live"}} class="current" aria-current="page"{{end}} href="{{href (print .Path "?tab=live")}}">Live</a>
+<a{{if eq .Tab "records"}} class="current" aria-current="page"{{end}} href="{{href (print .Path "?tab=records")}}">Records</a>
+</nav>
+<p class="flash" id="mac-changed" hidden>This Mac has changed since this page was made. <a href="">Show it as it is now</a></p>
+{{- if .Fence}}
+<div class="fence" id="live-fence">
+<p><b>Live needs your own Lease on {{.Mac.Name}}.</b>{{if .Fence.Holder}} @{{.Fence.Holder}} holds it until {{.Fence.Until}}.{{else if .Fence.Why}} It takes none now: {{.Fence.Why}}.{{end}}</p>
+{{- if .Fence.CanLease}}
+<form class="form-inline" method="post" action="{{href (print .Path "/lease")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="back" value="live"><button class="button button-small" type="submit">Lease</button></form>
+{{- end}}
+</div>
+{{- end}}
+<div{{with .Live}} data-live data-api="{{.API}}"{{if .CSRF}} data-csrf="{{.CSRF}}"{{end}}{{if .ViewOnly}} data-view-only{{end}}{{if .NotNow}} data-not-now{{end}} data-logs="{{.Logs}}"{{end}} data-mac="{{.Mac.Name}}" data-tab="{{.Tab}}" data-stream="{{href .Stream}}" data-changes="{{.Changes}}">
+{{- if eq .Tab "overview"}}
+<section class="card" id="mac-facts">
+<h2 class="card-title">this mac</h2>
+{{- if .Team}}
+<p class="card-tools"><a class="button button-small" href="{{href (print "/boot?mac=" .Mac.Name)}}">Boot a kernel</a></p>
+{{- end}}
+<dl class="facts">
+<dt>Configuration</dt><dd>{{.Mac.Configuration}}{{if .Mac.SetBy}} <span class="dim">set by @{{.Mac.SetBy}}</span>{{end}}</dd>
+<dt>Kind</dt><dd>{{.Mac.Kind}}{{if .Mac.Volunteer}} of @{{.Mac.Volunteer}}{{end}}</dd>
+<dt>State</dt><dd>{{.Mac.State}}{{if .Facts.Reason}} <span class="dim">{{.Facts.Reason}}</span>{{end}}{{if .Facts.Queued}} <span class="dim">{{.Facts.Queued}} queued</span>{{end}}</dd>
+<dt>Access level</dt><dd>{{.Facts.AccessLevel}}{{if not .Facts.Volunteers}} <span class="dim">a Lab-owned Mac</span>{{end}}</dd>
+{{- if .Facts.Volunteers}}
+<dt>Availability window</dt><dd>{{.Facts.Window}}</dd>
+{{- end}}
+<dt>Known-good kernel</dt><dd>{{if .Facts.KnownGood}}{{.Facts.KnownGood}}{{else}}<span class="dim">none: it has not passed its baseline</span>{{end}}</dd>
+<dt>Running</dt><dd>{{if .Facts.Kernel}}{{.Facts.Kernel}}{{else}}<span class="dim">unknown</span>{{end}}</dd>
+<dt>lab-agent</dt><dd>{{if .Facts.Agent}}{{.Facts.Agent}}{{else}}<span class="dim">unknown</span>{{end}}</dd>
+<dt>Last seen</dt><dd>{{if .Facts.LastSeen}}{{.Facts.LastSeen}}{{else}}<span class="dim">never</span>{{end}}</dd>
+<dt>Lease</dt><dd>{{if .Mac.Holder}}@{{.Mac.Holder}}{{if .Mac.HolderKind}} <span class="badge {{.Mac.HolderClass}}">{{.Mac.HolderKind}}</span>{{end}} <span class="nowrap">until {{.Mac.Until}}</span>{{else}}<span class="dim">none</span>{{end}}
+{{- if .Mac.Mine}}
+<form class="inline" method="post" action="{{href (print .Path "/renew")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="back" value="mac"><button class="button button-small" type="submit">Renew</button></form>
+{{template "take" ($.Take (print .Path "/release") "Release" (print "Release: your Lease on " .Mac.Name " ends now") "back" "mac")}}
+{{- else if .Mac.CanLease}}
+<form class="form-inline" method="post" action="{{href (print .Path "/lease")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="back" value="mac">{{if .Maintainer}}<label><input name="hours" inputmode="numeric" size="2" value="4"> hours</label> {{end}}<button class="button button-small" type="submit">Lease</button></form>
+{{- if .Mac.Warning}}
+<p class="dim">{{.Mac.Warning}}</p>
+{{- end}}
+{{- else if .Mac.Why}}
+<p class="dim">It takes no Lease from you: {{.Mac.Why}}.{{if and .Maintainer .Mac.Holder}} A Lease is ended on <a href="{{href "/people"}}">People</a>.{{end}}</p>
+{{- end}}
+</dd>
+</dl>
+</section>
+<section class="card" id="mac-jobs">
+<h2 class="card-title">jobs on this mac</h2>
+{{- if .Jobs}}
+<div class="scroll">
+<table class="stack">
+<thead><tr><th>Job</th><th>What</th><th>By</th><th>State</th><th>When</th></tr></thead>
+<tbody>
+{{- range .Jobs}}
+<tr><td data-label="Job"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td><td data-label="What">{{.What}}</td><td data-label="By">{{if .By}}@{{.By}}{{else}}<span class="dim">the lab</span>{{end}}</td><td data-label="State">{{.State}}</td><td data-label="When" class="nowrap">{{.When}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+</div>
+{{- else}}
+<p class="dim">No job has run here yet.</p>
+{{- end}}
+</section>
+{{- end}}
+{{- with .Live}}
+{{- if .ViewOnly}}
+<p class="dim">Your Mac: what the lab sees of its screen and its logs. Looking changes nothing on it.</p>
+{{- end}}
+{{- if .NotNow}}
+<p class="fence" id="live-not-now">{{.NotNow}}</p>
+{{- end}}
+<section class="card" id="live-screen">
+<h2 class="card-title">screen</h2>
+{{- if not (or .ViewOnly .NotNow)}}
+<p class="card-tools"><span class="chips"><button class="chip current" type="button" data-auto="0">auto off</button><button class="chip" type="button" data-auto="3">every 3 s</button><button class="chip" type="button" data-auto="10">every 10 s</button><button class="chip" type="button" data-auto="30">every 30 s</button></span> <button class="button button-small" type="button" data-capture>Capture</button></p>
+{{- end}}
+<p class="dim" data-screen-note>{{if .Screen}}Latest capture: {{.ScreenAt}}.{{else}}No capture of this Mac's screen is kept.{{end}}</p>
+<img class="screen" data-screen alt="The screen of {{$.Data.Mac.Name}}"{{if .Screen}} src="{{.Screen}}"{{else}} hidden{{end}}>
+</section>
+<section class="card" id="live-logs">
+<h2 class="card-title">logs</h2>
+<p><span class="chips"><a class="chip{{if eq .Logs "journal"}} current{{end}}" href="{{href (print $.Data.Path "?tab=live")}}">Journal</a><a class="chip{{if eq .Logs "kernel"}} current{{end}}" href="{{href (print $.Data.Path "?tab=live&logs=kernel")}}">Kernel</a><a class="chip{{if eq .Logs "events"}} current{{end}}" href="{{href (print $.Data.Path "?tab=live&logs=events")}}">Events</a></span>{{if and (ne .Logs "events") (not .NotNow)}} <button class="button button-small button-plain" type="button" data-refresh>Read again</button>{{end}}</p>
+{{- if eq .Logs "events"}}
+<p class="dim">The kernel's warnings and errors of the last day, newest first. New ones arrive as they happen.</p>
+<ol class="record" data-events>
+{{range .Events}}<li><span class="when">{{.When}}</span> {{.Line}}</li>
+{{end}}</ol>
+{{- else if .NotNow}}
+<p class="dim">Its {{.Logs}} log is not read now.</p>
+{{- else}}
+<pre class="term" data-log>Reading the last 500 lines from {{$.Data.Mac.Name}}.</pre>
+{{- end}}
+</section>
+{{- end}}
+{{- if eq .Tab "records"}}
+<section class="card" id="lease-record">
+<h2 class="card-title">lease record</h2>
+<p class="dim">Each Lease taken, renewed, extended, released, expired and ended, newest first.</p>
+{{- if .Leases}}
+{{template "lines" .Leases}}
+{{- else}}
+<p>No Lease has been taken on this Mac.</p>
+{{- end}}
+</section>
+<section class="card" id="mac-record">
+<h2 class="card-title">the mac's record</h2>
+<p class="dim">Joined, Availability window, Access level, left.</p>
+{{- if .MacRecord}}
+{{template "lines" .MacRecord}}
+{{- else}}
+<p>Nothing is recorded for this Mac yet.</p>
+{{- end}}
+</section>
+{{- if .ShowAudit}}
+<section class="card" id="audit-log">
+<h2 class="card-title">audit log</h2>
+<p class="dim">The lab's copy of the log written by the Mac itself, newest first. For Maintainers and the Mac's Volunteer.</p>
+{{- if .Audit}}
+{{template "lines" .Audit}}
+{{- else}}
+<p>The Mac has sent no line of its Audit log.</p>
+{{- end}}
+</section>
+{{- end}}
+<section class="card" id="exec-record">
+<h2 class="card-title">exec record</h2>
+<p class="dim">Each lab exec on this Mac: who, when, the command and how it ended, never its output. For Maintainers, whoever ran the command and the Mac's Volunteer.</p>
+{{- if .Exec}}
+{{template "lines" .Exec}}
+{{- else}}
+<p>No lab exec is recorded for this Mac.</p>
+{{- end}}
+</section>
+{{- end}}
+</div>
+{{- end}}
+{{- end}}

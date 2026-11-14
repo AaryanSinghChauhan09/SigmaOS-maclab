@@ -18,7 +18,7 @@
 <tbody>
 {{- range .Macs}}
 <tr id="mac-{{.Name}}">
-<td data-label="Mac">{{.Name}}</td>
+<td data-label="Mac"><a href="{{href (print "/macs/" .Name)}}">{{.Name}}</a></td>
 <td data-label="Kind">{{.Kind}}{{if .Volunteer}} of @{{.Volunteer}}{{end}}</td>
 <td data-label="Configuration">{{.Configuration}}{{if .SetBy}} <span class="dim">set by @{{.SetBy}}</span>{{end}}
 {{- if $.Data.Maintainer}}

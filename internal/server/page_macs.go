@@ -195,15 +195,40 @@ func (s *Server) macOr404(w http.ResponseWriter, r *http.Request) *dev {
 	return v
 }
 
-// backToMacs answers a button of Macs: back to the page under its filter,
-// or the page saying why the lab refused.
-func (s *Server) backToMacs(w http.ResponseWriter, r *http.Request, err error) {
-	show := showOf(r.PostFormValue("show"))
-	if err != nil {
-		s.renderMacs(w, r, show, err)
-		return
+// macTabPressed is the tab of a Mac's own page a button was pressed on, for
+// a button that was: the Lease's buttons are on Macs and on a Mac's page.
+func macTabPressed(r *http.Request) (tab string, ok bool) {
+	switch r.PostFormValue("back") {
+	case "mac":
+		return tabOverview, true
+	case tabLive:
+		return tabLive, true
 	}
-	w.Header().Set("Location", s.basePath()+macsPath(show))
+	return "", false
+}
+
+// backToMacs answers a button of Macs or of a Mac's page: back to the page
+// it was pressed on, Macs under its filter, or that page saying why the lab
+// refused.
+func (s *Server) backToMacs(w http.ResponseWriter, r *http.Request, err error) {
+	show, to := showOf(r.PostFormValue("show")), ""
+	if tab, ok := macTabPressed(r); ok {
+		if v := s.dev(r.PathValue("name")); v != nil {
+			if err != nil {
+				s.renderMac(w, r, v, tab, err)
+				return
+			}
+			to = macPagePath(v.snapshot().Name, tab)
+		}
+	}
+	if to == "" {
+		if err != nil {
+			s.renderMacs(w, r, show, err)
+			return
+		}
+		to = macsPath(show)
+	}
+	w.Header().Set("Location", s.basePath()+to)
 	w.WriteHeader(http.StatusSeeOther)
 }
 
@@ -250,7 +275,11 @@ func (s *Server) pMacsRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := v.snapshot().Name
-	if !s.sure(w, r, "Release: your Lease on "+name+" ends now", macsPath(showOf(r.PostFormValue("show")))) {
+	back := macsPath(showOf(r.PostFormValue("show")))
+	if tab, ok := macTabPressed(r); ok {
+		back = macPagePath(name, tab)
+	}
+	if !s.sure(w, r, "Release: your Lease on "+name+" ends now", back) {
 		return
 	}
 	p := leaser(r)
