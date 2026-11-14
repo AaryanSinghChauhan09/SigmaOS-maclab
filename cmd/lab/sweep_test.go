@@ -346,3 +346,60 @@ func TestAToolNeverAnswersWithAToken(t *testing.T) {
 		}
 	}
 }
+
+// A verdict and a Promotion are a person's: the first call of either tool
+// changes nothing and answers with the lab's own sentence, and only a call
+// with confirm goes on.
+func TestAVerdictAndAPromotionAskBeforeTheyAct(t *testing.T) {
+	var confirmed []string
+	c := labAt(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["confirm"] == true {
+			confirmed = append(confirmed, r.URL.Path)
+			io.WriteString(w, `{"release":{"name":"12.0","state":"qualified"},"device":"m1-pro"}`)
+			return
+		}
+		io.WriteString(w, `{"confirm":"Record 12.0 as qualified? 1 of 3 Configurations have a passed run."}`)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := newMCP(c).Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	say := func(tool string, args map[string]any) string {
+		t.Helper()
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+		if err != nil || res.IsError {
+			t.Fatalf("%s: %v %+v", tool, err, res)
+		}
+		var said string
+		for _, part := range res.Content {
+			if text, ok := part.(*mcp.TextContent); ok {
+				said += text.Text
+			}
+		}
+		return said
+	}
+	for tool, args := range map[string]map[string]any{
+		"lab_installed_verdict": {"release": "12.0", "verdict": "qualified", "note": "three Macs passed"},
+		"lab_installed_promote": {"release": "12.0", "device": "m1-pro", "job_id": "j1"},
+	} {
+		first := say(tool, args)
+		if !strings.Contains(first, "1 of 3 Configurations") || !strings.Contains(first, "Nothing was done") || len(confirmed) != 0 {
+			t.Fatalf("%s, asked first, answered %q and confirmed %v", tool, first, confirmed)
+		}
+		args["confirm"] = true
+		say(tool, args)
+		if len(confirmed) != 1 {
+			t.Fatalf("%s with confirm: the lab was told %v", tool, confirmed)
+		}
+		confirmed = nil
+	}
+}
