@@ -202,7 +202,7 @@ func newMini(t *testing.T) *mini {
 	write(t, m.tree+"/deploy/homebrew-formulae", "# none\n", 0o644)
 	write(t, m.tree+"/deploy/"+cloudflaredLabel+".plist", read(t, filepath.Join(repo(t), "deploy", cloudflaredLabel+".plist")), 0o644)
 	write(t, m.tree+"/deploy/"+signalLabel+".plist", read(t, filepath.Join(repo(t), "deploy", signalLabel+".plist")), 0o644)
-	for _, f := range []string{litestreamLabel + ".plist", backupLabel + ".plist", "litestream.yml"} {
+	for _, f := range []string{litestreamLabel + ".plist", backupLabel + ".plist", "litestream.yml", deadManLabel + ".plist", drillLabel + ".plist"} {
 		write(t, m.tree+"/deploy/"+f, read(t, filepath.Join(repo(t), "deploy", f)), 0o644)
 	}
 	write(t, m.tree+"/deploy/pins", "# none\n", 0o644)

@@ -3,6 +3,7 @@
 #
 #   sudo scripts/mini/setup [--dry-run] [--release-key FILE] [--tunnel-credential FILE]
 #                           [--backup-guest ADDRESS] [--backup-keys FOLDER]
+#                           [--checks FOLDER]
 #
 # Makes the lab account and its folders, pins the release key, installs the
 # Homebrew formulae deploy/homebrew-formulae names and what deploy/pins
@@ -13,10 +14,11 @@
 # and a Deployed build to read its routes from. Installs the Signal sender's
 # LaunchDaemon file and starts signal-cli from the copy; its number is
 # registered with scripts/mini/signal. Starts Litestream and schedules the
-# nightly backup once the guest's and R2's keys are in place. Safe to run
-# again: it changes only what is not yet as it should be. It never starts
-# labd: Deploy does. Needs only what macOS has, and Homebrew for its own
-# formulae.
+# nightly backup and the monthly Restore drill once the guest's and R2's keys
+# are in place. Starts the Dead-man switch's ping once it has its check.
+# Safe to run again: it changes only what is not yet as it should be. It
+# never starts labd: Deploy does. Needs only what macOS has, and Homebrew
+# for its own formulae.
 #
 #   --dry-run           say what would change, and change nothing
 #   --release-key FILE  the allowed_signers file Deploy checks a bundle
@@ -38,6 +40,12 @@
 #                       r2-access-key-id, r2-secret-access-key). Each file
 #                       found is put where only the lab account reads it and
 #                       removed from FOLDER; the rest can come in a later run.
+#   --checks FOLDER     the addresses of the checks kept outside the house,
+#                       at healthchecks.io, one file each: dead-man, backup,
+#                       restore-drill, holding the one line
+#                       https://hc-ping.com/<the check's id>. Each file found
+#                       is put where only the lab account reads it and
+#                       removed from FOLDER.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,13 +53,14 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,48p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
 credential=""
 guest=""
 keys=""
+checks=""
 while (( $# )); do
   case "$1" in
     --dry-run) DRY=1 ;;
@@ -59,6 +68,7 @@ while (( $# )); do
     --tunnel-credential) [[ $# -ge 2 ]] || usage; credential="$2"; shift ;;
     --backup-guest) [[ $# -ge 2 ]] || usage; guest="$2"; shift ;;
     --backup-keys) [[ $# -ge 2 ]] || usage; keys="$2"; shift ;;
+    --checks) [[ $# -ge 2 ]] || usage; checks="$2"; shift ;;
     *) usage ;;
   esac
   shift
@@ -112,6 +122,21 @@ if [[ -n $keys ]]; then
     esac
   done
   (( found )) || fail "$keys holds none of: $BACKUP_KEYS_HOUSE $BACKUP_KEYS_OFFSITE"
+fi
+if [[ -n $checks ]]; then
+  [[ -d $checks ]] || fail "no folder $checks"
+  found=0
+  for name in $CHECK_NAMES; do
+    [[ -e $checks/$name || -L $checks/$name ]] || continue
+    found=1
+    [[ -f $checks/$name && ! -L $checks/$name && -s $checks/$name ]] || fail "$checks/$name is empty or no plain file"
+    case "$(looks "$checks/$name")" in
+      -r--------\ * | -rw-------\ *) ;;
+      *) fail "$checks/$name can be read by others: whoever has a check's address can ping it in the lab's place. Make the check again at healthchecks.io, which gives it a new address, and keep the file to its owner (chmod 600)" ;;
+    esac
+    [[ "$(<"$checks/$name")" =~ $CHECK_URL ]] || fail "$checks/$name is not a check's address: one line, $CHECKS_AT/ and the check's id"
+  done
+  (( found )) || fail "$checks holds none of: $CHECK_NAMES"
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/lab-setup.XXXXXX")"
@@ -651,6 +676,62 @@ backups() {
   elif ! cmp -s "$deploy/$BACKUP_LABEL.plist" "$LAUNCHD_DIR/$BACKUP_LABEL.plist" || ! loaded "$BACKUP_LABEL"; then
     change "schedule the nightly backup ($BACKUP_LABEL) under $LAUNCHD_DIR/$BACKUP_LABEL.plist" start_daemon "$BACKUP_LABEL"
   fi
+
+  # The Restore drill restores what the nightly backup sent, and is
+  # scheduled with it.
+  if [[ -n $missing ]] || ! guest_named || [[ ! -x $LAB_CURRENT/scripts/mini/backup ]]; then
+    return 0
+  elif [[ ! -x $LAB_CURRENT/scripts/mini/restore-drill ]]; then
+    say "the Restore drill is not scheduled: the Deployed build has no scripts/mini/restore-drill. Deploy one that has, then run the set-up again"
+  elif ! cmp -s "$deploy/$DRILL_LABEL.plist" "$LAUNCHD_DIR/$DRILL_LABEL.plist" || ! loaded "$DRILL_LABEL"; then
+    change "schedule the Restore drill ($DRILL_LABEL) under $LAUNCHD_DIR/$DRILL_LABEL.plist" start_daemon "$DRILL_LABEL"
+  fi
+}
+
+# The checks kept outside the house. A check's address is all it takes to
+# ping it, so each goes where only the lab account reads it and is never
+# printed. The Dead-man switch's ping reads its address afresh each minute:
+# a new address needs no restart.
+
+take_check() {
+  lab_file "$CHECKS/$1" 400 < "$checks/$1"
+  rm -f "$checks/$1"
+}
+
+# has_check NAME: whether the check's address is in place, or in a dry run would be.
+has_check() {
+  [[ -s $CHECKS/$1 ]] || { (( DRY )) && [[ -n $checks && -s $checks/$1 ]]; }
+}
+
+dead_man() {
+  local name
+  if [[ -d $CHECKS && ! -r $CHECKS ]] || [[ ! -d $CHECKS && -d $LAB_HOME/secrets && ! -r $LAB_HOME/secrets ]]; then
+    say "$LAB_HOME/secrets is $LAB_OWNER's: the checks are not looked at without sudo"
+    return 0
+  fi
+  if [[ -n $checks ]]; then
+    if [[ "$(looks "$CHECKS")" != "$(shape d 700) $LAB_OWNER:$LAB_GROUP" ]]; then
+      change "make $CHECKS ($LAB_OWNER:$LAB_GROUP, 700)" lab_folder "$CHECKS" 700
+    fi
+    for name in $CHECK_NAMES; do
+      [[ -f $checks/$name ]] || continue
+      no_link "$CHECKS/$name"
+      if cmp -s "$checks/$name" "$CHECKS/$name"; then
+        change "remove $checks/$name: the check $name is already at $CHECKS/$name" rm -f "$checks/$name"
+      else
+        change "put the check $name at $CHECKS/$name, which only $LAB_OWNER reads, and remove it from $checks" take_check "$name"
+      fi
+    done
+  fi
+  if ! has_check dead-man; then
+    say "the Dead-man switch is not started: it has no check to ping yet (--checks FOLDER, with the file dead-man)"
+  elif [[ ! -d $LAB_CURRENT/ ]]; then
+    say "the Dead-man switch is not started: no build is Deployed yet for it to run from. Deploy, then run the set-up again"
+  elif [[ ! -x $LAB_CURRENT/scripts/mini/dead-man ]]; then
+    say "the Dead-man switch is not started: the Deployed build has no scripts/mini/dead-man. Deploy one that has, then run the set-up again"
+  elif ! cmp -s "$deploy/$DEAD_MAN_LABEL.plist" "$LAUNCHD_DIR/$DEAD_MAN_LABEL.plist" || ! loaded "$DEAD_MAN_LABEL"; then
+    change "start the Dead-man switch's ping ($DEAD_MAN_LABEL) under $LAUNCHD_DIR/$DEAD_MAN_LABEL.plist" start_daemon "$DEAD_MAN_LABEL"
+  fi
 }
 
 no_planted_link
@@ -664,6 +745,7 @@ controller
 tunnel
 sender
 backups
+dead_man
 
 if (( CHANGES == 0 )); then
   say "nothing to change"

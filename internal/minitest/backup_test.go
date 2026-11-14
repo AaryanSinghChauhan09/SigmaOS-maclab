@@ -98,10 +98,48 @@ case "$cmd" in
     done ;;
   restore)
     id="$1"
+    shift
     [[ $id != latest ]] || id="$(ls "$dir/snapshots" | tail -n 1)"
-    [[ $2 == --target && -d $dir/snapshots/$id ]] || { echo "Fatal: no snapshot" >&2; exit 1; }
-    mkdir -p "$3"
-    cp -R "$dir/snapshots/$id/files/." "$3" ;;
+    target="" includes=()
+    while (( $# )); do
+      case "$1" in
+        --target) target="$2"; shift ;;
+        --include) includes+=("$2"); shift ;;
+        *) echo "Fatal: unknown flag $1" >&2; exit 1 ;;
+      esac
+      shift
+    done
+    [[ -n $target && -d $dir/snapshots/$id ]] || { echo "Fatal: no snapshot" >&2; exit 1; }
+    mkdir -p "$target"
+    if (( ${#includes[@]} == 0 )); then
+      cp -R "$dir/snapshots/$id/files/." "$target"
+    else
+      for p in "${includes[@]}"; do
+        [[ -e $dir/snapshots/$id/files$p ]] || continue
+        mkdir -p "$target$(dirname "$p")"
+        cp -R "$dir/snapshots/$id/files$p" "$target$p"
+      done
+    fi ;;
+  ls)
+    id="" folders=()
+    for a in "$@"; do
+      case "$a" in
+        --json) ;;
+        -*) echo "Fatal: unknown flag $a" >&2; exit 1 ;;
+        *) if [[ -z $id ]]; then id="$a"; else folders+=("$a"); fi ;;
+      esac
+    done
+    [[ $id != latest ]] || id="$(ls "$dir/snapshots" | tail -n 1)"
+    [[ -d $dir/snapshots/$id ]] || { echo "Fatal: no snapshot" >&2; exit 1; }
+    printf '{"time":"%s","paths":["/"],"hostname":"lab-mini","id":"%s","struct_type":"snapshot"}\n' "$(<"$dir/snapshots/$id/time")" "$id"
+    for p in "${folders[@]}"; do
+      for f in "$dir/snapshots/$id/files$p"/*; do
+        [[ -e $f ]] || continue
+        kind=file
+        [[ ! -d $f ]] || kind=dir
+        printf '{"name":"%s","type":"%s","path":"%s","struct_type":"node"}\n' "$(basename "$f")" "$kind" "$p/$(basename "$f")"
+      done
+    done ;;
 esac
 `
 
@@ -479,6 +517,7 @@ func TestTheBackupsDryRunSaysWhatWouldRunAndRunsNothing(t *testing.T) {
 		"backup: would run, for the off-site copy's retention: restic forget --group-by host --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune",
 		"backup: would forget every off-site snapshot made before " + cut,
 		"backup: would ask lab-backup how its pruning and the owner's copy went",
+		"backup: would ping the check backup",
 		"backup: nothing was run",
 		"",
 	}, "\n")
