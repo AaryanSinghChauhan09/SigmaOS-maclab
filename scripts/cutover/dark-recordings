@@ -1,0 +1,291 @@
+#!/bin/bash
+# The Dark recordings (spec section 6, "While Dark" and "Cache"; section 16,
+# step 17b). Recorded, not gates: nothing here passes or fails on what the
+# edge does, it is written down as seen.
+#
+#   dark-recordings [--dry-run]
+#   dark-recordings --local [--bin DIR]
+#   dark-recordings --lab --mini USER@HOST [--page PATH] [--seconds N]
+#
+# --lab, through the Lab address, signed out:
+#   1. loads the public pages and notes every cookie an answer sets, by
+#      name, Cloudflare's own included;
+#   2. asks a public page until the edge serves it from its cache;
+#   3. has the mini stop cloudflared for --seconds (scripts/mini/hold, over
+#      SSH: sudo asks for the password) and asks that page, and /status,
+#      which is never cached, every ten seconds meanwhile and for a minute
+#      after: the status, cf-cache-status and age of each answer; for an
+#      error page, its number and ray id only;
+#   4. the same with labd alone stopped and the tunnel up;
+#   5. writes docs/acceptance/DATE-dark-recordings.md.
+#
+#   --mini USER@HOST   the mini, as the owner reaches it over SSH with a key
+#   --page PATH        the cached public page that is asked (/)
+#   --seconds N        how long each daemon is stopped, 1 to 240 (150: a
+#                      minute while the edge's copy is fresh and a minute and
+#                      a half after). Over five minutes "Agents" would be told
+#
+# The lab is Dark, or labd is down, for that long, twice: run it while no
+# job runs. --local does the same against a labd on this machine's
+# loopback, stopping and starting it here: there is no edge, so it shows
+# labd's side (no cookie) and that the script reads what it sees.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$here/front-door/lib.sh"
+# shellcheck source=scripts/cutover/visitor.sh
+. "$here/visitor.sh"
+usage() { sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+page="/"
+seconds=""
+every=10
+tail_seconds=60
+PUBLIC_PAGES="/ /reports /matrix /terms /privacy /install /status"
+UNCACHED="/status"
+
+fd_options "$@"
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --page | --seconds | --every | --tail)
+      (( $# >= 2 )) || fail "$1 needs a value. Nothing was done."
+      case "$1" in
+        --page) page="$2" ;;
+        --seconds) seconds="$2" ;;
+        --every) every="$2" ;;
+        --tail) tail_seconds="$2" ;;
+      esac
+      shift
+      ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+[[ $page =~ ^/[A-Za-z0-9._~/-]*$ && $page != /api/* ]] || fail "--page $page is not a public page's path"
+[[ -n $seconds ]] || { if [[ $MODE == local ]]; then seconds=3; else seconds=150; fi; }
+[[ $seconds =~ ^[1-9][0-9]{0,2}$ ]] || fail "--seconds $seconds is not a number of seconds"
+(( seconds <= 240 )) || fail "--seconds takes at most 240: past five minutes \"Agents\" is told the tunnel is gone"
+[[ $every =~ ^[1-9][0-9]?$ && $tail_seconds =~ ^[0-9]{1,3}$ ]] || fail "--every and --tail take seconds"
+if [[ $MODE == local ]]; then
+  (( every <= seconds )) || every=1
+  (( tail_seconds <= 5 )) || tail_seconds=3
+fi
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Started with --lab by the owner, signed out, through $LAB_URL, it would:
+  1. curl each of: $PUBLIC_PAGES, and note the name of every cookie an answer sets, Cloudflare's included
+  2. curl $LAB_URL$page until cf-cache-status says HIT
+  3. ssh -t MINI sudo $MINI_SCRIPTS/hold cloudflared $seconds, and meanwhile, every $every s and for $tail_seconds s after:
+       curl $LAB_URL$page (cached) and $LAB_URL$UNCACHED (never cached): status, cf-cache-status, age; of an error page its number and ray id
+  4. ssh -t MINI sudo $MINI_SCRIPTS/hold labd $seconds, and the same
+  5. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-dark-recordings.md: what a signed-out visitor got, as seen
+With --local it would do the same against a labd on this machine's loopback, stopped and started here.
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+clock() { TZ=Australia/Brisbane date -r "$1" +%H:%M:%S 2>/dev/null || TZ=Australia/Brisbane date -d "@$1" +%H:%M:%S; }
+
+workspace
+if [[ $MODE == local ]]; then
+  [[ -x $BIN/labd ]] || fail "no labd in $BIN: run make all, or name the folder with --bin"
+  export HOME="$WORK/home" TMPDIR="$WORK/tmp"
+  mkdir -p "$HOME" "$TMPDIR"
+  # start_labd LISTEN: labd on loopback; leaves BASE.
+  start_labd() {
+    local n port=""
+    : > "$WORK/labd.log"
+    "$BIN/labd" --listen="$1" --data="$WORK/data" --omt=false >> "$WORK/labd.log" 2>&1 &
+    LABD_PID=$!
+    for n in $(seq 100); do
+      port="$(sed -n 's/.*labd listening on http:\/\/127\.0\.0\.1:\([0-9]*\).*/\1/p' "$WORK/labd.log" | head -n 1)"
+      [[ -z $port ]] || break
+      kill -0 "$LABD_PID" 2>/dev/null || fail "labd stopped while starting: $(tail -n 3 "$WORK/labd.log")"
+      sleep 0.1
+    done
+    [[ -n $port ]] || fail "labd did not say where it listens"
+    BASE="http://127.0.0.1:$port"
+  }
+  start_labd 127.0.0.1:0
+  # hold PART SECONDS FILE: this machine's stand-in for scripts/mini/hold,
+  # whose three lines go to FILE. There is no tunnel here: labd is what stops.
+  hold() {
+    kill "$LABD_PID" 2>/dev/null || true
+    wait "$LABD_PID" 2>/dev/null || true
+    echo "stopped $(date +%s)" > "$3"
+    sleep "$2"
+    start_labd "${BASE#http://}"
+    echo "started $(date +%s)" >> "$3"
+    echo "back $(date +%s)" >> "$3"
+  }
+else
+  [[ -n $MINI ]] || fail "--lab needs --mini USER@HOST"
+  BASE="$(at "$LAB_NAME")"
+  # sudo's prompt comes down the same pipe as hold's three lines: all of it
+  # is shown, and only those lines are read afterwards.
+  hold() { ssh -t "$MINI" sudo "$MINI_SCRIPTS/hold" "$1" "$2" | tee "$3"; }
+fi
+
+answers() {
+  local n
+  for n in $(seq 60); do
+    ask "$BASE/healthz"
+    [[ $STATUS != 200 ]] || return 0
+    sleep 2
+  done
+  return 1
+}
+answers || fail "the lab does not answer at $BASE. Nothing was stopped."
+
+record_open dark-recordings "The Dark recordings" "Recorded, not gates: what a signed-out visitor got, as seen from the machine that ran this."
+
+# 1. Cookies.
+set_any=""
+asked=0
+for path in $PUBLIC_PAGES; do
+  ask "$BASE$path"
+  asked=$((asked + 1))
+  names="$(cookie_names)"
+  [[ -z $names ]] || set_any+="${set_any:+; }$path ($STATUS) set $names"
+  [[ $STATUS == 200 ]] || set_any+="${set_any:+; }$path answered $STATUS"
+done
+if [[ -z $set_any ]]; then
+  if [[ $MODE == local ]]; then
+    rec "cookies: a signed-out load of $asked public pages ($PUBLIC_PAGES) set no cookie. These are labd's own answers: there is no edge here to add one"
+  else
+    rec "cookies: a signed-out load of $asked public pages ($PUBLIC_PAGES) set no cookie, the edge's own included"
+  fi
+else
+  rec "cookies: of $asked public pages loaded signed out: $set_any"
+fi
+
+# 2. The page in the edge's cache.
+warm() {
+  local n
+  for n in 1 2 3 4 5 6 7 8 9 10; do
+    ask "$BASE$page"
+    if [[ "$(header cf-cache-status)" == HIT ]]; then
+      rec "the cached page: $page was an edge HIT at request $n (age $(header age) s)"
+      return 0
+    fi
+    sleep 1
+  done
+  if [[ $MODE == local ]]; then
+    rec "the cached page: $page answered $STATUS. There is no edge here, so nothing is cached: labd says Cache-Control \"$(header cache-control)\" and Cloudflare-CDN-Cache-Control \"$(header cloudflare-cdn-cache-control)\""
+  else
+    rec "the cached page: $page was never an edge HIT in 10 requests (the last said \"$(header cf-cache-status)\", status $STATUS): what follows is then not about a cached copy"
+  fi
+}
+
+# sample FILE: one line for each of the two pages every few seconds, until
+# $WORK/stop is there: time, which page, status, cf-cache-status, age, and
+# for an answer that is not a 200 what it says of itself.
+sample() {
+  local t which path cache age note
+  ASK_SECONDS=15
+  while [[ ! -e $WORK/stop ]]; do
+    t="$(date +%s)"
+    for which in cached uncached; do
+      path="$page"
+      [[ $which == cached ]] || path="$UNCACHED"
+      ask "$BASE$path"
+      cache="$(header cf-cache-status | tr -cd 'A-Za-z')"
+      age="$(header age | tr -cd '0-9')"
+      note="-"
+      [[ $STATUS == 200 ]] || note="$(error_of)"
+      [[ $STATUS != 000 ]] || note="nothing answered"
+      echo "$t $which $STATUS ${cache:--} ${age:--} $note"
+    done >> "$1"
+    sleep "$every"
+  done
+}
+
+# seen FILE WHICH FROM TO: the answers one page got between two times, by
+# kind, each kind in one phrase.
+seen() {
+  awk -v which="$2" -v a="$3" -v b="$4" '
+    $2 == which && $1 >= a && $1 < b {
+      total++
+      k = $3 " " $4
+      age = ($5 == "-" ? "" : $5)
+      if (!(k in n)) { order[++kinds] = k; first[k] = $1 - a; lo[k] = hi[k] = ""; $1 = $2 = $3 = $4 = $5 = ""; sub(/^ +/, ""); note[k] = $0 }
+      n[k]++
+      if (age != "" && (lo[k] == "" || age + 0 < lo[k] + 0)) lo[k] = age
+      if (age != "" && (hi[k] == "" || age + 0 > hi[k] + 0)) hi[k] = age
+    }
+    END {
+      if (!total) { print "no answer was sampled"; exit }
+      for (i = 1; i <= kinds; i++) {
+        k = order[i]; split(k, p, " ")
+        s = n[k] " of " total " answers: status " p[1]
+        if (p[2] != "-") s = s ", cf-cache-status " p[2]
+        if (lo[k] != "") s = s ", age " lo[k] (hi[k] != lo[k] ? " to " hi[k] : "") " s"
+        if (note[k] != "" && note[k] != "-") s = s " (" note[k] ")"
+        s = s ", first " first[k] " s in"
+        printf "%s%s", (i > 1 ? "; " : ""), s
+      }
+      print ""
+    }' "$1"
+}
+
+# one PART WORDS: stop PART on the mini, sample meanwhile, write down what came.
+one() {
+  local part="$1" samples="$WORK/samples.$1" out="$WORK/hold.$1" pid stopped started back good first
+  warm
+  rm -f "$WORK/stop"
+  : > "$samples"
+  sample "$samples" &
+  pid=$!
+  sleep "$every"
+  if ! hold "$part" "$seconds" "$out"; then
+    touch "$WORK/stop"
+    wait "$pid" 2>/dev/null || true
+    rec "$2: the mini did not hold $part; what it said is above. Nothing was recorded for it"
+    failed=1
+    return 0
+  fi
+  sleep "$tail_seconds"
+  touch "$WORK/stop"
+  wait "$pid" 2>/dev/null || true
+  stopped="$(tr -d '\r' < "$out" | sed -n 's/.*stopped \([0-9]\{9,\}\)$/\1/p' | tail -n 1)"
+  started="$(tr -d '\r' < "$out" | sed -n 's/.*started \([0-9]\{9,\}\)$/\1/p' | tail -n 1)"
+  back="$(tr -d '\r' < "$out" | sed -n 's/.*back \([0-9]\{9,\}\)$/\1/p' | tail -n 1)"
+  if [[ -z $stopped || -z $started ]]; then
+    rec "$2: the mini did not say when it stopped and started $part. Nothing was recorded for it"
+    failed=1
+    return 0
+  fi
+  rec "$2, for $((started - stopped)) s ($(clock "$stopped") to $(clock "$started") Brisbane), asked every $every s:"
+  rec "  the cached page $page: $(seen "$samples" cached "$stopped" "$started")"
+  rec "  $UNCACHED, never cached: $(seen "$samples" uncached "$stopped" "$started")"
+  good="$(awk -v a="$stopped" -v b="$started" '$2 == "cached" && $1 >= a && $1 < b { t++; if ($3 == 200) g++ } END { print (t ? (g == t ? "all" : (g ? "some" : "none")) : "unsampled") }' "$samples")"
+  case "$good" in
+    all) rec "  so: a signed-out visitor kept getting the public page for the whole $((started - stopped)) s" ;;
+    some) rec "  so: a signed-out visitor got the public page for part of the time and an error for the rest" ;;
+    none) rec "  so: a signed-out visitor got no page for the whole $((started - stopped)) s: only an error, or nothing" ;;
+    *) rec "  so: nothing can be said, no answer was sampled while $part was stopped" ;;
+  esac
+  first="$(awk -v b="$started" '$2 == "uncached" && $1 >= b && $3 == 200 { print $1 - b; exit }' "$samples")"
+  rec "  after: $UNCACHED answered 200 again ${first:-not within $tail_seconds} s after $part was started${back:+ (the mini saw it back after $((back - started)) s)}; the cached page since: $(seen "$samples" cached "$started" 9999999999)"
+  if ! answers; then
+    rec "the lab does not answer at $BASE after $part was started again: stopped here"
+    record_done fail
+    exit 1
+  fi
+}
+
+if [[ $MODE == local ]]; then
+  one labd "labd stopped (there is no tunnel and no edge here)"
+else
+  one cloudflared "cloudflared stopped, labd running"
+  one labd "labd alone stopped, cloudflared running"
+fi
+
+if (( failed )); then
+  record_done fail
+  exit 1
+fi
+record_done recorded

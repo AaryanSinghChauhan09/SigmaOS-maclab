@@ -25,6 +25,7 @@ needs() {
   say "  Zone, for $LAB_DOMAIN only, Edit on each of:"
   say "    Zone Settings, Bot Management, Zone WAF, Cache Rules,"
   say "    Dynamic Redirect, DNS, Email Routing Rules; and Zone: Read"
+  say "    SSL and Certificates, only for the Alias and its rehearsal (alias.sh)"
   say "  Account, Edit on each of:"
   say "    Cloudflare Tunnel, Email Routing Addresses; and Notifications: Read"
   say "  TTL: an end date a day or two away."

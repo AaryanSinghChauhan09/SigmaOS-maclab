@@ -125,7 +125,7 @@ type fake struct {
 	fallback  map[string]any   // the zone's fallback origin; nil when none is set
 	hostnames []map[string]any // the zone's custom hostnames
 	noSaaS    bool             // Cloudflare for SaaS is not enabled on the zone
-	broken    string // a path that answers with a web error page
+	broken    string           // a path that answers with a web error page
 	seq       int
 }
 

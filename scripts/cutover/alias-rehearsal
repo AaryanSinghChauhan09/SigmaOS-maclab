@@ -1,0 +1,495 @@
+#!/bin/bash
+# The Alias rehearsal (spec section 6, "The Alias"; section 16, step 17a):
+# the whole route of the Alias on a throwaway name under
+# omarchy-m-testing.org, made, checked, taken away and deleted in one run.
+# Not a gate for Ready or the day: it gates the ask (alias-ask.md).
+#
+#   alias-rehearsal [--dry-run]
+#   alias-rehearsal --local [--bin DIR]
+#   alias-rehearsal --lab --mini USER@HOST --token-file FILE [--charged WORDS]
+#
+# --lab, started by the owner once payment details are on the Cloudflare
+# account and while omarchy-m-testing.org is still on Porkbun's nameservers:
+#   1. makes two custom hostnames on the lab's zone (scripts/cloud/alias.sh),
+#      NAME and NAME-third, and one record for each at Porkbun, a CNAME of
+#      the Lab address (scripts/cloud/rehearsal-record.sh);
+#   2. waits for the certificate, issued with nothing but the CNAME in place;
+#   3. has the mini route NAME and labd take it as its Alias
+#      (scripts/mini/rehearsal-alias, over SSH: sudo asks for the password);
+#   4. asks NAME as a visitor: a page request gets the forward, path and
+#      query kept; an API request is refused with the plain line; lab login
+#      pointed at the name fails and stores nothing; no answer carries a
+#      cookie; NAME-third, which the tunnel does not route, gets 404; the
+#      Front door's test 13 is still green on the Lab address;
+#   5. removes the record: the name stops resolving, Cloudflare is seen to
+#      let the hostname lapse, and "Agents" gets labd's line, which the
+#      owner confirms at the prompt;
+#   6. deletes both hostnames and both records and puts the mini back, also
+#      when the run stops midway; writes docs/acceptance/DATE-alias-rehearsal.md.
+#
+#   --mini USER@HOST      the mini, as the owner reaches it over SSH with a key
+#   --token-file FILE     a short-lived Cloudflare token (Zone: Read, SSL and
+#                         Certificates: Edit on omarchy-mac.org), in a file
+#                         only you can read. Porkbun's keys come from the
+#                         Keychain, as for the other cloud scripts
+#   --charged WORDS       what Cloudflare charged when the payment details
+#                         were entered, for the record ("nothing")
+#   --name LABEL          the throwaway label (alias-rehearsal)
+#   --issue-minutes N     how long to wait for the certificate (30)
+#   --lapse-minutes N     how long to wait for the hostname to lapse (90)
+#   --alert-minutes N     how long after the record went labd may take to
+#                         tell "Agents": two looks, 15 minutes apart (45)
+#   --agents-line seen|not-seen   the answer to the prompt, given ahead
+#
+# --local proves labd's part now, against a labd started here and asked on
+# the socket the tunnel would use: the forward, the refusal, no cookie, and
+# that a third name is refused. The lab is Dark for the seconds the mini's
+# two restarts take, twice; the real Alias is not routed during the run.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$here/front-door/lib.sh"
+# shellcheck source=scripts/cutover/visitor.sh
+. "$here/visitor.sh"
+usage() { sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+OLD_DOMAIN="omarchy-m-testing.org"
+CLOUD="$REPO/scripts/cloud"
+FD13="$FD_HERE/fd13-cache"
+label="alias-rehearsal"
+token_file=""
+charged=""
+agents=""
+issue_minutes=30
+lapse_minutes=90
+alert_minutes=45
+every=30
+
+fd_options "$@"
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --name | --token-file | --charged | --agents-line | --issue-minutes | --lapse-minutes | --alert-minutes | --every | --cloud | --fd13)
+      (( $# >= 2 )) || fail "$1 needs a value. Nothing was done."
+      case "$1" in
+        --name) label="$2" ;;
+        --token-file) token_file="$2" ;;
+        --charged) charged="$2" ;;
+        --agents-line) agents="$2" ;;
+        --issue-minutes) issue_minutes="$2" ;;
+        --lapse-minutes) lapse_minutes="$2" ;;
+        --alert-minutes) alert_minutes="$2" ;;
+        --every) every="$2" ;;
+        --cloud) CLOUD="$2" ;;
+        --fd13) FD13="$2" ;;
+      esac
+      shift
+      ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+[[ $label =~ ^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$ && $label != www ]] || fail "--name $label is not a throwaway label, such as alias-rehearsal"
+for n in "$issue_minutes" "$lapse_minutes" "$alert_minutes" "$every"; do
+  [[ $n =~ ^[0-9]{1,4}$ ]] || fail "\"$n\" is not a number of minutes"
+done
+(( every >= 1 )) || fail "--every takes at least 1 second"
+[[ -z $agents || $agents == seen || $agents == not-seen ]] || fail "--agents-line takes seen or not-seen"
+[[ ! $charged =~ [[:cntrl:]] ]] || fail "--charged takes one line"
+NAME="$label.$OLD_DOMAIN"
+THIRD="$label-third.$OLD_DOMAIN"
+LINE="Omarchy Mac Lab is at $LAB_URL: use that address"
+
+if [[ $MODE == dry ]]; then
+  CLOUD="${CLOUD#"$REPO"/}"
+  FD13="${FD13#"$REPO"/}"
+  cat <<PLAN
+$ME: dry run. Started with --lab by the owner, it would:
+  1. $CLOUD/alias.sh --apply --name $NAME, and --name $THIRD: two custom hostnames on the lab's zone, the fallback origin the Lab address
+     $CLOUD/rehearsal-record.sh --apply --name $NAME, and --name $THIRD: one CNAME of $LAB_NAME each, at Porkbun
+     (each of the two scripts prints its own calls when run with no option)
+  2. wait up to $issue_minutes minutes for $CLOUD/alias.sh --check: the hostname and its certificate active, with nothing but the CNAME in place
+  3. ssh -t MINI sudo $MINI_SCRIPTS/rehearsal-alias $NAME: the tunnel routes the name and labd takes it as its Alias
+  4. ask https://$NAME as a visitor:
+       /, /install, /reports?kernel=6.17&page=2 and a POST: 308 to the same path and query at $LAB_URL
+       /api/devices and a POST under /api/: 421 and the line "$LINE"
+       lab login https://$NAME, in an empty home: fails and stores nothing
+       no answer carries a cookie
+       https://$THIRD: 404 at the tunnel
+       $FD13 --lab: the Front door's test 13, still green on the Lab address
+  5. $CLOUD/rehearsal-record.sh --apply --remove: the name stops resolving; within $lapse_minutes minutes Cloudflare lets the hostname lapse; within $alert_minutes minutes "Agents" gets "The Alias is no longer active", which the owner confirms
+  6. $CLOUD/alias.sh --apply --remove for both names, and ssh -t MINI sudo $MINI_SCRIPTS/rehearsal-alias deployed
+  7. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-alias-rehearsal.md
+With --local it would start labd on this machine with the Alias $NAME and ask it on its socket: the forward, the refusal, no cookie, a third name refused.
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+# What labd does on its Alias, asked as a visitor asks: the same checks
+# under --local, on the socket, and under --lab, through the edge.
+cookies=""
+note_cookies() {
+  local names
+  names="$(cookie_names)"
+  [[ -z $names ]] || cookies+="${cookies:+; }$1 set $names"
+}
+
+check_forward() {
+  local path want bad="" n=0
+  for path in "/" "/install" "/reports?kernel=6.17&page=2" "POST /sign-in?return=%2Fme"; do
+    if [[ $path == "POST "* ]]; then
+      path="${path#POST }"
+      ask -X POST "$(at "$NAME")$path"
+    else
+      ask "$(at "$NAME")$path"
+    fi
+    note_cookies "$path"
+    want="$LAB_URL$path"
+    n=$((n + 1))
+    if [[ $STATUS != 308 || "$(header location)" != "$want" ]]; then
+      if [[ $STATUS == 308 ]]; then bad+="${bad:+; }$path led elsewhere than $want"; else bad+="${bad:+; }$path answered $STATUS ($(error_of))"; fi
+    elif [[ -n "$(header cache-control)" && "$(header cache-control)" != *no-store* ]]; then
+      bad+="${bad:+; }the forward of $path may be cached ($(header cache-control))"
+    fi
+  done
+  if [[ -z $bad ]]; then
+    step pass "the forward" "$n page requests on $NAME, one a POST, each got 308 to the same path and query at $LAB_URL, marked no-store"
+  else
+    step fail "the forward" "$bad"
+  fi
+}
+
+check_api() {
+  local bad="" path
+  for path in "/api/devices" "POST /api/agent/enroll"; do
+    if [[ $path == "POST "* ]]; then
+      path="${path#POST }"
+      ask -X POST -H 'Content-Type: application/json' --data '{}' "$(at "$NAME")$path"
+    else
+      ask -H 'Authorization: Bearer lab_rehearsal-not-a-token' "$(at "$NAME")$path"
+    fi
+    note_cookies "$path"
+    if [[ $STATUS != 421 ]]; then
+      bad+="${bad:+; }$path answered $STATUS ($(error_of))"
+    elif [[ "$(head -c 400 "$WORK/body" | tr -d '\r\n')" != "$LINE" ]]; then
+      bad+="${bad:+; }$path was refused with other words than the plain line"
+    fi
+  done
+  if [[ -z $bad ]]; then
+    step pass "the API" "a read and a POST under /api/ on $NAME were refused (421) with the line \"$LINE\""
+  else
+    step fail "the API" "$bad"
+  fi
+}
+
+check_cookies() {
+  if [[ -z $cookies ]]; then
+    step pass "cookies" "no answer on $NAME carried a cookie"
+  else
+    step fail "cookies" "$cookies"
+  fi
+}
+
+# lab pointed at the name: it must fail in plain words and leave no file.
+check_lab() {
+  local home="$WORK/lab-home" rc=0 files said
+  mkdir -p "$home"
+  printf 'lab_rehearsal-not-a-token\n' | env -u MACLAB_URL -u MACLAB_TOKEN HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_STATE_HOME="$home/.local/state" \
+    XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache" "$LAB_CMD" login "$(at "$NAME")" > "$WORK/lab.out" 2>&1 || rc=$?
+  files="$(find "$home" -type f | wc -l | tr -d ' ')"
+  said="$(plain "$WORK/lab.out" | head -n 3 | tr '\n' ' ')"
+  if (( rc != 0 )) && [[ $files == 0 ]] && grep -qF "$LAB_URL" "$WORK/lab.out" && ! grep -qiE '<!doctype|<html' "$WORK/lab.out"; then
+    step pass "lab" "lab login pointed at $NAME failed, named the Lab address and stored nothing"
+  else
+    step fail "lab" "lab login pointed at $NAME: exit $rc, $files files left in its home; it said: $said"
+  fi
+}
+
+# ---- --local ----
+
+if [[ $MODE == local ]]; then
+  [[ -x $BIN/labd ]] || fail "no labd in $BIN: run make all, or name the folder with --bin"
+  workspace
+  # A socket's path holds at most 104 bytes: its folder is a short one.
+  SOCKETS="$(mktemp -d /tmp/alias-rehearsal.XXXXXX)"
+  trap 'rm -rf "$SOCKETS"; cleanup' EXIT
+  export HOME="$WORK/home" TMPDIR="$WORK/tmp"
+  mkdir -p "$HOME" "$TMPDIR"
+  "$BIN/labd" --listen=127.0.0.1:0 --socket="$SOCKETS/labd.sock" --data="$WORK/data" --public-url="$LAB_URL" --alias="$NAME" --omt=false > "$WORK/labd.log" 2>&1 &
+  LABD_PID=$!
+  VIA=(--unix-socket "$SOCKETS/labd.sock" -H 'X-Forwarded-Proto: https')
+  for _ in $(seq 100); do
+    ask "$(at "$LAB_NAME")/healthz"
+    [[ $STATUS != 200 ]] || break
+    kill -0 "$LABD_PID" 2>/dev/null || fail "labd stopped while starting: $(tail -n 3 "$WORK/labd.log")"
+    sleep 0.1
+  done
+  [[ $STATUS == 200 ]] || fail "the labd started here does not answer on its socket"
+  record_open alias-rehearsal "The Alias rehearsal"
+  rec "labd: started with --public-url $LAB_URL and --alias $NAME, asked on its socket by each name"
+  check_forward
+  check_api
+  check_cookies
+  ask "$(at "$LAB_NAME")/"
+  if [[ $STATUS == 200 ]]; then
+    step pass "the Lab address" "$LAB_NAME is served (200): the lab answers on one name and only forwards on the other"
+  else
+    step fail "the Lab address" "$LAB_NAME answered $STATUS"
+  fi
+  bad=""
+  for path in "/" "/api/devices"; do
+    ask "$(at "$THIRD")$path"
+    note_cookies "$THIRD$path"
+    [[ $STATUS == 421 && -z "$(header location)" && -z "$(cookie_names)" ]] || bad+="${bad:+; }$path answered $STATUS"
+  done
+  if [[ -z $bad ]]; then
+    step pass "a third name" "$THIRD is refused by labd itself (421) with no forward and no cookie. Through the tunnel it never reaches labd: cloudflared answers 404, which --lab checks"
+  else
+    step fail "a third name" "$bad"
+  fi
+  rec "not here: the certificate, the tunnel's 404, lab pointed at the name (lab dials no socket; internal/cutovertest does it through a stand-in for the edge), the Front door's test 13, the lapse and the alert. They are --lab's"
+  if (( failed )); then
+    record_done fail
+    exit 1
+  fi
+  record_done pass
+  exit 0
+fi
+
+# ---- --lab ----
+
+[[ -n $MINI ]] || fail "--lab needs --mini USER@HOST"
+[[ -n $token_file ]] || fail "--lab needs --token-file FILE: the run calls Cloudflare several times, and a token is typed once into a file only you can read (scripts/cloud/owner-setup.sh makes it)"
+[[ -f $token_file ]] || fail "no token file $token_file"
+for tool in dig curl "$LAB_CMD"; do
+  command -v "$tool" >/dev/null 2>&1 || fail "no $tool on this machine"
+done
+for script in alias.sh rehearsal-record.sh; do
+  [[ -x $CLOUD/$script ]] || fail "no $script in $CLOUD"
+done
+
+workspace
+made=0
+switched=0
+torn=0
+
+# cloud SCRIPT ARGS...: one of the cloud scripts; what it said is kept in
+# $WORK/cloud.out. They print statuses and ray ids, never an answer's body.
+cloud() {
+  local script="$1"
+  shift
+  "$CLOUD/$script" "$@" --token-file "$token_file" > "$WORK/cloud.out" 2>&1 < /dev/null
+}
+said() { sed 's/^/    /' "$WORK/cloud.out" | tail -n 8; }
+
+mini_alias() { ssh -t "$MINI" sudo "$MINI_SCRIPTS/rehearsal-alias" "$1"; }
+
+lab_answers() {
+  local n
+  for n in $(seq 60); do
+    ask "$(at "$LAB_NAME")/healthz"
+    [[ $STATUS != 200 ]] || return 0
+    sleep 2
+  done
+  return 1
+}
+
+# teardown: both hostnames and both records deleted and the mini back,
+# however far the run got. Leaves TORN_BAD with what could not be undone.
+TORN_BAD=""
+teardown() {
+  (( ! torn )) || return 0
+  torn=1
+  local n
+  if (( made )); then
+    for n in "$NAME" "$THIRD"; do
+      cloud rehearsal-record.sh --apply --remove --name "$n" || TORN_BAD+="${TORN_BAD:+; }the record of $n is still at Porkbun"
+      cloud alias.sh --apply --remove --name "$n" || TORN_BAD+="${TORN_BAD:+; }the custom hostname $n is still on the zone"
+    done
+  fi
+  if (( switched )); then
+    mini_alias deployed || TORN_BAD+="${TORN_BAD:+; }the mini is still under the rehearsal's name: run sudo $MINI_SCRIPTS/rehearsal-alias deployed on it"
+  fi
+}
+on_exit() {
+  local rc=$?
+  if (( ! torn )); then
+    say "stopped midway: taking the rehearsal down"
+    set +e
+    teardown
+    [[ -z $TORN_BAD ]] || say "NOT undone: $TORN_BAD"
+  fi
+  cleanup
+  exit "$rc"
+}
+trap on_exit EXIT
+
+# Before anything is made.
+ns="$(dig +short NS "$OLD_DOMAIN" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/\.$//' | sort)"
+[[ -n $ns ]] || fail "$OLD_DOMAIN has no nameservers that this machine can see. Nothing was made."
+if grep -qv 'porkbun' <<<"$ns"; then
+  fail "$OLD_DOMAIN is no longer on Porkbun's nameservers ($(tr '\n' ' ' <<<"$ns")): the rehearsal needs it there, so it runs before the day's step 19. Nothing was made."
+fi
+NS1="$(head -n 1 <<<"$ns")"
+lab_answers || fail "the lab does not answer at $LAB_URL. Nothing was made."
+
+record_open alias-rehearsal "The Alias rehearsal" "On the throwaway names \`$NAME\` and \`$THIRD\`. Not a gate for Ready or the day: it gates the ask."
+rec "before: $OLD_DOMAIN is on Porkbun's nameservers ($(wc -l <<<"$ns" | tr -d ' ') of them) and the lab answers at $LAB_URL"
+if [[ -n $charged ]]; then
+  rec "payment details: the owner entered them on Cloudflare before this run. Charged, as he saw it: $charged"
+else
+  rec "payment details: the owner entered them on Cloudflare before this run. What was charged is not said here (--charged): he adds it to this line"
+fi
+
+# 1. The two hostnames and their records.
+made=1
+for n in "$NAME" "$THIRD"; do
+  if ! cloud alias.sh --apply --name "$n"; then
+    step fail "made" "Cloudflare did not take the custom hostname $n:"
+    said
+    break
+  fi
+  if ! cloud rehearsal-record.sh --apply --name "$n"; then
+    step fail "made" "Porkbun did not take the record of $n:"
+    said
+    break
+  fi
+done
+if (( ! failed )); then
+  rec "made: custom hostnames $NAME and $THIRD on the lab's zone, the fallback origin $LAB_NAME; at Porkbun one record each, a CNAME of $LAB_NAME. Nothing else: no TXT record, no other name"
+fi
+
+# 2. The certificate, with nothing but the CNAME in place.
+issued=0
+if (( ! failed )); then
+  t0="$(date +%s)"
+  while :; do
+    if cloud alias.sh --check --name "$NAME"; then
+      state="$(sed -n "s/^state    $NAME: //p" "$WORK/cloud.out" | head -n 1)"
+      if cloud alias.sh --check --name "$THIRD"; then issued=1; break; fi
+    fi
+    (( $(date +%s) - t0 < issue_minutes * 60 )) || break
+    sleep "$every"
+  done
+  took=$(( $(date +%s) - t0 ))
+  if (( issued )); then
+    step pass "the certificate" "issued $((took / 60)) min $((took % 60)) s after the record was made, with nothing but the CNAME in place ($state)"
+  else
+    step fail "the certificate" "not issued within $issue_minutes minutes. Cloudflare says:"
+    said
+  fi
+fi
+
+# 3 and 4. The mini takes the name, and the name is asked.
+if (( issued )); then
+  switched=1
+  if mini_alias "$NAME" && lab_answers; then
+    rec "the mini: the tunnel routes $NAME and labd was started with it as its Alias; the lab answers again at $LAB_URL"
+    [[ -n $EDGE ]] || rec "TLS: curl verified the certificate of $NAME on every request below"
+    check_forward
+    check_api
+    check_lab
+    check_cookies
+    bad=""
+    for path in "/" "/api/devices"; do
+      ask "$(at "$THIRD")$path"
+      [[ $STATUS == 404 && -z "$(header location)" ]] || bad+="${bad:+; }$path answered $STATUS ($(error_of))"
+    done
+    if [[ -z $bad ]]; then
+      step pass "a third name" "$THIRD, a custom hostname the tunnel's route file does not list, got 404 at the tunnel for a page and for the API"
+    else
+      step fail "a third name" "$bad"
+    fi
+    if [[ ! -x $FD13 ]]; then
+      step fail "the Front door's test 13" "not run: there is no $FD13 in this checkout"
+    else
+      fd13=("$FD13" --lab)
+      [[ -z $RECORDS ]] || fd13+=(--records "$RECORDS")
+      if "${fd13[@]}" > "$WORK/fd13.out" 2>&1; then
+        step pass "the Front door's test 13" "still green on the Lab address: $(tail -n 1 "$WORK/fd13.out")"
+      else
+        step fail "the Front door's test 13" "it failed on the Lab address: $(plain "$WORK/fd13.out" | tail -n 3 | tr '\n' ' ')"
+      fi
+    fi
+  else
+    step fail "the mini" "it did not take $NAME, or the lab did not answer afterwards; what it said is above"
+  fi
+fi
+
+# 5. The record goes: the name stops resolving, the hostname lapses, the alert.
+if (( issued && switched )); then
+  if cloud rehearsal-record.sh --apply --remove --name "$NAME" && cloud rehearsal-record.sh --apply --remove --name "$THIRD"; then
+    removed="$(date +%s)"
+    gone=0
+    for _ in $(seq 40); do
+      if [[ -z "$(dig +short CNAME "$NAME" "@$NS1" 2>/dev/null)" ]]; then gone=1; break; fi
+      sleep "$every"
+    done
+    if (( gone )); then
+      step pass "the record removed" "$NAME no longer resolves at $NS1, $(( $(date +%s) - removed )) s after the record was deleted"
+    else
+      step fail "the record removed" "$NAME still resolves at $NS1"
+    fi
+    status=active
+    while :; do
+      cloud alias.sh --check --name "$NAME" || true
+      status="$(sed -n "s/^state    $NAME: hostname=\\([a-z_]*\\) .*/\\1/p" "$WORK/cloud.out" | head -n 1)"
+      [[ ${status:-active} == active ]] || break
+      (( $(date +%s) - removed < lapse_minutes * 60 )) || break
+      sleep "$every"
+    done
+    since=$(( $(date +%s) - removed ))
+    if [[ -n $status && $status != active ]]; then
+      step pass "the lapse" "Cloudflare shows the hostname as \"$status\" $((since / 60)) min $((since % 60)) s after the record went"
+    else
+      step fail "the lapse" "not seen within $lapse_minutes minutes: Cloudflare still shows the hostname as ${status:-unread}"
+    fi
+    # labd looks at its Alias every 15 minutes and tells "Agents" after two
+    # looks in a row that found it gone.
+    left=$(( alert_minutes * 60 - ($(date +%s) - removed) ))
+    if (( left > 0 )) && [[ $agents != seen ]]; then
+      say "waiting up to $((left / 60)) more minutes for labd's line in \"Agents\" (two looks, 15 minutes apart)"
+      sleep "$left"
+    fi
+    if [[ -z $agents && -t 0 ]]; then
+      printf '%s: did "Agents" get the line "The Alias is no longer active: it stopped leading to the Lab address, which answers."? [y/n] ' "$ME" >&2
+      read -r answer || answer=""
+      case "$answer" in y | Y | yes) agents=seen ;; *) agents=not-seen ;; esac
+    fi
+    case "$agents" in
+      seen) step pass "the alert" "the owner saw \"Agents\" get \"The Alias is no longer active\", once, within $alert_minutes minutes of the record going" ;;
+      not-seen) step fail "the alert" "the owner did not see \"Agents\" get \"The Alias is no longer active\" within $alert_minutes minutes" ;;
+      *) step fail "the alert" "nobody was at the terminal to say whether \"Agents\" got the line (--agents-line seen|not-seen)" ;;
+    esac
+  else
+    step fail "the record removed" "Porkbun did not delete the record:"
+    said
+  fi
+fi
+
+# 6. Everything of the rehearsal is deleted, and the mini is back.
+teardown
+left=""
+for n in "$NAME" "$THIRD"; do
+  cloud alias.sh --check --remove --name "$n" || left+="${left:+; }the custom hostname $n"
+  cloud rehearsal-record.sh --check --remove --name "$n" || left+="${left:+; }the record of $n"
+done
+if [[ -z $left && -z $TORN_BAD ]]; then
+  step pass "deleted" "both throwaway hostnames are gone from the zone and both records from Porkbun"
+else
+  step fail "deleted" "still there: ${left:-nothing}${TORN_BAD:+. $TORN_BAD}"
+fi
+if (( switched )); then
+  if [[ $TORN_BAD != *"the mini"* ]] && lab_answers; then
+    step pass "the mini, after" "labd and the tunnel run under the Deployed files again and the lab answers at $LAB_URL"
+  else
+    step fail "the mini, after" "the lab does not answer at $LAB_URL under the Deployed files"
+  fi
+fi
+
+if (( failed )); then
+  record_done fail
+  exit 1
+fi
+record_done pass
