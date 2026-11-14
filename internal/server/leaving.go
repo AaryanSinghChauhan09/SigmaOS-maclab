@@ -121,13 +121,13 @@ func (s *Server) hAgentLeave(w http.ResponseWriter, r *http.Request) {
 
 // ended answers a request carrying the secret of a Mac whose enrollment a
 // Maintainer ended: 401, with the Maintainer's name for the Mac to read.
-func (s *Server) ended(w http.ResponseWriter, secret string) bool {
+func (s *Server) ended(w http.ResponseWriter, r *http.Request, secret string) bool {
 	by, err := s.store.endedBy(hashSecret(secret))
 	if err != nil {
 		return false
 	}
 	w.Header().Set(endedHeader, by)
-	httpErr(w, 401, "enrollment ended by %s", by)
+	s.refuse(w, r, 401, "enrollment ended by %s", by)
 	return true
 }
 

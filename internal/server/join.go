@@ -45,7 +45,7 @@ func (s *Server) joinToken(h http.HandlerFunc) http.HandlerFunc {
 				s.refusedToken(w, r, 401, "enrollment token unknown, used or expired")
 				return
 			}
-			httpErr(w, 401, "enrollment token unknown, used or expired")
+			s.refuse(w, r, 401, "enrollment token unknown, used or expired")
 			return
 		}
 		h(w, r)

@@ -186,6 +186,9 @@ type Server struct {
 	// watch is what labd saw of the lab's own parts (watch.go).
 	watch watcher
 
+	// refusals counts refused credentials by address (refused.go).
+	refusals refusals
+
 	// leaseMu makes taking a Lease one step: the count of a person's Leases
 	// per Configuration is read on other Macs than the one leased.
 	leaseMu sync.Mutex
@@ -387,6 +390,9 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	}
 	s.builds = newBuildMgr(s)
 	s.reconcileRunningBuilds()
+	// A labd that starts refuses no address: what the one before counted
+	// went with it.
+	s.agents.LimiterQuiet()
 	go s.monitor()
 	go s.leaseKeeper()
 	go s.buildMonitor()
@@ -436,6 +442,7 @@ func (s *Server) monitor() {
 			return
 		case <-t.C():
 		}
+		s.refusedLook()
 		for _, v := range s.allDevs() {
 			v.mu.Lock()
 			// After a restart, agents need a moment to reconnect before silence means anything.
@@ -838,10 +845,10 @@ func (s *Server) agent(h http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
-		if s.ended(w, bearer(r)) {
+		if s.ended(w, r, bearer(r)) {
 			return
 		}
-		httpErr(w, 401, "unknown device secret")
+		s.refuse(w, r, 401, "unknown device secret")
 	}
 }
 
@@ -984,9 +991,13 @@ func (s *Server) tokenValid(hash string) bool {
 
 // refusedToken answers a request whose enrollment token labd does not
 // take, and logs it. A refused token is never posted to a group: anyone on
-// the internet can produce one.
+// the internet can produce one. It counts with the other refused
+// credentials (refused.go): past the limit the answer is 429.
 func (s *Server) refusedToken(w http.ResponseWriter, r *http.Request, code int, why string) {
 	s.log.Printf("refused an enrollment token on %s %s: %s", r.Method, r.URL.Path, why)
+	if s.tooManyRefused(w, r) {
+		return
+	}
 	httpErr(w, code, "%s", why)
 }
 

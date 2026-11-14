@@ -120,7 +120,7 @@ func TestTheCallerLogNamesAddressCallerAndRay(t *testing.T) {
 	for i, want := range []callerLine{
 		{Addr: "203.0.113.7", Who: "person:ada", Ray: "8f1e2d3c4b5a6978-BNE", Method: "GET", Path: "/api/devices", Status: 200, Agent: "lab/0.2.0"},
 		{Addr: "198.51.100.20", Who: "mac:m1-pro", Ray: "8f1e2d3c4b5a6979-SYD", Method: "POST", Path: "/api/agent/checkin", Agent: "lab/0.2.0"},
-		{Addr: "198.51.100.99", Who: "", Ray: "8f1e2d3c4b5a697a-SYD", Method: "GET", Path: "/api/devices", Status: 401, Agent: "lab/0.2.0"},
+		{Addr: "198.51.100.99", Who: "", Ray: "8f1e2d3c4b5a697a-SYD", Method: "GET", Path: "/api/devices", Status: 401, Agent: "lab/0.2.0", Refused: true},
 		{Addr: "127.0.0.1", Who: "builder:" + testBuilderName, Method: "POST", Path: "/api/builder/poll", Agent: "lab/0.2.0"},
 		{Addr: "2001:db8::7", Ray: "8f1e2d3c4b5a697b-LAX", Method: "GET", Path: "/healthz", Status: 200, Agent: "lab/0.2.0"},
 	} {

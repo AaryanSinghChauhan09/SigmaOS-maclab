@@ -350,7 +350,7 @@ func (s *Server) hBuilderPoll(w http.ResponseWriter, r *http.Request) {
 	for {
 		b, err := s.claimBuild(c, host, where)
 		if errors.Is(err, errBuilderRemoved) {
-			httpErr(w, 401, "%v", err)
+			s.refuse(w, r, 401, "%v", err)
 			return
 		}
 		if b != nil {

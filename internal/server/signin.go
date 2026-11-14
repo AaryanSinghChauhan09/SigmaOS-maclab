@@ -160,13 +160,18 @@ func (s *Server) hSignInCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	state := q.Get("state")
 	pending, ok := s.signIns.take(hashSecret(state), s.now())
+	// A sign-in turned down counts as a refused credential (refused.go).
 	if state == "" || subtle.ConstantTimeCompare([]byte(mine), []byte(state)) != 1 || !ok {
-		httpErr(w, 400, "That sign-in link is stale. %s", again)
+		if !s.tooManyRefused(w, r) {
+			httpErr(w, 400, "That sign-in link is stale. %s", again)
+		}
 		return
 	}
 	code := q.Get("code")
 	if code == "" {
-		httpErr(w, 400, "GitHub didn't sign you in. %s", again)
+		if !s.tooManyRefused(w, r) {
+			httpErr(w, 400, "GitHub didn't sign you in. %s", again)
+		}
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
@@ -177,7 +182,9 @@ func (s *Server) hSignInCallback(w http.ResponseWriter, r *http.Request) {
 		who, err = app.user(ctx, token)
 	}
 	if err != nil {
-		httpErr(w, 502, "GitHub didn't sign you in (%v). %s", err, again)
+		if !s.tooManyRefused(w, r) {
+			httpErr(w, 502, "GitHub didn't sign you in (%v). %s", err, again)
+		}
 		return
 	}
 	if k, err := s.store.knownPerson(who.ID); err == nil && k.Blocked {

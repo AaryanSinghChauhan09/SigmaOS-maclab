@@ -10,7 +10,6 @@ import (
 	"context"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/web"
 )
@@ -144,17 +143,6 @@ func (s *Server) access(r *http.Request) (a access, who string) {
 		}
 	}
 	return noAccess, ""
-}
-
-// noCredential answers a request that came with nothing labd admits. An
-// expired Lab token is told where it is renewed.
-func (s *Server) noCredential(w http.ResponseWriter, r *http.Request) {
-	if u := tokenUseOf(r); u != nil && u.expired {
-		httpErr(w, 401, "this Lab token, %q of @%s, expired on %s after %d days unused: renew it on your own page, %s",
-			u.token.Name, u.Handle, u.token.Expires.UTC().Format(time.DateOnly), u.token.Period, s.publicBase(r)+web.OwnPage)
-		return
-	}
-	httpErr(w, 401, "not a Lab token")
 }
 
 // asMaintainer serves r for the Maintainer name until it ends, or their

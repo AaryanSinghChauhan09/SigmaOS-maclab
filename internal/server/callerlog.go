@@ -39,6 +39,9 @@ type callerLine struct {
 	Status int       `json:"status"`
 	Millis int64     `json:"ms"`
 	Agent  string    `json:"agent,omitempty"` // the caller's User-Agent
+	// Refused marks a request whose credential labd did not admit, which
+	// the limiter counted against Addr (refused.go).
+	Refused bool `json:"refused,omitempty"`
 }
 
 // callerLog writes the lines to one file for each UTC day under dir. Once
@@ -258,6 +261,7 @@ func (s *Server) callerLogLoop() {
 type call struct {
 	addr, ray string
 	who       string
+	refused   bool
 }
 
 type callKey struct{}
@@ -359,7 +363,7 @@ func (s *Server) logged(w http.ResponseWriter, r *http.Request, h func(*answer, 
 		// A handler that wrote nothing answers 200 as it returns.
 		a.starts(http.StatusOK)
 		s.callers.write(callerLine{Time: start, Addr: c.addr, Who: c.who, Ray: c.ray, Method: clip(r.Method, 16), Path: clip(r.URL.Path, 512),
-			Status: a.status, Millis: s.since(start).Milliseconds(), Agent: clip(r.UserAgent(), 200)})
+			Status: a.status, Millis: s.since(start).Milliseconds(), Agent: clip(r.UserAgent(), 200), Refused: c.refused})
 	}()
 	h(a, r.WithContext(context.WithValue(r.Context(), callKey{}, c)))
 }

@@ -91,7 +91,7 @@ func (s *Server) builderAuth(h http.HandlerFunc) http.HandlerFunc {
 		tok := bearer(r)
 		b, gen, err := s.store.builderByToken(hashSecret(tok))
 		if tok == "" || err != nil || gen == "" {
-			httpErr(w, 401, "bad builder token")
+			s.refuse(w, r, 401, "bad builder token")
 			return
 		}
 		c := builderCred{name: b.Name, gen: gen, kinds: b.Kinds}
@@ -100,7 +100,7 @@ func (s *Server) builderAuth(h http.HandlerFunc) http.HandlerFunc {
 		defer s.bconns.add(cancel, c.gen)()
 		// Removed between the lookup and registering this request.
 		if !s.store.builderGenCurrent(c.gen) {
-			httpErr(w, 401, "bad builder token")
+			s.refuse(w, r, 401, "bad builder token")
 			return
 		}
 		h(w, r.WithContext(ctx))
