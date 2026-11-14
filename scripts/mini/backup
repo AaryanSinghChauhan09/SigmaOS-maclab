@@ -11,7 +11,9 @@
 # own jobs went: the pruning of the house copy and the owner's copy, the
 # nightly mirror. The live database files, Litestream's own folders, uploads
 # still arriving and the caller log are never sent. Anything that failed is
-# one line to "Agents", and the run exits 1.
+# one line to "Agents", and the run exits 1. A run in which nothing failed
+# pings its own check outside the house, so that a backup that silently
+# stopped running is noticed too.
 #
 #   --dry-run   say what would run, and run nothing
 #   restic      run restic against one of the two targets as the nightly run
@@ -25,7 +27,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 umask 077
 
-usage() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 KEEP=(--keep-daily 7 --keep-weekly 4 --keep-monthly 6)
 # No copy is kept longer than 6 months, whatever the keep rules leave.
@@ -235,8 +237,10 @@ if [[ -n $FAILED ]]; then
   exit 1
 fi
 if (( DRY )); then
+  say "would ping the check backup"
   say "nothing was run"
 else
   date -u +%Y-%m-%dT%H:%M:%SZ > "$BACKUP_OK"
+  ping_check backup || true
   say "done"
 fi

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Restore drill on the mini, as the unprivileged lab account, at 05:30
+     on the first of each month by the mini's clock: after that night's
+     backup (02:30) and the guest's pruning (04:30). It runs the Deployed
+     build's own script. scripts/mini/setup installs this file; nothing here
+     opens a backup: that is in files only lab reads. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.restore-drill</string>
+  <key>UserName</key><string>lab</string>
+  <key>GroupName</key><string>lab</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/current/scripts/mini/restore-drill</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/lab</string>
+  <key>Umask</key><integer>63</integer>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Day</key><integer>1</integer>
+    <key>Hour</key><integer>5</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key><string>/var/lab/log/restore-drill.log</string>
+  <key>StandardErrorPath</key><string>/var/lab/log/restore-drill.log</string>
+</dict>
+</plist>

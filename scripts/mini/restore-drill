@@ -1,0 +1,251 @@
+#!/bin/bash
+# The Restore drill, run on the first of each month as the lab account by
+# its LaunchDaemon:
+#
+#   scripts/mini/restore-drill [--dry-run]
+#
+# Restores the newest snapshot of each backup into a scratch folder only the
+# lab account reads: from the house copy the two databases' copies and one
+# artifact, from the off-site copy the two databases' copies. Then it checks
+# what came back. A snapshot is no older than 36 hours. A database passes
+# SQLite's integrity check, has no table the live database lacks, and is not
+# empty while the live one holds rows. The artifact is what its name, a
+# SHA-256, says, and the same as the live file. The scratch folder is removed
+# whatever happened. Anything that failed is one line to "Agents", and the
+# drill exits 1. A drill in which nothing failed writes when it ended to
+# /var/lab/log/restore-drill.ok and pings its own check outside the house.
+#
+#   --dry-run   say what would run, and run nothing
+#
+# By hand: sudo -u lab /usr/local/lab/current/scripts/mini/restore-drill
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+umask 077
+
+usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+# A backup runs nightly: a newest snapshot older than this is a missed night.
+LATE=$((36 * 3600))
+FAILED=""
+SCRATCH=""
+ARTIFACT=""
+TABLES="SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+
+failed() {
+  say "failed: $1"
+  [[ "; $FAILED; " != *"; $1; "* ]] || return 0
+  FAILED+="${FAILED:+; }$1"
+}
+
+# restic against a target exactly as the nightly backup opens it.
+restic_of() { "$here/backup" restic "$@"; }
+
+# newest TARGET: the id of the target's newest snapshot of this mini and its
+# age in seconds, or nothing when the target holds none. restic writes a time
+# with the zone it was taken in.
+newest() {
+  local out
+  if ! out="$(restic_of "$1" snapshots --json --host "$BACKUP_HOST")"; then
+    [[ -z $out ]] || echo "$out" >&2
+    return 1
+  fi
+  jq -r '
+    def seconds: (.[0:19] + "Z" | fromdateiso8601) as $t
+      | if endswith("Z") then $t
+        else $t - (if .[-6:-5] == "-" then -1 else 1 end) * ((.[-5:-3] | tonumber) * 3600 + (.[-2:] | tonumber) * 60)
+        end;
+    max_by(.time | seconds) // empty | "\(.id) \(now - (.time | seconds) | floor)"' <<<"$out"
+}
+
+# one_artifact ID: sets ARTIFACT to one artifact that the house copy's
+# snapshot holds and the mini still has, a different one from day to day.
+# labd keeps an artifact as a file named by its SHA-256; nothing else in
+# that folder is one.
+one_artifact() {
+  local listed names name live kept=()
+  ARTIFACT=""
+  if ! listed="$(restic_of house ls --json "$1" "$LAB_DATA/artifacts")"; then
+    failed "the house copy's artifacts could not be listed"
+    return 0
+  fi
+  names="$(jq -r --arg dir "$LAB_DATA/artifacts/" 'select(.type == "file" and (.path | type) == "string" and (.path | startswith($dir))) | .path[($dir | length):]' <<<"$listed" | grep -E '^[0-9a-f]{64}$' | LC_ALL=C sort || true)"
+  if [[ -z $names ]]; then
+    live="$(find "$LAB_DATA/artifacts" -maxdepth 1 -type f 2>/dev/null | grep -cE '/[0-9a-f]{64}$' || true)"
+    if (( live )); then
+      failed "the house copy holds no artifact, and the mini holds $live"
+    else
+      say "the house copy holds no artifact, and neither does the mini: none was restored"
+    fi
+    return 0
+  fi
+  for name in $names; do
+    [[ ! -f $LAB_DATA/artifacts/$name || -L $LAB_DATA/artifacts/$name ]] || kept+=("$name")
+  done
+  if (( ${#kept[@]} == 0 )); then
+    say "no artifact of the house copy is still on the mini: none was restored"
+    return 0
+  fi
+  ARTIFACT="${kept[$(( $(date -u +%s) / 86400 % ${#kept[@]} ))]}"
+}
+
+# rows FILE TABLE...: how many rows those tables hold together.
+rows() {
+  local file="$1" sum="SELECT 0" t
+  shift
+  for t in "$@"; do
+    sum+=" + (SELECT count(*) FROM \"$t\")"
+  done
+  sqlite3 -readonly "$file" ".timeout 5000" "$sum" 2>/dev/null
+}
+
+# database WHAT FILE NAME: a database that came back, against damage and
+# against the live one. The live database has gone on since the copy was
+# made, and a Deploy may have added tables: what must hold is that the copy
+# is this lab's database and not an empty one.
+database() {
+  local what="$1" file="$2" name="$3" tables live t in_copy in_live n=0
+  if [[ ! -f $file ]]; then
+    failed "$name did not come back from $what"
+    return 0
+  fi
+  if [[ "$(sqlite3 -readonly "$file" 'PRAGMA integrity_check' 2>/dev/null)" != ok ]]; then
+    failed "$name from $what is damaged"
+    return 0
+  fi
+  tables="$(sqlite3 -readonly "$file" "$TABLES" 2>/dev/null)" || tables=""
+  if [[ -z $tables ]]; then
+    failed "$name from $what holds no table"
+    return 0
+  fi
+  if ! live="$(sqlite3 -readonly "$LAB_DATA/$name" ".timeout 5000" "$TABLES" 2>/dev/null)"; then
+    failed "the live $name could not be read"
+    return 0
+  fi
+  for t in $tables; do
+    if [[ ! $t =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || ! grep -qx -- "$t" <<<"$live"; then
+      failed "$name from $what has a table, $(tr -cd 'A-Za-z0-9_' <<<"$t"), that the live database lacks"
+      return 0
+    fi
+    n=$((n + 1))
+  done
+  # shellcheck disable=SC2086
+  if ! in_copy="$(rows "$file" $tables)"; then
+    failed "$name from $what is damaged"
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  if ! in_live="$(rows "$LAB_DATA/$name" $tables)"; then
+    failed "the live $name could not be read"
+    return 0
+  fi
+  if (( in_copy == 0 && in_live > 0 )); then
+    failed "$name from $what is empty, and the live database holds $in_live rows"
+    return 0
+  fi
+  say "$name from $what: intact, tables: $n, rows: $in_copy, rows in the live database now: $in_live"
+}
+
+# artifact WHAT FILE NAME
+artifact() {
+  local what="$1" file="$2" name="$3"
+  if [[ ! -f $file ]]; then
+    failed "the artifact $name did not come back from $what"
+  elif [[ "$(shasum -a 256 "$file" | awk '{ print $1 }')" != "$name" ]]; then
+    failed "the artifact $name from $what is not what its name says"
+  elif ! cmp -s "$file" "$LAB_DATA/artifacts/$name"; then
+    failed "the artifact $name from $what differs from the live file"
+  else
+    say "the artifact $name from $what: is what its name says, and the same as the live file"
+  fi
+}
+
+# drill TARGET WHAT: restore the newest snapshot of one target, and check
+# what came back.
+drill() {
+  local target="$1" what="$2" found id age name dir include=()
+  if ! found="$(newest "$target")"; then
+    failed "$what's snapshots could not be listed"
+    return 0
+  fi
+  if [[ -z $found ]]; then
+    failed "$what holds no snapshot of $BACKUP_HOST"
+    return 0
+  fi
+  read -r id age <<<"$found"
+  if [[ ! $id =~ ^[0-9a-f]+$ || ! $age =~ ^-?[0-9]+$ ]]; then
+    failed "$what's newest snapshot could not be read"
+    return 0
+  fi
+  say "$what: snapshot ${id:0:8} of $BACKUP_HOST, made $((age / 3600)) hours ago"
+  (( age <= LATE )) || failed "$what's newest snapshot is $((age / 3600)) hours old"
+
+  for name in $LAB_DATABASES; do
+    include+=(--include "$LAB_SNAPSHOTS/$name")
+  done
+  ARTIFACT=""
+  if [[ $target == house ]]; then
+    one_artifact "$id"
+    [[ -z $ARTIFACT ]] || include+=(--include "$LAB_DATA/artifacts/$ARTIFACT")
+  fi
+  dir="$SCRATCH/$target"
+  if ! restic_of "$target" restore "$id" --target "$dir" "${include[@]}" >/dev/null; then
+    failed "$what could not be restored"
+    return 0
+  fi
+  for name in $LAB_DATABASES; do
+    database "$what" "$dir$LAB_SNAPSHOTS/$name" "$name"
+  done
+  [[ -z $ARTIFACT ]] || artifact "$what" "$dir$LAB_DATA/artifacts/$ARTIFACT" "$ARTIFACT"
+}
+
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    *) usage ;;
+  esac
+  shift
+done
+[[ -n $SYSROOT || "$(id -un)" == "$LAB_OWNER" ]] || fail "run it as $LAB_OWNER: sudo -u $LAB_OWNER $0"
+
+if (( DRY )); then
+  copies=""
+  for name in $LAB_DATABASES; do
+    copies+="${copies:+, }$LAB_SNAPSHOTS/$name"
+  done
+  say "would restore, from the newest snapshot of $BACKUP_HOST in the house copy: $copies and one artifact of $LAB_DATA/artifacts"
+  say "would restore, from the newest snapshot of $BACKUP_HOST in the off-site copy: $copies"
+  say "would restore into a new folder under $LAB_HOME/run, and remove it afterwards"
+  say "would check each snapshot is no older than 36 hours, each database for damage and against the live one (its tables, its rows), the artifact against its name and the live file"
+  say "would ping the check restore-drill"
+  say "nothing was run"
+  exit 0
+fi
+
+lock="$LAB_HOME/run/restore-drill.lock"
+if ! mkdir "$lock" 2>/dev/null; then
+  pid="$(cat "$lock/pid" 2>/dev/null || true)"
+  if [[ $pid =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
+    fail "another Restore drill is running"
+  fi
+  rm -rf "$lock"
+  mkdir "$lock"
+fi
+echo $$ > "$lock/pid"
+trap 'rm -rf "$lock" ${SCRATCH:+"$SCRATCH"}' EXIT
+# What a drill that was cut short restored holds the lab's data.
+rm -rf "$LAB_HOME/run"/restore-drill.??????
+SCRATCH="$(mktemp -d "$LAB_HOME/run/restore-drill.XXXXXX")"
+
+drill house "the house copy"
+drill offsite "the off-site copy"
+
+if [[ -n $FAILED ]]; then
+  notify "The Restore drill failed: $FAILED."
+  exit 1
+fi
+date -u +%Y-%m-%dT%H:%M:%SZ > "$DRILL_OK"
+ping_check restore-drill || true
+say "done"
