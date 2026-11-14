@@ -171,5 +171,20 @@ jobs:
         with:
           working-directory: site
           bundler-cache: true
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: The port writes the corpus of reports both will judge
+        working-directory: .
+        env:
+          REPORT_PARITY_DIR: ${{ runner.temp }}/report-parity
+        run: go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
       - run: bin/rails db:test:prepare
       - run: bin/rails test
+        env:
+          REPORT_PARITY_DIR: ${{ runner.temp }}/report-parity
+      - name: The port and the site judge that corpus alike
+        working-directory: .
+        env:
+          REPORT_PARITY_VERDICTS: ${{ runner.temp }}/report-parity/rails-verdicts.jsonl
+        run: go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports

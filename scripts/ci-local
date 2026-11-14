@@ -151,8 +151,11 @@ step_gpu() {
 
 step_site() {
   if have pg_isready && pg_isready -q 2>/dev/null && have ruby && [[ "$(ruby -e 'print RUBY_VERSION')" == "$(tr -d 'ruby-\n' < site/.ruby-version)" ]]; then
+    local parity="$LOGS/report-parity"
+    run "report parity: the port writes the corpus" env REPORT_PARITY_DIR="$parity" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
     run "Rails: prepare the test database" in_dir site env RAILS_ENV=test bin/rails db:test:prepare
-    run "Rails: tests" in_dir site env RAILS_ENV=test bin/rails test
+    run "Rails: tests" in_dir site env RAILS_ENV=test REPORT_PARITY_DIR="$parity" bin/rails test
+    run "report parity: the port and the site agree" env REPORT_PARITY_VERDICTS="$parity/rails-verdicts.jsonl" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
   else
     skip "Rails reference" "needs Postgres running and Ruby $(tr -d 'ruby-\n' < site/.ruby-version)"
   fi
