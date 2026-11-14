@@ -17,7 +17,7 @@ import (
 
 // apiClient bounds every call, so a stream labd wrongly opens fails the
 // test instead of holding it up.
-var apiClient = &http.Client{Timeout: time.Minute}
+var apiClient = &http.Client{Timeout: time.Minute, Transport: named{}}
 
 // as calls labd's HTTP API with the given bearer token ("" sends none).
 func (l *lab) as(token, method, path string, body any) (*http.Response, string) {

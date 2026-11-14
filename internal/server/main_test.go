@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -22,7 +23,21 @@ import (
 // hands them to copies of itself and runs a share here.
 // LAB_TEST_SHARDS=1 turns that off; so does any -run, -skip, -list, -bench,
 // -fuzz, -shuffle, cover or profile flag.
+// named sends the tests' requests under a name of their own. Go's name is
+// what a lab built from maclab sends, and labd refuses it on a lab's routes
+// (see labcli.go).
+type named struct{}
+
+func (named) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Header.Get("User-Agent") == "" {
+		r = r.Clone(r.Context())
+		r.Header.Set("User-Agent", "labd-tests")
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
 func TestMain(m *testing.M) {
+	http.DefaultClient.Transport = named{}
 	// macOS keeps its temporary folder behind a symlink (/var), and the code
 	// under test refuses paths with a symlink among their ancestors.
 	if dir, err := filepath.EvalSymlinks(os.TempDir()); err == nil {

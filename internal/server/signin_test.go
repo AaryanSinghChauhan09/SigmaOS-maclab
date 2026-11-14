@@ -738,7 +738,7 @@ func TestALabUnderDevelopmentSignsInOverLoopback(t *testing.T) {
 	labd := httptest.NewServer(s.Handler())
 	defer labd.Close()
 	jar := &memJar{}
-	c := &http.Client{Jar: jar}
+	c := &http.Client{Jar: jar, Transport: named{}}
 	res, err := c.Get(labd.URL + "/sign-in?return=/api/auth")
 	if err != nil {
 		t.Fatal(err)

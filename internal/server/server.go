@@ -109,6 +109,10 @@ type Config struct {
 	// opens (--preview): the one switch for everything that changes (see
 	// Server.Preview).
 	Preview bool
+	// Release is the Lab release this labd came from, which it tells a lab
+	// on every answer. MinLab is the oldest lab release it takes; empty is
+	// MinLabRelease (see labcli.go).
+	Release, MinLab string
 	// MachineIDKey is the 64 bytes a report's Mac is told from another by
 	// (reports.NewRules): a permanent secret, reproduced from the old site's.
 	// Without it labd takes no reports.
@@ -721,7 +725,8 @@ func bearer(r *http.Request) string {
 // hAuth tells a caller who it is to labd. Signed in with a browser, or sent
 // with a Lab token, it names the person, their kind and whether they are a
 // Maintainer. With neither, and while labd knows nobody any other way
-// (Config.Person), there is nothing to say: labd answers 404.
+// (Config.Person), there is nothing to say: labd answers 404, or 401 to a
+// token it does not know, which is what lab login reads.
 func (s *Server) hAuth(w http.ResponseWriter, r *http.Request) {
 	if u := tokenUseOf(r); u != nil {
 		if u.Blocked {
@@ -744,6 +749,10 @@ func (s *Server) hAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cfg.Person == nil {
+		if r.Header.Get("Authorization") != "" {
+			s.noCredential(w, r)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}

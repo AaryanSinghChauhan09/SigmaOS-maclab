@@ -214,7 +214,7 @@ func (s *Server) register(m *http.ServeMux, rt route) {
 	default:
 		panic(fmt.Sprintf("route %s says nothing about who may reach it", rt.pattern))
 	}
-	m.HandleFunc(rt.pattern, h)
+	m.HandleFunc(rt.pattern, s.labCall(rt, h))
 }
 
 // macInScope answers 404 for a Mac the caller doesn't see, as if it weren't

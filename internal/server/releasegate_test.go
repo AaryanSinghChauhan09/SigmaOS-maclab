@@ -831,6 +831,7 @@ func TestGateEndpoint(t *testing.T) {
 	gate("/api/gate/"+k[:12]+"?exclude=jnope", 400)
 	// lab gate --exclude is that query.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("MACLAB_URL", l.url)
 	t.Setenv("MACLAB_TOKEN", harnessToken)
 	c, err := client.Load()
