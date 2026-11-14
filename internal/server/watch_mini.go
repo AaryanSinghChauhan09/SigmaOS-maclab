@@ -15,9 +15,9 @@ import (
 	"time"
 )
 
-// run runs one of the mini's helpers with no argument and no input, and
+// runHelper runs one of the mini's helpers with no argument and no input, and
 // gives what it printed. A helper that fails is an error with what it said.
-func run(ctx context.Context, script string, limit time.Duration) (string, error) {
+func runHelper(ctx context.Context, script string, limit time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, script)
@@ -37,7 +37,7 @@ func run(ctx context.Context, script string, limit time.Duration) (string, error
 // MiniParts is Watch.Mini as scripts/mini/parts answers it.
 func MiniParts(script string) func(context.Context) (Mini, error) {
 	return func(ctx context.Context) (Mini, error) {
-		out, err := run(ctx, script, 30*time.Second)
+		out, err := runHelper(ctx, script, 30*time.Second)
 		if err != nil {
 			return Mini{}, err
 		}
@@ -97,7 +97,7 @@ func ParseParts(out string) (Mini, error) {
 // it: a line for each update that waits.
 func PendingUpdates(script string) func(context.Context) ([]string, error) {
 	return func(ctx context.Context) ([]string, error) {
-		out, err := run(ctx, script, 4*time.Minute)
+		out, err := runHelper(ctx, script, 4*time.Minute)
 		if err != nil {
 			return nil, err
 		}

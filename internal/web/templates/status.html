@@ -4,6 +4,6 @@
 <dl class="facts">
 {{range .Parts}}<dt>{{.Name}}</dt><dd>{{if eq .State "bad"}}<span class="bad">{{.Text}}</span>{{else if eq .State "none"}}<span class="dim">{{.Text}}</span>{{else}}{{.Text}}{{end}}</dd>
 {{end}}</dl>
-<p class="dim">Looked at {{.Looked}}. The lab looks once a minute; times are Brisbane's.</p>
+<p class="dim">{{if .Looked}}Looked at {{.Looked}}. {{else}}The lab has just started and has not looked yet. {{end}}The lab looks once a minute; times are Brisbane's.</p>
 </section>
 {{end}}{{end}}

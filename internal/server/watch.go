@@ -108,7 +108,10 @@ type Status struct {
 }
 
 type watcher struct {
-	mu sync.Mutex
+	// mu is held for a whole look; statusMu only to read or replace what
+	// the last look saw, so that /status never waits for one.
+	mu       sync.Mutex
+	statusMu sync.Mutex
 	// since is when each trouble was first seen, while it lasts.
 	since map[string]time.Time
 	// lastAlive is when the labd before this one was last known to run.
@@ -240,7 +243,9 @@ func (s *Server) look(ctx context.Context) {
 	s.lookDisk(now)
 	s.lookAlias(ctx, now)
 
+	w.statusMu.Lock()
 	w.status = Status{Looked: whenDay(now), Parts: parts}
+	w.statusMu.Unlock()
 	s.lines.setMark(markAlive, strconv.FormatInt(now.Unix(), 10))
 }
 
@@ -261,8 +266,8 @@ func (s *Server) statusNow() Status {
 		st.Parts = append(st.Parts, s.lastRestart(nil))
 		return st
 	}
-	s.watch.mu.Lock()
-	defer s.watch.mu.Unlock()
+	s.watch.statusMu.Lock()
+	defer s.watch.statusMu.Unlock()
 	return s.watch.status
 }
 

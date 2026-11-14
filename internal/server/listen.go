@@ -84,7 +84,7 @@ func (lc ListenConfig) Listen() ([]net.Listener, error) {
 	if lc.Socket == "" {
 		return []net.Listener{tcp}, nil
 	}
-	unix, err := listenSocket(lc.Socket)
+	unix, err := listenSocket("--socket", lc.Socket)
 	if err != nil {
 		tcp.Close()
 		return nil, err
@@ -92,14 +92,15 @@ func (lc ListenConfig) Listen() ([]net.Listener, error) {
 	return []net.Listener{tcp, unix}, nil
 }
 
-func listenSocket(path string) (net.Listener, error) {
+// listenSocket opens the Unix socket the flag named flag gives.
+func listenSocket(flag, path string) (net.Listener, error) {
 	switch st, err := os.Lstat(path); {
 	case err == nil && st.Mode()&os.ModeSocket == 0:
-		return nil, fmt.Errorf("--socket %s: something that is not a socket is there", path)
+		return nil, fmt.Errorf("%s %s: something that is not a socket is there", flag, path)
 	case err == nil:
 		if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
 			c.Close()
-			return nil, fmt.Errorf("--socket %s: another labd is serving on it", path)
+			return nil, fmt.Errorf("%s %s: another labd is serving on it", flag, path)
 		}
 		if err := os.Remove(path); err != nil {
 			return nil, err

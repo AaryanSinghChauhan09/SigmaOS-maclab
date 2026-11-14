@@ -29,7 +29,7 @@ func ListenOps(path string) (net.Listener, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("--ops-socket %q: give the socket's full path", path)
 	}
-	return listenSocket(path)
+	return listenSocket("--ops-socket", path)
 }
 
 // OpsServer serves the ops socket.
