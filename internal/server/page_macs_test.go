@@ -2,8 +2,6 @@ package server
 
 import (
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,16 +9,6 @@ import (
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 )
-
-// lrPost sends a form of a lab page; fields are name, value pairs.
-func (b *browser) lrPost(target string, fields ...string) *httptest.ResponseRecorder {
-	b.l.t.Helper()
-	form := url.Values{}
-	for i := 0; i+1 < len(fields); i += 2 {
-		form.Set(fields[i], fields[i+1])
-	}
-	return b.write("POST", target, form.Encode(), "Content-Type", "application/x-www-form-urlencoded")
-}
 
 func (b *browser) macsPage(query string) string {
 	b.l.t.Helper()
@@ -122,7 +110,7 @@ func TestMacsLeasesRenewsAndReleases(t *testing.T) {
 	l.lrMac("m2-mini", "j473", nil)
 	grace, ravi := l.lrMember(lrGrace), l.lrMaintainer()
 
-	if w := grace.lrPost("/macs/m1-pro/lease"); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/macs" {
+	if w := grace.form("/macs/m1-pro/lease"); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/macs" {
 		t.Fatalf("Lease: %d to %q %s", w.Code, w.Header().Get("Location"), w.Body)
 	}
 	q := l.leaseOn("m1-pro")
@@ -130,7 +118,7 @@ func TestMacsLeasesRenewsAndReleases(t *testing.T) {
 		t.Fatalf("the Lease taken on the site: %+v", q)
 	}
 	l.clock.Advance(time.Hour)
-	if w := grace.lrPost("/macs/m1-pro/renew"); w.Code != http.StatusSeeOther {
+	if w := grace.form("/macs/m1-pro/renew"); w.Code != http.StatusSeeOther {
 		t.Fatalf("Renew: %d %s", w.Code, w.Body)
 	}
 	if q := l.leaseOn("m1-pro"); !q.Expires.Equal(l.s.now().Add(4 * time.Hour)) {
@@ -139,7 +127,7 @@ func TestMacsLeasesRenewsAndReleases(t *testing.T) {
 	// Renew and Release are the person's, whatever label their lab gave.
 	grace.mustLease("m2-mini", "grace@laptop", 0)
 	l.clock.Advance(time.Hour)
-	if w := grace.lrPost("/macs/m2-mini/renew"); w.Code != http.StatusSeeOther {
+	if w := grace.form("/macs/m2-mini/renew"); w.Code != http.StatusSeeOther {
 		t.Fatalf("Renew of a Lease lab took: %d %s", w.Code, w.Body)
 	}
 	if q := l.leaseOn("m2-mini"); q.Holder != "grace@laptop" || !q.Expires.Equal(l.s.now().Add(4*time.Hour)) {
@@ -147,36 +135,36 @@ func TestMacsLeasesRenewsAndReleases(t *testing.T) {
 	}
 
 	// Release takes something away, so it asks twice.
-	w := grace.lrPost("/macs/m1-pro/release")
+	w := grace.form("/macs/m1-pro/release")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Release: your Lease on m1-pro ends now") || l.leaseOn("m1-pro") == nil {
 		t.Fatalf("the first Release: %d, Lease %+v", w.Code, l.leaseOn("m1-pro"))
 	}
-	if w := grace.lrPost("/macs/m1-pro/release", "sure", "yes"); w.Code != http.StatusSeeOther || l.leaseOn("m1-pro") != nil {
+	if w := grace.form("/macs/m1-pro/release", "sure", "yes"); w.Code != http.StatusSeeOther || l.leaseOn("m1-pro") != nil {
 		t.Fatalf("the second Release: %d, Lease %+v", w.Code, l.leaseOn("m1-pro"))
 	}
 
 	// A refusal is said on the page, and nothing changes.
-	if w := ravi.lrPost("/macs/m2-mini/lease"); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `role="alert"`) || !strings.Contains(w.Body.String(), "m2-mini is leased by grace@laptop (grace) until") {
+	if w := ravi.form("/macs/m2-mini/lease"); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `role="alert"`) || !strings.Contains(w.Body.String(), "m2-mini is leased by grace@laptop (grace) until") {
 		t.Fatalf("a Lease on a Mac someone holds: %d %s", w.Code, w.Body)
 	}
-	if w := ravi.lrPost("/macs/m2-mini/release", "sure", "yes"); w.Code != http.StatusConflict || l.leaseOn("m2-mini") == nil {
+	if w := ravi.form("/macs/m2-mini/release", "sure", "yes"); w.Code != http.StatusConflict || l.leaseOn("m2-mini") == nil {
 		t.Fatalf("releasing someone else's Lease from Macs: %d", w.Code)
 	}
-	if w := ravi.lrPost("/macs/m2-mini/renew"); w.Code != http.StatusConflict {
+	if w := ravi.form("/macs/m2-mini/renew"); w.Code != http.StatusConflict {
 		t.Fatalf("renewing someone else's Lease: %d", w.Code)
 	}
 	// A Maintainer picks the hours, up to 24; an M team member's are 4.
-	if w := ravi.lrPost("/macs/m1-pro/lease", "hours", "24"); w.Code != http.StatusSeeOther {
+	if w := ravi.form("/macs/m1-pro/lease", "hours", "24"); w.Code != http.StatusSeeOther {
 		t.Fatalf("a Maintainer's Lease of 24 hours: %d %s", w.Code, w.Body)
 	}
 	if q := l.leaseOn("m1-pro"); q == nil || !q.Expires.Equal(l.s.now().Add(24*time.Hour)) {
 		t.Fatalf("a Maintainer's Lease of 24 hours: %+v", q)
 	}
-	ravi.lrPost("/macs/m1-pro/release", "sure", "yes")
-	if w := grace.lrPost("/macs/m1-pro/lease", "hours", "24"); w.Code != http.StatusBadRequest || l.leaseOn("m1-pro") != nil {
+	ravi.form("/macs/m1-pro/release", "sure", "yes")
+	if w := grace.form("/macs/m1-pro/lease", "hours", "24"); w.Code != http.StatusBadRequest || l.leaseOn("m1-pro") != nil {
 		t.Fatalf("an M team member's Lease of 24 hours: %d", w.Code)
 	}
-	if w := l.signedIn(nobodyID).lrPost("/macs/m1-pro/lease"); w.Code != http.StatusNotFound {
+	if w := l.signedIn(nobodyID).form("/macs/m1-pro/lease"); w.Code != http.StatusNotFound {
 		t.Fatalf("a Lease from Macs by someone with no role: %d", w.Code)
 	}
 	// A write that is not the lab's own page's is refused.
@@ -223,7 +211,7 @@ func TestMacsFiltersAllMineAndLeasedByMe(t *testing.T) {
 		t.Error("the filter in use is not marked")
 	}
 	// A button pressed under a filter comes back to it.
-	if w := grace.lrPost("/macs/m2-mini/renew", "show", "leased"); w.Header().Get("Location") != "/macs?show=leased" {
+	if w := grace.form("/macs/m2-mini/renew", "show", "leased"); w.Header().Get("Location") != "/macs?show=leased" {
 		t.Errorf("after Renew under Leased by me: %q", w.Header().Get("Location"))
 	}
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -202,9 +203,32 @@ func TestOnlyTheMTeamAndMaintainersTakeALease(t *testing.T) {
 		t.Fatalf("an Admin's Lease: %+v", got)
 	}
 
+	// A Lab token takes a Lease as its person, as lab does.
+	l.lrMac("m2-mini", "j473", nil)
+	token := grace.makeToken("laptop", "90")
+	body, _ := json.Marshal(api.LeaseRequest{Holder: "grace@laptop"})
+	byToken := func(token string) *httptest.ResponseRecorder {
+		return l.browser().do("POST", "/api/devices/m2-mini/lease", string(body), "Authorization", "Bearer "+token, "Content-Type", "application/json")
+	}
+	if w := byToken(token); w.Code != http.StatusOK {
+		t.Fatalf("a Lease by an M team member's Lab token: %d %s", w.Code, w.Body)
+	}
+	if q := l.leaseOn("m2-mini"); q == nil || q.AccountID != lrGrace || q.Maintainer != "grace" {
+		t.Fatalf("the Lease a Lab token took: %+v", q)
+	}
+	if w := byToken(l.signedIn(nobodyID).makeToken("mine", "90")); w.Code != http.StatusForbidden {
+		t.Errorf("a Lease by the Lab token of a person with no role: %d %s", w.Code, w.Body)
+	}
+	if w := byToken("lab_0000000000000000000000000000000000000000"); w.Code != http.StatusUnauthorized {
+		t.Errorf("a Lease by no Lab token: %d %s", w.Code, w.Body)
+	}
+
 	// The mark is read on every request.
 	l.lrUnmark(lrGrace)
 	grace.refusedLease("m1-pro", "grace@laptop", 0, http.StatusForbidden, "M team")
+	if w := byToken(token); w.Code != http.StatusForbidden {
+		t.Errorf("a Lab token after its person lost the mark: %d %s", w.Code, w.Body)
+	}
 }
 
 // Only a Mac that has passed its baseline and has not left takes a Lease.
@@ -412,10 +436,10 @@ func TestTheConfigurationComesFromTheTableElseTheKernelLog(t *testing.T) {
 	grace.refusedLease("max-c", "grace@laptop", 0, http.StatusConflict, "max-a", "core counts unknown", "until a Maintainer sets")
 
 	// A Maintainer sets or corrects it, on the site.
-	if w := grace.lrPost("/macs/max-c/configuration", "cpu", "12", "gpu", "38"); w.Code != http.StatusNotFound {
+	if w := grace.form("/macs/max-c/configuration", "cpu", "12", "gpu", "38"); w.Code != http.StatusNotFound {
 		t.Errorf("an M team member setting a Configuration: %d", w.Code)
 	}
-	if w := ravi.lrPost("/macs/max-c/configuration", "cpu", "12", "gpu", "38"); w.Code != http.StatusSeeOther {
+	if w := ravi.form("/macs/max-c/configuration", "cpu", "12", "gpu", "38"); w.Code != http.StatusSeeOther {
 		t.Fatalf("a Maintainer setting a Configuration: %d %s", w.Code, w.Body)
 	}
 	if got := conf("max-c"); got != "j414c, 12 CPU and 38 GPU cores" {
@@ -426,25 +450,25 @@ func TestTheConfigurationComesFromTheTableElseTheKernelLog(t *testing.T) {
 	}
 	grace.mustLease("max-c", "grace@laptop", 0)
 	// A Maintainer's correction stands over the table and over a later log.
-	if w := ravi.lrPost("/macs/max-a/configuration", "cpu", "12", "gpu", "38"); w.Code != http.StatusSeeOther {
+	if w := ravi.form("/macs/max-a/configuration", "cpu", "12", "gpu", "38"); w.Code != http.StatusSeeOther {
 		t.Fatalf("correcting a Configuration: %d %s", w.Code, w.Body)
 	}
 	l.lrKernelLog("max-a", "j-newest", lrKnownGood, t0.Add(5*time.Hour), lrLog("12", "30"))
 	if got := conf("max-a"); got != "j414c, 12 CPU and 38 GPU cores" {
 		t.Errorf("a Maintainer's correction after a later job: %q", got)
 	}
-	if w := ravi.lrPost("/macs/pro-16/configuration", "cpu", "10", "gpu", "14"); w.Code != http.StatusSeeOther || conf("pro-16") != "j316s, 10 CPU and 14 GPU cores" {
+	if w := ravi.form("/macs/pro-16/configuration", "cpu", "10", "gpu", "14"); w.Code != http.StatusSeeOther || conf("pro-16") != "j316s, 10 CPU and 14 GPU cores" {
 		t.Errorf("a Maintainer's correction of a board in the table: %d, %q", w.Code, conf("pro-16"))
 	}
 	// Emptied, the control hands the Configuration back to labd.
-	if w := ravi.lrPost("/macs/max-a/configuration", "cpu", "", "gpu", ""); w.Code != http.StatusSeeOther {
+	if w := ravi.form("/macs/max-a/configuration", "cpu", "", "gpu", ""); w.Code != http.StatusSeeOther {
 		t.Fatalf("clearing a Configuration: %d %s", w.Code, w.Body)
 	}
 	if got := conf("max-a"); got != "j414c, 12 CPU and 30 GPU cores" {
 		t.Errorf("after the correction is taken back: %q", got)
 	}
 	for _, bad := range [][2]string{{"12", ""}, {"0", "30"}, {"twelve", "30"}, {"12", "-1"}, {"4096", "30"}} {
-		if w := ravi.lrPost("/macs/max-b/configuration", "cpu", bad[0], "gpu", bad[1]); w.Code != http.StatusBadRequest {
+		if w := ravi.form("/macs/max-b/configuration", "cpu", bad[0], "gpu", bad[1]); w.Code != http.StatusBadRequest {
 			t.Errorf("core counts %q and %q: %d", bad[0], bad[1], w.Code)
 		}
 	}

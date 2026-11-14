@@ -9,12 +9,11 @@ package server
 import (
 	"context"
 	"net/http"
-	"slices"
 )
 
 // asker is the person a request about a Lease acts for.
 type asker struct {
-	AccountID int64 // 0 for a Maintainer's token, which names no account
+	AccountID int64
 	Handle    string
 	// Maintainer is a Maintainer or an Admin; MTeam an M team member who is
 	// neither. Neither is anyone else, who takes no Lease.
@@ -32,16 +31,24 @@ func (a asker) kind() string {
 	return ""
 }
 
-// asking is who r asks as: the person signed in, or the Maintainer whose
-// token it carries.
+// asking is who r asks as: the person whose Lab token it carries, or the
+// one signed in on its browser.
 func (s *Server) asking(r *http.Request) asker {
-	if p := PersonOf(r); p != nil {
+	if p := requestPerson(r); p != nil {
 		return s.askerOf(*p)
 	}
-	if name := maintainerName(r); name != "" {
-		return asker{Handle: name, Maintainer: true}
-	}
 	return asker{}
+}
+
+// requestPerson is the person r acts as, by Lab token or browser session.
+func requestPerson(r *http.Request) *Person {
+	if u := tokenUseOf(r); u != nil {
+		if u.expired {
+			return nil
+		}
+		return &u.Person
+	}
+	return PersonOf(r)
 }
 
 func (s *Server) askerOf(p Person) asker {
@@ -54,11 +61,10 @@ func (s *Server) askerOf(p Person) asker {
 // askerByAccount is the person with this account id as the lab knows them
 // now; ok is false for an account it does not know.
 func (s *Server) askerByAccount(accountID int64) (a asker, ok bool) {
-	p := Person{AccountID: accountID}
-	if err := s.store.db.QueryRow(`SELECT handle, maintainer FROM people WHERE account_id = ?`, accountID).Scan(&p.Handle, &p.Maintainer); err != nil {
+	p, err := s.personNow(accountID)
+	if err != nil {
 		return asker{}, false
 	}
-	p.Admin = slices.Contains(s.cfg.Admins, accountID)
 	return s.askerOf(p), true
 }
 
@@ -71,26 +77,32 @@ func (s *Server) lends(a asker, v *dev) bool {
 }
 
 // teamUp admits a Maintainer or an M team member: the routes of a Lease.
-// The request ends when the role, the mark or the session goes.
+// The request ends when the role or the mark goes, or the session or the
+// Lab token it came with.
 func (s *Server) teamUp(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch a, who := s.access(r); a {
 		case adminAccess:
 			s.asMaintainer(w, r, who, h)
 		case signedInAccess:
-			p := PersonOf(r)
-			if !s.askerOf(*p).MTeam {
+			if !s.asking(r).MTeam {
 				httpErr(w, 403, "@%s is signed in with no role in the lab; a Lease is for the M team and Maintainers", who)
 				return
 			}
 			noteCaller(r, "person:"+who)
 			ctx, cancel := context.WithCancel(r.Context())
-			defer s.conns.add(p.connKey(), cancel)()
+			var keys []string
+			if u := tokenUseOf(r); u != nil {
+				keys = []string{accountConnKey(u.AccountID), tokenConnKey(u.token.ID)}
+			} else if si := signedInOf(r); si != nil {
+				keys = si.connKeys()
+			}
+			defer s.conns.add(cancel, keys...)()
 			h(w, r.WithContext(ctx))
 		case viewAccess:
 			httpErr(w, 403, "%s may only look; a Lease is for the M team and Maintainers", who)
 		default:
-			httpErr(w, 401, "not a Maintainer's token")
+			s.noCredential(w, r)
 		}
 	}
 }
