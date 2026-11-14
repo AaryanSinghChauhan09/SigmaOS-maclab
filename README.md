@@ -164,9 +164,33 @@ table for a board sold with one, otherwise from the kernel log of the Mac's
 latest job on its Known-good kernel. Macs of one board whose counts it cannot
 read count as the same Configuration until a Maintainer sets them, on Macs.
 
-A Maintainer can end another person's Lease early with `lab release <device>
---force`; labd's log and each job it set aside record who ended it. Removing a
-Maintainer ends their leases the same way.
+A Lease fences jobs, `lab exec`, screenshots, the live journal and reset. An
+M team member needs their own Lease on the Mac for each, cancels only their
+own jobs, and runs no baseline and no build. A Maintainer acts without a Lease
+on a free Mac; under another person's Lease a Maintainer is refused jobs, exec
+and a reset, may still look and cancel a job, and may end the Lease. The M team
+reads every job, result and collected file on the fleet; a Mac's Audit log is
+for Maintainers and its Volunteer.
+
+How a Lease ends decides what happens to its holder's work:
+
+| How it ends | Running job | Holder's queued jobs and sessions |
+| --- | --- | --- |
+| Released by the holder | finishes | canceled and cut |
+| Runs out with the holder's job running | the Lease is extended until that job ends, no further | canceled and cut at the original end |
+| Runs out with nothing running | | canceled and cut |
+| Ended by a Maintainer (`lab release <device> --force`, or End Lease on People), the holder leaving the M team or being Blocked, "End all access" | canceled as `lab cancel` does; the Mac returns to its Known-good kernel | canceled and cut |
+| Window end, Pause, lowered Access level on a Volunteer's Mac | stopped by `lab-agent` | stay queued |
+
+A job that ran under a Lease is never queued again by labd itself. Jobs others
+queued before the Lease run when it ends. Cutting a `lab exec` ends its answer;
+a command already started on the Mac runs to its own end.
+
+Every Lease taken, renewed, extended, released, expired and ended is in the
+Mac's Lease record (`GET /api/devices/<device>/leases`, for whoever sees the
+Mac) with the handle the person had then, and on the person's row on People.
+The Lab group gets a line for a Lease taken, released, expired or ended, none
+for a renewal or an extension.
 
 ## Lab boots come back by themselves
 
