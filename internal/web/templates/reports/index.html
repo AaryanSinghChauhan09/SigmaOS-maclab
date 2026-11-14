@@ -1,0 +1,7 @@
+{{define "main"}}<h1>Reports</h1>
+<p class="subtitle">Every run, newest first. Community runs show up right away; they colour the matrix once another machine agrees. Verified runs colour it on their own.</p>
+{{with .Data}}{{template "filter_bar" .Bar}}<section class="card">
+<h2 class="card-title">{{.Count}}</h2>
+{{if .Reports}}{{template "report_list" .Reports}}{{else}}<p class="dim">No reports{{if .Any}} match these filters{{end}} yet.</p>
+{{end}}</section>
+{{end}}{{end}}

@@ -210,15 +210,30 @@ func (s *Server) matrixRow(row *reports.Row, features []*reports.Object, summary
 	return v
 }
 
+func (s *Server) featureHeads(features []*reports.Object) []featureHead {
+	var heads []featureHead
+	for _, feature := range features {
+		id, layer := words(member(feature, "id")), words(member(feature, "layer"))
+		heads = append(heads, featureHead{ID: id, Name: words(member(feature, "name")), Layer: layer, LayerWords: reports.LayerWords[layer], Href: s.href("/features/" + id)})
+	}
+	return heads
+}
+
+// matrixOf is some rows of a matrix as a plain table.
+func (s *Server) matrixOf(features []*reports.Object, rows []*reports.Row) matrixView {
+	v := matrixView{Features: s.featureHeads(features)}
+	for _, row := range rows {
+		v.Groups = append(v.Groups, matrixGroup{Row: s.matrixRow(row, features, false, false)})
+	}
+	return v
+}
+
 // matrixTable is the matrix as its table; with a history, each row is a
 // model's summary and the history's rows are its builds.
 func (s *Server) matrixTable(m *reports.Matrix, history reports.History) matrixView {
 	v := matrixView{Grouped: history != nil}
 	features := m.Features()
-	for _, feature := range features {
-		id, layer := words(member(feature, "id")), words(member(feature, "layer"))
-		v.Features = append(v.Features, featureHead{ID: id, Name: words(member(feature, "name")), Layer: layer, LayerWords: reports.LayerWords[layer], Href: s.href("/features/" + id)})
-	}
+	v.Features = s.featureHeads(features)
 	for _, row := range m.Rows() {
 		group := matrixGroup{Row: s.matrixRow(row, features, history != nil, false)}
 		if history != nil {
@@ -333,6 +348,10 @@ type runView struct {
 type buildView struct {
 	Label, Words, Href  string
 	MatchedSet, SetHref string
+	// On a report's own page: the page of the set its image names, its
+	// runtime build, then its kernel, boot package, build time and tool.
+	SetPage, Runtime string
+	Extras           []string
 }
 
 func (s *Server) buildOf(p *reports.Published, run *reports.Run) *buildView {

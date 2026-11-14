@@ -1,0 +1,22 @@
+{{define "main"}}<h1>Data</h1>
+{{with .Data}}<section class="card">
+<h2 class="card-title">downloads</h2>
+<p>Everything published here is <a href="{{.LicenseURL}}">CC0</a>: use it for anything. Hidden and deleted reports are never included.</p>
+<table class="list">
+<tbody>
+<tr><td><a href="{{href "/api/v1/reports.json"}}">reports.json</a></td><td>every report exactly as uploaded, with its link and upload time</td></tr>
+<tr><td><a href="{{href "/api/v1/reports.csv"}}">reports.csv</a></td><td>one row per report: Mac, stack, versions and pass/fail/skip counts</td></tr>
+<tr><td><a href="{{href "/api/v1/checks.csv"}}">checks.csv</a></td><td>one row per check result, with its outcome, feature, layer, expected states and any benchmark score</td></tr>
+<tr><td><a href="{{href "/api/v1/matrix.json"}}">matrix.json</a></td><td>the compatibility matrix, with each cell's agreement per machine</td></tr>
+<tr><td><a href="{{href "/api/v1/benchmarks.json"}}">benchmarks.json</a></td><td>benchmark scores per Mac model and stack/version: median, range, machines and runs</td></tr>
+<tr><td><a href="{{href "/api/v1/aurora.json"}}">aurora.json</a></td><td>the Aurora feature-support table per chip generation, from Verified runs, with each cell's runs and the catalogue's expected states</td></tr>
+</tbody>
+</table>
+<p class="dim">The exports say "tester" where the pages say Verified: a tester run is a Verified run. The names are kept so that what reads the exports keeps working.</p>
+<p class="dim">The expected Asahi states inside come from the <a href="https://asahilinux.org/docs/platform/feature-support/overview/">Asahi Linux feature-support tables</a>, CC BY 3.0: credit Asahi Linux when you reuse them.</p>
+</section>
+<section class="card">
+<h2 class="card-title">api</h2>
+<p><code>POST {{href "/api/v1/reports"}}</code> takes a report in <a href="https://github.com/omacom/omarchy-maclab/blob/main/schema/report-v{{.Schema}}.schema.json">report schema v{{.Schema}}</a> and answers with its link and deletion link. Reports in older schemas and unknown check ids are refused with an upgrade message; uploads are limited to {{.UploadsPerHour}} an hour per network.</p>
+</section>
+{{end}}{{end}}

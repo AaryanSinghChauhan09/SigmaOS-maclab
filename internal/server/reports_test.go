@@ -324,7 +324,8 @@ func TestTheReportPageExplainsEachResultInPlainWords(t *testing.T) {
 	page := func(change func(map[string]any)) string {
 		t.Helper()
 		out := httptest.NewRecorder()
-		if err := l.s.site.Render(out, "reports/show", web.Request{}, web.Page{Data: l.s.reportPage(reportOf(t, change))}); err != nil {
+		published := reports.NewPublished(l.s.catalogue, []*reports.Report{reportOf(t, change)})
+		if err := l.s.site.Render(out, "reports/show", web.Request{}, web.Page{Data: l.s.reportPage(nil, published, published.Runs()[0])}); err != nil {
 			t.Fatal(err)
 		}
 		return out.Body.String()

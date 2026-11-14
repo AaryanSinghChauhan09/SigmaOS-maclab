@@ -11,7 +11,6 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
-	"strings"
 
 	"github.com/omacom/omarchy-maclab/catalogue"
 	"github.com/omacom/omarchy-maclab/internal/reports"
@@ -42,18 +41,19 @@ func (s *Server) hUploadReport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// hReportPage is a published report's page. A Hidden report is not found.
 func (s *Server) hReportPage(w http.ResponseWriter, r *http.Request) {
-	report, err := s.reports.Report(r.PathValue("id"))
-	if errors.Is(err, reports.ErrNoReport) || (err == nil && report.Hidden) {
+	p := s.published(w)
+	if p == nil {
+		return
+	}
+	run := p.Run(r.PathValue("id"))
+	if run == nil {
 		s.notFound(w, r)
 		return
 	}
-	if err != nil {
-		s.pageFailed(w, err)
-		return
-	}
-	p := s.reportPage(report)
-	s.render(w, r, "reports/show", web.Page{Title: p.Title, Nav: "reports", Public: true, Data: p})
+	page := s.reportPage(r, p, run)
+	s.render(w, r, "reports/show", web.Page{Title: page.Title, Nav: "reports", Public: true, Data: page})
 }
 
 func (s *Server) pageFailed(w http.ResponseWriter, err error) {
@@ -140,125 +140,6 @@ func words(value any) string {
 		return value.String()
 	}
 	return ""
-}
-
-type reportPage struct {
-	Title, PublicID, Model                  string
-	Chip, SoC, Board, Storage, Kernel       string
-	Distro, BootLoader, Encryption          string
-	ToolName, ToolVersion, CatalogueVersion string
-	Uploaded                                string
-	Pass, Fail, Gap, Skip                   int
-	Unattended, Verified                    bool
-	Packages                                []reportPackage
-	Sections                                []*reportSection
-}
-
-type reportPackage struct{ Name, Version string }
-
-type reportSection struct {
-	Name   string
-	Checks []reportCheck
-}
-
-type reportCheck struct {
-	ID, StatusClass, StatusLabel string
-	Classified, Unconfirmed      bool
-	Outcome, OutcomeWords, State string
-	Feature, Layer               string
-	Evidence                     string
-}
-
-// outcomeStates is the result state a check's outcome counts as.
-var outcomeStates = map[string]string{
-	"works":            "works",
-	"fails":            "fails",
-	"not-in-aurora":    "missing",
-	"not-in-asahi":     "missing",
-	"not-in-omarchy":   "missing",
-	"not-applicable":   "not-applicable",
-	"unknown-hardware": "unknown",
-	"not-tested":       "not-tested",
-}
-
-// expectedGap reports whether a failed check is one the catalogue expects on
-// this Mac: support that is not there yet, or hardware it does not have.
-func expectedGap(status, outcome string) bool {
-	if status != "fail" {
-		return false
-	}
-	switch outcome {
-	case "not-in-aurora", "not-in-asahi", "not-in-omarchy", "not-applicable":
-		return true
-	}
-	return false
-}
-
-// reportPage is what a report's page shows: the machine, and each check with
-// its result in the catalogue's words.
-func (s *Server) reportPage(report *reports.Report) reportPage {
-	doc := report.Document()
-	text := func(path ...string) string { return words(member(doc, path...)) }
-	p := reportPage{
-		PublicID: report.PublicID, Model: text("machine", "model"),
-		Chip: text("machine", "chip"), SoC: text("machine", "soc"), Board: text("machine", "board"),
-		Storage: text("machine", "storage"), Kernel: text("machine", "kernel"),
-		Distro: text("system", "distro"), BootLoader: text("system", "boot_loader"), Encryption: text("system", "encryption"),
-		ToolName: text("tool", "name"), ToolVersion: text("tool", "version"), CatalogueVersion: text("catalogue_version"),
-		Uploaded: uploadedAt(report), Unattended: member(doc, "unattended") == true, Verified: report.Verified,
-	}
-	p.Title = strings.TrimPrefix(p.Model, "Apple ") + " report"
-	packages, _ := member(doc, "system", "packages").([]any)
-	for _, pkg := range packages {
-		p.Packages = append(p.Packages, reportPackage{words(member(pkg, "name")), words(member(pkg, "version"))})
-	}
-	checks, _ := member(doc, "checks").([]any)
-	sections := map[string]*reportSection{}
-	for _, check := range checks {
-		c := reportCheck{ID: words(member(check, "id"))}
-		status := words(member(check, "status"))
-		c.Outcome = words(member(check, "classification", "outcome"))
-		c.StatusClass, c.StatusLabel = status, strings.ToUpper(status)
-		switch {
-		case expectedGap(status, c.Outcome) && c.Outcome == "not-applicable":
-			c.StatusClass, c.StatusLabel = "gap", "N/A"
-			p.Gap++
-		case expectedGap(status, c.Outcome):
-			c.StatusClass, c.StatusLabel = "gap", "GAP"
-			p.Gap++
-		case status == "pass":
-			p.Pass++
-		case status == "fail":
-			p.Fail++
-		case status == "skip":
-			p.Skip++
-		}
-		if _, classified := member(check, "classification").(*reports.Object); classified {
-			c.Classified = true
-			c.Unconfirmed = member(check, "answered_by_default") == true
-			c.OutcomeWords = s.catalogue.OutcomeWords(c.Outcome)
-			if c.State = outcomeStates[c.Outcome]; c.State == "" {
-				c.State = "unknown"
-			}
-			c.Feature = s.catalogue.FeatureName(words(member(check, "classification", "feature")))
-			c.Layer = words(member(check, "classification", "layer"))
-		}
-		evidence, _ := member(check, "evidence").([]any)
-		lines := make([]string, 0, len(evidence))
-		for _, line := range evidence {
-			lines = append(lines, words(line))
-		}
-		c.Evidence = strings.Join(lines, "\n")
-		name, _, _ := strings.Cut(c.ID, ".")
-		section := sections[name]
-		if section == nil {
-			section = &reportSection{Name: name}
-			sections[name] = section
-			p.Sections = append(p.Sections, section)
-		}
-		section.Checks = append(section.Checks, c)
-	}
-	return p
 }
 
 // loadCatalogue is the feature catalogue the pages word results with.

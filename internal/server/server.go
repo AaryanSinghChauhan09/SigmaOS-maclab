@@ -148,9 +148,11 @@ type Server struct {
 	// uploads takes reports in; nil without the machine-id key.
 	uploads   *reports.Uploads
 	catalogue *reports.Catalogue
-	log       *log.Logger
-	ctx       context.Context
-	start     time.Time
+	// macOSReference gives a board's macOS numbers; nil is the catalogue's.
+	macOSReference func(board string) *reports.MacOSReference
+	log            *log.Logger
+	ctx            context.Context
+	start          time.Time
 
 	// macSignIns answers a Mac's sign-in, status and sign-out; nil without
 	// the machine-id key, which names the Mac.
@@ -607,7 +609,7 @@ func hashSecret(s string) string {
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
-	for _, rt := range s.routes() {
+	for _, rt := range append(s.routes(), s.exportRoutes()...) {
 		s.register(m, rt)
 	}
 	// The interface's own files and pages: each page says who may open it.
