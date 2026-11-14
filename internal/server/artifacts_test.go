@@ -728,3 +728,82 @@ func TestRemovingABuilderMidPart(t *testing.T) {
 		t.Fatal("labd holds a part its builder was removed while sending")
 	}
 }
+
+// One upload's starts and parts take their turns: starting it again, by
+// anyone and at any moment, never drops a part labd has answered for.
+func TestStartsOfOneUploadAtOnceLoseNoPart(t *testing.T) {
+	b := transferLab(t, Transfers{}, nil)
+	for round := 0; round < 40 && !t.Failed(); round++ {
+		data := append(partsContent(3999), byte(round))
+		path := "/api/artifacts/uploads/" + artifactSHA(data)
+		var wg sync.WaitGroup
+		for n := 1; n <= 4; n++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, code := b.startUpload("mtok", "/api/artifacts/uploads", data); code != 200 {
+					t.Errorf("round %d: start: %d", round, code)
+					return
+				}
+				if code, msg := b.do(b.ctx, "PUT", fmt.Sprintf("%s/parts/%d", path, n), "mtok", bytes.NewReader(data[(n-1)*1000:n*1000])); code != 200 {
+					t.Errorf("round %d: part %d: %d %s", round, n, code, msg)
+					return
+				}
+				if st, code := b.startUpload("mtok", "/api/artifacts/uploads", data); code != 200 || !slices.Contains(st.Held, n) {
+					t.Errorf("round %d: part %d was answered for, and a start then says labd holds %v (%d)", round, n, st.Held, code)
+				}
+			}()
+		}
+		wg.Wait()
+		var stored api.StoredArtifact
+		if code := b.call("POST", path+"/close", "mtok", nil, &stored); !t.Failed() && (code != 200 || !bytes.Equal(b.stored(stored.SHA256), data)) {
+			t.Errorf("round %d: close: %d", round, code)
+		}
+	}
+}
+
+// A part still arriving when its upload is closed finds no upload: it is
+// not joined to a folder that is gone.
+func TestAPartThatArrivesAfterItsUploadIsClosedIsToldToStartAgain(t *testing.T) {
+	b := transferLab(t, Transfers{}, nil)
+	data := partsContent(2500)
+	path := "/api/artifacts/uploads/" + artifactSHA(data)
+	b.startUpload("mtok", "/api/artifacts/uploads", data)
+	for n := 1; n <= 3; n++ {
+		if code, msg := b.do(b.ctx, "PUT", fmt.Sprintf("%s/parts/%d", path, n), "mtok", bytes.NewReader(data[(n-1)*1000:min(n*1000, 2500)])); code != 200 {
+			t.Fatalf("part %d: %d %s", n, code, msg)
+		}
+	}
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	type answer struct {
+		code int
+		msg  string
+	}
+	answered := make(chan answer, 1)
+	go func() {
+		req, _ := http.NewRequestWithContext(b.ctx, "PUT", b.url+path+"/parts/1", pr)
+		req.ContentLength = 1000
+		req.Header.Set("Authorization", "Bearer mtok")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			answered <- answer{0, err.Error()}
+			return
+		}
+		defer resp.Body.Close()
+		msg, _ := io.ReadAll(resp.Body)
+		answered <- answer{resp.StatusCode, string(msg)}
+	}()
+	pw.Write(data[:500])
+	time.Sleep(300 * time.Millisecond) // labd has read that and waits for more
+	if code := b.call("POST", path+"/close", "mtok", nil, nil); code != 200 {
+		t.Fatalf("close: %d", code)
+	}
+	pw.Write(data[500:1000])
+	if a := <-answered; a.code != 404 || !strings.Contains(a.msg, "start it again") {
+		t.Fatalf("the late part: %d %s", a.code, a.msg)
+	}
+	if left := b.uploadDirs(); len(left) != 0 {
+		t.Fatalf("a closed upload left %v", left)
+	}
+}

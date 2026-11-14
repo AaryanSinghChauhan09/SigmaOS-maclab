@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
@@ -249,9 +250,55 @@ func loadPartUpload(dir string) (partUpload, error) {
 	return u, nil
 }
 
-// beginPartUpload finds the upload in dir again, or starts it. One started
-// with another size or part size is not this upload: it is dropped.
+// uploadLocks holds one lock for each upload folder in use. An upload's
+// start, the moment a part joins it and its close each take it, so none of
+// them sees the folder half made or removes it under another.
+var uploadLocks = struct {
+	sync.Mutex
+	of map[string]*uploadLock
+}{of: map[string]*uploadLock{}}
+
+type uploadLock struct {
+	sync.Mutex
+	users int
+}
+
+func lockUpload(dir string) (unlock func()) {
+	uploadLocks.Lock()
+	l := uploadLocks.of[dir]
+	if l == nil {
+		l = &uploadLock{}
+		uploadLocks.of[dir] = l
+	}
+	l.users++
+	uploadLocks.Unlock()
+	l.Lock()
+	return func() {
+		l.Unlock()
+		uploadLocks.Lock()
+		if l.users--; l.users == 0 {
+			delete(uploadLocks.of, dir)
+		}
+		uploadLocks.Unlock()
+	}
+}
+
+// errNoUpload is a part or a close whose upload labd no longer holds.
+var errNoUpload = errors.New("no such upload")
+
+// beginPartUpload finds the upload in dir again, or starts it, and says which
+// parts it holds. One started with another size or part size is not this
+// upload: it is dropped.
 func beginPartUpload(dir string, want api.UploadState) (partUpload, error) {
+	defer lockUpload(dir)()
+	u, err := findOrMakePartUpload(dir, want)
+	if err == nil {
+		u.Held = u.held()
+	}
+	return u, err
+}
+
+func findOrMakePartUpload(dir string, want api.UploadState) (partUpload, error) {
 	if u, err := loadPartUpload(dir); err == nil && u.Size == want.Size && u.PartBytes == want.PartBytes {
 		now := time.Now()
 		return u, os.Chtimes(dir, now, now)
@@ -266,9 +313,13 @@ func beginPartUpload(dir string, want api.UploadState) (partUpload, error) {
 	return partUpload{dir: dir, UploadState: want}, os.WriteFile(filepath.Join(dir, partUploadMeta), b, 0o600)
 }
 
-// put stores part n. The part is held only once all its bytes are on disk.
+// put stores part n. The part is held only once all its bytes are on disk,
+// and only if the upload it was sent for is still there.
 func (u partUpload) put(n int, body io.Reader) error {
 	f, err := os.CreateTemp(u.dir, ".part-*")
+	if errors.Is(err, os.ErrNotExist) {
+		return errNoUpload
+	}
 	if err != nil {
 		return err
 	}
@@ -283,7 +334,12 @@ func (u partUpload) put(n int, body io.Reader) error {
 	if err = errors.Join(err, f.Close()); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), u.path(n))
+	// A folder dropped since, by a close or another start, took this file with it.
+	defer lockUpload(u.dir)()
+	if err = os.Rename(f.Name(), u.path(n)); errors.Is(err, os.ErrNotExist) {
+		return errNoUpload
+	}
+	return err
 }
 
 // partsReader reads an upload's parts one after another, as the file they make.
@@ -387,7 +443,7 @@ func (s *Server) hStartUpload(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, "%v", err)
 		return
 	}
-	u.AtOnce, u.Held = atOnce, u.held()
+	u.AtOnce = atOnce
 	writeJSON(w, u.UploadState)
 }
 
@@ -403,10 +459,14 @@ func (s *Server) openUpload(w http.ResponseWriter, r *http.Request) (u partUploa
 	}
 	u, err := loadPartUpload(s.partUploadDir(build, sha))
 	if err != nil {
-		httpErr(w, 404, "no upload %s: start it again", short(sha))
+		noUpload(w, sha)
 		return u, c, build, false
 	}
 	return u, c, build, true
+}
+
+func noUpload(w http.ResponseWriter, sha string) {
+	httpErr(w, 404, "no upload %s: start it again", short(sha))
 }
 
 func (s *Server) hPutPart(w http.ResponseWriter, r *http.Request) {
@@ -432,6 +492,8 @@ func (s *Server) hPutPart(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case !c.shared() && r.Context().Err() != nil:
 			httpErr(w, 403, "%v", errBuilderRemoved)
+		case errors.Is(err, errNoUpload):
+			noUpload(w, u.SHA256)
 		case errors.Is(err, io.ErrUnexpectedEOF):
 			httpErr(w, 400, "part %d was cut short: send it again", n)
 		default:
@@ -447,6 +509,12 @@ func (s *Server) hPutPart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) hCloseUpload(w http.ResponseWriter, r *http.Request) {
 	u, c, build, ok := s.openUpload(w, r)
 	if !ok {
+		return
+	}
+	defer lockUpload(u.dir)()
+	u, err := loadPartUpload(u.dir)
+	if err != nil {
+		noUpload(w, r.PathValue("sha"))
 		return
 	}
 	if held := u.held(); len(held) != u.parts() {
