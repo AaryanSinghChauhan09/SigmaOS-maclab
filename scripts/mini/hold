@@ -1,0 +1,64 @@
+#!/bin/bash
+# Stop one of the two daemons a visitor's request passes, for some seconds,
+# and start it again: for the Dark recordings (spec section 16, step 17b),
+# which note what a signed-out visitor gets meanwhile.
+#
+#   sudo scripts/mini/hold cloudflared|labd SECONDS
+#
+# SECONDS is 1 to 240: under the five minutes after which "Agents" is told
+# the tunnel is gone. It prints three lines the recording reads, each with
+# the time in seconds since 1970: "stopped" when launchd has let the daemon
+# go, "started" when it was handed back, "back" when the tunnel holds a
+# connection again or labd answers. The daemon is started again however the
+# run ends, a cut SSH connection included. With labd held, the Macs' agents
+# retry by themselves; run it while no job runs.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+usage() { sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+(( $# == 2 )) || usage
+case "$1" in
+  cloudflared) label="$CLOUDFLARED_LABEL" ;;
+  labd) label="$LABD_LABEL" ;;
+  *) usage ;;
+esac
+seconds="$2"
+[[ $seconds =~ ^[1-9][0-9]{0,2}$ ]] || usage
+(( seconds <= 240 )) || usage
+plist="$LAUNCHD_DIR/$label.plist"
+[[ -f $plist ]] || fail "$1 is not set up on this machine: nothing was stopped"
+need_root
+loaded "$label" || fail "$1 is not running: nothing was stopped"
+
+held=0
+start() {
+  (( held )) || return 0
+  held=0
+  launchctl enable "system/$label" || true
+  launchctl bootstrap system "$plist" || { echo "$ME: launchd did not take $plist: start $1 by hand with sudo launchctl bootstrap system $plist" >&2; return 1; }
+  echo "started $(date +%s)"
+}
+trap 'start "$1"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT TERM
+
+held=1
+stopped "$label" || fail "$1 did not stop (20 s)"
+echo "stopped $(date +%s)"
+sleep "$seconds" &
+wait $!
+start "$1"
+
+for (( n = 0; n < ${LAB_READY_TRIES:-30}; n++ )); do
+  if [[ $1 == cloudflared ]]; then
+    ! curl -fsS -o /dev/null --max-time 5 "$TUNNEL_READY" 2>/dev/null || break
+  else
+    ! curl -fsS -o /dev/null --max-time 5 "http://$LABD_LISTEN/healthz" 2>/dev/null || break
+  fi
+  sleep 2
+done
+(( n < ${LAB_READY_TRIES:-30} )) || fail "$1 was started again and is not back yet: look at $LAB_HOME/log/"
+echo "back $(date +%s)"
