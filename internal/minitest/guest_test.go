@@ -177,7 +177,7 @@ func TestTheGuestsSetUp(t *testing.T) {
 			t.Errorf("the SFTP account's rules lack %q:\n%s", want, sshd)
 		}
 	}
-	for timer, at := range map[string]string{"prune": "04:30:00", "mirror": "03:30:00"} {
+	for timer, at := range map[string]string{"prune": "04:30:00", "mirror": "03:30:00", "trim": "05:00:00"} {
 		if !strings.Contains(read(t, g.path("etc/systemd/system/lab-backup-"+timer+".timer")), "OnCalendar=*-*-* "+at+" Australia/Brisbane\n") ||
 			!strings.Contains(read(t, g.path("etc/systemd/system/lab-backup-"+timer+".service")), "ExecStart=/usr/local/lib/lab-backup/"+timer+"\n") {
 			t.Errorf("the nightly %s is not at %s", timer, at)
@@ -237,7 +237,7 @@ func TestTheGuestsSetUp(t *testing.T) {
 		"htpasswd -B -i -c ",
 		"sshd -t",
 		"systemctl reload ssh",
-		"systemctl enable --quiet lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer",
+		"systemctl enable --quiet lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer lab-backup-trim.timer",
 	} {
 		if !strings.Contains(g.calls(), want) {
 			t.Errorf("the set-up did not run %q:\n%s", want, g.calls())
@@ -303,6 +303,16 @@ func TestTheGuestKeepsTheHouseCopyToTheRetention(t *testing.T) {
 	write(t, fresh, "x", 0o600)
 	then := time.Now().AddDate(0, 0, -200)
 	os.Chtimes(old, then, then)
+	// Litestream's folder is the SFTP account's alone: the restic account,
+	// which prunes, cannot enter it. A folder nobody enters stands in for it.
+	db := g.path("srv/lab-backup/sftp/db")
+	shut := func(mode os.FileMode) {
+		if err := os.Chmod(db, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shut(0)
+	t.Cleanup(func() { os.Chmod(db, 0o700) })
 	os.Remove(g.log)
 
 	g.ok("prune")
@@ -313,11 +323,37 @@ func TestTheGuestKeepsTheHouseCopyToTheRetention(t *testing.T) {
 	if g.calls() != want {
 		t.Errorf("the pruning ran\n%s\nwant\n%s", g.calls(), want)
 	}
+	if s := g.status("prune"); len(s) != 3 || s[0] != "ok" {
+		t.Errorf("the pruning's own line is %v", s)
+	}
+
+	// Litestream's files are kept to six months by a job of the SFTP
+	// account's own, which says how it went on a line of its own.
+	if os.Getuid() != 0 {
+		if out, code := g.run("trim"); code == 0 {
+			t.Errorf("a clean-up that could not enter Litestream's folder passed:\n%s", out)
+		}
+		if s := strings.Join(g.status("trim"), " "); !strings.HasPrefix(s, "failed ") || !strings.HasSuffix(s, " removing Litestream files older than six months") {
+			t.Errorf("after a failed clean-up the line is %q", s)
+		}
+	}
+	shut(0o700)
+	if !exists(old) {
+		t.Fatal("the pruning, or a failed clean-up, removed a Litestream file")
+	}
+	g.ok("trim")
 	if exists(old) || !exists(fresh) {
 		t.Error("a Litestream file older than six months stays, or a fresh one went")
 	}
+	if s := g.status("trim"); len(s) != 3 || s[0] != "ok" {
+		t.Errorf("the clean-up's own line is %v", s)
+	}
 	if s := g.status("prune"); len(s) != 3 || s[0] != "ok" {
-		t.Errorf("the pruning's own line is %v", s)
+		t.Errorf("the clean-up wrote over the pruning's line: %v", s)
+	}
+	account := strings.TrimSpace(must(t, nil, "id", "-un"))
+	if unit := read(t, g.path("etc/systemd/system/lab-backup-trim.service")); !strings.Contains(unit, "\nUser="+account+"\nExecStart=/usr/local/lib/lab-backup/trim\n") {
+		t.Errorf("the clean-up does not run as the SFTP account:\n%s", unit)
 	}
 
 	write(t, filepath.Join(g.state, "forget.fails"), "", 0o644)
@@ -478,7 +514,7 @@ func TestAFailedMirrorWritesItsAlertAndTheMiniSendsIt(t *testing.T) {
 func TestTheGuestsScriptsPassShellcheck(t *testing.T) {
 	dir := filepath.Join(repo(t), "scripts", "mini", "guest")
 	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 4 {
+	if err != nil || len(entries) != 5 {
 		t.Fatalf("scripts/mini/guest: %v, %d files", err, len(entries))
 	}
 	var files []string

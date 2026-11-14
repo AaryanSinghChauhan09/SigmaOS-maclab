@@ -8,12 +8,12 @@
 # data/snapshots, sends the data directory to the backup guest in the house
 # (restic through rest-server, which only lets the mini add), sends the two
 # copies alone to R2, applies the retention there, and asks the guest how its
-# own jobs went: the pruning of the house copy and the owner's copy, the
-# nightly mirror. The live database files, Litestream's own folders, uploads
-# still arriving and the caller log are never sent. Anything that failed is
-# one line to "Agents", and the run exits 1. A run in which nothing failed
-# pings its own check outside the house, so that a backup that silently
-# stopped running is noticed too.
+# own jobs went: the pruning of the house copy, the clean-up of Litestream's
+# files and the owner's copy, the nightly mirror. The live database files,
+# Litestream's own folders, uploads still arriving and the caller log are
+# never sent. Anything that failed is one line to "Agents", and the run exits
+# 1. A run in which nothing failed pings its own check outside the house, so
+# that a backup that silently stopped running is noticed too.
 #
 #   --dry-run   say what would run, and run nothing
 #   restic      run restic against one of the two targets as the nightly run
@@ -157,16 +157,16 @@ offsite() {
   step "forgetting off-site snapshots made before $cut" offsite forget --prune $ids || true
 }
 
-# The guest writes how its two nightly jobs went where its SFTP account can
+# The guest writes how its three nightly jobs went where its SFTP account can
 # read: "ok|failed <seconds since 1970> <time> <reason>".
 guest() {
   local dir name what state at rest now
   if (( DRY )); then
-    say "would ask $BACKUP_GUEST how its pruning and the owner's copy went"
+    say "would ask $BACKUP_GUEST how its pruning, its clean-up of Litestream's files and the owner's copy went"
     return 0
   fi
   dir="$(mktemp -d "${TMPDIR:-/tmp}/lab-backup.XXXXXX")"
-  if ! printf -- '-get /status/%s %s\n' mirror "$dir/mirror" prune "$dir/prune" \
+  if ! printf -- '-get /status/%s %s\n' mirror "$dir/mirror" prune "$dir/prune" trim "$dir/trim" \
     | sftp -q -b - -i "$BACKUP_KEYS/litestream-sftp-key" -o IdentitiesOnly=yes -o BatchMode=yes \
       -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$BACKUP_KEYS/known_hosts" \
       "litestream@$BACKUP_GUEST" >/dev/null 2>&1; then
@@ -175,9 +175,12 @@ guest() {
     return 0
   fi
   now="$(date -u +%s)"
-  for name in prune mirror; do
-    what="the pruning of the house copy"
-    [[ $name == prune ]] || what="the owner's copy (the nightly mirror)"
+  for name in prune trim mirror; do
+    case "$name" in
+      prune) what="the pruning of the house copy" ;;
+      trim) what="the clean-up of Litestream's files" ;;
+      *) what="the owner's copy (the nightly mirror)" ;;
+    esac
     state="" at="" rest=""
     read -r state at _ rest < "$dir/$name" 2>/dev/null || true
     rest="$(printf '%s' "$rest" | tr -cd 'A-Za-z0-9 .:,_/-' | cut -c 1-160)"

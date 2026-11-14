@@ -1,0 +1,15 @@
+#!/bin/bash
+# Nightly on the backup guest, as the SFTP account, which alone can enter
+# Litestream's folder: remove any file of a Litestream replica older than six
+# months, which only happens once Litestream has stopped tidying its own. How
+# it went is written where the mini reads it.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/guest/lib.sh
+. "$here/lib.sh"
+JOB=trim
+trap report EXIT
+
+WHAT="removing Litestream files older than six months"
+find "$SFTP_DIR/db" -type f -mtime +"$KEEP_DAYS" -delete

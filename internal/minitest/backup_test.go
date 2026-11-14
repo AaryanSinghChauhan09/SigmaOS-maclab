@@ -223,6 +223,7 @@ func newBackedUp(t *testing.T) *backedUp {
 	write(t, data+"/.reports.db-litestream/ltx/0/1.ltx", "litestream's own\n", 0o600)
 	b.guestSays("mirror", "ok", time.Now(), "")
 	b.guestSays("prune", "ok", time.Now(), "")
+	b.guestSays("trim", "ok", time.Now(), "")
 	return b
 }
 
@@ -482,6 +483,16 @@ func TestTheNightlyRunSaysWhenTheGuestsOwnJobsFailed(t *testing.T) {
 			func(b *backedUp) { b.guestSays("prune", "failed", time.Now(), "restic forget") },
 			"the pruning of the house copy failed on lab-backup: restic forget",
 		},
+		"the clean-up of Litestream's files never ran": {
+			func(b *backedUp) { os.Remove(filepath.Join(b.state, "guest/status/trim")) },
+			"the clean-up of Litestream's files has never run on lab-backup",
+		},
+		"the clean-up of Litestream's files failed": {
+			func(b *backedUp) {
+				b.guestSays("trim", "failed", time.Now(), "removing Litestream files older than six months")
+			},
+			"the clean-up of Litestream's files failed on lab-backup: removing Litestream files older than six months",
+		},
 		"the guest is away": {
 			func(b *backedUp) { write(b.t, filepath.Join(b.state, "sftp.fails"), "", 0o644) },
 			"lab-backup did not answer over SFTP, so its own jobs are not known",
@@ -516,7 +527,7 @@ func TestTheBackupsDryRunSaysWhatWouldRunAndRunsNothing(t *testing.T) {
 		"backup: would run, for the off-site copy: the databases' copies to R2: restic backup --host lab-mini " + data + "/snapshots",
 		"backup: would run, for the off-site copy's retention: restic forget --group-by host --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune",
 		"backup: would forget every off-site snapshot made before " + cut,
-		"backup: would ask lab-backup how its pruning and the owner's copy went",
+		"backup: would ask lab-backup how its pruning, its clean-up of Litestream's files and the owner's copy went",
 		"backup: would ping the check backup",
 		"backup: nothing was run",
 		"",

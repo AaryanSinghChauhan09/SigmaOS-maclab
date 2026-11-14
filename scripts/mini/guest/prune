@@ -1,9 +1,9 @@
 #!/bin/bash
 # Nightly on the backup guest, as the restic account: keep the house copy to
 # the retention. The mini cannot do this itself: rest-server only lets it
-# add. Also removes any file of a Litestream replica older than six months,
-# which only happens once Litestream has stopped tidying its own. How it
-# went is written where the mini reads it.
+# add. How it went is written where the mini reads it. Litestream's files
+# are another account's: the job beside this one, trim, keeps them to six
+# months.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,6 +25,3 @@ if [[ -n $ids ]]; then
   # shellcheck disable=SC2086
   restic forget --prune $ids
 fi
-
-WHAT="removing Litestream files older than six months"
-find "$SFTP_DIR/db" -type f -mtime +"$KEEP_DAYS" -delete

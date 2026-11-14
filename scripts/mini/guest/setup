@@ -8,10 +8,11 @@
 # no login (restic, litestream, mirror), and starts: rest-server in
 # append-only mode, where the mini can add to its repository and delete
 # nothing; an SFTP account that sees one folder, for Litestream; the nightly
-# pruning of the house copy; the nightly mirror of the repository and of
-# every Lab release's files. Makes the keys the mini needs and leaves them
-# in /root/for-the-mini, to be carried to the mini once and removed here.
-# Safe to run again: it changes only what is not yet as it should be.
+# pruning of the house copy and clean-up of Litestream's files; the nightly
+# mirror of the repository and of every Lab release's files. Makes the keys
+# the mini needs and leaves them in /root/for-the-mini, to be carried to the
+# mini once and removed here. Safe to run again: it changes only what is not
+# yet as it should be.
 #
 #   --dry-run       say what would change, and change nothing
 #   --mini ADDRESS  the only address rest-server answers (192.168.1.20)
@@ -21,7 +22,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/guest/lib.sh
 . "$here/lib.sh"
 
-usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 DRY=0
 CHANGES=0
@@ -146,7 +147,7 @@ folders() {
   folder "$ETC" "$ROOT_USER" 755
   folder "$LIB" "$ROOT_USER" 755
   local job owner
-  for job in "prune:$RESTIC_USER" "mirror:$MIRROR_USER"; do
+  for job in "prune:$RESTIC_USER" "mirror:$MIRROR_USER" "trim:$SFTP_USER"; do
     owner="${job#*:}" job="${job%%:*}"
     [[ "$(mode_of "$STATUS_DIR/$job")" == "644 $owner" ]] || change "let $owner say how the nightly $job went, in $STATUS_DIR/$job" install -o "$owner" -m 0644 /dev/null "$STATUS_DIR/$job"
   done
@@ -154,7 +155,7 @@ folders() {
 
 scripts() {
   local f
-  for f in lib.sh prune mirror; do
+  for f in lib.sh prune mirror trim; do
     file "$LIB/$f" "$ROOT_USER" "$([[ $f == lib.sh ]] && echo 644 || echo 755)" < "$here/$f" || true
   done
 }
@@ -275,6 +276,28 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
+  # Litestream's folder is the SFTP account's alone, so its clean-up is that
+  # account's job, apart from the pruning.
+  unit lab-backup-trim.service <<EOF
+[Unit]
+Description=Omarchy Mac Lab: keep Litestream's files to six months
+
+[Service]
+Type=oneshot
+User=$SFTP_USER
+ExecStart=$lib/trim
+EOF
+  unit lab-backup-trim.timer <<EOF
+[Unit]
+Description=Omarchy Mac Lab: clean Litestream's files up each night
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 Australia/Brisbane
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
   unit lab-backup-mirror.service <<EOF
 [Unit]
 Description=Omarchy Mac Lab: the owner's copy, a mirror of the repository and of every Lab release's files
@@ -302,8 +325,8 @@ EOF
 restart() {
   systemctl daemon-reload
   [[ " $RESTARTS " != *" ssh "* ]] || systemctl reload ssh
-  systemctl enable --quiet lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer
-  systemctl restart lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer
+  systemctl enable --quiet lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer lab-backup-trim.timer
+  systemctl restart lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer lab-backup-trim.timer
 }
 
 packages
@@ -316,8 +339,8 @@ sftp_account
 units
 if [[ -n $RESTARTS ]]; then
   change "start what changed:$RESTARTS" restart
-elif ! systemctl is-active --quiet lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer; then
-  change "start rest-server and the two nightly timers" restart
+elif ! systemctl is-active --quiet lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer lab-backup-trim.timer; then
+  change "start rest-server and the three nightly timers" restart
 fi
 
 if (( CHANGES == 0 )); then
