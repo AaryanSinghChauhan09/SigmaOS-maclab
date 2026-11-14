@@ -224,6 +224,10 @@ const (
 	// dropUnusedOf drops a person's unused Join commands, and dropOrphans
 	// what was kept of tokens that are gone: used up, revoked or dropped.
 	dropUnusedOf = `DELETE FROM tokens WHERE activated_by = '' AND token_hash IN (SELECT token_hash FROM join_commands WHERE volunteer_id = ?)`
+	// madeBy are the unused Join commands an account made: all of them, or
+	// with the last argument 1 only those for Lab-owned Macs.
+	madeBy = ` FROM tokens t JOIN join_commands j ON j.token_hash = t.token_hash
+		WHERE j.made_by = ? AND t.activated_by = '' AND (? = 0 OR j.volunteer_id = 0)`
 	dropOrphans  = `DELETE FROM join_commands WHERE token_hash NOT IN (SELECT token_hash FROM tokens)`
 )
 
@@ -303,6 +307,40 @@ func (st *store) cancelJoinCommand(accountID int64, now time.Time) (*joinCommand
 		return nil, err
 	}
 	return c, tx.Commit()
+}
+
+// cancelJoinCommandsMadeBy drops the unused Join commands the account made,
+// for Lab-owned Macs only when labOwned is set, and returns those that had
+// not run out.
+func (st *store) cancelJoinCommandsMadeBy(accountID int64, labOwned bool, now time.Time) ([]joinCommand, error) {
+	tx, err := st.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT `+joinCommandColumns+madeBy+` AND t.expires >= ? ORDER BY t.name`, accountID, labOwned, now.Unix())
+	if err != nil {
+		return nil, err
+	}
+	var out []joinCommand
+	for rows.Next() {
+		c, err := scanJoinCommand(rows.Scan)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, *c)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM tokens WHERE token_hash IN (SELECT t.token_hash`+madeBy+`)`, accountID, labOwned); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(dropOrphans); err != nil {
+		return nil, err
+	}
+	return out, tx.Commit()
 }
 
 // unusedTokensFor are the unused, unexpired Join commands for a name.
@@ -639,6 +677,29 @@ func (s *Server) cancelOwnJoinCommand(r *http.Request) error {
 	return nil
 }
 
+// endJoinCommandsOf cancels the unused Join commands p made, so that a line
+// made with access that was cut enrolls no Mac: all of them, or with
+// labOwned those for Lab-owned Macs, which only a Maintainer makes. by made
+// the cut. Each has its line in the People record and for the Lab group.
+func (s *Server) endJoinCommandsOf(p, by Person, labOwned bool) {
+	gone, err := s.store.cancelJoinCommandsMadeBy(p.AccountID, labOwned, s.now())
+	if err != nil {
+		s.log.Printf("the Join commands @%s made: %v", p.Handle, err)
+		return
+	}
+	for _, c := range gone {
+		l := recordLine{At: s.now(), ActorID: by.AccountID, Actor: by.Handle, What: "cancelled the Join command for " + c.Name}
+		if by.AccountID != p.AccountID {
+			l.What += " made by"
+			l.AboutID, l.About = p.AccountID, p.Handle
+		}
+		if err := s.store.addRecord(l); err != nil {
+			s.log.Printf("the People record: %v", err)
+		}
+		s.labGroup.JoinCommandCancelled(c.Name, "")
+	}
+}
+
 // expireJoinCommands records and posts each Join command that ran out
 // unused since the last look.
 func (s *Server) expireJoinCommands() {
@@ -675,9 +736,9 @@ func (s *Server) joinCommandLoop() {
 
 // mayEnroll is why the Mac of token t may not enroll now, or nil: its
 // Volunteer is Blocked, lends as many Macs as their cap allows, or the name
-// was taken since the Join command was made. A Lab-owned Mac's token meets
-// only the last.
-func (s *Server) mayEnroll(t *api.EnrollTokenRequest) error {
+// was taken since the Join command was made. A Lab-owned Mac's token asks
+// that whoever made it is still a Maintainer, and meets the last.
+func (s *Server) mayEnroll(t *tokenState) error {
 	if t.VolunteerID != 0 {
 		p, err := s.person(t.VolunteerID)
 		switch {
@@ -692,6 +753,10 @@ func (s *Server) mayEnroll(t *api.EnrollTokenRequest) error {
 			return err
 		} else if l.Cap != 0 && len(l.Macs) >= l.Cap {
 			return refuse(http.StatusConflict, "Cap reached: you lend %d Macs, which is your cap. One has to Leave first, or a Maintainer raises your cap.", len(l.Macs))
+		}
+	} else if t.MadeBy != 0 {
+		if p, err := s.person(t.MadeBy); err != nil || p.Blocked || !p.isMaintainer() {
+			return refuse(http.StatusForbidden, "The person who made this Join command is no longer a Maintainer.")
 		}
 	}
 	if v := s.dev(t.Name); v != nil {

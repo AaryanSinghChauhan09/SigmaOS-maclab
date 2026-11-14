@@ -353,15 +353,16 @@ func (s *Server) signOutEverywhere(accountID int64) error {
 	return nil
 }
 
-// endAllAccess is the second cut: every browser session, Lab token and
-// Lease of the person ends, the Leases as when a Maintainer ends them. by
-// used it: the person, or a Maintainer for them. The person stays, and
-// signs in again.
+// endAllAccess is the second cut: every browser session, Lab token, unused
+// Join command and Lease of the person ends, the Leases as when a
+// Maintainer ends them. by used it: the person, or a Maintainer for them.
+// The person stays, and signs in again.
 func (s *Server) endAllAccess(p, by Person) error {
 	if err := s.store.endAllAccess(p.AccountID); err != nil {
 		return err
 	}
 	s.conns.end(accountConnKey(p.AccountID))
+	s.endJoinCommandsOf(p, by, false)
 	end := allAccessEnded(by)
 	end.note = "ended: @" + by.Handle + ` used "End all access"`
 	if by.AccountID != p.AccountID {

@@ -84,7 +84,7 @@ func (s *Server) hJoinCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.ActivatedBy == "" {
-		if err := s.mayEnroll(&t.EnrollTokenRequest); err != nil {
+		if err := s.mayEnroll(t); err != nil {
 			s.refusedEnrollment(w, t.Name, err)
 			return
 		}

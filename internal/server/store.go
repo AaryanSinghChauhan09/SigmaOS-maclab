@@ -141,14 +141,17 @@ type tokenState struct {
 	// the first Mac that used it at all, "" until one did.
 	ActivatedBy, BoundTo string
 	Expires              time.Time
+	// MadeBy is the account that made the Join command, 0 when the lab
+	// kept none.
+	MadeBy int64
 }
 
 func (s *store) tokenState(hash string, now time.Time) (*tokenState, error) {
 	var t tokenState
 	var exp int64
 	err := s.db.QueryRow(`SELECT t.name,t.label,t.model,t.volunteer,t.requester,t.volunteer_name,t.contact,t.volunteer_login,t.expires,t.activated_by,
-		COALESCE(j.volunteer_id,0),COALESCE(j.bound_to,'') FROM tokens t LEFT JOIN join_commands j ON j.token_hash=t.token_hash WHERE t.token_hash=?`, hash).
-		Scan(&t.Name, &t.Label, &t.Model, &t.Volunteer, &t.VolunteeredBy, &t.VolunteerName, &t.Contact, &t.VolunteerLogin, &exp, &t.ActivatedBy, &t.VolunteerID, &t.BoundTo)
+		COALESCE(j.volunteer_id,0),COALESCE(j.bound_to,''),COALESCE(j.made_by,0) FROM tokens t LEFT JOIN join_commands j ON j.token_hash=t.token_hash WHERE t.token_hash=?`, hash).
+		Scan(&t.Name, &t.Label, &t.Model, &t.Volunteer, &t.VolunteeredBy, &t.VolunteerName, &t.Contact, &t.VolunteerLogin, &exp, &t.ActivatedBy, &t.VolunteerID, &t.BoundTo, &t.MadeBy)
 	if err != nil {
 		return nil, err
 	}

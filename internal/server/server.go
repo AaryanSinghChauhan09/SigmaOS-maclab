@@ -993,7 +993,7 @@ func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 		s.refusedToken(w, r, 403, tokenOtherMacs)
 		return
 	}
-	if err := s.mayEnroll(&t.EnrollTokenRequest); err != nil {
+	if err := s.mayEnroll(t); err != nil {
 		s.refusedEnrollment(w, t.Name, err)
 		return
 	}
@@ -1010,7 +1010,7 @@ func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if _, dup := s.devs[d.Name]; dup {
 		s.mu.Unlock()
-		s.refusedEnrollment(w, d.Name, s.mayEnroll(&t.EnrollTokenRequest))
+		s.refusedEnrollment(w, d.Name, s.mayEnroll(t))
 		return
 	}
 	// Used up here, under s.mu, in one transaction with the device's row: of

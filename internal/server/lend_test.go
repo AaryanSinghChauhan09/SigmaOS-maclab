@@ -745,3 +745,98 @@ func TestTheJoinCommandNamesWhyItWasRefused(t *testing.T) {
 		}
 	}
 }
+
+// labJoin has a Maintainer's Lab token make the Join command for a Lab-owned
+// Mac called name, as `lab enroll` does.
+func (l *signInLab) labJoin(labToken, name string) string {
+	l.t.Helper()
+	w := l.asMac("POST", "/api/enroll-tokens", labToken, `{"name":"`+name+`","model":"desktop"}`)
+	var tok api.EnrollTokenResponse
+	if json.Unmarshal(w.Body.Bytes(), &tok); w.Code != http.StatusOK || tok.Token == "" {
+		l.t.Fatalf("lab enroll %s: %d %s", name, w.Code, w.Body)
+	}
+	return tok.Token
+}
+
+// A Join command dies with its maker's access. A Maintainer whose access was
+// ended, who is no longer a Maintainer or who was Blocked leaves no line
+// that passes the check or enrolls a Mac, and each cancelled Join command
+// has its line in the People record and for the Lab group.
+func TestAJoinCommandDiesWithItsMakersAccess(t *testing.T) {
+	for name, cut := range map[string]func(owner, ravi *browser){
+		"End all access by a Maintainer": func(owner, _ *browser) {
+			owner.did(personPath(maintainerID, "end-all-access"), "sure", "yes")
+		},
+		"End all access by the person": func(_, ravi *browser) {
+			if w := ravi.form("/me/end-all-access", "sure", "yes"); w.Code != http.StatusSeeOther {
+				t.Fatalf("End all access: %d %s", w.Code, w.Body)
+			}
+		},
+		"no longer a Maintainer": func(owner, _ *browser) {
+			owner.did(personPath(maintainerID, "maintainer/remove"), "sure", "yes")
+		},
+		"Blocked": func(owner, _ *browser) {
+			owner.did(personPath(maintainerID, "block"), "sure", "yes")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, _ := lendLab(t)
+			l.t = t
+			owner, ravi := l.signedIn(ownerID), l.signedIn(maintainerID)
+			token := l.labJoin(ravi.makeToken("laptop", "90"), "shelf-mini")
+			records, lines := len(l.recorded()), len(l.labLines())
+			cut(owner, ravi)
+			if w := l.joinCheck(token, keyA); w.Code != http.StatusUnauthorized && w.Code != http.StatusForbidden {
+				t.Errorf("the kept line passes the check: %d %s", w.Code, w.Body)
+			}
+			if w := l.enrollWith(token, keyA); w.Code != http.StatusForbidden {
+				t.Errorf("the kept line enrolls a Mac: %d %s", w.Code, w.Body)
+			}
+			if l.s.dev("shelf-mini") != nil {
+				t.Errorf("a Mac called shelf-mini is in the lab")
+			}
+			if n := l.count(`SELECT count(*) FROM tokens WHERE name = 'shelf-mini'`); n != 0 {
+				t.Errorf("%d tokens for shelf-mini are kept", n)
+			}
+			said := strings.Join(since(l.recorded(), records), "\n")
+			if !strings.Contains(said, "@owner cancelled the Join command for shelf-mini made by @ravi") && !strings.Contains(said, "@ravi cancelled the Join command for shelf-mini") {
+				t.Errorf("the People record has no line for the cancelled Join command:\n%s", said)
+			}
+			if got := strings.Join(since(l.labLines(), lines), "\n"); !strings.Contains(got, "The Join command for shelf-mini was cancelled.") {
+				t.Errorf("the Lab group has no line for the cancelled Join command:\n%s", got)
+			}
+		})
+	}
+}
+
+// "End all access" cancels the unused Join command a person made for a Mac
+// of their own too.
+func TestEndAllAccessCancelsAPersonsOwnJoinCommand(t *testing.T) {
+	l, _ := lendLab(t)
+	ravi := l.signedIn(maintainerID)
+	ravi.did("/people/mark", "handle", "grace", "as", "invite")
+	_, token := l.signedIn(graceID).makeJoin("shelf-mac")
+	ravi.did(personPath(graceID, "end-all-access"), "sure", "yes")
+	if w := l.enrollWith(token, keyA); w.Code != http.StatusForbidden {
+		t.Errorf("after End all access the person's Join command enrolls a Mac: %d %s", w.Code, w.Body)
+	}
+	if got := l.recorded(); !strings.Contains(strings.Join(got, "\n"), "@ravi cancelled the Join command for shelf-mac made by @grace") {
+		t.Errorf("the People record has no line for the cancelled Join command:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// Whatever left a Lab-owned Mac's Join command behind, it enrolls no Mac
+// once its maker is no longer a Maintainer.
+func TestALabOwnedJoinCommandAsksAfterItsMaker(t *testing.T) {
+	l, _ := lendLab(t)
+	token := l.labJoin(l.signedIn(maintainerID).makeToken("laptop", "90"), "shelf-mini")
+	if err := l.s.store.setMaintainer(maintainerID, false); err != nil {
+		t.Fatal(err)
+	}
+	l.s.changed(maintainerID)
+	for what, w := range map[string]*httptest.ResponseRecorder{"the check": l.joinCheck(token, keyA), "the enrollment": l.enrollWith(token, keyA)} {
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "no longer a Maintainer") {
+			t.Errorf("%s: %d %s", what, w.Code, w.Body)
+		}
+	}
+}
