@@ -99,7 +99,7 @@ type noticeLab struct {
 
 func newNoticeLab(t *testing.T, c labConfig) *noticeLab {
 	t.Helper()
-	n := &noticeLab{ntfy: newNtfyCatcher(t), cmds: filepath.Join(t.TempDir(), "notify-cmd.log")}
+	n := &noticeLab{ntfy: newNtfyCatcher(t), cmds: notifyCmdLog(t)}
 	n.clock = agent.NewFakeClock(time.Now())
 	c.clock = n.clock
 	prev := c.config
@@ -117,6 +117,27 @@ func newNoticeLab(t *testing.T, c labConfig) *noticeLab {
 	}
 	n.baseline()
 	return n
+}
+
+// notifyCmdLog is the file --notify-cmd appends to. labd does not wait for the
+// commands it starts, and one sent as the test ends is still running while the
+// test's folders are removed: it made the file again in a folder being
+// emptied, and the removal failed. So the file's folder is renamed first: a
+// late command finds no folder to write in, and nothing is added to the one
+// being removed.
+func notifyCmdLog(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "live")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Rename(dir, filepath.Join(tmp, "gone")); err != nil {
+			t.Error(err)
+		}
+	})
+	return filepath.Join(dir, "notify-cmd.log")
 }
 
 // openWindowForNotices opens the Volunteer Mac's Availability window for the
