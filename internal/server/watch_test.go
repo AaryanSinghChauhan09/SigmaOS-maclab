@@ -1052,3 +1052,22 @@ func TestALabdGivenNothingToWatchWithTellsNothing(t *testing.T) {
 		cancel()
 	}
 }
+
+// What the mini's helper says of a tunnel and a Litestream that launchd no
+// longer has (their LaunchDaemon files installed, no daemon) is told like
+// any other trouble, once each.
+func TestDaemonsLaunchdLostAreToldOnce(t *testing.T) {
+	lost, err := ParseParts("boot 1763092800\ntunnel down\nlitestream stopped 1\nservice signal-cli 7\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := newOps(t, nil)
+	o.minutes(3)
+	o.m.set(func(m *machine) { lost.Boot = m.mini.Boot; m.mini = lost })
+	o.minutes(10)
+	o.wantTold("Litestream is failing on the mini: it is not running. The databases are not being copied to the house.",
+		"The tunnel has been disconnected for over 5 minutes, since Sat 14:04 AEST: the lab is Dark until it connects again.")
+	if got, state := o.status("Tunnel"), o.state("Tunnel"); state != "bad" || !strings.HasPrefix(got, "disconnected since") {
+		t.Errorf("/status says of the tunnel: %s %q", state, got)
+	}
+}

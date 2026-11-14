@@ -9,15 +9,17 @@
 #   service NAME STARTS                 how often launchd started a daemon it keeps alive
 #
 # labd runs it once a minute, as the lab account, for its alerts to "Agents"
-# and for /status. A daemon launchd does not have on this machine has no
-# line. It changes nothing and needs no root.
+# and for /status. A daemon this machine was never given has no line. One
+# whose LaunchDaemon file is installed and which launchd does not have is
+# down or stopped: booted out by hand, or by a set-up or a Deploy that
+# stopped before starting it again. It changes nothing and needs no root.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/lib.sh
 . "$here/lib.sh"
 
-[[ $# == 0 ]] || { sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+[[ $# == 0 ]] || { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 if [[ -n $SYSROOT && -n ${LAB_BOOT:-} ]]; then
   boot="$LAB_BOOT"
@@ -37,6 +39,9 @@ facts() {
   [[ $STARTS =~ ^[0-9]+$ ]] || STARTS=0
 }
 
+# installed LABEL: that daemon's LaunchDaemon file is on this machine.
+installed() { [[ -e $LAUNCHD_DIR/$1.plist ]]; }
+
 if facts "$CLOUDFLARED_LABEL"; then
   if curl -fsS -o /dev/null --max-time 5 "$TUNNEL_READY" 2>/dev/null; then
     echo "tunnel up"
@@ -44,19 +49,26 @@ if facts "$CLOUDFLARED_LABEL"; then
     echo "tunnel down"
   fi
   echo "service cloudflared $STARTS"
+elif installed "$CLOUDFLARED_LABEL"; then
+  echo "tunnel down"
 fi
 
-if facts "$LITESTREAM_LABEL"; then
-  errors=0
-  log="$LAB_HOME/log/litestream.log"
+litestream_errors() {
+  local errors=0 log="$LAB_HOME/log/litestream.log"
   if [[ -f $log ]]; then errors="$(grep -c 'level=ERROR' "$log" || true)"; fi
   [[ $errors =~ ^[0-9]+$ ]] || errors=0
+  echo "$errors"
+}
+
+if facts "$LITESTREAM_LABEL"; then
   if [[ $STATE == running ]]; then
-    echo "litestream running $errors"
+    echo "litestream running $(litestream_errors)"
   else
-    echo "litestream stopped $errors"
+    echo "litestream stopped $(litestream_errors)"
   fi
   echo "service litestream $STARTS"
+elif installed "$LITESTREAM_LABEL"; then
+  echo "litestream stopped $(litestream_errors)"
 fi
 
 if facts "$SIGNAL_LABEL"; then echo "service signal-cli $STARTS"; fi

@@ -317,6 +317,37 @@ func TestPartsSaysWhatLabdCannotSee(t *testing.T) {
 	}
 }
 
+// A daemon whose LaunchDaemon file is installed and which launchd does not
+// have is down, not absent: booted out by hand, or by a set-up or a Deploy
+// that stopped between the bootout and the start. labd reads it as trouble.
+func TestPartsSaysADaemonLaunchdLostIsDown(t *testing.T) {
+	m := newMini(t)
+	m.wrapCurl()
+	m.env = append(m.env, "LAB_BOOT=1763092800", "LAB_TUNNEL_READY=http://127.0.0.1:1/ready")
+	for _, label := range []string{cloudflaredLabel, litestreamLabel, signalLabel} {
+		write(t, m.path("Library/LaunchDaemons/"+label+".plist"), "<plist/>\n", 0o644)
+		m.loadedAs(label, "running", 1)
+	}
+	write(t, m.path("var/lab/log/litestream.log"), "time=2026-11-14T14:00:01+10:00 level=ERROR msg=\"sync error\"\n", 0o600)
+	for _, label := range []string{cloudflaredLabel, litestreamLabel} {
+		for _, ext := range []string{"", ".state", ".runs"} {
+			if err := os.Remove(filepath.Join(filepath.Dir(m.root), "state", "loaded."+label+ext)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	out := m.ok("parts")
+	if want := "boot 1763092800\ntunnel down\nlitestream stopped 1\nservice signal-cli 1\n"; out != want {
+		t.Fatalf("parts says:\n%s\nwant:\n%s", out, want)
+	}
+	if got, err := server.ParseParts(out); err != nil || got.Tunnel != "down" || got.Litestream != "stopped" || got.LitestreamErrors != 1 {
+		t.Errorf("labd reads it as %+v, %v", got, err)
+	}
+	if strings.Contains(m.calls(), "curl ") {
+		t.Errorf("parts asked a tunnel launchd does not have:\n%s", m.calls())
+	}
+}
+
 // The tunnel's answer is asked where its LaunchDaemon file has it listen.
 func TestPartsAsksTheTunnelWhereItListens(t *testing.T) {
 	_, arrays := plist(t, filepath.Join(repo(t), "deploy", cloudflaredLabel+".plist"))
