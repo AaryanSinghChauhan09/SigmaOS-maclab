@@ -113,6 +113,10 @@ type Config struct {
 	// opens (--preview): the one switch for everything that changes (see
 	// Server.Preview).
 	Preview bool
+	// MachineIDKey is the 64 bytes a report's Mac is told from another by
+	// (reports.NewRules): a permanent secret, reproduced from the old site's.
+	// Without it labd takes no reports.
+	MachineIDKey []byte
 	// Terms is what a Mac's owner accepts before it joins the lab; empty is
 	// DefaultTerms (see terms.go).
 	Terms string
@@ -131,9 +135,12 @@ type Server struct {
 	cfg     Config
 	store   *store
 	reports *reports.Store
-	log     *log.Logger
-	ctx     context.Context
-	start   time.Time
+	// uploads takes reports in; nil without the machine-id key.
+	uploads   *reports.Uploads
+	catalogue *reports.Catalogue
+	log       *log.Logger
+	ctx       context.Context
+	start     time.Time
 
 	mu          sync.Mutex
 	devs        map[string]*dev // by name
@@ -236,6 +243,16 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 			return nil, err
 		}
 	}
+	features, err := loadCatalogue()
+	if err != nil {
+		return nil, err
+	}
+	var rules *reports.Rules
+	if cfg.MachineIDKey != nil {
+		if rules, err = reports.NewRules(cfg.MachineIDKey); err != nil {
+			return nil, err
+		}
+	}
 	callers, err := openCallerLog(filepath.Join(cfg.DataDir, "callers"), logger, ctx.Done())
 	if err != nil {
 		return nil, err
@@ -249,8 +266,11 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		st.db.Close()
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, reports: rep, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, callers: callers}
+	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, callers: callers}
 	s.start = s.now()
+	if rules != nil {
+		s.uploads = reports.NewUploads(rep, rules, s.now)
+	}
 	if err := s.firstMaintainer(); err != nil {
 		return nil, err
 	}
@@ -574,6 +594,12 @@ func (s *Server) routes() []route {
 		{"GET /sign-in", anyone, s.hSignIn},
 		{"GET /auth/github/callback", anyone, s.hSignInCallback},
 		{"POST /sign-out", anyone, s.hSignOut},
+		// Reports from omarchy-m-test, and the two links each is answered
+		// with (reports.go): the deletion link's secret is its credential.
+		{"POST /api/v1/reports", anyone, s.hUploadReport},
+		{"GET /reports/{id}", anyone, s.hReportPage},
+		{"GET /reports/{id}/deletion", anyone, s.hReportDeletion},
+		{"POST /reports/{id}", anyone, s.hReportDelete},
 		// healthz answers that labd is up, to anyone: a Kubernetes probe. It
 		// says nothing else.
 		{"GET /healthz", anyone, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok\n") }},

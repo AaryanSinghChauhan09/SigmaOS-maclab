@@ -1,0 +1,18 @@
+{{define "head"}}
+    <meta name="referrer" content="no-referrer">
+{{- end}}
+{{define "main" -}}
+<section class="card narrow">
+  <h2 class="card-title">delete report</h2>
+  <h1>Delete this report?</h1>
+  <p>This permanently removes the {{.Model}} report uploaded {{.Uploaded}}, with all its evidence. It can't be undone.</p>
+  <form method="post" action="{{.Action}}">
+    <input type="hidden" name="_method" value="delete">
+    <input type="hidden" name="token" value="{{.Token}}">
+    {{- if .CSRF}}
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    {{- end}}
+    <button type="submit" class="button button-danger">Delete report</button>
+  </form>
+</section>
+{{- end}}

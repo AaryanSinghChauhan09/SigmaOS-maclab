@@ -1,0 +1,54 @@
+{{define "main" -}}
+<article class="report terminal">
+  <div class="terminal-bar">
+    <span class="terminal-title">omarchy-m-test</span>
+    <span class="dim">report {{.PublicID}}</span>
+  </div>
+  <div class="terminal-body">
+    <p class="prompt-line"><span class="prompt">$</span> omarchy-m-test</p>
+    <h1>{{.Model}}</h1>
+    <dl class="machine">
+      <dt>chip</dt><dd>{{.Chip}} ({{.SoC}}, board {{.Board}})</dd>
+      {{- if .Storage}}
+      <dt>SSD</dt><dd id="storage">{{.Storage}}</dd>
+      {{- end}}
+      <dt>kernel</dt><dd>{{.Kernel}}</dd>
+      <dt>system</dt><dd>{{.Distro}}, {{.BootLoader}}, encryption {{.Encryption}}</dd>
+      <dt>tool</dt><dd>{{.ToolName}} {{.ToolVersion}}</dd>
+      <dt>catalogue</dt><dd>feature catalogue v{{.CatalogueVersion}}</dd>
+      <dt>uploaded</dt><dd>{{.Uploaded}}</dd>
+      <dt>results</dt><dd><span class="ok">{{.Pass}} pass</span> · <span class="bad">{{.Fail}} fail</span>{{if .Gap}} · <span class="gap" title="Failures the feature catalogue expects on this Mac: not yet supported, or no such hardware">{{.Gap}} gap</span>{{end}} · <span class="dim">{{.Skip}} skip</span></dd>
+      {{- if .Unattended}}
+      <dt>run</dt><dd id="unattended">unattended: nobody was at the Mac, so only the automatic checks ran</dd>
+      {{- end}}
+    </dl>
+    <details class="packages" id="packages" open>
+      <summary>packages ({{len .Packages}})</summary>
+      <table class="package-table">
+        {{- range .Packages}}
+        <tr><td>{{.Name}}</td><td>{{.Version}}</td></tr>
+        {{- end}}
+      </table>
+    </details>
+    {{- range .Sections}}
+    <h2 class="section-title">{{.Name}}</h2>
+    <ul class="checks">
+      {{- range .Checks}}
+      <li class="check check-{{.StatusClass}}" id="check-{{.ID}}">
+        <span class="status status-{{.StatusClass}}">{{.StatusLabel}}</span>
+        <span class="check-id">{{.ID}}</span>
+        {{- if .Classified}}
+        {{if .Unconfirmed}}<span class="badge badge-unconfirmed outcome outcome-{{.Outcome}} answered-by-default" title="Answered by pressing Enter (the default), not a typed y: not counted in the matrix">{{.OutcomeWords}} (unconfirmed)</span>{{else}}<span class="badge badge-{{.State}} outcome outcome-{{.Outcome}}">{{.OutcomeWords}}</span>{{end}}
+        <span class="feature">{{.Feature}}, {{.Layer}} layer</span>
+        {{- end}}
+        {{- if .Evidence}}
+        <pre class="evidence">{{.Evidence}}</pre>
+        {{- end}}
+      </li>
+      {{- end}}
+    </ul>
+    {{- end}}
+  </div>
+</article>
+<p class="credit dim">Asahi hardware states: <a href="https://asahilinux.org/docs/platform/feature-support/overview/">Asahi Linux feature support</a>, CC BY 3.0.</p>
+{{- end}}
