@@ -181,7 +181,7 @@ const (
 // needs only the local disk: a Lab boot without network must still reboot.
 func labBootDeadlineUnit() string {
 	return `[Unit]
-Description=maclab: reboot a Lab boot that misses its deadline
+Description=Omarchy Mac Lab: reboot a Lab boot that misses its deadline
 DefaultDependencies=no
 After=local-fs.target
 Conflicts=shutdown.target

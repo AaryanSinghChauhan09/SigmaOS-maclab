@@ -69,7 +69,7 @@ func showNoticeWithPause(ctx context.Context, sys System, guiUser, text string, 
 		return false, "no desktop session: " + err.Error()
 	}
 	argv := append([]string{"-u", u.Username, "--", "env"}, env...)
-	argv = append(argv, "notify-send", "-u", "critical", "--wait", "--action=pause=Pause", "maclab", text)
+	argv = append(argv, "notify-send", "-u", "critical", "--wait", "--action=pause=Pause", "Omarchy Mac Lab", text)
 	cmd := exec.CommandContext(ctx, "runuser", argv...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

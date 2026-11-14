@@ -593,7 +593,7 @@ func (r *jobRun) execute(ctx context.Context) (string, string) {
 				sr.KernelRelease, lost.Deadline, d.Kernel)
 		}
 		if j.Spec.Baseline {
-			return api.OutcomeInfra, "the one-shot did not select the lab entry (check the maclab hook in custom.cfg): " + cause
+			return api.OutcomeInfra, "the one-shot did not select the lab entry (check the lab's hook in custom.cfg, the lines under \"# maclab: one-shot hook\"): " + cause
 		}
 		if o == api.OutcomeBootFailed {
 			cause = "test kernel did not come up; the Mac fell back to " + d.Kernel + ". " + cause

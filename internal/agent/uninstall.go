@@ -452,7 +452,7 @@ func (u *uninstaller) enrolled() error {
 		return nil // uninstall leaves limine.conf as it is
 	}
 	if why := l.enrollment(u.path("/etc/default/limine")); why != "" {
-		return fmt.Errorf("uninstall takes the maclab block out of %s, and %s; then run uninstall again", l.Conf, why)
+		return fmt.Errorf("uninstall takes the lab's block, the lines from \"# maclab: begin\" to \"# maclab: end\", out of %s, and %s; then run uninstall again", l.Conf, why)
 	}
 	return nil
 }
@@ -523,7 +523,7 @@ func (u *uninstaller) limine(l *limineLayout) error {
 	block := reMaclabBlock.Match(conf)
 	// Its entries name the staged UKIs: they stay until the block can go.
 	if !block && bytes.Contains(conf, []byte(limineBegin)) {
-		return fmt.Errorf("%s: the maclab block has no %q line; remove it by hand", l.Conf, limineEnd)
+		return fmt.Errorf("%s: the lab's block, which starts at \"# maclab: begin\", has no %q line; remove it by hand", l.Conf, limineEnd)
 	}
 	// writeSynced's temporary copies, left by a write the Mac died during
 	tmps := []string{l.Conf + ".tmp"}
@@ -541,7 +541,7 @@ func (u *uninstaller) limine(l *limineLayout) error {
 		defer unlock()
 	}
 	if block {
-		if err := u.do(l.removeEntriesLocked, "remove the maclab block from %s", l.Conf); err != nil {
+		if err := u.do(l.removeEntriesLocked, "remove the lab's block (\"# maclab: begin\" to \"# maclab: end\") from %s", l.Conf); err != nil {
 			return err
 		}
 	}
@@ -596,7 +596,7 @@ func (u *uninstaller) unhook(g *grubLayout) error {
 	}
 	rest, ok := stripHook(cur)
 	if !ok {
-		return fmt.Errorf("%s: the maclab hook has no \"# maclab: end\" line; remove it by hand", custom)
+		return fmt.Errorf("%s: the lab's hook has no \"# maclab: end\" line; remove it by hand", custom)
 	}
 	old, berr := os.ReadFile(bak)
 	switch {

@@ -136,7 +136,7 @@ func (a *Agent) keepAwake() {
 	}
 	switch {
 	case job != "" && h.release == nil:
-		release, err := a.sys.InhibitSuspend("maclab job " + job + " holds the Mac")
+		release, err := a.sys.InhibitSuspend("Omarchy Mac Lab job " + job + " holds the Mac")
 		if err != nil {
 			a.log.Printf("keep the Mac awake: %v", err)
 			return

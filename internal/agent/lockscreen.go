@@ -70,7 +70,7 @@ const (
 // labBootSessionUnit writes the autologin drop-in, before SDDM starts.
 func labBootSessionUnit() string {
 	return `[Unit]
-Description=maclab: log the GUI user in on a Lab boot of a Volunteer's Mac
+Description=Omarchy Mac Lab: log the GUI user in on a Lab boot of a Volunteer's Mac
 DefaultDependencies=no
 After=local-fs.target
 Before=sddm.service display-manager.service
@@ -88,7 +88,7 @@ WantedBy=sysinit.target
 // labBootLockUnit locks the session the drop-in logged in.
 func labBootLockUnit() string {
 	return `[Unit]
-Description=maclab: lock the GUI user's session on a Lab boot of a Volunteer's Mac
+Description=Omarchy Mac Lab: lock the GUI user's session on a Lab boot of a Volunteer's Mac
 After=display-manager.service
 
 [Service]

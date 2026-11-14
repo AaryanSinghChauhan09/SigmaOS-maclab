@@ -37,7 +37,7 @@ const (
 )
 
 const unit = `[Unit]
-Description=maclab test agent
+Description=Omarchy Mac Lab: the agent
 Wants=network-online.target
 After=network-online.target
 

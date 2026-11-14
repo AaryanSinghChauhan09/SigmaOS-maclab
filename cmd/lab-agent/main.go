@@ -17,7 +17,7 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
-const usage = `lab-agent: the Mac side of the test lab
+const usage = `lab-agent: the Mac side of Omarchy Mac Lab
 
   sudo lab-agent setup --server <Lab address> --token-stdin [--gui-user you] [--accept-terms <sha256>]
         [--autologin|--stay-awake] [--volatile-journal] [--ca-file <pem>] [--allow-plain-http]

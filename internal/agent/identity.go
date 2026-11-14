@@ -42,7 +42,7 @@ func IdentityScript(c api.IdentityCheck, payload bool) string {
 	if payload {
 		args = append(args, "--payload")
 	}
-	return "#!/bin/bash\n# maclab installed-mode identity, phase " + c.Phase + " (read only)\nset -u\n" +
+	return "#!/bin/bash\n# Omarchy Mac Lab: installed-mode identity, phase " + c.Phase + " (read only)\nset -u\n" +
 		`out=${MACLAB_OUT:-.}` + "\n" +
 		`py=$(mktemp); trap 'rm -f "$py"' EXIT` + "\n" +
 		"cat > \"$py\" <<'MACLAB_COLLECTOR_EOF'\n" + identityCollector + "MACLAB_COLLECTOR_EOF\n" +

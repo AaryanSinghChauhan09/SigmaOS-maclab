@@ -451,5 +451,5 @@ func desktopNotice(sys System, guiUser, text string) {
 	if err != nil {
 		return
 	}
-	exec.Command("runuser", append([]string{"-u", u.Username, "--", "env"}, append(env, "notify-send", "-u", "critical", "maclab", text)...)...).Run()
+	exec.Command("runuser", append([]string{"-u", u.Username, "--", "env"}, append(env, "notify-send", "-u", "critical", "Omarchy Mac Lab", text)...)...).Run()
 }

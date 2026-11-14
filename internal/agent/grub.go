@@ -168,7 +168,7 @@ func (g *grubLayout) hookProblems() []string {
 	}
 	custom, _ := os.ReadFile(filepath.Join(g.Dir, "custom.cfg"))
 	if !strings.Contains(string(custom), hookMarker) {
-		p = append(p, "custom.cfg lacks the maclab one-shot hook (run lab-agent setup)")
+		p = append(p, "custom.cfg lacks the lab's one-shot hook, the lines under \"# maclab: one-shot hook\" (run lab-agent setup)")
 	}
 	if _, err := os.Stat(g.EnvFile); err != nil {
 		p = append(p, "missing one-shot env file "+g.EnvFile+" (run lab-agent setup)")

@@ -1,4 +1,4 @@
-// Package labhttp is how Maclab's programs talk to labd: the lab CLI and its
+// Package labhttp is how Omarchy Mac Lab's programs talk to labd: the lab CLI and its
 // MCP server, lab-agent and lab-builder all use one policy, so a labd URL
 // means the same thing to each of them.
 //
@@ -83,7 +83,7 @@ func (p Policy) Client(timeout time.Duration) (*http.Client, error) {
 }
 
 func refuseRedirect(req *http.Request, via []*http.Request) error {
-	return fmt.Errorf("%w to %s: Maclab clients never follow one, so check the labd URL", ErrRedirect, req.URL.Redacted())
+	return fmt.Errorf("%w to %s: Omarchy Mac Lab's programs never follow one, so check the labd URL", ErrRedirect, req.URL.Redacted())
 }
 
 // guard checks each request's URL before its base transport sends it.
