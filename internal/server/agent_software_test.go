@@ -140,6 +140,9 @@ func TestAVolunteersMacGetsANewAgentOnlyWhenItsVolunteerRunsTheLine(t *testing.T
 	if d.LabAgent != agent.Version {
 		t.Fatalf("the Mac's view does not say the lab's lab-agent is newer: lab_agent %q", d.LabAgent)
 	}
+	if line := agentUpdateLine(d); line != "sudo lab-agent update" {
+		t.Errorf("the one line for its Volunteer: %q", line)
+	}
 
 	// One Notice, fixed wording, the Mac's name, nothing to run.
 	var told []Notification
@@ -190,7 +193,7 @@ func TestAVolunteersMacGetsANewAgentOnlyWhenItsVolunteerRunsTheLine(t *testing.T
 	if now, _ := os.ReadFile(sl.installed); bytes.Equal(now, was) || sl.restarts != 1 {
 		t.Fatalf("after update: restarts %d, installed changed %v\n%s", sl.restarts, !bytes.Equal(now, was), out)
 	}
-	if d := sl.waitAgent(agent.Version); d.LabAgent != "" {
+	if d := sl.waitAgent(agent.Version); d.LabAgent != "" || agentUpdateLine(d) != "" {
 		t.Errorf("an up-to-date Mac is still said to be behind: lab_agent %q", d.LabAgent)
 	}
 	if code, said := sl.needsNewerAgent(); strings.Contains(said, "runs lab-agent") {
