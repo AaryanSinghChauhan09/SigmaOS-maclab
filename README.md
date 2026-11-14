@@ -448,8 +448,9 @@ nothing. Once the token has expired (1 hour), make a new one with `lab
 enroll <name>`, after `lab remove <name>` if the Mac is listed already. `lab
 enroll <name> --revoke` withdraws a token.
 
-On the Mac, the Join command downloads lab-agent from the lab, checks it and
-runs `setup`, handing it the token on stdin. By hand:
+On the Mac, the Join command downloads lab-agent from the lab, checks its
+signature against the release key written into the line itself, and runs
+`setup`, handing it the token on stdin. By hand:
 
 ```sh
 printf '%s\n' enr_... | sudo ./lab-agent setup --server https://lab.omarchy-mac.org --token-stdin --gui-user <you> --autologin
@@ -558,6 +559,22 @@ then run `lab baseline <mac>` again: it records the running kernel as the Mac's
 known-good, and labd's once it passes. Until it passes, the Mac has no known-good
 kernel on labd and takes no other job. The baseline passes only if a plain reboot
 comes back on that kernel, so it must be the bootloader's default entry.
+
+lab-agent itself comes from the lab server only. Every install of it checks its
+signature against the release key pinned in the lab-agent already running, and
+refuses an agent older than the one installed.
+
+```sh
+sudo lab-agent update      # at the Mac: take the lab's lab-agent
+lab agent-update m1air     # a Maintainer, for a Lab-owned Mac, while it is idle (no job, no Lease)
+lab-agent version          # its own number, the Lab release it came from, the release key it trusts
+```
+
+Nothing pushes an agent to a Volunteer's Mac: its Volunteer runs `sudo lab-agent
+update`. Each check-in carries the agent's number and its Lab release, and `lab
+status` and Macs show an agent older than the lab's with its version. There is no
+fleet-wide minimum: the lab refuses only a job that needs a newer agent, naming
+the version.
 
 To take a Mac out of the lab, `sudo lab-agent uninstall` undoes every change `setup` made. First it
 tells labd the Mac is leaving: labd cancels the Mac's running and queued jobs, saying why, lists it as
@@ -1158,8 +1175,9 @@ cannot qualify as a fully compared release-gate pass until those checks run.
 On a Mac with a desktop user, every job also runs
 [omarchy-m-test](docs/omarchy-m-test.md) in the desktop
 session: about 70 checks of the boot chain, drivers, GPU, video decode, display,
-audio, Wi-Fi, power and CPU, and short benchmarks. The agent installs or upgrades
-the tool with its own installer, which checks the release signature. It runs with
+audio, Wi-Fi, power and CPU, and short benchmarks. Before each run the agent installs
+the latest tool from the lab's own install line (`<Lab address>/install`), whose
+script checks the release signature. It runs with
 `--unattended`: it answers the disclaimer and gets no more input, every check meant
 for a person is skipped, and the speaker tone, brightness steps, camera window and
 disruptive sections (lid, Wi-Fi reload) don't happen. The run takes 1 to 3 minutes.

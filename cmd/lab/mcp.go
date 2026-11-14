@@ -529,6 +529,11 @@ func newMCP(c *client.Client) *mcp.Server {
 			sha, err := up.Upload(ctx, a.Path)
 			return text(sha), nil, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_agent_update", Description: "Update a Lab-owned Mac's lab-agent to the lab's, while the Mac is idle (Maintainers). The Mac checks the new agent's signature itself and refuses an older one. A Volunteer's Mac is never sent one: its Volunteer runs sudo lab-agent update at the Mac."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a devArg) (*mcp.CallToolResult, any, error) {
+			res, err := c.AgentUpdate(ctx, a.Device)
+			return text(res), nil, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "lab_version", Description: "The Lab release this lab came from, and the one Omarchy Mac Lab runs."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ none) (*mcp.CallToolResult, any, error) {
 			who, err := c.WhoAmI(ctx)

@@ -120,7 +120,7 @@ var (
 		"boot-test", "login", "builder", "status", "enroll", "remove", "device", "baseline", "build", "package",
 		"builds", "build-log", "build-get", "exec", "run", "crashtest", "pack", "jobs", "job", "wait", "cancel",
 		"logs", "gate", "exclude", "retry", "publish", "lease", "release", "installed", "reset", "oob", "audit",
-		"upload", "mcp", "version",
+		"upload", "agent-update", "mcp", "version",
 	}
 	atHome = []string{"boot-test", "login", "pack", "mcp", "version"}
 )
