@@ -153,9 +153,21 @@ func (s *Server) pMakeJoinCommand(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// pCancelJoinCommand is Cancel beside an unused Join command, on "Lend a
+// Mac" and above the cards of My Macs; it answers on the page it was
+// pressed on.
 func (s *Server) pCancelJoinCommand(w http.ResponseWriter, r *http.Request) {
-	if !s.sure(w, r, "Cancel: this Join command stops working now", "/lend") {
+	back := "/lend"
+	if r.PostFormValue("back") == "my-macs" {
+		back = myMacsPath(leaser(r))
+	}
+	if !s.sure(w, r, "Cancel: this Join command stops working now", back) {
 		return
 	}
-	s.lendDone(w, r, s.cancelOwnJoinCommand(r))
+	err := s.cancelOwnJoinCommand(r)
+	if err == nil && back != "/lend" {
+		http.Redirect(w, r, s.basePath()+back, http.StatusSeeOther)
+		return
+	}
+	s.lendDone(w, r, err)
 }

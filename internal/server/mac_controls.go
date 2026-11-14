@@ -35,21 +35,32 @@ func (s *Server) myMac(w http.ResponseWriter, r *http.Request) *dev {
 	return v
 }
 
-// controlDone answers a button of My Macs: back to My Macs, or the Mac's
-// own page saying why the lab refused.
+// controlDone answers a button of My Macs: back to the Mac's card, or the
+// cards saying why the lab refused. They are on My Macs, and under "Mine"
+// on Macs for the M team and up.
 func (s *Server) controlDone(w http.ResponseWriter, r *http.Request, v *dev, err error) {
 	var no *refusal
 	switch {
 	case err == nil:
-		http.Redirect(w, r, s.basePath()+"/my-macs", http.StatusSeeOther)
+		to := myMacsPath(leaser(r))
+		// A Mac that left has no card to come back to.
+		if name := r.PathValue("name"); s.dev(name) == v {
+			to += "#mac-" + name
+		}
+		http.Redirect(w, r, s.basePath()+to, http.StatusSeeOther)
 	case errors.As(err, &no) && no.code == http.StatusNotFound:
 		s.notFound(w, r)
 	case errors.As(err, &no):
-		s.renderMac(w, r, v, tabOverview, err)
+		s.renderMyMacs(w, r, err)
 	default:
 		s.log.Printf("My Macs, %s: %v", r.URL.Path, err)
-		s.renderMac(w, r, v, tabOverview, refuse(http.StatusInternalServerError, "The lab couldn't do that."))
+		s.renderMyMacs(w, r, refuse(http.StatusInternalServerError, "The lab couldn't do that."))
 	}
+}
+
+// leaveSentence is what the Leave button turns into.
+func leaveSentence(name string) string {
+	return "Leave: " + name + " leaves the lab now, any job on it stops, and the lab is removed from it when it next reaches the lab"
 }
 
 func controlOf(control func(*Server, *dev, Person) error) func(*Server, http.ResponseWriter, *http.Request) {
@@ -90,8 +101,7 @@ func (s *Server) pLeaveMac(w http.ResponseWriter, r *http.Request) {
 	if v == nil {
 		return
 	}
-	name := v.snapshot().Name
-	if !s.sure(w, r, "Leave: "+name+" leaves the lab now, any job on it stops, and the lab is removed from it when it next reaches the lab", "/my-macs") {
+	if !s.sure(w, r, leaveSentence(v.snapshot().Name), myMacsPath(leaser(r))) {
 		return
 	}
 	s.controlDone(w, r, v, s.leaveMac(v, *PersonOf(r)))

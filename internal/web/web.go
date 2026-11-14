@@ -288,6 +288,13 @@ func (v view) Take(action, label, sentence string, fields ...string) Take {
 	return t
 }
 
+// With is the view with data as its page's Data: for a shared piece that two
+// pages show, each handing it its own part of what it reads.
+func (v view) With(data any) view {
+	v.Data = data
+	return v
+}
+
 // Asking is what the page "ask_twice" reads: the server asking the second
 // time itself, for a browser that ran no script.
 type Asking struct {

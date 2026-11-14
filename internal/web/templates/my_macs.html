@@ -1,0 +1,10 @@
+{{define "main" -}}
+<h1>My Macs</h1>
+<p class="subtitle">The Macs you lend. Nobody else's are shown to you.</p>
+{{- with .Data}}
+{{- with .Flash}}
+<p class="flash flash-alert" role="alert">{{.}}</p>
+{{- end}}
+{{template "my-macs" ($.With .Mine)}}
+{{- end}}
+{{- end}}

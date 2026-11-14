@@ -1,0 +1,93 @@
+{{define "card-lines"}}{{if .Lines}}<ol class="record">
+{{range .Lines}}<li>{{if .When}}<span class="when">{{.When}}</span> {{end}}{{.Line}}</li>
+{{end}}</ol>
+<p class="dim"><a href="{{href .All}}">All of it, on its page</a></p>
+{{else}}<p class="dim">{{.None}}</p>
+{{end}}{{end}}
+
+{{define "my-macs"}}{{with .Data}}{{with .Terms}}<section class="card attention" id="terms-changed">
+<h2 class="card-title">the lab's terms changed</h2>
+<p>The terms are now those of {{.Date}}. Your Macs take nothing from the lab until you accept them.</p>
+</section>
+{{end}}{{with .Unused}}<section class="card attention" id="join-command">
+<h2 class="card-title">a join command is waiting</h2>
+<p>An unused Join command for <b>{{.Name}}</b> is good until {{.Expires}}. {{template "take" ($.Take "/lend/join-command/cancel" "Cancel" "Cancel: this Join command stops working now" "back" "my-macs")}}</p>
+<p class="dim">The lab showed its one line when you made it. <a href="{{href "/lend"}}">Lend a Mac</a> makes a new one, which cancels this one.</p>
+</section>
+{{end}}<section id="lend-another">
+{{if not .Leave}}<p><a class="button" href="{{href "/lend"}}">Lend a Mac</a></p>
+{{else if .AtCap}}<p>You lend {{.Cap}} Macs, which is your cap: {{.Lends}} of {{.Cap}}. One has to Leave first, or a Maintainer raises your cap.</p>
+{{else}}<p><a class="button" href="{{href "/lend"}}#lend">{{if .Lends}}Lend another Mac{{else}}Lend a Mac{{end}}</a> <span class="dim">{{.Lends}} of {{if .Cap}}{{.Cap}}{{else}}no cap{{end}}{{if .Unused}}, the unused Join command among them{{end}}</span></p>
+{{end}}</section>
+{{if not .Cards}}<p class="dim">You lend no Mac.</p>
+{{end}}{{range $card := .Cards}}<section class="card mac-card" id="mac-{{.Name}}">
+<h2 class="card-title">{{.Name}}</h2>
+<p class="card-tools"><a href="{{href .Page}}">Its page</a> · <a href="{{href (print .Page "?tab=live")}}">Live</a></p>
+{{with .Hands}}<div class="fence" id="hands-{{$card.Name}}">
+<p><b>{{.Title}}</b>{{if .Since}} <span class="dim">since {{.Since}}</span>{{end}}</p>
+<ol class="steps">
+{{range .Steps}}<li>{{.}}</li>
+{{end}}</ol>
+{{if .Why}}<p>{{.Why}}</p>
+{{end}}{{if .LastLog}}<p class="dim">The last line the lab had from it: <code>{{.LastLog}}</code></p>
+{{end}}</div>
+{{end}}<dl class="facts">
+<dt>Configuration</dt><dd>{{.Configuration}}</dd>
+<dt>State</dt><dd>{{.State}}{{if .Reason}} <span class="dim">{{.Reason}}</span>{{end}}</dd>
+<dt>Availability window</dt><dd>{{if .Schedule}}{{.Schedule}}{{if .Zone}} <span class="dim">({{.Zone}})</span>{{end}}{{else}}none yet{{end}} <span class="nowrap">{{.Window}}</span></dd>
+<dt>Access level</dt><dd>{{.AccessLevel}}</dd>
+<dt>Publishing</dt><dd>{{if .Publishing}}on <span class="dim">the lab may publish this Mac's reports</span>{{else}}off <span class="dim">the lab publishes none of this Mac's reports</span>{{end}}</dd>
+<dt>Installed runs</dt><dd>{{if .Eligible}}Eligible{{else}}not Eligible <span class="dim">its system cannot be captured first</span>{{end}} <span class="dim">Installed runs are not offered on a Volunteer's Mac yet.</span></dd>
+<dt>Notices</dt><dd>{{if .Topic}}<code>{{.Topic}}</code>{{else}}<span class="dim">no topic</span>{{end}} <span class="nowrap">job Notices {{if .JobNotices}}on{{else}}off{{end}}</span></dd>
+<dt>Lease</dt><dd>{{if .Holder}}@{{.Holder}}{{if .HolderKind}} <span class="badge {{.HolderClass}}">{{.HolderKind}}</span>{{end}} <span class="nowrap">until {{.Until}}</span>{{else}}<span class="dim">none</span>{{end}}</dd>
+<dt>lab-agent</dt><dd>{{if .Agent}}{{.Agent}}{{else}}<span class="dim">unknown</span>{{end}}</dd>
+</dl>
+<div class="controls" id="controls-{{.Name}}">
+{{if .PausedHere}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/resume")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Resume</button></form>
+{{else}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/pause")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><label class="dim">until <input type="datetime-local" name="until" title="The Mac's own time{{if .Zone}}, {{.Zone}}{{end}}. Empty: until you Resume."></label> <button class="button button-small button-plain" type="submit">Pause</button></form>
+{{end}}{{if .Limited}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/remove-limit")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Remove limit</button></form>
+{{else}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/limit")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small button-plain" type="submit">Limit to Qualification</button></form>
+{{end}}{{template "take" ($.Take (print "/my-macs/" .Name "/leave") "Leave" .LeaveSentence)}}
+<p class="dim">The site only takes away, and gives back only what it took. Pause and Limit stop a job that is running and end a Lease. A time is the Mac's own{{if .Zone}} ({{.Zone}}){{end}}; with none, Pause holds until you Resume.</p>
+</div>
+<h3>jobs</h3>
+<div id="jobs-{{.Name}}">
+{{if .Jobs}}<div class="scroll">
+<table class="stack">
+<thead><tr><th>Job</th><th>What</th><th>Asked by</th><th>How it ended</th><th>When</th></tr></thead>
+<tbody>
+{{range .Jobs}}<tr><td data-label="Job"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td><td data-label="What">{{.What}}</td><td data-label="Asked by">{{if .By}}@{{.By}}{{else}}<span class="dim">the lab</span>{{end}}</td><td data-label="How it ended">{{.State}}</td><td data-label="When" class="nowrap">{{.When}}</td></tr>
+{{end}}</tbody>
+</table>
+</div>
+<p class="dim"><a href="{{href .Page}}">All of them, on its page</a></p>
+{{else}}<p class="dim">No job has run on it yet.</p>
+{{end}}</div>
+<h3>reports the lab published</h3>
+<div id="reports-{{.Name}}">
+{{if .Reports}}<ul class="record">
+{{range .Reports}}<li>{{if .Hidden}}report {{.ID}} <span class="dim">Hidden by a Maintainer</span>{{else}}<a href="{{href (print "/reports/" .ID)}}">report {{.ID}}</a>{{end}} <span class="dim">from job {{.Job}}, {{.When}}</span> {{template "take" ($.Take (print "/my-macs/" $card.Name "/reports/" .ID "/delete") "Delete" "Delete this report and its evidence for good")}}</li>
+{{end}}</ul>
+{{else}}<p class="dim">The lab has published none from this Mac.</p>
+{{end}}</div>
+<h3>the mac's record</h3>
+<div id="record-{{.Name}}">{{template "card-lines" (.Lines .Record "Nothing is recorded for this Mac yet.")}}</div>
+<h3>audit log</h3>
+<div id="audit-{{.Name}}">{{template "card-lines" (.Lines .Audit "The Mac has sent no line of its Audit log.")}}</div>
+<h3>exec record</h3>
+<div id="exec-{{.Name}}">{{template "card-lines" (.Lines .Exec "No lab exec is recorded for this Mac.")}}</div>
+<h3>only at the mac</h3>
+<div id="commands-{{.Name}}">
+<p class="dim">What the lab is given, it is given at the Mac. Each of these is typed there.</p>
+<dl class="commands">
+{{range .Commands}}<dt><code>{{.Line}}</code></dt><dd>{{.What}}</dd>
+{{end}}</dl>
+</div>
+</section>
+{{end}}{{with .Left}}<section class="card" id="left-the-lab">
+<h2 class="card-title">left the lab</h2>
+<ul class="record">
+{{range .}}<li{{if .Anchor}} id="{{.Anchor}}"{{end}}><span class="when">{{.When}}</span> <b>{{.Name}}</b>: {{.Who}}</li>
+{{end}}</ul>
+</section>
+{{end}}{{end}}{{end}}

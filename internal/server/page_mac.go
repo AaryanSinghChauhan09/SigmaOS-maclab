@@ -321,14 +321,20 @@ func (s *Server) macRecords(data *macPageData, v *dev, d DeviceView, p Person, a
 	}
 	data.MacRecord = s.macRecord(d)
 	data.Exec = s.execRecordFor(v, p)
-	if data.ShowAudit = audit; !audit {
-		return
+	if data.ShowAudit = audit; audit {
+		data.Audit = s.auditShown(d.Name, macRecordsShown)
 	}
-	entries, err := s.readAuditCopy(d.Name)
+}
+
+// auditShown is the newest n lines of the lab's copy of a Mac's Audit log,
+// newest first, for whoever may read it: Maintainers and the Mac's Volunteer.
+func (s *Server) auditShown(name string, n int) []recordShownLine {
+	entries, err := s.readAuditCopy(name)
 	if err != nil {
-		s.log.Printf("%s's Audit log: %v", d.Name, err)
+		s.log.Printf("%s's Audit log: %v", name, err)
 	}
-	for i := len(entries) - 1; i >= 0 && len(data.Audit) < macRecordsShown; i-- {
+	var out []recordShownLine
+	for i := len(entries) - 1; i >= 0 && len(out) < n; i-- {
 		e := entries[i]
 		who := "the lab"
 		switch {
@@ -346,8 +352,9 @@ func (s *Server) macRecords(data *macPageData, v *dev, d DeviceView, p Person, a
 		} else {
 			line += e.Action
 		}
-		data.Audit = append(data.Audit, recordShownLine{whenDay(e.Time), line})
+		out = append(out, recordShownLine{whenDay(e.Time), line})
 	}
+	return out
 }
 
 // execRecordFor is the Exec record's lines on v that p may read, newest

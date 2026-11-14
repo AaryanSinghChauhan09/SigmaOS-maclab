@@ -194,13 +194,16 @@ func TestMacsFiltersAllMineAndLeasedByMe(t *testing.T) {
 		"":             "graces-air m1-pro m2-mini",
 		"?show=all":    "graces-air m1-pro m2-mini",
 		"?show=leased": "m2-mini",
-		"?show=mine":   "graces-air",
 		"?show=other":  "graces-air m1-pro m2-mini",
 	} {
 		_, order := macRows(grace.macsPage(query))
 		if got := strings.Join(order, " "); got != want {
 			t.Errorf("/macs%s for grace: %q, want %q", query, got, want)
 		}
+	}
+	// Mine is the cards of My Macs, in place of the table.
+	if got := ids(mainOf(t, grace.macsPage("?show=mine")).all(t, "section.mac-card")); got != "mac-graces-air" {
+		t.Errorf("/macs?show=mine for grace: %q", got)
 	}
 	if rows, _ := macRows(linus.macsPage("")); !strings.Contains(rowText(rows["graces-air"]), "Volunteer's of @grace") {
 		t.Errorf("an M team member is not shown whose Mac it is: %s", rowText(rows["graces-air"]))

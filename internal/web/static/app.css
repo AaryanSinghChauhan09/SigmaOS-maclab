@@ -914,6 +914,30 @@ button.chip { background: transparent; cursor: pointer; font-family: inherit; }
 .boot input[type="checkbox"], .boot input[type="radio"] { accent-color: var(--green); }
 .boot-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 0.75rem; }
 
+/* My Macs: one card per Mac a person lends */
+
+#lend-another { margin: 0 0 1.5rem; }
+.mac-card h3 { border-top: 1px solid rgb(65 72 104 / 0.35); padding-top: 1em; text-transform: lowercase; }
+.mac-card:target { border-color: var(--green); }
+.record li:target { color: var(--white); }
+.controls { align-items: center; display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; margin: 1.2rem 0 0; }
+.controls p { flex-basis: 100%; font-size: 0.9em; margin: 0; }
+.controls input[type="datetime-local"] {
+  background: var(--deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--white);
+  color-scheme: dark;
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0.1em 0.4em;
+}
+.controls input[type="datetime-local"]:focus { border-color: var(--green); outline: none; }
+.steps { margin: 0.4em 0; padding-left: 1.6em; }
+.commands { margin: 0; }
+.commands dt { margin-top: 0.6em; overflow-wrap: anywhere; }
+.commands dd { color: var(--fg-dim); font-size: 0.9em; margin: 0; }
+
 /* phone width: each row of the header scrolls sideways, tables stack */
 
 @media (max-width: 760px) {

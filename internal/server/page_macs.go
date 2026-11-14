@@ -40,6 +40,9 @@ type macsData struct {
 	Macs       []macRow
 	// Empty is said in place of the table.
 	Empty string
+	// Mine, under the filter of that name, is the cards of the Macs the
+	// viewer lends, as My Macs shows them, in place of the table.
+	Mine *myMacs
 }
 
 type macRow struct {
@@ -95,6 +98,17 @@ func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string,
 	if refused != nil {
 		data.Flash, page.Status = refused.Error(), statusOf(refused)
 	}
+	if show == showMine {
+		mine, err := s.myMacsOf(p)
+		if err != nil {
+			s.pageFailed(w, err)
+			return
+		}
+		data.Mine = mine
+		page.Data = data
+		s.render(w, r, "macs", page)
+		return
+	}
 	type mac struct {
 		v *dev
 		d DeviceView
@@ -110,13 +124,13 @@ func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string,
 			continue
 		}
 		mine := s.holdsLease(v, p)
-		if show == showLeased && !mine || show == showMine && (d.VolunteerID == 0 || d.VolunteerID != p.AccountID) {
+		if show == showLeased && !mine {
 			continue
 		}
 		data.Macs = append(data.Macs, s.macRow(v, d, p, mine))
 	}
 	if len(data.Macs) == 0 {
-		data.Empty = map[string]string{showAll: "No Mac is enrolled.", showMine: "You lend no Mac.", showLeased: "You hold no Lease."}[show]
+		data.Empty = map[string]string{showAll: "No Mac is enrolled.", showLeased: "You hold no Lease."}[show]
 	}
 	page.Data = data
 	s.render(w, r, "macs", page)
