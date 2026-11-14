@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -18,7 +19,15 @@ const readers = 4
 // DB is one SQLite file. Exec and Begin write, one at a time; Query and
 // QueryRow read from the pool and never wait for a writer. A statement that
 // writes and returns rows goes through a transaction.
-type DB struct{ w, r *sql.DB }
+type DB struct {
+	w, r *sql.DB
+
+	file string
+	// watch is the connection DataVersion asks, opened at its first call.
+	mu      sync.Mutex
+	watchDB *sql.DB
+	watch   *sql.Conn
+}
 
 // Open opens the file at path, making it if it is not there.
 //
@@ -57,7 +66,7 @@ func open(path string, fullfsync bool) (*DB, error) {
 	}
 	r.SetMaxOpenConns(readers)
 	r.SetMaxIdleConns(readers)
-	d := &DB{w, r}
+	d := &DB{w: w, r: r, file: file}
 	if err := d.openReaders(); err != nil {
 		d.Close()
 		return nil, err
@@ -89,7 +98,46 @@ func (d *DB) openReaders() error {
 	return nil
 }
 
+// DataVersion is a number that is another one after anything committed a
+// change to the file: this DB's own writer, another connection, another
+// program. SQLite counts for each connection apart, so it is always asked of
+// the same one, which reads and never writes.
+func (d *DB) DataVersion() (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ctx := context.Background()
+	if d.watch == nil {
+		db, err := sql.Open("sqlite", d.file+"?mode=rw&_pragma=busy_timeout(5000)&_query_only=1")
+		if err != nil {
+			return 0, err
+		}
+		db.SetMaxOpenConns(1)
+		c, err := db.Conn(ctx)
+		if err != nil {
+			db.Close()
+			return 0, err
+		}
+		d.watchDB, d.watch = db, c
+	}
+	var v int64
+	if err := d.watch.QueryRowContext(ctx, `PRAGMA data_version`).Scan(&v); err != nil {
+		// Another connection would count from somewhere else: the next call starts over.
+		d.watch.Close()
+		d.watchDB.Close()
+		d.watchDB, d.watch = nil, nil
+		return 0, err
+	}
+	return v, nil
+}
+
 func (d *DB) Close() error {
+	d.mu.Lock()
+	if d.watch != nil {
+		d.watch.Close()
+		d.watchDB.Close()
+		d.watchDB, d.watch = nil, nil
+	}
+	d.mu.Unlock()
 	err := d.r.Close()
 	if werr := d.w.Close(); werr != nil {
 		err = werr

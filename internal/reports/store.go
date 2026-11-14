@@ -14,7 +14,10 @@ var migrations embed.FS
 
 // Store is reports.db. It holds no credential, and what it holds is enough
 // to render the public site without labd.db.
-type Store struct{ db *sqlitedb.DB }
+type Store struct {
+	db   *sqlitedb.DB
+	kept kept
+}
 
 // Open opens reports.db at path, making it or bringing it up to date.
 func Open(path string) (*Store, error) {
@@ -30,7 +33,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db}, nil
+	return &Store{db: db}, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }

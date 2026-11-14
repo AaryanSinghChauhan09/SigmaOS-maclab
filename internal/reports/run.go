@@ -4,10 +4,11 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // Published is the published reports as the public pages count them: every
-// report that is not hidden, oldest upload first, read once for a request.
+// report that is not hidden, oldest upload first, counted for one request.
 // It needs reports.db and the catalogue, nothing of labd.db.
 type Published struct {
 	cat    *Catalogue
@@ -16,13 +17,41 @@ type Published struct {
 	sets   map[string]bool
 }
 
-// Published reads the published reports.
+// kept is the published reports as last read from reports.db, each with its
+// body read, for as long as nothing changes the file. Reading them is the
+// costly part of a public page, and anybody can ask for one.
+type kept struct {
+	mu      sync.Mutex
+	fresh   bool
+	version int64
+	reports []*Report
+	docs    []*Object
+	loads   int
+}
+
+// Published is the published reports for one request. The reports are read
+// again only after something changed reports.db; what a request counts from
+// them is its own.
 func (s *Store) Published(cat *Catalogue) (*Published, error) {
-	list, err := s.publishedWhere(`1`)
-	if err != nil {
-		return nil, err
+	k := &s.kept
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	// Asked before the read: a change that lands between the two is read now
+	// and read once more at the next request.
+	version, verr := s.db.DataVersion()
+	if verr != nil || !k.fresh || version != k.version {
+		reports, err := s.publishedWhere(`1`)
+		if err != nil {
+			return nil, err
+		}
+		k.reports, k.docs = reports, make([]*Object, len(reports))
+		for i, report := range reports {
+			k.docs[i] = report.Document()
+		}
+		k.fresh, k.version = verr == nil, version
+		k.loads++
 	}
-	return NewPublished(cat, list), nil
+	return newPublished(cat, k.reports, k.docs), nil
 }
 
 // publishedWhere reads the published reports a condition picks, oldest first.
@@ -45,11 +74,22 @@ func (s *Store) publishedWhere(where string, args ...any) ([]*Report, error) {
 
 // NewPublished counts the given reports; hidden ones are left out.
 func NewPublished(cat *Catalogue, list []*Report) *Published {
-	p := &Published{cat: cat, passes: map[[2]string]map[string][]*Run{}}
+	var reports []*Report
+	var docs []*Object
 	for _, report := range list {
 		if !report.Hidden {
-			p.runs = append(p.runs, &Run{Report: report, doc: report.Document(), pub: p})
+			reports, docs = append(reports, report), append(docs, report.Document())
 		}
+	}
+	return newPublished(cat, reports, docs)
+}
+
+// newPublished counts reports whose bodies were read into docs. It changes
+// neither.
+func newPublished(cat *Catalogue, reports []*Report, docs []*Object) *Published {
+	p := &Published{cat: cat, passes: map[[2]string]map[string][]*Run{}}
+	for i, report := range reports {
+		p.runs = append(p.runs, &Run{Report: report, doc: docs[i], pub: p})
 	}
 	sortRuns(p.runs)
 	return p

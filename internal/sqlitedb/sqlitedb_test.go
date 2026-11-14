@@ -449,3 +449,55 @@ func TestAPathIsTakenAsItIs(t *testing.T) {
 		t.Errorf("files outside the folder: %v", all)
 	}
 }
+
+// The data version stays while nothing is written and is another number
+// after each commit, by this DB or by another that has the file open. A
+// read changes nothing, and neither does a write that was rolled back.
+func TestTheDataVersionChangesWithEachCommitAndNoRead(t *testing.T) {
+	d, path := openDB(t)
+	version := func() int64 {
+		t.Helper()
+		v, err := d.DataVersion()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if _, err := d.Exec(`CREATE TABLE a (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	first := version()
+	var n int
+	if err := d.QueryRow(`SELECT count(*) FROM a`).Scan(&n); err != nil || version() != first || version() != first {
+		t.Fatalf("the data version moved with nothing written: %v", err)
+	}
+	if _, err := d.Exec(`INSERT INTO a DEFAULT VALUES`); err != nil {
+		t.Fatal(err)
+	}
+	second := version()
+	if second == first {
+		t.Fatal("a commit left the data version as it was")
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO a DEFAULT VALUES`); err != nil {
+		t.Fatal(err)
+	}
+	tx.Rollback()
+	if version() != second {
+		t.Error("a write that was rolled back moved the data version")
+	}
+	other, err := open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if _, err := other.Exec(`INSERT INTO a DEFAULT VALUES`); err != nil {
+		t.Fatal(err)
+	}
+	if version() == second {
+		t.Error("another program's commit left the data version as it was")
+	}
+}
