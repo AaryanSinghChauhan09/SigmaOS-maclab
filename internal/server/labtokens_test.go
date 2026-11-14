@@ -780,12 +780,18 @@ func (b *browser) heldForm(target string, fields ...string) (send func() *httpte
 	for i := 0; i+1 < len(fields); i += 2 {
 		v.Set(fields[i], fields[i+1])
 	}
-	h := &held{body: strings.NewReader(v.Encode()), asked: make(chan struct{}), send: make(chan struct{})}
+	return b.heldPost(target, formType, v.Encode())
+}
+
+// heldPost is heldForm for a body of any content type.
+func (b *browser) heldPost(target, contentType, body string) (send func() *httptest.ResponseRecorder) {
+	b.l.t.Helper()
+	h := &held{body: strings.NewReader(body), asked: make(chan struct{}), send: make(chan struct{})}
 	r := httptest.NewRequest("POST", "http://"+labHost+target, h)
 	r = r.WithContext(onTunnel(r.Context()))
 	r.RemoteAddr = "@"
 	for name, value := range map[string]string{"X-Forwarded-Proto": "https", "CF-Connecting-IP": "203.0.113.9", "User-Agent": "TestBrowser/9.75",
-		"Origin": labAddress, "X-CSRF-Token": b.csrf(), "Content-Type": formType} {
+		"Origin": labAddress, "X-CSRF-Token": b.csrf(), "Content-Type": contentType} {
 		r.Header.Set(name, value)
 	}
 	r.AddCookie(b.session())

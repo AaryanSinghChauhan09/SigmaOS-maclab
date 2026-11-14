@@ -16,6 +16,7 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -240,7 +241,8 @@ func (s *Server) hSignOut(w http.ResponseWriter, r *http.Request) {
 //
 // A form is read whole before the session is looked up: a body held back is
 // then judged by the session and the person as they are when the body has
-// come, so a form let in before a cut does nothing after it.
+// come, so a form let in before a cut does nothing after it. Any other body
+// is read through liveBody, which holds each read to the same.
 func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin string) (*http.Request, bool) {
 	if r.Header.Get("Authorization") != "" {
 		return r, true
@@ -282,6 +284,29 @@ func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin s
 			httpErr(w, 403, "refused: this page is out of date. Open it again and retry")
 			return r, false
 		}
+		if !form && r.Body != nil && r.Body != http.NoBody {
+			r.Body = liveBody{r.Body, func() bool {
+				now := s.sessionOf(c.Value)
+				return now != nil && now.AccountID == si.AccountID && now.Role() == si.Role()
+			}}
+		}
 	}
 	return r.WithContext(withPerson(r.Context(), si)), true
+}
+
+// liveBody is the body of a signed-in browser's request that changes
+// something and is no form. A read answers only while the session is there
+// and its person has the role they had when the request was let in: what
+// comes after a cut is not read, so the request does nothing with it.
+type liveBody struct {
+	io.ReadCloser
+	live func() bool
+}
+
+func (b liveBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if !b.live() {
+		return 0, errSessionEnded
+	}
+	return n, err
 }

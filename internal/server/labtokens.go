@@ -157,8 +157,8 @@ func labTokenName(name string) (string, bool) {
 // errTooManyTokens is the eleventh token.
 var errTooManyTokens = fmt.Errorf("has %d Lab tokens, which is the most a person has: revoke one first", labTokenCap)
 
-// errSessionEnded is a token asked for by a browser session that was ended
-// while its request was on the way.
+// errSessionEnded is a token asked for, or a body sent, by a browser session
+// that was ended while its request was on the way.
 var errSessionEnded = errors.New("the browser session that asked has ended")
 
 // makeLabToken makes a Lab token for the person and returns its secret,

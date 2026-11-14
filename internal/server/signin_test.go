@@ -887,3 +887,32 @@ func TestAHeldFormOfALiveSessionActs(t *testing.T) {
 		t.Errorf("a slow form of a live session: %d %s", w.Code, refusalIn(w.Body.String()))
 	}
 }
+
+// A body that is no form is bound to its session the same way: sent after
+// the cut, it is not read, and what it asked for is not done.
+func TestABodyHeldOpenAcrossACutChangesNothing(t *testing.T) {
+	for name, cut := range map[string]string{"End all access": "end-all-access", "no longer a Maintainer": "maintainer/remove"} {
+		t.Run(name, func(t *testing.T) {
+			l, _ := lendLab(t)
+			l.t = t
+			owner, thief := l.signedIn(ownerID), l.signedIn(maintainerID)
+			send := thief.heldPost("/api/enroll-tokens", "application/json", `{"name":"held-mini","model":"desktop"}`)
+			owner.did(personPath(maintainerID, cut), "sure", "yes")
+			if w := send(); w.Code == http.StatusOK || strings.Contains(w.Body.String(), "enr_") {
+				t.Errorf("a body sent after the cut was taken: %d %s", w.Code, w.Body)
+			}
+			if n := l.count(`SELECT count(*) FROM tokens WHERE name = 'held-mini'`); n != 0 {
+				t.Errorf("a body sent after the cut made %d Join commands", n)
+			}
+		})
+	}
+}
+
+// A slow body of a session that is still there is taken.
+func TestAHeldBodyOfALiveSessionIsTaken(t *testing.T) {
+	l, _ := lendLab(t)
+	w := l.signedIn(maintainerID).heldPost("/api/enroll-tokens", "application/json", `{"name":"slow-mini","model":"desktop"}`)()
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "enr_") {
+		t.Errorf("a slow body of a live session: %d %s", w.Code, w.Body)
+	}
+}
