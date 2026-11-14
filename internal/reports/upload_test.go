@@ -845,6 +845,26 @@ func TestAnUnattendedReportIsAcceptedAndUnattendedCanOnlyBeTrue(t *testing.T) {
 	}
 }
 
+// The old site could not store a report with a NUL outside its evidence, and
+// failed. Nothing here refuses one, and the store holds it.
+func TestAReportWithANulInItsTextIsStored(t *testing.T) {
+	d := newDesk(t)
+	links := d.post(t, put(golden(t, "m2-max-image2"), "7.1.12\x00-ARCH", "machine", "kernel"))
+	if links.status != http.StatusCreated {
+		t.Fatalf("%d %v", links.status, links.body)
+	}
+	report, err := d.store.Report(links.text("id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kernel := at(report.Document(), "machine", "kernel"); kernel != "7.1.12\x00-ARCH" {
+		t.Errorf("the kernel reads back as %q", kernel)
+	}
+	if got := d.store.list(t, `SELECT body -> 'machine' ->> 'board' FROM reports`); len(got) != 1 || got[0] != "j416c" {
+		t.Errorf("the stored body is not read as JSON: %v", got)
+	}
+}
+
 // A lab run's report comes in by Receive, inside labd: the same rules and
 // the Mac's limit, and no address to count.
 func TestAReportHandedOverInsideIsJudgedAndCountedForItsMac(t *testing.T) {
