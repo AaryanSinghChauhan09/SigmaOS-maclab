@@ -35,7 +35,8 @@ func Uninstall(ctx context.Context, o UninstallOptions) error {
 		return fmt.Errorf("run uninstall from a shell on the Mac, not through the lab: stopping lab-agent.service would kill it")
 	}
 	_, kernel, cmdline := (&Linux{}).Identity()
-	u := &uninstaller{ctx: ctx, dry: o.DryRun, force: o.Force, say: o.Log, running: kernel, cmdline: cmdline, cmd: runCmd, home: homeDir, bootTime: bootTime(), leave: Leave}
+	u := &uninstaller{ctx: ctx, dry: o.DryRun, force: o.Force, say: o.Log, running: kernel, cmdline: cmdline, cmd: runCmd, home: homeDir, bootTime: bootTime(), leave: Leave,
+		farewell: func(rec *left) bool { return rec.tellLabd(ctx) }}
 	u.boot, u.bootErr = detectBootloader()
 	return u.uninstall()
 }
@@ -61,6 +62,9 @@ type uninstaller struct {
 	removed  map[string]bool // so a dry run sees the directories it would empty
 	// leave tells labd the Mac is leaving the lab (Leave); nil tells no one.
 	leave func(cfg *Config, req api.LeaveRequest) (*api.LeaveResponse, error)
+	// farewell tells the lab of a Mac that left it before the lab could
+	// hear; nil tells no one.
+	farewell func(rec *left) bool
 	// heard is what labd made of it: "told", "forgotten" (it no longer knows
 	// the Mac), or "" when no one was asked or it couldn't be reached; then
 	// todo is what to run on the controller instead. asked: labd was asked.
@@ -243,6 +247,26 @@ func (u *uninstaller) tellLabd(cfg *Config) {
 	}
 }
 
+// tellOfLeaving is for a Mac that left the lab with `lab-agent leave` while
+// the lab could not be reached: lab-agent, which uninstall is about to
+// remove, was still to tell it. Uninstall tells it now, once, or says how
+// the enrollment is ended from the lab's side.
+func (u *uninstaller) tellOfLeaving(cfg *Config) {
+	rec, err := readLeft(u.path(workDir))
+	if cfg != nil || u.farewell == nil || err != nil || rec == nil || rec.Told {
+		return
+	}
+	switch {
+	case u.dry:
+		u.say("would tell the lab at %s that %s left it", rec.Server, rec.Name)
+	case u.farewell(rec):
+		u.say("told the lab at %s that %s left it", rec.Server, rec.Name)
+	default:
+		u.say("the lab at %s was not told that %s left it, and lab-agent, which was to tell it, goes now: end the enrollment on My Macs (%s/my-macs), or ask a Maintainer to",
+			rec.Server, rec.Name, strings.TrimRight(rec.Server, "/"))
+	}
+}
+
 // stayInLab takes tellLabd back when uninstall stops before the agent does.
 // The agent runs on, so labd must not keep the Mac as left, refusing every
 // job for it. It is best-effort, and says what to run on the controller if
@@ -341,6 +365,7 @@ func (u *uninstaller) uninstall() error {
 	}
 
 	u.tellLabd(cfg)
+	u.tellOfLeaving(cfg)
 	// A running agent could arm a one-shot or rewrite limine.conf
 	// mid-uninstall: nothing else changes until it is stopped. Until then,
 	// an interrupt or a failure leaves the agent running, in the lab.

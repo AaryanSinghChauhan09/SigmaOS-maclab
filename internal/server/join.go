@@ -7,10 +7,11 @@ package server
 // (GET /api/join/lab-agent), which tests the token before anything changes:
 // a refusal is said once, by its case, and nothing is tried again. It checks
 // the download's sha256 against the one written into it, and runs
-// `sudo lab-agent setup`, the token going to it on stdin. Setup binds the
-// token to the Mac (POST /api/join/check), shows the lab's terms
-// (GET /api/join/terms), which the owner accepts by typing yes, before it
-// changes anything; then the Mac enrolls, using the token up (see hEnroll).
+// `sudo lab-agent setup`, the token going to it on stdin. Setup runs its
+// pre-checks, which reach no lab, then shows the lab's terms
+// (GET /api/join/terms), which the owner accepts by typing yes. Only then
+// does it bind the token to the Mac (POST /api/join/check) and change
+// anything; then the Mac enrolls, using the token up (see hEnroll).
 //
 // The token travels in the Authorization header and request bodies only,
 // never in a URL, so neither labd's nor a proxy's access log records it. It
@@ -58,7 +59,7 @@ func (s *Server) hJoinTerms(w http.ResponseWriter, r *http.Request) {
 }
 
 // hJoinCheck is the Join command testing its token on the Mac, after the
-// pre-checks and before anything changes. The first Mac to ask binds the
+// pre-checks and the accepted terms, before anything changes. The first Mac to ask binds the
 // token: from then on it serves the Mac with that activation key and no
 // other. What would refuse the enrollment (Blocked, cap reached, name
 // taken) is said here already, so that a Mac leaves no other lab for a

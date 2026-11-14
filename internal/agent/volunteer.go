@@ -113,6 +113,9 @@ func showStatus(ctx context.Context, cfg *Config, sys System, args []string, out
 
 // kindName is how status and setup name a Mac's kind.
 func kindName(e api.Enrollment) string {
+	if e.IsVolunteer() && e.VolunteerName == "" && e.Contact == "" {
+		return "a Volunteer's Mac"
+	}
 	if e.IsVolunteer() {
 		return fmt.Sprintf("a Volunteer's Mac (%s, %s)", e.VolunteerName, e.Contact)
 	}

@@ -290,3 +290,18 @@ func TestMoveSaysWhenTheNewConfigMayNotBeDurable(t *testing.T) {
 		t.Errorf("Save with an unsyncable directory: %v", err)
 	}
 }
+
+// move serves one use, a change of the Lab address: a lab that does not know
+// this Mac is another lab, and the refusal names the way into one.
+func TestMoveServesOnlyAChangeOfTheLabAddress(t *testing.T) {
+	f := newMoveFixture(t)
+	err := Move(context.Background(), f.opts(f.srv.URL+"/elsewhere", f.caFile(t)))
+	if err == nil {
+		t.Fatal("moved to a lab that does not know the Mac")
+	}
+	for _, want := range []string{"only for a change of the Lab address", "Join command", "Nothing was changed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+}

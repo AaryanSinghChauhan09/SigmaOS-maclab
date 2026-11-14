@@ -1,9 +1,10 @@
 package agent
 
-// Moving an enrolled Mac to labd's new URL: when labd moves, with its data,
-// to another address (from a LAN host to https://maclab.example.com, say),
-// each Mac keeps its enrollment and only learns where labd is now. Move
-// changes nothing but that: no bootloader, known-good kernel, watchdog,
+// Moving an enrolled Mac to a new Lab address, move's one use: when the lab
+// changes its address, keeping its data, each Mac keeps its enrollment and
+// only learns where the lab is now. A Mac never moves to another lab: it
+// Joins afresh, with that lab's Join command. Move changes nothing but the
+// address: no bootloader, known-good kernel, watchdog,
 // journal, getty or enrollment, which only setup touches.
 
 import (
@@ -162,7 +163,7 @@ func knowsThisMac(ctx context.Context, server string, cfg Config, p labhttp.Poli
 	var se *statusError
 	switch {
 	case errors.As(err, &se) && (se.Code == http.StatusUnauthorized || se.Code == http.StatusForbidden || se.Code == http.StatusNotFound):
-		return fmt.Errorf("labd at %s doesn't know this Mac (%d): is labd's data there yet? Nothing was changed", server, se.Code)
+		return fmt.Errorf("the lab at %s doesn't know this Mac (%d). move is only for a change of the Lab address, the same lab with its data at a new address: a Mac joins another lab with that lab's Join command. Nothing was changed", server, se.Code)
 	case err != nil:
 		return fmt.Errorf("labd at %s: %v%s. Nothing was changed", server, err, certTimeHint(err, time.Now()))
 	case cfg.Enrollment.Kind != "" && live.Kind != cfg.Enrollment.Kind:

@@ -899,3 +899,78 @@ func TestUninstallRemovesTheLabBootAutologinLink(t *testing.T) {
 	}
 	m.gone(t, labBootAutologinLink)
 }
+
+// `sudo lab-agent uninstall` runs cleanly after `sudo lab-agent leave`:
+// leave took the lab's boot entries, units, settings files and device secret
+// and kept lab-agent, the Audit log, the window and the Access level;
+// uninstall then finds no lab to tell, fails at nothing, and removes what
+// leave kept, whether or not the lab had heard of the leaving.
+func TestUninstallRunsCleanlyAfterLeave(t *testing.T) {
+	for _, told := range []bool{true, false} {
+		m := newLabMac(t)
+		m.lim.Stage = filepath.Join(m.lim.ESP.Target, "maclab")
+		m.u.leave = func(*Config, api.LeaveRequest) (*api.LeaveResponse, error) {
+			t.Error("uninstall told a lab about a Mac that had left it")
+			return nil, errors.New("no lab")
+		}
+		in := func(paths ...string) []string {
+			var rooted []string
+			for _, p := range paths {
+				rooted = append(rooted, m.u.path(p))
+			}
+			return rooted
+		}
+		var farewells []string
+		m.u.farewell = func(rec *left) bool {
+			farewells = append(farewells, rec.Server+" "+rec.Secret)
+			return true
+		}
+		work := m.u.path(workDir)
+		kept := map[string]string{auditFile: `{"maintainer":"ada"}` + "\n", windowFile: `{"rules":["mon-fri 19:00-07:00"]}`, accessFile: `{"access_level":"full","publish":true}`}
+		for name, s := range kept {
+			if err := os.WriteFile(filepath.Join(work, name), []byte(s), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rec := &left{Server: "http://labd:7770", DeviceID: "d-1", Name: "m1air", Told: told}
+		if !told {
+			rec.Secret = "s3cret"
+		}
+		if err := writeLeft(work, rec); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := leaveCleanup(leaveLayout{
+			Config: m.u.path(ConfigPath), Units: in(labUnitPaths...), UnitNames: nil,
+			DropIns:    in(labBootAutologinPath, labBootAutologinLink, sysctlPath, watchdogCfg, serialGettyDropIn, sddmAutologinConf),
+			LimineConf: m.lim.Conf, Stage: m.lim.Stage, WorkDir: work,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := plan.apply(!told); err != nil {
+			t.Fatalf("leave: %v", err)
+		}
+		m.gone(t, ConfigPath, sysctlPath, workDir+"/known-good.json")
+		m.kept(t, binPath, workDir+"/"+auditFile, workDir+"/"+windowFile, workDir+"/"+accessFile)
+		if conf, _ := os.ReadFile(m.lim.Conf); strings.Contains(string(conf), limineBegin) {
+			t.Fatalf("leave left the lab's block in limine.conf:\n%s", conf)
+		}
+
+		if err := m.again(false); err != nil {
+			t.Fatalf("told %v: uninstall after leave: %v\n%s", told, err, strings.Join(m.out, "\n"))
+		}
+		// A lab that never heard of the leaving hears it now, once: lab-agent,
+		// which was to tell it, is what uninstall removes.
+		if want := map[bool][]string{false: {"http://labd:7770 s3cret"}}[told]; !slices.Equal(farewells, want) {
+			t.Errorf("told %v: uninstall told %q, want %q", told, farewells, want)
+		}
+		m.gone(t, binPath, workDir, filepath.Dir(ConfigPath), unitPath, journaldCfg, labBootDeadlineUnitPath)
+		m.kept(t, "/etc/sysctl.d/10-other.conf", "/usr/lib/modules/6.9-arch/vmlinuz")
+		if last := m.out[len(m.out)-1]; last != "uninstalled" {
+			t.Errorf("told %v: uninstall ended with %q", told, last)
+		}
+		if err := m.again(false); err != nil || m.out[len(m.out)-1] != "nothing to undo: no lab setup is left on this Mac" {
+			t.Errorf("told %v: a second uninstall: %v %q", told, err, m.out)
+		}
+	}
+}
