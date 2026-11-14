@@ -1033,6 +1033,29 @@ type EnrollRequest struct {
 type JoinTerms struct {
 	SHA256 string `json:"sha256"`
 	Text   string `json:"text"`
+	// Date is the terms' date, which with the sha256 is their version.
+	Date string `json:"date,omitempty"`
+}
+
+// JoinCheckRequest is a Mac testing its Join command's token before it
+// changes anything (POST /api/join/check, the token in the Authorization
+// header). ActivationKey is the key the Mac will enroll with: the first Mac
+// to ask binds the token, and no other Mac uses it after that.
+type JoinCheckRequest struct {
+	ActivationKey string `json:"activation_key"`
+}
+
+// JoinCheck is the lab's answer to a token it takes: the name the Mac
+// joins under, its kind (KindLabOwned or KindVolunteer), when the token
+// runs out, whether this Mac has enrolled with it already, and the version
+// of the terms to accept.
+type JoinCheck struct {
+	Name        string    `json:"name"`
+	Kind        string    `json:"kind"`
+	Expires     time.Time `json:"expires"`
+	Enrolled    bool      `json:"enrolled,omitempty"`
+	TermsSHA256 string    `json:"terms_sha256"`
+	TermsDate   string    `json:"terms_date,omitempty"`
 }
 
 type EnrollResponse struct {

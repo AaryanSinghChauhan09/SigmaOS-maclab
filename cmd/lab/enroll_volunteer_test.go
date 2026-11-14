@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,9 +54,38 @@ func runLab(t *testing.T, c *client.Client, cmd string, args ...string) (string,
 	return string(out), err
 }
 
-func TestEnrollTokenForAVolunteerSendsTheirNameAndContact(t *testing.T) {
+// lab enroll is for Lab-owned Macs only: it has no flag that names a
+// Volunteer, a contact or a login, and lab device changes a Mac's label and
+// model, not whose it is.
+func TestEnrollAndDeviceNameNoVolunteer(t *testing.T) {
+	enroll := flag.NewFlagSet("enroll", flag.ContinueOnError)
+	enrollFlags(enroll)
+	device := flag.NewFlagSet("device", flag.ContinueOnError)
+	deviceFlags(device)
+	for _, gone := range []string{"volunteer", "contact", "login", "unlink"} {
+		for _, fs := range []*flag.FlagSet{enroll, device} {
+			if fs.Lookup(gone) != nil {
+				t.Errorf("lab %s still takes --%s", fs.Name(), gone)
+			}
+		}
+	}
+	for fs, kept := range map[*flag.FlagSet][]string{enroll: {"label", "model", "revoke"}, device: {"label", "model"}} {
+		for _, name := range kept {
+			if fs.Lookup(name) == nil {
+				t.Errorf("lab %s lost --%s", fs.Name(), name)
+			}
+		}
+	}
+	for _, line := range strings.Split(usage, "\n") {
+		if strings.Contains(line, "--volunteer ") || strings.Contains(line, "--contact") || strings.Contains(line, "--login") || strings.Contains(line, "--unlink") {
+			t.Errorf("lab's usage still offers: %s", strings.TrimSpace(line))
+		}
+	}
+}
+
+func TestEnrollMakesAJoinCommandForALabOwnedMac(t *testing.T) {
 	c, asked := enrollTokenLab(t)
-	out, err := runLab(t, c, "enroll", "ada-mbp", "--volunteer", "Ada Lovelace", "--contact", "ada@example.org")
+	out, err := runLab(t, c, "enroll", "rack-mac", "--label", "left desk", "--model", "desktop")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,51 +93,25 @@ func TestEnrollTokenForAVolunteerSendsTheirNameAndContact(t *testing.T) {
 		t.Fatalf("labd was asked %d times", len(*asked))
 	}
 	got := (*asked)[0]
-	if got["name"] != "ada-mbp" || got["volunteer_name"] != "Ada Lovelace" || got["contact"] != "ada@example.org" {
+	if got["name"] != "rack-mac" || got["label"] != "left desk" || got["model"] != "desktop" {
 		t.Fatalf("request: %v", got)
 	}
-	if !strings.Contains(out, "enr_fixture_token") {
-		t.Fatalf("the token is not printed:\n%s", out)
+	for _, field := range []string{"volunteer", "volunteer_name", "contact", "volunteer_login", "volunteer_id"} {
+		if _, sent := got[field]; sent {
+			t.Errorf("lab enroll sent %s: %v", field, got)
+		}
+	}
+	if !strings.Contains(out, "enr_fixture_token") || !strings.Contains(out, "a Lab-owned Mac") {
+		t.Fatalf("the token or the Mac's kind is not printed:\n%s", out)
 	}
 }
 
-func TestEnrollTokenWithoutVolunteerMakesALabOwnedMac(t *testing.T) {
+func TestEnrollNeedsAMacName(t *testing.T) {
 	c, asked := enrollTokenLab(t)
-	if _, err := runLab(t, c, "enroll", "rack-mac"); err != nil {
-		t.Fatal(err)
-	}
-	got := (*asked)[0]
-	if v, _ := got["volunteer_name"].(string); v != "" {
-		t.Fatalf("a Volunteer was sent: %v", got)
-	}
-	if v, _ := got["contact"].(string); v != "" {
-		t.Fatalf("a contact was sent: %v", got)
-	}
-}
-
-func TestEnrollTokenForAVolunteerNeedsTheirContact(t *testing.T) {
-	c, asked := enrollTokenLab(t)
-	if _, err := runLab(t, c, "enroll", "ada-mbp", "--volunteer", "Ada Lovelace"); err == nil {
-		t.Fatal("a Volunteer with no contact was accepted")
-	}
-	if len(*asked) != 0 {
-		t.Fatal("labd was asked anyway")
-	}
-}
-
-func TestEnrollTokenWithAContactAloneIsRefused(t *testing.T) {
-	c, asked := enrollTokenLab(t)
-	if _, err := runLab(t, c, "enroll", "rack-mac", "--contact", "ada@example.org"); err == nil {
-		t.Fatal("a contact with no Volunteer was accepted")
-	}
-	if len(*asked) != 0 {
-		t.Fatal("labd was asked anyway")
-	}
-}
-
-func TestEnrollTokenForAVolunteerNeedsAMacName(t *testing.T) {
-	c, _ := enrollTokenLab(t)
-	if _, err := runLab(t, c, "enroll", "--volunteer", "Ada", "--contact", "a@b.c"); err == nil {
+	if _, err := runLab(t, c, "enroll"); err == nil {
 		t.Fatal("no Mac name was accepted")
+	}
+	if len(*asked) != 0 {
+		t.Fatal("labd was asked anyway")
 	}
 }

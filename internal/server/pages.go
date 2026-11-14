@@ -107,9 +107,9 @@ func (s *Server) fleet() *web.Fleet {
 	return f
 }
 
-// pendingRequests is the count People carries in the navigation. Nobody can
-// ask for anything yet.
-func (s *Server) pendingRequests() int { return 0 }
+// pendingRequests is the count People carries in the navigation: the
+// Requests to lend no Maintainer has answered.
+func (s *Server) pendingRequests() int { return s.requestsToLendWaiting() }
 
 // sure reports whether the person asked twice for an action that takes
 // something away. The lab's script asks in place: the first click turns the

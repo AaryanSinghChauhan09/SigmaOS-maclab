@@ -121,74 +121,41 @@ func (s *store) devices() ([]deviceRow, error) {
 	return out, rows.Err()
 }
 
-const insertToken = `INSERT INTO tokens(token_hash,name,label,model,volunteer,requester,volunteer_name,contact,volunteer_login,expires) VALUES(?,?,?,?,?,?,?,?,?,?)`
-
-// addToken stores a Maintainer's token, with the Volunteer's login they
-// linked, if any. That login is no requester: the token is outside the
-// person's own limits, and their ./volunteer never replaces it.
-func (s *store) addToken(hash string, req api.EnrollTokenRequest, exp time.Time) error {
-	_, err := s.db.Exec(insertToken, hash, req.Name, req.Label, req.Model, req.Volunteer, "", req.VolunteerName, req.Contact, req.VolunteerLogin, exp.Unix())
-	return err
-}
-
-// errVolunteerTokens turns a volunteer away while too many others hold
-// unused tokens. A token stays until its Mac first checks in (see token),
-// but once a Mac has enrolled with it, it is used: it counts no more.
-var errVolunteerTokens = errors.New("too many volunteers hold unused enrollment tokens")
-
-// addVolunteerToken stores a token for who, the tailnet viewer who asked for
-// it, in place of any unused one they still hold: nobody holds two, and
-// asking again after a setup that stopped half way just works. It refuses
-// with errVolunteerTokens while max others hold unused ones.
-func (s *store) addVolunteerToken(hash string, req api.EnrollTokenRequest, who string, exp, now time.Time, max int) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM tokens WHERE requester != '' AND (requester=? AND name NOT IN (SELECT name FROM devices) OR expires<?)`, who, now.Unix()); err != nil {
-		return err
-	}
-	var n int
-	if err := tx.QueryRow(`SELECT count(*) FROM tokens WHERE requester != '' AND name NOT IN (SELECT name FROM devices)`).Scan(&n); err != nil {
-		return err
-	}
-	if n >= max {
-		return errVolunteerTokens
-	}
-	if _, err := tx.Exec(insertToken, hash, req.Name, req.Label, req.Model, req.Volunteer, who, req.VolunteerName, req.Contact, "", exp.Unix()); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// token looks up an enrollment token that has not expired. VolunteeredBy is
-// the login that asked for a volunteer token, VolunteerLogin the one a
-// Maintainer linked.
+// token looks up an enrollment token that has not expired. VolunteerID is
+// whose Mac it enrolls. VolunteeredBy and VolunteerLogin are a token's from
+// before people signed in: the tailnet login that asked for it, and the one
+// a Maintainer linked.
 func (s *store) token(hash string, now time.Time) (*api.EnrollTokenRequest, error) {
-	var r api.EnrollTokenRequest
+	t, err := s.tokenState(hash, now)
+	if err != nil {
+		return nil, err
+	}
+	return &t.EnrollTokenRequest, nil
+}
+
+// tokenState is a token and what became of it.
+type tokenState struct {
+	api.EnrollTokenRequest
+	// ActivatedBy is the hash of the activation key that used the token up,
+	// "" while it is unused. BoundTo is the hash of the activation key of
+	// the first Mac that used it at all, "" until one did.
+	ActivatedBy, BoundTo string
+	Expires              time.Time
+}
+
+func (s *store) tokenState(hash string, now time.Time) (*tokenState, error) {
+	var t tokenState
 	var exp int64
-	err := s.db.QueryRow(`SELECT name,label,model,volunteer,requester,volunteer_name,contact,volunteer_login,expires FROM tokens WHERE token_hash=?`, hash).
-		Scan(&r.Name, &r.Label, &r.Model, &r.Volunteer, &r.VolunteeredBy, &r.VolunteerName, &r.Contact, &r.VolunteerLogin, &exp)
+	err := s.db.QueryRow(`SELECT name,label,model,volunteer,requester,volunteer_name,contact,volunteer_login,expires,activated_by,volunteer_id,bound_to FROM tokens WHERE token_hash=?`, hash).
+		Scan(&t.Name, &t.Label, &t.Model, &t.Volunteer, &t.VolunteeredBy, &t.VolunteerName, &t.Contact, &t.VolunteerLogin, &exp, &t.ActivatedBy, &t.VolunteerID, &t.BoundTo)
 	if err != nil {
 		return nil, err
 	}
 	if now.Unix() > exp {
 		return nil, sql.ErrNoRows
 	}
-	return &r, nil
-}
-
-// tokenState is token, and the hash of the activation key that used the
-// token up, "" while it is unused.
-func (s *store) tokenState(hash string, now time.Time) (*api.EnrollTokenRequest, string, error) {
-	t, err := s.token(hash, now)
-	if err != nil {
-		return nil, "", err
-	}
-	var by string
-	err = s.db.QueryRow(`SELECT activated_by FROM tokens WHERE token_hash=?`, hash).Scan(&by)
-	return t, by, err
+	t.Expires = time.Unix(exp, 0)
+	return &t, nil
 }
 
 // activateAndSave uses up an unused, unexpired token for the activation

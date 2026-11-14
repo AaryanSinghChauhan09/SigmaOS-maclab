@@ -88,8 +88,6 @@ func TestRoutesDeclareReach(t *testing.T) {
 		"GET /api/devices/{name}/screens",
 		"GET /api/devices/{name}/screens/{file}",
 		"GET /api/devices/{name}/logs",
-		"POST /api/volunteer",
-		"GET /api/volunteer/lab-agent",
 		"GET /api/jobs",
 		"GET /api/jobs/{id}",
 		"GET /api/jobs/{id}/wait",
@@ -156,17 +154,16 @@ func TestPersonSeesOnlyTheirOwnMacs(t *testing.T) {
 		}
 		secret = resp.Secret
 	}
-	volunteer := func(remote, name string) {
+	volunteer := func(login, name string) {
 		t.Helper()
-		var resp api.EnrollTokenResponse
-		w := do("POST", "/api/volunteer", remote, "", `{"name":"`+name+`"}`)
-		if json.Unmarshal(w.Body.Bytes(), &resp); w.Code != 200 {
-			t.Fatalf("volunteer %s: %d %s", name, w.Code, w.Body)
+		tok, err := s.store.volunteeredTokenForTest(name, login)
+		if err != nil {
+			t.Fatal(err)
 		}
-		enroll(resp.Token)
+		enroll(tok)
 	}
-	volunteer(visitor, "mine")
-	volunteer(other, "theirs")
+	volunteer("visitor@github", "mine")
+	volunteer("other@github", "theirs")
 	tok, _ := s.store.addTokenForTest("lab")
 	enroll(tok)
 	for _, d := range []string{"mine", "theirs", "lab"} {

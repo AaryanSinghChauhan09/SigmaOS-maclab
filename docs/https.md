@@ -16,7 +16,6 @@ too (see [Other ways to serve HTTPS](#other-ways-to-serve-https)).
 | `--trusted-proxy CIDR[,CIDR]` | The only peers whose `X-Forwarded-Proto`/`X-Forwarded-Host` labd reads. Those headers must match `--public-url`, or labd answers 421. They are never identity. Refused together with `--tailscale` |
 | `--tls-cert FILE --tls-key FILE` | labd serves TLS itself (1.2+, HTTP/2) and re-reads the files when they change |
 | `--allow-plain-http` | Allows plain HTTP on a non-loopback `--listen`. Use it behind a proxy inside a private network. Without it, a non-loopback `--listen` without TLS is refused |
-| `--terms-file FILE` | The terms a Mac's owner accepts before setup. Without it, labd uses its built-in terms |
 
 `X-Forwarded-Prefix` is never read. A request outside the `--public-url` path gets 404, and so does `/maclabx` for `/maclab`.
 A non-canonical path under the prefix (`//`, `/./`, `/../`) is 404 too, and any redirect labd makes keeps the prefix.
@@ -119,11 +118,10 @@ Apply in this order:
 ### Terms, and inviting a Mac
 - A Mac's owner accepts labd's terms before anything is installed. Their version is the sha256 of the exact text, and labd records
   the accepted version and the time with the Mac.
-  - To use your own text, put it in `deploy/k8s/terms/terms.txt` and deploy `deploy/k8s/terms`. That mounts it from a ConfigMap
-    and adds `--terms-file`.
+  - The text is `internal/web/texts/terms.txt`, shipped with the Lab release and served at `/terms`: a change of terms reaches the lab by a Deploy.
   - A changed text gets a new sha256. labd refuses an enrollment that accepted any other version.
-- A Maintainer runs `lab enroll <name> --volunteer "<name>" --contact <c>`, or uses the web UI. labd answers with a **one-line join command**.
-  - It holds a one-time activation token, `enr_…`, valid for 24 h. The token travels only in an `Authorization` header, never in a URL,
+- The person who lends a Mac makes its **Join command** on "Lend a Mac", signed in; a Maintainer runs `lab enroll <name>` for a Lab-owned Mac. Either is one line.
+  - It holds a one-time activation token, `enr_…`, valid for 1 h. The token travels only in an `Authorization` header, never in a URL,
     and is in no process's arguments: curl reads that header on stdin (`-H @-`), and setup reads the token on stdin too.
   - The command starts with a space, so shells that skip such lines (bash with `HISTCONTROL=ignorespace`) leave it out of history.
   - It downloads lab-agent over https, checks its sha256, and runs `sudo lab-agent setup --server https://maclab.chonkbase.net --token-stdin`.

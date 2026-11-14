@@ -34,7 +34,7 @@ func sources(t *testing.T) map[string]string {
 	t.Helper()
 	top := root(t)
 	out := map[string]string{}
-	for _, dir := range []string{"cmd", "internal", "builder", "scripts", "deploy", "tools", "specs", "volunteer"} {
+	for _, dir := range []string{"cmd", "internal", "builder", "scripts", "deploy", "tools", "specs"} {
 		err := filepath.WalkDir(filepath.Join(top, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err

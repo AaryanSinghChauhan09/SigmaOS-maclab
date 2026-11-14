@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -147,18 +145,16 @@ func TestRoles(t *testing.T) {
 		t.Errorf("tagged device's /api/auth: %+v", a)
 	}
 
-	// The viewer volunteers Mac m, so their stream carries its events.
-	var vol api.EnrollTokenResponse
-	r := httptest.NewRequest("POST", labdAt+"/api/volunteer", strings.NewReader(`{"name":"m"}`))
+	// The viewer volunteered Mac m, so their stream carries its events.
+	vol, err := s.store.volunteeredTokenForTest("m", "visitor@github")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", labdAt+"/api/agent/enroll", strings.NewReader(enrollJSON(vol)))
 	r.RemoteAddr = viewer
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	json.Unmarshal(w.Body.Bytes(), &vol)
-	r = httptest.NewRequest("POST", labdAt+"/api/agent/enroll", strings.NewReader(enrollJSON(vol.Token)))
-	r.RemoteAddr = viewer
-	w = httptest.NewRecorder()
-	if h.ServeHTTP(w, r); w.Code != 200 || vol.Name != "m" {
-		t.Fatalf("volunteer m: %+v, enroll %d %s", vol, w.Code, w.Body)
+	if h.ServeHTTP(w, r); w.Code != 200 {
+		t.Fatalf("enroll m: %d %s", w.Code, w.Body)
 	}
 
 	// The live stream leaves serial lines out for viewers, even of their own
@@ -198,81 +194,6 @@ func TestRoles(t *testing.T) {
 	}
 	if got := stream(admin, "lab_adm_secret"); !strings.Contains(got, "event: serial") {
 		t.Errorf("an admin's stream lost the serial line:\n%s", got)
-	}
-}
-
-// ./volunteer: any person labd knows gets a token for its own Mac, under a free
-// name and labelled with its login, and downloads the lab's lab-agent.
-func TestVolunteer(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	whois := func(ctx context.Context, ip string) (*testPeer, error) {
-		if ip == "100.64.0.2" {
-			return &testPeer{Login: "visitor@github", Node: "omarchy"}, nil
-		}
-		return nil, fmt.Errorf("no match for IP")
-	}
-	bin := filepath.Join(t.TempDir(), "lab-agent-linux-arm64")
-	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(), Person: personAt(whois), AgentBinary: bin},
-		log.New(io.Discard, "", 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := s.Handler()
-	const peer = "100.64.0.2:40000"
-	do := func(method, path, remote, body string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(method, labdAt+path, strings.NewReader(body))
-		r.RemoteAddr = remote
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		return w
-	}
-	volunteer := func(body string) (resp api.EnrollTokenResponse) {
-		w := do("POST", "/api/volunteer", peer, body)
-		if w.Code != 200 {
-			t.Fatalf("volunteer %s: %d %s", body, w.Code, w.Body)
-		}
-		json.Unmarshal(w.Body.Bytes(), &resp)
-		return resp
-	}
-
-	first := volunteer(`{"name":"Naeem-omarchy","model":"desktop"}`)
-	if first.Name != "naeem-omarchy" || !strings.HasPrefix(first.Token, "enr_") {
-		t.Fatalf("first volunteer: %+v", first)
-	}
-	if w := do("POST", "/api/agent/enroll", peer, enrollJSON(first.Token)); w.Code != 200 {
-		t.Fatalf("enroll with the volunteer's token: %d %s", w.Code, w.Body)
-	}
-	var d api.Device
-	json.Unmarshal(do("GET", "/api/devices/naeem-omarchy", peer, "").Body.Bytes(), &d)
-	if d.Label != "visitor@github" || d.Model != api.ModelDesktop {
-		t.Errorf("the volunteer's Mac: label %q, model %q", d.Label, d.Model)
-	}
-	for body, want := range map[string]string{
-		`{"name":"naeem-omarchy"}`:      "naeem-omarchy-2",
-		`{"name":"  Ünïcode__host!! "}`: "n-code-host",
-		`{}`:                            "mac",
-		`{"name":"` + strings.Repeat("a", 40) + `"}`: strings.Repeat("a", 28),
-	} {
-		if got := volunteer(body).Name; got != want {
-			t.Errorf("volunteer %s: name %q, want %q", body, got, want)
-		}
-	}
-	if w := do("POST", "/api/volunteer", "192.168.7.3:5000", `{}`); w.Code != 401 {
-		t.Errorf("nobody labd knows: %d", w.Code)
-	}
-
-	if w := do("GET", "/api/volunteer/lab-agent", peer, ""); w.Code != 404 {
-		t.Errorf("no lab-agent built: %d", w.Code)
-	}
-	if err := os.WriteFile(bin, []byte("ELF agent"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if w := do("GET", "/api/volunteer/lab-agent", peer, ""); w.Code != 200 || w.Body.String() != "ELF agent" {
-		t.Errorf("download lab-agent: %d %q", w.Code, w.Body)
-	}
-	if w := do("GET", "/api/volunteer/lab-agent", "192.168.7.3:5000", ""); w.Code != 401 {
-		t.Errorf("lab-agent for nobody labd knows: %d", w.Code)
 	}
 }
 

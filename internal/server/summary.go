@@ -76,6 +76,12 @@ func (s *Server) summaryMacs() []MacSummary {
 	return out
 }
 
-// requestsToLendWaiting is the count the daily summary gives. labd has no
-// Requests to lend yet.
-func (s *Server) requestsToLendWaiting() int { return 0 }
+// requestsToLendWaiting is the count the daily summary gives, and the one
+// People carries in the navigation.
+func (s *Server) requestsToLendWaiting() int {
+	n, err := s.store.countWaitingRequests()
+	if err != nil {
+		s.log.Printf("Requests to lend waiting: %v", err)
+	}
+	return n
+}

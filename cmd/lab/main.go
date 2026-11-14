@@ -40,13 +40,12 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
                                       builder hosts with their own token (it may only build)
   lab status [device]                 devices, what they're doing, and anything a human must do
   lab enroll <name> [--label "MacBook Air M1, left desk"] [--model laptop|desktop]
-             [--volunteer "<name>" --contact <contact>]   a Volunteer's Mac, not a Lab-owned one; prints the one-liner
-                                      the Mac's owner runs to join it (--revoke: revoke its unused token)
-             [--login <tailnet login>]                links it to the Volunteer's login, so they see it in labd
+                                      a Lab-owned Mac: prints the Join command to run on it, good for 1 hour
+                                      (--revoke: cancel it unused). A Volunteer's Mac is lent by its own
+                                      Volunteer, signed in, from "Lend a Mac" on the site
   lab remove <mac>                    end a Mac's enrollment: its device secret stops working at once, and lab-agent
                                       removes the lab from the Mac at its next check-in (a Volunteer is told)
   lab device <name> [--label ..] [--model ..] [--oob-url http://m3:7780 --oob-token ..] [--no-oob]
-             [--login <tailnet login> | --unlink]   link a Volunteer's Mac to their login, or unlink it
   lab baseline <device>               prove the one-shot boot works; required once per Mac
   lab build <github-url> --device <mac> | --config <file>   build a kernel from a repo, branch, commit or PR URL (reused if built before)
   lab package <recipe-dir> [--commit <github-url>] [--pkgrel 11.14] [-o dir]
@@ -147,6 +146,39 @@ func holder() string {
 }
 
 // parse lets flags come after positional arguments, as in `lab run m1air --kernel k.tar`.
+// enrollOpts are lab enroll's flags. It enrolls Lab-owned Macs only: a
+// Volunteer's Mac is lent by its own Volunteer from the site, so nothing
+// here names a Volunteer, a contact or a login.
+type enrollOpts struct {
+	label, model *string
+	revoke       *bool
+}
+
+func enrollFlags(fs *flag.FlagSet) enrollOpts {
+	return enrollOpts{
+		label:  fs.String("label", "", "where the Mac physically is, for power-cycle instructions"),
+		model:  fs.String("model", api.ModelLaptop, "laptop or desktop"),
+		revoke: fs.Bool("revoke", false, "cancel the Join commands for <name>, used or not, instead of making one"),
+	}
+}
+
+// deviceOpts are lab device's flags: a Mac's label and model, and the
+// out-of-band controller a Maintainer attaches to it.
+type deviceOpts struct {
+	label, model, oobURL, oobToken *string
+	noOOB                          *bool
+}
+
+func deviceFlags(fs *flag.FlagSet) deviceOpts {
+	return deviceOpts{
+		label:    fs.String("label", "", ""),
+		model:    fs.String("model", "", ""),
+		oobURL:   fs.String("oob-url", "", "oobd URL for the controller host attached to this Mac"),
+		oobToken: fs.String("oob-token", "", ""),
+		noOOB:    fs.Bool("no-oob", false, "detach the out-of-band controller"),
+	}
+}
+
 func parse(fs *flag.FlagSet, args []string) []string {
 	var pos []string
 	for len(args) > 0 {
@@ -183,17 +215,12 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		return showDevices(ctx, c)
 
 	case "enroll":
-		label := fs.String("label", "", "where the Mac physically is, for power-cycle instructions")
-		model := fs.String("model", api.ModelLaptop, "laptop or desktop")
-		volunteer := fs.String("volunteer", "", "the Volunteer whose Mac this is (with --contact); none makes a Lab-owned Mac")
-		contact := fs.String("contact", "", "how to reach the Volunteer")
-		login := fs.String("login", "", "the Volunteer's tailnet login (with --volunteer), so they see their Mac in labd")
-		revoke := fs.Bool("revoke", false, "revoke the enrollment tokens for <name>, used or not, instead of making one")
+		o := enrollFlags(fs)
 		pos := parse(fs, args)
-		if err := need(pos, 1, `lab enroll <name> [--volunteer "<name>" --contact <contact> [--login <tailnet login>]] | lab enroll <name> --revoke`); err != nil {
+		if err := need(pos, 1, `lab enroll <name> [--label ..] [--model laptop|desktop] | lab enroll <name> --revoke`); err != nil {
 			return err
 		}
-		if *revoke {
+		if *o.revoke {
 			n, err := c.RevokeEnrollTokens(ctx, pos[0])
 			if err != nil {
 				return err
@@ -201,37 +228,21 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 			fmt.Printf("revoked %d enrollment token(s) for %s\n", n, pos[0])
 			return nil
 		}
-		if (strings.TrimSpace(*volunteer) == "") != (strings.TrimSpace(*contact) == "") {
-			return fmt.Errorf("a Volunteer's Mac needs both --volunteer and --contact")
-		}
-		if *login != "" && strings.TrimSpace(*volunteer) == "" {
-			return fmt.Errorf("--login is a Volunteer's: give --volunteer and --contact too")
-		}
-		t, err := c.EnrollToken(ctx, api.EnrollTokenRequest{Name: pos[0], Label: *label, Model: *model, VolunteerName: *volunteer, Contact: *contact, VolunteerLogin: *login})
+		t, err := c.EnrollToken(ctx, api.EnrollTokenRequest{Name: pos[0], Label: *o.label, Model: *o.model})
 		if err != nil {
 			return err
 		}
-		kind := "a Lab-owned Mac"
-		if v := strings.TrimSpace(*volunteer); v != "" {
-			kind = "the Volunteer " + v + "'s Mac"
-		}
-		fmt.Printf("Enrollment token for %s, %s (one activation, expires %s). Keep it private.\n\n", pos[0], kind, t.Expires.Format(time.DateTime))
+		fmt.Printf("Join command for %s, a Lab-owned Mac (one Mac, once; expires %s). Keep it private.\n\n", pos[0], t.Expires.Format(time.DateTime))
 		if t.JoinCommand != "" {
-			fmt.Printf("The Mac's owner runs this in a terminal on the Mac; it shows the lab's terms, and joins once they type yes:\n\n  %s\n\n", t.JoinCommand)
+			fmt.Printf("Run this in a terminal on the Mac, as yourself; it checks the Mac, shows the lab's terms, and joins once you type yes:\n\n  %s\n\n", t.JoinCommand)
 		} else {
 			fmt.Printf("labd has no lab-agent to hand out: copy lab-agent to the Mac and run\n\n  printf '%%s\\n' '%s' | sudo ./lab-agent setup --server %s --token-stdin --gui-user \"$USER\"\n\n", t.Token, c.URL)
 		}
-		fmt.Printf("Revoke it unused: lab enroll %s --revoke. Then: lab baseline %s\n", pos[0], pos[0])
+		fmt.Printf("Cancel it unused: lab enroll %s --revoke. Then: lab baseline %s\n", pos[0], pos[0])
 		return nil
 
 	case "device":
-		label := fs.String("label", "", "")
-		model := fs.String("model", "", "")
-		oobURL := fs.String("oob-url", "", "oobd URL for the controller host attached to this Mac")
-		oobToken := fs.String("oob-token", "", "")
-		noOOB := fs.Bool("no-oob", false, "detach the out-of-band controller")
-		login := fs.String("login", "", "link a Volunteer's Mac to their tailnet login, so they see it in labd")
-		unlink := fs.Bool("unlink", false, "unlink a Volunteer's Mac from the login linked to it")
+		o := deviceFlags(fs)
 		pos := parse(fs, args)
 		if err := need(pos, 1, "lab device <name> [flags]"); err != nil {
 			return err
@@ -240,25 +251,15 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "label":
-				p.Label = label
+				p.Label = o.label
 			case "model":
-				p.Model = model
-			case "login":
-				p.VolunteerLogin = login
+				p.Model = o.model
 			}
 		})
-		if *unlink {
-			if p.VolunteerLogin != nil {
-				return fmt.Errorf("give --login or --unlink, not both")
-			}
-			p.VolunteerLogin = new(string)
-		} else if p.VolunteerLogin != nil && *p.VolunteerLogin == "" {
-			return fmt.Errorf("--login needs a tailnet login; --unlink unlinks")
+		if *o.oobURL != "" {
+			p.OOB = &api.OOBConfig{Driver: "oobd", URL: *o.oobURL, Token: *o.oobToken}
 		}
-		if *oobURL != "" {
-			p.OOB = &api.OOBConfig{Driver: "oobd", URL: *oobURL, Token: *oobToken}
-		}
-		p.NoOOB = *noOOB
+		p.NoOOB = *o.noOOB
 		if _, err := c.PatchDevice(ctx, pos[0], p); err != nil {
 			return err
 		}

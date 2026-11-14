@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/web"
 )
 
 // joinLab is a labd at https://chonkbase.net/maclab with a lab-agent to hand
@@ -178,9 +179,10 @@ func TestEnrollmentNeedsTheCurrentTerms(t *testing.T) {
 	if d.ID != e.DeviceID || d.TermsSHA256 != termsSum() || d.TermsAccepted.IsZero() {
 		t.Errorf("the Mac's record of the terms: %+v", d)
 	}
-	// An operator's own terms replace the built-in ones, and their sha256 is the version.
-	if text, sum := (&Server{cfg: Config{Terms: "Our lab. Our rules.\n"}}).terms(); text != "Our lab. Our rules.\n" || sum == termsSum() || len(sum) != 64 {
-		t.Errorf("own terms: %q %s", text, sum)
+	// The terms are the text shipped with the Lab release, the one /terms
+	// serves: its sha256 is the version a Mac accepts.
+	if text, sum := j.s.terms(); text != web.Terms().Body || sum != web.Terms().SHA256 || len(sum) != 64 || !strings.HasPrefix(text, "OMARCHY MAC LAB: LENDING A MAC\n") {
+		t.Errorf("the terms a Mac accepts are not the shipped text: %s", sum)
 	}
 }
 
@@ -192,7 +194,7 @@ func TestJoinRoutesTakeOnlyAnEnrollmentTokenInTheHeader(t *testing.T) {
 	tok := j.invite("joiner").Token
 	code, body := j.do("GET", "/api/join/terms", tok, "")
 	var terms api.JoinTerms
-	if json.Unmarshal([]byte(body), &terms); code != 200 || terms.SHA256 != termsSum() || terms.Text != DefaultTerms {
+	if json.Unmarshal([]byte(body), &terms); code != 200 || terms.SHA256 != termsSum() || terms.Text != web.Terms().Body || terms.Date != web.Terms().Date || terms.Date == "" {
 		t.Fatalf("terms: %d %s", code, body)
 	}
 	if code, body := j.do("GET", "/api/join/lab-agent", tok, ""); code != 200 || !strings.HasPrefix(body, "\x7fELF") {
@@ -210,7 +212,7 @@ func TestJoinRoutesTakeOnlyAnEnrollmentTokenInTheHeader(t *testing.T) {
 		t.Errorf("a token in the URL: %d, want 401", code)
 	}
 	// The enrollment token reaches nothing a Maintainer or a Mac does.
-	for _, p := range []string{"/api/devices", "/api/jobs", "/api/agent/enrollment", "/api/volunteer/lab-agent"} {
+	for _, p := range []string{"/api/devices", "/api/jobs", "/api/agent/enrollment"} {
 		if code, _ := j.do("GET", p, tok, ""); code != 401 {
 			t.Errorf("an enrollment token on %s: %d, want 401", p, code)
 		}
@@ -325,6 +327,7 @@ func TestJoinCommandRunsWithTheTokenInNoArguments(t *testing.T) {
 printf '%s\n' "$@" > "$REC/curl.argv"
 cat > "$REC/curl.stdin"
 while [ $# -gt 0 ]; do if [ "$1" = -o ]; then cp "$REC/agent" "$2"; fi; shift; done
+printf 200
 `), 0o755)
 	os.WriteFile(filepath.Join(bin, "sudo"), []byte(`#!/bin/bash
 printf '%s\n' "$@" > "$REC/sudo.argv"

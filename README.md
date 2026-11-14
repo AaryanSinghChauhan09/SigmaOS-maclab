@@ -1207,41 +1207,28 @@ simulated Mac (`internal/agent/sim.go`):
 
 ## Volunteer a Mac
 
-On an Apple Silicon Mac running Omarchy, in a clone of this repo:
+Lending starts on the site. `./volunteer` is retired, and nothing looks for
+the lab: every line a person is told to run names the Lab address and nothing
+else.
 
-```sh
-./volunteer          # join the lab
-./volunteer leave    # leave it again (sudo lab-agent uninstall)
-```
+1. Sign in with GitHub and open "Lend a Mac". The page opens with the Test
+   machine rule, then what the lab may and may not do, then the terms.
+2. Leave to lend is needed once per person. The M team and Maintainers have
+   it; a person a Maintainer gave an Invite has it from their first sign-in;
+   anyone else sends a Request to lend from the page and a Maintainer answers
+   it on People. The page shows waiting, approved or declined; the lab sends
+   nothing.
+3. Name the Mac on the page and copy the Join command: one line, good for one
+   Mac, once, for 1 hour. A person holds one unused Join command; a new one
+   cancels the old. Run the line on the Mac, as yourself.
 
-`./volunteer` installs Tailscale and signs in if needed, finds labd among the
-tailnet's online machines (port 7770), asks it for an enrollment token, downloads
-labd's lab-agent and runs `sudo lab-agent setup --server .. --token .. --gui-user <you>`
-with them. Any machine on the tailnet could answer like a lab, and its lab-agent
-runs as root, so before signing up it shows the machine that answered (its
-tailnet DNS name and host name, printable ASCII only, since the machine picks
-its own host name) and goes on only when you answer `y`. It stops
-when more than one lab answers. `MACLAB_SERVER=http://<host>:7770 ./volunteer`
-skips the search and the question.
+A person lends up to 5 Macs, an unused Join command counting as one and Macs
+that left not counting. A Maintainer raises one person's cap on People;
+Maintainers have none. A Mac's name is lowercase letters, digits and dashes,
+up to 31, unique in the lab, and is never changed.
 
-The maintainer runs labd with `--tailscale` (see [Tailscale](#tailscale)) and
-keeps `make`'s `bin/lab-agent-linux-arm64` next to labd, which hands it out.
-Then they share the labd machine with each volunteer's Tailscale account (admin
-console, Machines, Share), or invite them to the tailnet. Any person on the
-tailnet may enroll a Mac this way (`POST /api/volunteer`): the Mac gets a free
-name made from `<user>-<hostname>` and the volunteer's login as its label, and
-is marked a volunteer's: `lab gate` leaves its results out unless asked (see
-[Release gate](#release-gate)), and in labd only its Volunteer and the
-Maintainers see it (see [Tailscale](#tailscale)). Tagged tailnet devices, lab
-Macs under `tag:maclab` among them, are machines and get no token. Each person holds at most one unused
-token: asking again replaces it, so running `./volunteer` again after a setup
-that stopped half way just works. At most 20 people hold one at once; the next
-gets a 429 until one is used or expires a day later. Each person may have at
-most 3 Macs in the lab, counted by tailnet login; a fourth gets a 409 until
-`lab forget` drops one of them. Maintainers, asking with their token, aren't
-limited. Next
-comes its baseline, `lab baseline <name>`; after `./volunteer leave`,
-`lab forget <name>`.
+Nobody enrolls a Mac in another person's name. `lab enroll <name>` makes the
+same kind of Join command for a Lab-owned Mac only.
 
 ## Phones
 

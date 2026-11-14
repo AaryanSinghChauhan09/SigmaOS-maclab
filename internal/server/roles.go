@@ -478,6 +478,7 @@ func (s *Server) block(r *http.Request, k knownPerson, reason string) error {
 		return err
 	}
 	s.changed(k.AccountID)
+	s.endLendingOf(k.AccountID)
 	s.endLeasesOf(k.Person, wasBlocked(*by))
 	s.endMacSignInsOf(k.AccountID)
 	s.endEnrollmentsOf(k.AccountID)
@@ -519,3 +520,15 @@ func (p Person) access() access {
 // endEnrollmentsOf has the Macs the person lends Leave. Until it does, a
 // Blocked person's Macs stay enrolled, and the person no longer sees them.
 func (s *Server) endEnrollmentsOf(accountID int64) {}
+
+// endLendingOf takes back what a Blocked person had on the way to lending a
+// Mac: a waiting Request to lend and an unused Join command. Neither is an
+// event of its own: the Block is what is recorded.
+func (s *Server) endLendingOf(accountID int64) {
+	if _, err := s.store.settleRequest(accountID, requestWithdrawn, accountID, "", s.now()); err != nil {
+		s.log.Printf("a Blocked person's Request to lend: %v", err)
+	}
+	if _, err := s.store.cancelJoinCommand(accountID, s.now()); err != nil {
+		s.log.Printf("a Blocked person's Join command: %v", err)
+	}
+}

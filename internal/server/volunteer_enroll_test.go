@@ -18,20 +18,31 @@ import (
 // "ntfy_topic"; the enroll-token request's "volunteer_name" and "contact".
 const kindVolunteer = "volunteer"
 
-// enrollMac asks for a token with extra fields, enrolls sim with it and
-// returns labd's answer. If run, the Mac's lab-agent then checks in.
+// enrollMac enrolls sim with a token for name and returns labd's answer. A
+// Lab-owned Mac's token is asked for as lab enroll does. A Volunteer's (extra
+// carries its fields) is stored as the lab kept one before Join commands:
+// no Maintainer makes a token for a Volunteer's Mac. If run, the Mac's
+// lab-agent then checks in.
 func (l *lab) enrollMac(name string, extra map[string]any, sim *agent.Sim, run bool) map[string]any {
 	l.t.Helper()
-	req := map[string]any{"name": name, "model": api.ModelLaptop}
-	for k, v := range extra {
-		req[k] = v
-	}
-	resp, body := l.post("/api/enroll-tokens", req)
 	var tok api.EnrollTokenResponse
-	if resp.StatusCode != 200 || json.Unmarshal([]byte(body), &tok) != nil {
-		l.t.Fatalf("enroll token for %s: %s %s", name, resp.Status, body)
+	if len(extra) > 0 {
+		req := api.EnrollTokenRequest{Name: name, Model: api.ModelLaptop}
+		b, _ := json.Marshal(extra)
+		if err := json.Unmarshal(b, &req); err != nil {
+			l.t.Fatal(err)
+		}
+		tok.Token = "enr_volunteer_" + name + "_" + randHex(4)
+		if err := l.s.store.addToken(hashSecret(tok.Token), req, time.Now().Add(time.Hour)); err != nil {
+			l.t.Fatal(err)
+		}
+	} else {
+		resp, body := l.post("/api/enroll-tokens", map[string]any{"name": name, "model": api.ModelLaptop})
+		if resp.StatusCode != 200 || json.Unmarshal([]byte(body), &tok) != nil {
+			l.t.Fatalf("enroll token for %s: %s %s", name, resp.Status, body)
+		}
 	}
-	resp, body = l.as("", "POST", "/api/agent/enroll", api.EnrollRequest{Token: tok.Token, Facts: sim.Facts(), ActivationKey: testActivationKey, TermsSHA256: termsSum()})
+	resp, body := l.as("", "POST", "/api/agent/enroll", api.EnrollRequest{Token: tok.Token, Facts: sim.Facts(), ActivationKey: testActivationKey, TermsSHA256: termsSum()})
 	if resp.StatusCode != 200 {
 		l.t.Fatalf("enroll %s: %s %s", name, resp.Status, body)
 	}
@@ -91,19 +102,25 @@ func TestTokenWithoutVolunteerMakesALabOwnedMac(t *testing.T) {
 	}
 }
 
-func TestVolunteerTokenNeedsBothNameAndContact(t *testing.T) {
+// lab enroll is for Lab-owned Macs only: a token that names a Volunteer in
+// any way is refused, pointing at "Lend a Mac", and leaves nothing behind.
+func TestAMaintainerMakesNoTokenForAVolunteersMac(t *testing.T) {
 	l := newLab(t, false)
-	for _, extra := range []map[string]any{{"volunteer_name": "Ada"}, {"contact": "ada@example.org"}, {"volunteer_name": " ", "contact": "x"}} {
+	for _, extra := range []map[string]any{{"volunteer_name": "Ada", "contact": "ada@example.org"}, {"volunteer_name": "Ada"}, {"contact": "ada@example.org"},
+		{"volunteer": true}, {"volunteer_id": 7}, {"volunteer_login": "ada@github"}} {
 		req := map[string]any{"name": "half-mac", "model": api.ModelLaptop}
 		for k, v := range extra {
 			req[k] = v
 		}
-		if resp, body := l.post("/api/enroll-tokens", req); resp.StatusCode != 400 {
+		if resp, body := l.post("/api/enroll-tokens", req); resp.StatusCode != 400 || !strings.Contains(body, "Lab-owned Macs only") || !strings.Contains(body, "/lend") {
 			t.Fatalf("token with %v: %s %s", extra, resp.Status, body)
 		}
 	}
 	// and the refused requests left no token behind: the name is still free
-	l.enrollMac("half-mac", ada, agent.NewSim(t.TempDir()), false)
+	l.enrollMac("half-mac", nil, agent.NewSim(t.TempDir()), false)
+	if d := l.deviceJSON("half-mac"); d["kind"] == kindVolunteer {
+		t.Errorf("lab enroll made a Volunteer's Mac: %v", d)
+	}
 }
 
 func TestMacKindIsFixedUntilItIsReenrolled(t *testing.T) {

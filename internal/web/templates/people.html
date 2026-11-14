@@ -10,9 +10,15 @@
 {{end}}<div class="split">
 <div>
 <section class="card">
-<h2 class="card-title">requests</h2>
-<p class="dim">No request is waiting.</p>
-</section>
+<h2 class="card-title">requests{{if .Requests}} ({{len .Requests}}){{end}}</h2>
+{{if .Requests}}<ul class="requests">
+{{range .Requests}}<li id="request-{{.AccountID}}"><b>@{{.Handle}}</b> asks to lend a {{.Model}} <span class="dim">{{.Asked}}</span>{{if .Note}}<br>Note: {{.Note}}{{end}}{{if .Contact}}<br>Contact: {{.Contact}}{{end}}
+<form class="form form-inline" method="post" action="{{href (printf "/people/%d/request/approve" .AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Approve</button></form>
+<form class="form form-inline" method="post" action="{{href (printf "/people/%d/request/decline" .AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="text" name="reason" maxlength="200" placeholder="reason (optional, one line)" aria-label="Reason (optional)" autocomplete="off"> <button class="button button-small button-plain" type="submit">Decline</button></form></li>
+{{end}}</ul>
+<p class="dim">Approval is of the person: it stands when their last Mac leaves. The lab sends them nothing; "Lend a Mac" shows your answer, and a reason you type.</p>
+{{else}}<p class="dim">No request is waiting.</p>
+{{end}}</section>
 <section class="card">
 <h2 class="card-title">people ({{len .Rows}})</h2>
 <p class="chips">{{range .Chips}}<a class="chip{{if .Current}} current{{end}}" href="{{href .Path}}">{{.Label}} {{.Count}}</a>
@@ -23,7 +29,7 @@
 {{range $row := .Rows}}<tr class="person-row{{if .Open}} open{{end}}" id="person-{{.AccountID}}">
 <td data-label="Person" class="nowrap"><a class="person-toggle" href="{{href .Path}}" aria-expanded="{{if .Open}}true{{else}}false{{end}}">{{if .Open}}▾{{else}}▸{{end}} <b>@{{.Handle}}</b></a>{{if .You}} <span class="you">you</span>{{end}}{{if .Twin}} <span class="dim" title="Two accounts go by this handle here: one was renamed and has not signed in since">account {{.AccountID}}</span>{{end}}</td>
 <td data-label="Kind"><span class="badge {{.BadgeClass}}">{{.Badge}}</span></td>
-<td data-label="Their Macs">{{template "names" .Macs}}</td>
+<td data-label="Their Macs">{{template "names" .Macs}}{{if .LeaveNoMac}} <span class="dim">has leave to lend, no Mac yet</span>{{end}}</td>
 <td data-label="Leases held">{{template "names" .Leases}}</td>
 <td data-label="Signed in for Verified runs">{{if .SignedIn}}{{.SignedIn}}{{if not .Counted}} <span class="dim">not counted</span>{{end}}{{else}}<span class="dim">0</span>{{end}}</td>
 <td data-label="Last seen" class="nowrap{{if .LastSeen.IsZero}} dim{{end}}">{{.Seen}}</td>
@@ -46,7 +52,11 @@
 <div>
 <h3>Their Macs</h3>
 {{if $row.Macs}}<ul>{{range $row.Macs}}<li>{{.}}</li>{{end}}</ul>{{else}}<p class="dim">Lends no Mac.</p>{{end}}
-</div>
+{{if .JoinCommand}}<p class="dim">An unused Join command for {{.JoinCommand}} counts as one.</p>
+{{end}}{{if $row.Blocked}}{{else if .Cap}}<p>Cap: {{.Lends}} of {{.Cap}}</p>
+<form class="form form-inline" method="post" action="{{href (printf "/people/%d/cap" $row.AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="text" name="macs" inputmode="numeric" maxlength="2" size="3" placeholder="{{.Cap}}" aria-label="Cap, in Macs" autocomplete="off"> <button class="button button-small" type="submit">Raise cap</button></form>
+{{else}}<p class="dim">A Maintainer has no cap.</p>
+{{end}}</div>
 <div>
 <h3>Leases held</h3>
 {{if $row.Leases}}<ul>{{range $row.Leases}}<li>{{.}} <form class="form form-inline take" method="post" action="{{href (printf "/people/%d/leases/%s/end" $row.AccountID .)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="text" name="why" maxlength="200" placeholder="why (optional)" aria-label="Why (optional)" autocomplete="off"> <button class="button button-danger button-small" type="submit" data-sentence="{{printf "End @%s's Lease on %s: its job is canceled and its sessions are cut" $row.Handle .}}">End Lease</button></form></li>{{end}}</ul>{{else}}<p class="dim">Holds no Lease.</p>{{end}}

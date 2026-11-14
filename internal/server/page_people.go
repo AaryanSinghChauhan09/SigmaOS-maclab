@@ -69,6 +69,8 @@ type personRow struct {
 	// whether their runs are Verified runs: the person is on the M team.
 	SignedIn int
 	Counted  bool
+	// LeaveNoMac is leave to lend with no Mac lent yet.
+	LeaveNoMac bool
 }
 
 // personOpen is the inside of an opened row.
@@ -90,19 +92,31 @@ type personOpen struct {
 	// Leases is the person's part of the Lease record: their Leases, and
 	// those they ended.
 	Leases []recordShownLine
+	// Lends is what counts toward the person's cap, Cap the cap (0 for a
+	// Maintainer, who has none), and JoinCommand the Mac their unused Join
+	// command names.
+	Lends, Cap  int
+	JoinCommand string
 }
 
 type recordShownLine struct {
 	When, Line string
 }
 
+// peopleRequest is a Request to lend waiting for a Maintainer.
+type peopleRequest struct {
+	AccountID                           int64
+	Handle, Model, Note, Contact, Asked string
+}
+
 type peopleData struct {
-	Admin   bool
-	Refused string
-	Chips   []peopleChip
-	Rows    []personRow
-	Record  []recordShownLine
-	Kind    string
+	Admin    bool
+	Refused  string
+	Requests []peopleRequest
+	Chips    []peopleChip
+	Rows     []personRow
+	Record   []recordShownLine
+	Kind     string
 }
 
 // utcMinute is a time as People shows it.
@@ -129,15 +143,20 @@ func (s *Server) showPeople(w http.ResponseWriter, r *http.Request, status int, 
 	if r.Method == http.MethodPost {
 		kind, open = "", r.PathValue("id")
 	}
+	s.expireJoinCommands()
 	people, err := s.store.knownPeople()
 	lines, lerr := s.store.recordLines(recordShown)
 	signIns, serr := s.reports.SignIns()
-	if err = errors.Join(err, lerr, serr); err != nil {
+	waiting, werr := s.store.waitingRequests()
+	if err = errors.Join(err, lerr, serr, werr); err != nil {
 		s.log.Printf("People: %v", err)
 		httpErr(w, 500, "The lab couldn't read its people.")
 		return
 	}
 	page := peopleData{Admin: me.Admin, Refused: refused, Record: shown(lines), Kind: kind}
+	for _, q := range waiting {
+		page.Requests = append(page.Requests, peopleRequest{AccountID: q.AccountID, Handle: q.Handle, Model: q.ModelName(), Note: q.Note, Contact: q.Contact, Asked: utcMinute(q.Asked)})
+	}
 	counts := map[string]int{}
 	for i := range people {
 		k := &people[i]
@@ -170,6 +189,7 @@ func (s *Server) showPeople(w http.ResponseWriter, r *http.Request, status int, 
 		if !k.LastSeen.IsZero() {
 			row.Seen = utcMinute(k.LastSeen)
 		}
+		row.LeaveNoMac = k.MayLend() && !k.OnMTeam() && len(row.Macs) == 0
 		to := url.Values{}
 		if kind != "" {
 			to.Set("kind", kind)
@@ -216,6 +236,12 @@ func (s *Server) openPerson(me *Person, k knownPerson, handles map[int64]string,
 	if events, err := s.store.leaseRecordOf(k.AccountID, recordShown); err == nil {
 		for _, e := range events {
 			o.Leases = append(o.Leases, recordShownLine{utcMinute(e.Time), e.Line()})
+		}
+	}
+	if l, err := s.lendsOf(k.Person); err == nil {
+		o.Lends, o.Cap = l.Count(), l.Cap
+		if l.Unused != nil {
+			o.JoinCommand = l.Unused.Name
 		}
 	}
 	return o

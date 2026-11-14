@@ -54,15 +54,6 @@ func TestMaintainerLinksVolunteerLogin(t *testing.T) {
 	l := newLinkLab(t, t.TempDir())
 	s, do, enroll, tokenFor, maintainerMac, patch, names := l.s, l.do, l.enroll, l.tokenFor, l.maintainerMac, l.patch, l.names
 	const visitor, other, admin = visitorAt, otherAt, adminTok
-	volunteer := func(remote, body string) *httptest.ResponseRecorder {
-		t.Helper()
-		var resp api.EnrollTokenResponse
-		w := do("POST", "/api/volunteer", remote, "", body)
-		if json.Unmarshal(w.Body.Bytes(), &resp); w.Code == 200 {
-			enroll(resp.Token)
-		}
-		return w
-	}
 	seesMac := l.seesMac
 
 	// Linked at enrollment: the login, in any case, sees the Mac; nobody else.
@@ -77,16 +68,17 @@ func TestMaintainerLinksVolunteerLogin(t *testing.T) {
 		t.Error("another person sees a Mac linked to someone else")
 	}
 
-	// Bad logins and logins without a Volunteer are refused; no token is made.
+	// A Maintainer makes no token for a Volunteer's Mac, linked or not:
+	// nobody enrolls a Mac in another person's name.
 	for _, body := range []string{
-		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"visitor"}`,
-		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"enr_0123456789abcdef0123456789abcdef"}`,
-		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"lab_adm_secret"}`,
-		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"visitor@github visitor@github"}`,
-		`{"name":"bad","volunteer_login":"visitor@github"}`, // a Lab-owned Mac's token
+		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"visitor@github"}`,
+		`{"name":"bad","volunteer_name":"V","contact":"c"}`,
+		`{"name":"bad","volunteer":true}`,
+		`{"name":"bad","volunteer_id":7}`,
+		`{"name":"bad","volunteer_login":"visitor@github"}`,
 	} {
-		if w := tokenFor(body); w.Code != 400 {
-			t.Errorf("token %s: %d %s, want 400", body, w.Code, w.Body)
+		if w := tokenFor(body); w.Code != 400 || !strings.Contains(w.Body.String(), "Lend a Mac") {
+			t.Errorf("token %s: %d %s, want 400 naming Lend a Mac", body, w.Code, w.Body)
 		}
 	}
 
@@ -135,10 +127,9 @@ func TestMaintainerLinksVolunteerLogin(t *testing.T) {
 	if got := s.dev("linked").d.LinkedLogin; got != "visitor@github" {
 		t.Errorf("a person changed linked's login to %q", got)
 	}
-	// ./volunteer takes no login from its body: the Mac is its asker's alone.
-	if w := volunteer(other, `{"name":"own","volunteer_login":"visitor@github"}`); w.Code != 200 {
-		t.Fatalf("volunteer: %d %s", w.Code, w.Body)
-	}
+	// A Mac a tailnet login volunteered, in a lab from before sign-in, is
+	// its asker's alone.
+	l.volunteered("own", "other@github")
 	if d := s.dev("own").d; d.LinkedLogin != "" || d.VolunteeredBy != "other@github" {
 		t.Errorf("own: LinkedLogin %q, VolunteeredBy %q", d.LinkedLogin, d.VolunteeredBy)
 	}
@@ -156,22 +147,6 @@ func TestMaintainerLinksVolunteerLogin(t *testing.T) {
 		t.Errorf("the visitor lists %q, want only linked", got)
 	}
 
-	// Linked Macs are outside the person's own limit: with three linked, they
-	// still volunteer three of their own, and no more.
-	maintainerMac("linked-2", "visitor@github")
-	maintainerMac("linked-3", "visitor@github")
-	for i := range maxVolunteerMacs {
-		if w := volunteer(visitor, fmt.Sprintf(`{"name":"mine-%d"}`, i)); w.Code != 200 {
-			t.Fatalf("volunteer mine-%d with linked Macs: %d %s", i, w.Code, w.Body)
-		}
-	}
-	if w := volunteer(visitor, `{"name":"one-too-many"}`); w.Code != 409 {
-		t.Errorf("a fourth Mac of their own: %d %s, want 409", w.Code, w.Body)
-	}
-	if got := names(visitor); len(got) != 6 {
-		t.Errorf("the visitor lists %q, want 3 linked and 3 of their own", got)
-	}
-
 	// A forgotten linked Mac takes its link with it: its name, taken again,
 	// is nobody's until a Maintainer links it, and the old jobs stay hidden.
 	if code, err := s.forget(s.dev("linked"), "", true); code != 200 {
@@ -180,9 +155,7 @@ func TestMaintainerLinksVolunteerLogin(t *testing.T) {
 	if slices.Contains(names(visitor), "linked") {
 		t.Error("the visitor still lists a forgotten Mac")
 	}
-	var resp api.EnrollTokenResponse
-	json.Unmarshal(tokenFor(`{"name":"linked","volunteer_name":"Other","contact":"o@example.org"}`).Body.Bytes(), &resp)
-	enroll(resp.Token)
+	enroll(l.linkedToken("linked", ""))
 	if w := do("GET", "/api/devices/linked", visitor, "", ""); w.Code != 404 {
 		t.Errorf("the visitor sees a new, unlinked Mac under a forgotten linked Mac's name: %d", w.Code)
 	}
@@ -272,16 +245,32 @@ func (l *linkLab) tokenFor(body string) *httptest.ResponseRecorder {
 	return l.do("POST", "/api/enroll-tokens", visitorAt, adminTok, body)
 }
 
-// linkedToken is a Maintainer's token for a Volunteer's Mac called name,
-// linked to login ("" for none).
+// linkedToken is a token for a Volunteer's Mac called name, linked to login
+// ("" for none), as a lab from before sign-in kept one.
 func (l *linkLab) linkedToken(name, login string) string {
 	l.t.Helper()
-	var resp api.EnrollTokenResponse
-	w := l.tokenFor(`{"name":"` + name + `","volunteer_name":"Visitor","contact":"v@example.org","volunteer_login":"` + login + `"}`)
-	if json.Unmarshal(w.Body.Bytes(), &resp); w.Code != 200 {
-		l.t.Fatalf("token for %s: %d %s", name, w.Code, w.Body)
+	if login != "" {
+		var err error
+		if login, err = volunteerLogin(login); err != nil {
+			l.t.Fatal(err)
+		}
 	}
-	return resp.Token
+	tok := "enr_linked_" + name + "_" + randHex(4)
+	if err := l.s.store.addToken(hashSecret(tok), api.EnrollTokenRequest{Name: name, Model: api.ModelLaptop, VolunteerName: "Visitor", Contact: "v@example.org", VolunteerLogin: login}, time.Now().Add(time.Hour)); err != nil {
+		l.t.Fatal(err)
+	}
+	return tok
+}
+
+// volunteered enrolls a Mac called name that the tailnet login by
+// volunteered, as ./volunteer did in a lab from before sign-in.
+func (l *linkLab) volunteered(name, by string) {
+	l.t.Helper()
+	tok := "enr_own_" + name + "_" + randHex(4)
+	if err := l.s.store.addToken(hashSecret(tok), api.EnrollTokenRequest{Name: name, Model: api.ModelLaptop, Volunteer: true, VolunteeredBy: by, VolunteerName: by, Contact: by}, time.Now().Add(time.Hour)); err != nil {
+		l.t.Fatal(err)
+	}
+	l.enroll(tok)
 }
 
 // maintainerMac enrolls a Volunteer's Mac with linkedToken, with one done

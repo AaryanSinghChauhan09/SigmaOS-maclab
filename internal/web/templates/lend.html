@@ -1,0 +1,65 @@
+{{define "models"}}<label class="filter-field"><span>Model</span><select name="model" required>
+<option value="">choose the Mac's model</option>
+{{range .Models}}<option value="{{.ID}}"{{if eq .ID $.Model}} selected{{end}}>{{.Name}}</option>
+{{end}}</select></label>{{end}}
+
+{{define "main"}}{{with .Data}}<h1>Lend a Mac</h1>
+<section class="card attention" id="test-machine">
+<h2 class="card-title">test machines only</h2>
+<p>Lend only a Test machine: a Mac with nothing on it, in Omarchy or in macOS, that you cannot afford to lose or to have read. A Mac you use every day is not welcome. No software checks this: your typed <code>yes</code> at the Mac covers it.</p>
+</section>
+<section class="card" id="what-the-lab-may-do">
+<h2 class="card-title">what the lab may and may not do</h2>
+<div class="scroll"><table class="list stack">
+<thead><tr><th></th><th>The lab may</th></tr></thead>
+<tbody>
+<tr><td><b>Qualification</b> <span class="dim">(every Mac starts here)</span></td><td data-label="The lab may">Restart the Mac into test kernels, the M team's own included, and back; run its own tests; collect hardware facts, logs and test output; see the screen and the live journal while a job or a Lease holds the Mac. Who: Maintainers, and M team members holding a Lease.</td></tr>
+<tr><td><b>Full</b> <span class="dim">(you choose it, on the Mac)</span></td><td data-label="The lab may">Also a root shell, their own scripts, staged Mesa.</td></tr>
+<tr><td><b>Never</b></td><td data-label="The lab may">A Hard reset: a hung Mac waits for its own watchdog, then for you. Anything outside the Availability window or on battery. Publishing its reports unless you turn that on. Showing your handle to the public.</td></tr>
+</tbody>
+</table></div>
+<p class="dim">A test kernel has full control of the machine, files included. Installing a Release and rolling back is not offered on a Volunteer's Mac. Joining, pausing, changing the window or the Access level, and leaving are posted to the Lab group on Signal, where the M team is, under the Mac's name, never yours. Nothing is sent to you about Leases: My Macs shows who holds one and until when. You set the window, pause, choose the Access level, read every record and leave at any time.</p>
+<p class="dim">A Mac that is in another lab: the Join command names that lab and asks once. On yes the Mac leaves it properly, then joins here at Qualification with publishing off; the window it had is kept.</p>
+</section>
+<section class="card" id="terms">
+<h2 class="card-title">the terms</h2>
+<pre class="legal">{{.Terms.Body}}</pre>
+<p class="legal-version">Dated <time datetime="{{.Terms.Date}}">{{.Terms.Date}}</time>. sha256 of this text: <code>{{.Terms.SHA256}}</code>. The same text is shown in the terminal at the Mac, where you accept it by typing <code>yes</code>.</p>
+</section>
+{{with .Refused}}<p class="flash flash-alert" role="alert">{{.}}</p>
+{{end}}{{if .Made}}<section class="card attention" id="join-command">
+<h2 class="card-title">the join command for {{.Made.Name}}</h2>
+<p>Run this one line in a terminal on the Mac, as yourself. This is the only time the lab shows it: copy it now.</p>
+<pre class="legal"><code>{{.Made.Line}}</code></pre>
+<p class="dim">Good for one Mac, once, until {{.Made.Expires}}. It checks the Mac, shows the terms and asks for your <code>yes</code> before it changes anything. It names {{.Address}} and nothing else. If it is refused, it says why once and stops.</p>
+</section>
+{{end}}{{if .Leave}}<section class="card" id="lend">
+<h2 class="card-title">your macs · {{.Lends}}{{if .Cap}} of {{.Cap}}{{end}}</h2>
+{{if .Cap}}<p class="dim">Each Mac you lend counts, and so does an unused Join command. Macs that left do not.</p>
+{{else}}<p class="dim">A Maintainer has no cap.</p>
+{{end}}{{with .Unused}}<p>An unused Join command for <b>{{.Name}}</b> is good until {{.Expires}}. {{template "take" ($.Take "/lend/join-command/cancel" "Cancel" "Cancel: this Join command stops working now")}}</p>
+{{end}}{{if .AtCap}}<p>You lend {{.Cap}} Macs, which is your cap. One has to Leave first, or a Maintainer raises your cap.</p>
+{{else}}<form class="form" method="post" action="{{href "/lend/join-command"}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">
+{{template "models" .}}
+<label class="filter-field"><span>Name</span><input type="text" name="name" maxlength="31" pattern="[a-z0-9][a-z0-9-]{0,30}" value="{{.Name}}" placeholder="empty: the model's name" autocomplete="off" spellcheck="false"></label>
+<button class="button" type="submit">Make the Join command</button>
+</form>
+<p class="dim">The name: lowercase letters, digits and dashes, up to 31, unique in the lab. Leave it empty and the lab suggests the model alone, numbered when taken. There is no rename. Who sees it: Maintainers, the M team, the Lab group on Signal and the notice service; never the public site.{{if .Unused}} A new Join command cancels the unused one.{{end}}</p>
+{{end}}</section>
+{{else if .Waiting}}<section class="card" id="request">
+<h2 class="card-title">your request to lend</h2>
+<p>Waiting since {{.Waiting.When}}, for a {{.Waiting.Model}}. A Maintainer answers here; nothing is sent to you.</p>
+<p>{{template "take" ($.Take "/lend/request/withdraw" "Withdraw" "Withdraw: your Request to lend is taken back")}}</p>
+</section>
+{{else}}<section class="card" id="request">
+<h2 class="card-title">request to lend</h2>
+{{with .Declined}}<p>Declined {{.When}}{{if .Reason}}: {{.Reason}}{{end}}. You can ask again at once.</p>
+{{else}}<p>Lending needs leave, once per person. Send a Request to lend and a Maintainer answers on this page; the lab sends you nothing.</p>
+{{end}}<form class="form" method="post" action="{{href "/lend/request"}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">
+{{template "models" .}}
+<label class="filter-field"><span>Note (optional)</span><input type="text" name="note" maxlength="500" autocomplete="off"></label>
+<label class="filter-field"><span>Contact (optional, Maintainers only)</span><input type="text" name="contact" maxlength="200" autocomplete="off"></label>
+<button class="button" type="submit">{{if .Declined}}Ask again{{else}}Send a Request to lend{{end}}</button>
+</form>
+</section>
+{{end}}{{end}}{{end}}

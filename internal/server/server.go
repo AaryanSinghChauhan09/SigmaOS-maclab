@@ -126,9 +126,6 @@ type Config struct {
 	// (reports.NewRules): a permanent secret, reproduced from the old site's.
 	// Without it labd takes no reports.
 	MachineIDKey []byte
-	// Terms is what a Mac's owner accepts before it joins the lab; empty is
-	// DefaultTerms (see terms.go).
-	Terms string
 	// GitHub is the OAuth app people sign in through with a browser; nil
 	// leaves sign-in off (see ReadSignIn).
 	GitHub *GitHubApp
@@ -391,6 +388,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	go s.buildMonitor()
 	go s.lines.run(ctx)
 	go s.summaryLoop()
+	go s.joinCommandLoop()
 	if cfg.Watch != nil {
 		s.startWatch()
 		if !cfg.Watch.ByHand {
@@ -709,10 +707,11 @@ func (s *Server) routes() []route {
 		{"POST /api/devices/{name}/console/arm", maintainers, s.hConsoleArm},
 		{"POST /api/agent/screen", ownMac, s.hAgentScreen},
 		{"POST /api/enroll-tokens", maintainers, s.hEnrollToken},
-		{"POST /api/volunteer", people, s.hVolunteer},
-		{"GET /api/volunteer/lab-agent", people, s.hVolunteerAgent},
-		{"GET /api/join/lab-agent", invited, s.hVolunteerAgent},
+		{"POST /api/volunteer", anyone, s.hVolunteerGone},
+		{"GET /api/volunteer/lab-agent", anyone, s.hVolunteerGone},
+		{"GET /api/join/lab-agent", invited, s.hJoinAgent},
 		{"GET /api/join/terms", invited, s.hJoinTerms},
+		{"POST /api/join/check", invited, s.hJoinCheck},
 		{"DELETE /api/enroll-tokens/{name}", maintainers, s.hRevokeEnrollTokens},
 		{"POST /api/devices/{name}/artifact-grants", maintainers, s.hArtifactGrants},
 		{"POST /api/artifacts", teamBuilds, s.teamUpload(s.hPutArtifact)},
@@ -849,17 +848,11 @@ func (s *Server) hEnrollToken(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "device name must be lowercase letters, digits and dashes")
 		return
 	}
-	if req.VolunteerLogin != "" {
-		if strings.TrimSpace(req.VolunteerName) == "" {
-			httpErr(w, 400, "a Volunteer's login goes on a Volunteer's token, with their name and contact")
-			return
-		}
-		l, err := volunteerLogin(req.VolunteerLogin)
-		if err != nil {
-			httpErr(w, 400, "%v", err)
-			return
-		}
-		req.VolunteerLogin = l
+	// Nobody enrolls a Mac in another person's name: a Volunteer makes the
+	// Join command for their own Mac, signed in, on "Lend a Mac".
+	if req.Volunteer || req.VolunteerName != "" || req.Contact != "" || req.VolunteerLogin != "" || req.VolunteerID != 0 {
+		httpErr(w, 400, "lab enroll is for Lab-owned Macs only: a Volunteer's Mac is lent by its own Volunteer, signed in, from Lend a Mac (%s)", s.publicBase(r)+"/lend")
+		return
 	}
 	// Activation is one-time, so a Mac that enrolled but never checked in
 	// still holds its name: a new token for it would only be refused.
@@ -871,64 +864,51 @@ func (s *Server) hEnrollToken(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.issueToken(w, r, req, "")
+	if req.Model == "" {
+		req.Model = api.ModelLaptop
+	}
+	var by int64
+	if p := credentialOf(r); p != nil {
+		by = p.AccountID
+	}
+	tok := "enr_" + randHex(16)
+	now := s.now()
+	exp := now.Add(joinCommandTTL)
+	if _, err := s.store.addJoinCommand(hashSecret(tok), req, by, now, exp); errors.Is(err, errNameHeld) {
+		httpErr(w, 409, "a Join command for a Mac called %s is waiting already: names are unique", req.Name)
+		return
+	} else if err != nil {
+		httpErr(w, 500, "%v", err)
+		return
+	}
+	s.saidOfJoinCommand(r, "made a Join command for "+req.Name)
+	s.labGroup.JoinCommandMade(req.Name, maintainerName(r))
+	writeJSON(w, api.EnrollTokenResponse{Name: req.Name, Token: tok, Expires: exp, JoinCommand: s.joinCommand(r, tok)})
 }
 
 // hRevokeEnrollTokens deletes the enrollment tokens for a name, used or not:
-// an invite that hasn't been used stops working, and a used one can't be
-// used again. A Mac that already enrolled with one stays until forgotten.
+// a Join command that hasn't been used stops working, and a used one can't
+// be used again. A Mac that already enrolled with one stays until forgotten.
 func (s *Server) hRevokeEnrollTokens(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	unused, _ := s.store.unusedTokensFor(name, s.now())
 	n, err := s.store.revokeTokens(name)
 	if err != nil {
 		httpErr(w, 500, "%v", err)
 		return
 	}
 	s.log.Printf("Maintainer %s revoked %d enrollment token(s) for %s", maintainerName(r), n, name)
+	if unused > 0 {
+		s.saidOfJoinCommand(r, "cancelled the Join command for "+name)
+		s.labGroup.JoinCommandCancelled(name, maintainerName(r))
+	}
 	writeJSON(w, map[string]any{"name": name, "revoked": n})
 }
 
-// issueToken answers with a one-use enrollment token for req, good for a day.
-// A token for volunteer, a tailnet viewer's login, replaces any unused one
-// they hold and counts toward maxVolunteerTokens (see addVolunteerToken).
-func (s *Server) issueToken(w http.ResponseWriter, r *http.Request, req api.EnrollTokenRequest, volunteer string) {
-	if req.Model == "" {
-		req.Model = api.ModelLaptop
-	}
-	req.VolunteerName, req.Contact = strings.TrimSpace(req.VolunteerName), strings.TrimSpace(req.Contact)
-	if (req.VolunteerName == "") != (req.Contact == "") {
-		httpErr(w, 400, "a Volunteer's token needs both the Volunteer's name and their contact")
-		return
-	}
-	req.Volunteer = req.Volunteer || req.VolunteerName != ""
-	tok := "enr_" + randHex(16)
-	exp := s.now().Add(24 * time.Hour)
-	var err error
-	if volunteer != "" {
-		err = s.store.addVolunteerToken(hashSecret(tok), req, volunteer, exp, s.now(), maxVolunteerTokens)
-	} else {
-		err = s.store.addToken(hashSecret(tok), req, exp)
-	}
-	if errors.Is(err, errVolunteerTokens) {
-		httpErr(w, 429, "%d volunteers are signing up already: try again in a while, or ask the lab's maintainer", maxVolunteerTokens)
-		return
-	} else if err != nil {
-		httpErr(w, 500, "%v", err)
-		return
-	}
-	writeJSON(w, api.EnrollTokenResponse{Name: req.Name, Token: tok, Expires: exp, JoinCommand: s.joinCommand(r, tok)})
+// hVolunteerGone answers the two routes of the retired ./volunteer.
+func (s *Server) hVolunteerGone(w http.ResponseWriter, r *http.Request) {
+	httpErr(w, http.StatusGone, "./volunteer is retired: sign in at %s and open Lend a Mac", s.publicBase(r))
 }
-
-// A viewer holds at most one unused volunteer token, and at most
-// maxVolunteerTokens viewers hold one, so tailnet peers can't fill labd's
-// token table. One viewer's tokens enroll at most maxVolunteerMacs Macs, so
-// one login can't fill the lab either. A request is a name and a model:
-// volunteerBodyMax is plenty.
-const (
-	maxVolunteerTokens = 20
-	maxVolunteerMacs   = 3
-	volunteerBodyMax   = 4 << 10
-)
 
 // Agents' requests are small, except for command results. Real ones stay far
 // below these limits: an enrollment or a check-in carries the Mac's facts, a
@@ -967,97 +947,10 @@ func decodeBody(w http.ResponseWriter, r *http.Request, max int64, v any) bool {
 	return false
 }
 
-// volunteerMacsLocked names the Macs that login's volunteer tokens enrolled,
-// left ones included until lab forget drops them. The caller holds s.mu.
-// Macs a Maintainer linked to the login don't count: the limit keeps one
-// person from filling the lab, and a Maintainer chose to let those in.
-func (s *Server) volunteerMacsLocked(login string) []string {
-	var names []string
-	for name, v := range s.devs {
-		if v.volunteeredBy == login {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names
-}
-
-// tooManyMacs is the answer to a volunteer who has maxVolunteerMacs already.
-func tooManyMacs(w http.ResponseWriter, login string, names []string) {
-	httpErr(w, 409, "%s has volunteered %d Macs already (%s), as many as one person may: to put in another, take one out first "+
-		"(./volunteer leave on it, then the lab's maintainer runs `lab forget <name>`)", login, len(names), strings.Join(names, ", "))
-}
-
-// hVolunteer gives any person labd knows a token to enroll their own Mac:
-// ./volunteer runs lab-agent setup with it. The Mac is named after what it
-// sent, made into a free device name, labelled with the volunteer's login
-// and marked a volunteer's. A person with maxVolunteerMacs Macs in the lab
-// gets no token. Maintainers may ask too, with their token, outside the
-// limits: they can make any token with POST /api/enroll-tokens anyway.
-func (s *Server) hVolunteer(w http.ResponseWriter, r *http.Request) {
-	a, who := s.access(r)
-	volunteer := ""
-	if a == adminAccess {
-		who = "" // a Maintainer, not a volunteer's login
-	} else {
-		if volunteer = strings.ToLower(who); volunteer == "" {
-			httpErr(w, 403, "labd can't tell who you are")
-			return
-		}
-		s.mu.Lock()
-		names := s.volunteerMacsLocked(volunteer)
-		s.mu.Unlock()
-		if len(names) >= maxVolunteerMacs {
-			tooManyMacs(w, who, names)
-			return
-		}
-	}
-	var req api.EnrollTokenRequest
-	if !decodeBody(w, r, volunteerBodyMax, &req) {
-		return
-	}
-	req.Label, req.Volunteer = who, true
-	// Only a Maintainer links a login (POST /api/enroll-tokens): a person's
-	// Mac is theirs alone.
-	req.VolunteerLogin = ""
-	if volunteer != "" { // a tailnet login is all labd knows of the person
-		req.VolunteerName, req.Contact = who, who
-	}
-	if req.Model != api.ModelDesktop {
-		req.Model = api.ModelLaptop
-	}
-	if req.Name = s.freeName(req.Name); req.Name == "" {
-		httpErr(w, 409, "no free device name")
-		return
-	}
-	s.log.Printf("enroll token for %s, asked for by volunteer %s", req.Name, orStr(who, "(Maintainer "+maintainerName(r)+")"))
-	s.issueToken(w, r, req, volunteer)
-}
-
 var reNameRun = regexp.MustCompile(`[^a-z0-9]+`)
 
-// freeName turns raw into a device name no Mac has yet, adding -2, -3, ...
-// on a clash; "" when even those are taken.
-func (s *Server) freeName(raw string) string {
-	base := strings.Trim(reNameRun.ReplaceAllString(strings.ToLower(raw), "-"), "-")
-	if base == "" {
-		base = "mac"
-	}
-	base = strings.TrimRight(base[:min(len(base), 28)], "-") // room for -99
-	for i := 1; i < 100; i++ {
-		name := base
-		if i > 1 {
-			name = fmt.Sprintf("%s-%d", base, i)
-		}
-		if s.dev(name) == nil {
-			return name
-		}
-	}
-	return ""
-}
-
-// hVolunteerAgent hands out the lab-agent built with this labd.
-func (s *Server) hVolunteerAgent(w http.ResponseWriter, r *http.Request) {
+// hJoinAgent hands out the lab-agent built with this labd.
+func (s *Server) hJoinAgent(w http.ResponseWriter, r *http.Request) {
 	f, err := os.Open(s.cfg.AgentBinary)
 	if err != nil {
 		httpErr(w, 404, "this lab has no lab-agent to hand out: build it with make, next to labd")
@@ -1078,14 +971,29 @@ func (s *Server) tokenValid(hash string) bool {
 	return err == nil
 }
 
+// refusedToken answers a request whose enrollment token labd does not
+// take, and logs it. A refused token is never posted to a group: anyone on
+// the internet can produce one.
+func (s *Server) refusedToken(w http.ResponseWriter, r *http.Request, code int, why string) {
+	s.log.Printf("refused an enrollment token on %s %s: %s", r.Method, r.URL.Path, why)
+	httpErr(w, code, "%s", why)
+}
+
+const (
+	tokenRefused   = "enrollment token unknown, used or expired"
+	tokenOtherMacs = "this Join command was first used on another Mac, and serves that Mac only: make a new one on Lend a Mac"
+)
+
 // hEnroll turns an enrollment token into a device. It needs no secret, so
 // its body is held to enrollBodyMax before the token is even looked at.
 //
-// Activation is one-time: the first enrollment with a token uses it up, for
-// the activation key that Mac sent. Should the answer never reach the Mac,
-// only that same activation key enrolls again with the token, and only until
-// the Mac's first check-in: the token alone, copied to another Mac, is worth
-// nothing once used. The owner must have accepted labd's current terms.
+// Activation is one-time: the first Mac to use a token binds it, and the
+// first enrollment uses it up, for the activation key that Mac sent. Should
+// the answer never reach the Mac, only that same activation key enrolls
+// again with the token, and only until the Mac's first check-in: the token
+// alone, copied to another Mac, is worth nothing once used. The owner must
+// have accepted the lab's current terms. A Blocked Volunteer, a cap reached
+// and a name taken are refused here, with the reason.
 func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 	// Anyone may send this body, before labd knows who they are: it must
 	// arrive soon, not trickle in to hold the connection.
@@ -1095,13 +1003,13 @@ func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tokHash := hashSecret(req.Token)
-	t, activatedBy, err := s.store.tokenState(tokHash, s.now())
+	t, err := s.store.tokenState(tokHash, s.now())
 	if err != nil {
-		httpErr(w, 403, "enrollment token unknown, used or expired")
+		s.refusedToken(w, r, 403, tokenRefused)
 		return
 	}
 	if _, sum := s.terms(); req.TermsSHA256 != sum {
-		httpErr(w, 409, "this Mac's owner hasn't accepted labd's current participation terms: lab-agent setup shows them")
+		httpErr(w, 409, "this Mac's owner hasn't accepted the lab's current terms: lab-agent setup shows them")
 		return
 	}
 	keyHash := ""
@@ -1113,15 +1021,26 @@ func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 		keyHash = hashSecret(req.ActivationKey)
 	}
 	secret := "dev_" + randHex(24)
-	if activatedBy != "" {
-		s.enrollAgain(w, t, tokHash, keyHash, activatedBy, secret)
+	if t.ActivatedBy != "" {
+		s.enrollAgain(w, r, &t.EnrollTokenRequest, tokHash, keyHash, t.ActivatedBy, secret)
 		return
 	}
 	if keyHash == "" { // an older lab-agent: no enrolling again with this token
+		if t.BoundTo != "" {
+			s.refusedToken(w, r, 403, tokenOtherMacs)
+			return
+		}
 		keyHash = "none-" + randHex(16)
+	} else if mine, err := s.store.bindToken(tokHash, keyHash); err != nil || !mine {
+		s.refusedToken(w, r, 403, tokenOtherMacs)
+		return
+	}
+	if err := s.mayEnroll(&t.EnrollTokenRequest); err != nil {
+		s.refusedEnrollment(w, t.Name, err)
+		return
 	}
 	d := api.Device{ID: "d-" + randHex(6), Name: t.Name, Label: t.Label, Model: t.Model, VolunteeredBy: t.VolunteeredBy, LinkedLogin: t.VolunteerLogin,
-		State: api.StateNew, StateReason: "enrolled; run a baseline job", Facts: req.Facts, Enrollment: enrollment(t, api.Enrollment{}),
+		State: api.StateNew, StateReason: "enrolled; run a baseline job", Facts: req.Facts, Enrollment: enrollment(&t.EnrollTokenRequest, api.Enrollment{}),
 		TermsSHA256: req.TermsSHA256, TermsAccepted: s.now()}
 	d.Volunteer = d.IsVolunteer()
 	if d.IsVolunteer() {
@@ -1132,25 +1051,15 @@ func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if _, dup := s.devs[d.Name]; dup {
 		s.mu.Unlock()
-		httpErr(w, 409, "device %s already enrolled", d.Name)
+		s.refusedEnrollment(w, d.Name, s.mayEnroll(&t.EnrollTokenRequest))
 		return
-	}
-	// hVolunteer counted this person's Macs when it handed out the token, but
-	// a token asked for while another was being used here was counted one
-	// Mac short. Counting again with the insert, under s.mu, settles it.
-	if d.VolunteeredBy != "" {
-		if names := s.volunteerMacsLocked(d.VolunteeredBy); len(names) >= maxVolunteerMacs {
-			s.mu.Unlock()
-			tooManyMacs(w, d.VolunteeredBy, names)
-			return
-		}
 	}
 	// Used up here, under s.mu, in one transaction with the device's row: of
 	// two enrollments racing with one token, one gets the Mac and the other
 	// a 403, and a crash leaves no used token without its Mac.
 	if ok, err := s.store.activateAndSave(tokHash, keyHash, s.now(), &d, hashSecret(secret)); err != nil || !ok {
 		s.mu.Unlock()
-		httpErr(w, 403, "enrollment token unknown, used or expired")
+		s.refusedToken(w, r, 403, tokenRefused)
 		return
 	}
 	s.devs[d.Name] = v
@@ -1160,14 +1069,26 @@ func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, api.EnrollResponse{DeviceID: d.ID, Name: d.Name, Secret: secret, AgentEnrollment: s.agentEnrollment(d.Enrollment)})
 }
 
+// refusedEnrollment answers an enrollment the lab refuses with the reason,
+// and leaves the Mac as it was.
+func (s *Server) refusedEnrollment(w http.ResponseWriter, name string, err error) {
+	var no *refusal
+	if !errors.As(err, &no) {
+		s.log.Printf("enrolling %s: %v", name, err)
+		no = &refusal{http.StatusConflict, fmt.Sprintf("Name taken: a Mac called %s is in the lab already. Make a new Join command with another name.", name)}
+	}
+	s.log.Printf("refused to enroll %s: %s", name, no.msg)
+	httpErr(w, no.code, "%s", no.msg)
+}
+
 // enrollAgain answers an enrollment with a used token: the same activation
 // enrolling again before its Mac's first check-in, because the first answer
 // never reached it. The Mac keeps its enrollment and gets a new secret.
 // Anything else is refused as an unknown token would be.
-func (s *Server) enrollAgain(w http.ResponseWriter, t *api.EnrollTokenRequest, tokHash, keyHash, activatedBy, secret string) {
+func (s *Server) enrollAgain(w http.ResponseWriter, r *http.Request, t *api.EnrollTokenRequest, tokHash, keyHash, activatedBy, secret string) {
 	v := s.dev(t.Name)
 	if keyHash == "" || subtle.ConstantTimeCompare([]byte(keyHash), []byte(activatedBy)) != 1 || v == nil {
-		httpErr(w, 403, "enrollment token unknown, used or expired")
+		s.refusedToken(w, r, 403, tokenRefused)
 		return
 	}
 	v.mu.Lock()
@@ -1180,7 +1101,7 @@ func (s *Server) enrollAgain(w http.ResponseWriter, t *api.EnrollTokenRequest, t
 	d := v.d
 	v.mu.Unlock()
 	if !ok {
-		httpErr(w, 403, "enrollment token unknown, used or expired")
+		s.refusedToken(w, r, 403, tokenRefused)
 		return
 	}
 	s.log.Printf("enrolled %s again with its own activation, before its first check-in", t.Name)
@@ -1193,7 +1114,7 @@ func enrollment(t *api.EnrollTokenRequest, old api.Enrollment) api.Enrollment {
 	if !t.Volunteer {
 		return api.Enrollment{Kind: api.KindLabOwned}
 	}
-	e := api.Enrollment{Kind: api.KindVolunteer, VolunteerName: t.VolunteerName, Contact: t.Contact, NtfyTopic: old.NtfyTopic, NtfyOwnURL: old.NtfyOwnURL}
+	e := api.Enrollment{Kind: api.KindVolunteer, VolunteerName: t.VolunteerName, VolunteerID: t.VolunteerID, Contact: t.Contact, NtfyTopic: old.NtfyTopic, NtfyOwnURL: old.NtfyOwnURL}
 	if e.NtfyTopic == "" {
 		e.NtfyTopic = newNtfyTopic()
 	}
