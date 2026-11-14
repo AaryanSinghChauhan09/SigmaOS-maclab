@@ -35,11 +35,10 @@ say() { printf '%s\n' "$*"; }
 would() { printf '  %s\n' "$*"; }
 
 # The tests stand a server on this machine in for Cloudflare's API.
-case "${LAB_CLOUD_API:-}" in
-  "") ;;
-  http://127.0.0.1:*) CLOUDFLARE_API="$LAB_CLOUD_API" ;;
-  *) die "LAB_CLOUD_API is the tests' and takes a loopback address only" ;;
-esac
+if [[ -n ${LAB_CLOUD_API:-} ]]; then
+  [[ $LAB_CLOUD_API =~ ^http://127\.0\.0\.1:[0-9]+(/.*)?$ ]] || die "LAB_CLOUD_API is the tests' and takes a loopback address only"
+  CLOUDFLARE_API="$LAB_CLOUD_API"
+fi
 
 # Names with no value that is a secret (CLOUDFLARE_ACCOUNT_ID) may sit beside
 # the scripts in lab.env, which is not committed: see lab.env.example.

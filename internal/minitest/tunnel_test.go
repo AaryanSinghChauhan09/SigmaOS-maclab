@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -477,5 +478,30 @@ func TestSetupRefusesItsOwnInstalledCredentialAsTheSource(t *testing.T) {
 	}
 	if !m.tunnelLoaded() || strings.Contains(m.calls(), "bootout") {
 		t.Errorf("the tunnel was touched:\n%s", m.calls())
+	}
+}
+
+// A tunnel that was not restarted still serves the routes of the build
+// before: a Deploy that needs other routes does not pass on them.
+func TestDeployGoesBackWhenTheTunnelDoesNotRestartOnNewRoutes(t *testing.T) {
+	m, k, r := deployed(t)
+	m.frontDoor()
+	m.installTunnel(true)
+	good, next := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, good), good, true)
+	bundle(t, k, filepath.Join(r.dir, next), next, true, "other routes")
+	m.ok("deploy", "--from", r.from(good), good)
+	write(t, filepath.Join(filepath.Dir(m.root), "state", "kickstart.fails"), "", 0o644)
+
+	out := m.refused("deploy", "--from", r.from(next), next)
+
+	if m.current() != good || !m.loaded() {
+		t.Fatalf("the mini runs %q, labd loaded %v\n%s", m.current(), m.loaded(), out)
+	}
+	if !strings.Contains(out, "did not restart the tunnel") || !strings.Contains(out, good+" is back and answers") || strings.Contains(out, "restarted the tunnel:") {
+		t.Errorf("no word of what happened:\n%s", out)
+	}
+	if !reflect.DeepEqual(m.builds(), []string{good}) {
+		t.Errorf("builds kept: %v", m.builds())
 	}
 }

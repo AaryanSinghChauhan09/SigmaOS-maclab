@@ -230,6 +230,12 @@ func TestTheAPIStandInTakesOnlyLoopback(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "loopback") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
+	// An address that only starts as loopback's: what follows the @ is the host.
+	for _, api := range []string{"http://127.0.0.1:1@lab.invalid/client/v4", "http://127.0.0.1:1.lab.invalid/client/v4", "http://127.0.0.1:/client/v4"} {
+		if out, code := script(t, f, []string{"LAB_CLOUD_API=" + api}, zoneScript, "--check", "--token-file", f.tokenFile()); code == 0 || !strings.Contains(out, "loopback") {
+			t.Errorf("LAB_CLOUD_API=%s: exit %d\n%s", api, code, out)
+		}
+	}
 	if !strings.Contains(source(t, "lib.sh"), `CLOUDFLARE_API="https://api.cloudflare.com/client/v4"`) {
 		t.Error("lib.sh does not name Cloudflare's API")
 	}

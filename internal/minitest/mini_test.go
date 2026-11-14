@@ -110,7 +110,7 @@ case "$1" in
   print) [[ -f $state ]] || exit 113; echo "state = running" ;;
   bootout) rm -f "$state" ;;
   bootstrap) [[ -f $3 ]] || exit 5; cp "$3" "$state" ;;
-  kickstart) [[ -f $state ]] || exit 113 ;;
+  kickstart) [[ -f $state && ! -f $STUB_STATE/kickstart.fails ]] || exit 113 ;;
 esac
 `
 

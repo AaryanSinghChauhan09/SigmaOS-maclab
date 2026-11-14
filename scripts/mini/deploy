@@ -90,8 +90,13 @@ switch_to() {
   launchctl enable "system/$LABD_LABEL" || true
   launchctl bootstrap system "$plist" || say "launchd did not take $plist"
   if (( routes )) && loaded "$CLOUDFLARED_LABEL"; then
-    launchctl kickstart -k "system/$CLOUDFLARED_LABEL" || say "launchd did not restart the tunnel"
-    say "restarted the tunnel: the build of $1 has other routes"
+    if launchctl kickstart -k "system/$CLOUDFLARED_LABEL"; then
+      say "restarted the tunnel: the build of $1 has other routes"
+    elif (( switching )); then
+      fail "launchd did not restart the tunnel, and the build of $1 has other routes"
+    else
+      say "launchd did not restart the tunnel: it keeps the routes it had"
+    fi
   fi
 }
 
