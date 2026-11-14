@@ -128,8 +128,16 @@ func TestTheBuildWatchRefusesBeforeItChangesAnything(t *testing.T) {
 func TestTheBuildWatchGivesTheCoresEmptiesTheCacheAndWatchesEachBuild(t *testing.T) {
 	m := watchedMini(t)
 	user := account(t)
+	// container names the image of the one volume; the other's is found
+	// where container keeps a volume's image, under the account's home.
 	image := m.state("maclab-cache.img")
 	write(t, image, strings.Repeat("kernel cache ", 200000), 0o644)
+	home := ""
+	if entry, err := exec.Command("id", "-P", user).Output(); err == nil && strings.Count(string(entry), ":") >= 9 {
+		home = strings.Split(string(entry), ":")[8]
+	}
+	kept := m.path(home + "/Library/Application Support/com.apple.container/volumes/maclab-pkgcache/volume.img")
+	write(t, kept, strings.Repeat("kernel cache ", 200000), 0o644)
 	want, err := exec.Command("du", "-k", image).Output()
 	if err != nil {
 		t.Fatal(err)
@@ -216,7 +224,7 @@ func TestTheBuildWatchGivesTheCoresEmptiesTheCacheAndWatchesEachBuild(t *testing
 		"@gate build 2 begin id=b1115-000002-abcd cpus=8 memory=16G",
 		"@gate build 2 end id=b1115-000002-abcd seconds=N vm_peak_kb=3000000 machine_peak_kb=20971520 probes=N",
 		"@gate volume maclab-cache used_kb=" + used + " size_kb=41943040",
-		"@gate volume maclab-pkgcache used_kb= size_kb=125829120",
+		"@gate volume maclab-pkgcache used_kb=" + used + " size_kb=125829120",
 		"@gate store artifacts used_kb=N budget_kb=20971520",
 		"@gate done",
 	}
@@ -253,6 +261,20 @@ func TestTheBuildWatchGivesTheCoresEmptiesTheCacheAndWatchesEachBuild(t *testing
 	if calls := m.calls(); strings.Contains(calls, "bootstrap") || strings.Contains(calls, "volume delete") || strings.Contains(calls, "volume create") {
 		t.Errorf("without --cold and at its cores the watch changed something:\n%s", calls)
 	}
+
+	// What the test reads at its end is read before the first build: a
+	// volume with no image to measure, and page times nobody gives, end the
+	// watch before it is ready.
+	os.Remove(kept)
+	if out := m.refused("build-watch", "--cpus", "8", "--builds", "1", "--wait", "1"); !strings.Contains(out, "how full the volume maclab-pkgcache is cannot be read") || strings.Contains(out, "@gate ready") {
+		t.Errorf("with a volume it cannot measure it said:\n%s", out)
+	}
+	write(t, kept, "packages", 0o644)
+	write(t, filepath.Join(m.tree, "scripts", "mini", "page-times"), "#!/bin/bash\necho 'page-times: the caller log is not readable' >&2\nexit 1\n", 0o755)
+	if out := m.refused("build-watch", "--cpus", "8", "--builds", "1", "--wait", "1"); !strings.Contains(out, "labd's page times cannot be read") || strings.Contains(out, "@gate ready") {
+		t.Errorf("with no page times it said:\n%s", out)
+	}
+	write(t, filepath.Join(m.tree, "scripts", "mini", "page-times"), watchPageTimes, 0o755)
 
 	// A cache that cannot be made again is said, and no build is waited for.
 	m.touch("full")

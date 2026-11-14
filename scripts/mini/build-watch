@@ -88,6 +88,26 @@ runs_with() {
 # kb SIZE: a volume's size as the set-up gives it (40G), in kB.
 kb() { echo $(( ${1%G} * 1024 * 1024 )); }
 
+# held VOLUME: how full a volume is, in kB: the blocks its image holds on
+# the mini's disk. The image only grows, so this is the most the volume
+# ever held. container names the image; where it does not, the image is
+# looked for where container keeps one. Nothing when there is no image.
+held() {
+  local image home
+  image="$("$watch" as "$user" volume inspect "$1" 2>/dev/null | jq -r '.[0].source // empty' 2>/dev/null || true)"
+  if [[ -z $image ]]; then
+    home="$(id -P "$user" 2>/dev/null | cut -d: -f9 || true)"
+    image="$SYSROOT$home/Library/Application Support/com.apple.container/volumes/$1/volume.img"
+  fi
+  [[ -f $image ]] || return 0
+  du -k "$image" 2>/dev/null | awk '{ print $1 }' || true
+}
+
+# times: labd's own times for its pages, now, as page-times says them.
+times() {
+  as_lab "$here/page-times" 2>/dev/null | grep -E '^probe_(p95_ms|max_ms|requests|pages)=[0-9]+$' | tr '\n' ' ' | sed 's/ $//' || true
+}
+
 [[ -z "$(seen)" ]] || fail "a build is running on the Builder: nothing was changed. Run it again when lab builds shows none queued or running"
 "$watch" status "$user" || fail "container's server does not answer under $user: nothing was changed. The watch starts it again within a minute; see $CONTAINER_LOG"
 
@@ -107,6 +127,13 @@ if (( cold )); then
   "$watch" as "$user" volume create -s "$size" "$name" >/dev/null ||
     fail "container did not make the volume $name again ($size): the Builder has no kernel cache until the set-up has run (scripts/mini/setup)"
 fi
+
+# What the test must read at its end is read once now: a run takes hours,
+# and what cannot be read is better known before the first build.
+for pair in $BUILDER_VOLUMES; do
+  [[ -n "$(held "${pair%%:*}")" ]] || fail "how full the volume ${pair%%:*} is cannot be read: container volume inspect ${pair%%:*} names no image that is there. No build was waited for"
+done
+[[ "$(times)" == *probe_p95_ms=* ]] || fail "labd's page times cannot be read: sudo -u $LAB_OWNER $here/page-times says why. No build was waited for"
 gate ready "cpus=$cpus"
 
 # pf: what the ticket on container's VMs says to read while a VM is up, when
@@ -122,14 +149,12 @@ pf() {
   } | while IFS= read -r line; do gate pf "$line"; done
 }
 
-# probe: labd's own times for its pages, now.
+# probe: one reading of labd's page times, between its two lines.
 probes=0
 probe() {
-  local numbers
   probes=$((probes + 1))
   gate probe "$probes" begin
-  numbers="$(as_lab "$here/page-times" 2>/dev/null | grep -E '^probe_(p95_ms|max_ms|requests|pages)=[0-9]+$' | tr '\n' ' ' || true)"
-  gate probe "$probes" end "${numbers% }"
+  gate probe "$probes" end "$(times)"
 }
 
 last=""
@@ -164,14 +189,8 @@ for (( k = 1; k <= builds; k++ )); do
   last="$build"
 done
 
-# How full a volume is: the blocks its image holds on the mini's disk. The
-# image only grows, so this is the most the volume ever held.
 for pair in $BUILDER_VOLUMES; do
-  name="${pair%%:*}"
-  image="$("$watch" as "$user" volume inspect "$name" 2>/dev/null | jq -r '.[0].source // empty' 2>/dev/null || true)"
-  used=""
-  if [[ -n $image && -f $image ]]; then used="$(du -k "$image" 2>/dev/null | awk '{ print $1 }' || true)"; fi
-  gate volume "$name" "used_kb=$used" "size_kb=$(kb "${pair##*:}")"
+  gate volume "${pair%%:*}" "used_kb=$(held "${pair%%:*}")" "size_kb=$(kb "${pair##*:}")"
 done
 store="$(as_lab du -sk "$LAB_DATA/artifacts" 2>/dev/null | awk '{ print $1 }' || true)"
 gate store artifacts "used_kb=$store" "budget_kb=$(kb 20G)"

@@ -88,7 +88,7 @@ exec "$MINI_ROOT/usr/local/lab/current/scripts/mini/build-watch" "$@"
 
 const gatePsStub = `#!/bin/bash
 [[ -f $GATE/vm ]] || { echo "  4096 /sbin/launchd"; exit 0; }
-cores="$(sed -n 's/.*<string>--cpus<\/string><string>\([0-9]*\)<.*/\1/p' "$LAB_SYSROOT/Library/LaunchDaemons/org.omarchy-mac.lab.builder.plist")"
+cores="$(cat "$GATE/vm.cores" 2>/dev/null || sed -n 's/.*<string>--cpus<\/string><string>\([0-9]*\)<.*/\1/p' "$LAB_SYSROOT/Library/LaunchDaemons/org.omarchy-mac.lab.builder.plist")"
 echo "  4096 /sbin/launchd"
 echo "  9000 /usr/local/bin/container run --rm --name maclab-$(cat "$GATE/vm") --cpus $cores --memory 16G -v maclab-cache:/cache -e URL=https://github.com/o/r -v /tmp/io:/io maclab-kbuild:1"
 echo "$(cat "$GATE/vm_kb") /System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"
@@ -138,9 +138,20 @@ echo "    <string>--cpus</string><string>$2</string>" > "$plist"
 `
 
 const gatePageTimesStub = `#!/bin/bash
+# pages.broken: never readable. pages.break: readable once, before the
+# builds, and never again. silent.<cores>: every third reading at that many
+# cores gives nothing.
 [[ ! -f $GATE/pages.broken ]] || { echo "page-times: the caller log is not readable" >&2; exit 1; }
+if [[ -f $GATE/pages.break ]]; then
+  [[ ! -f $GATE/pages.read ]] || exit 1
+  touch "$GATE/pages.read"
+fi
 cores="$(sed -n 's/.*<string>--cpus<\/string><string>\([0-9]*\)<.*/\1/p' "$LAB_SYSROOT/Library/LaunchDaemons/org.omarchy-mac.lab.builder.plist")"
 p95="$(cat "$GATE/p95.$cores" 2>/dev/null || echo 12)"
+if [[ -f $GATE/silent.$cores ]]; then
+  n=$(( $(cat "$GATE/readings" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$GATE/readings"
+  (( n % 3 )) || exit 1
+fi
 printf 'probe_pages=13\nprobe_requests=260\nprobe_p95_ms=%s\nprobe_max_ms=%s\nday_requests=9000\nday_p95_ms=20\n' "$p95" "$((p95 + 31))"
 `
 
@@ -429,6 +440,20 @@ func TestAFailedBuildDropsTheCoresToo(t *testing.T) {
 	}
 }
 
+// labd answering no page at all now and then while a build runs misses the
+// target as a slow page does.
+func TestPagesThatDoNotAnswerMissTheTarget(t *testing.T) {
+	t.Parallel()
+	g := newGate(t)
+	g.set("silent.10", "")
+	out, code := g.run()
+	if code != 0 || g.cores() != "8" {
+		t.Fatalf("exit %d, deploy/builder-cpus %s\n%s", code, g.cores(), out)
+	}
+	wants(t, "the record", g.record(), "of those readings gave no time at all: labd did not answer its pages. That misses the target",
+		"missed at 10 (failed: see the record). It runs again at 8 cores a build.", "At 8 cores a build:", "Result: pass")
+}
+
 // A build that reaches nothing past the mini, as container's VMs once did:
 // fewer cores mend nothing, so the run stops at once, with what the mini
 // read of pf while that VM was up saved beside the record.
@@ -492,11 +517,13 @@ func TestWhatCannotBeMeasuredDecidesNothing(t *testing.T) {
 		break_ func(*gate)
 		says   string
 	}{
-		"labd's page times":   {func(g *gate) { g.set("pages.broken", "") }, "labd's page times could not be read while the cold kernel build ran"},
-		"a volume's use":      {func(g *gate) { os.Remove(filepath.Join(g.state, "maclab-pkgcache.img")) }, "the mini could not say how full the volume maclab-pkgcache is"},
+		"labd's page times":   {func(g *gate) { g.set("pages.break", "") }, "labd's page times could not be read while the cold kernel build ran"},
+		"no page times ever":  {func(g *gate) { g.set("pages.broken", "") }, "the mini did not get ready for the builds at 10 cores"},
+		"a volume's use":      {func(g *gate) { os.Remove(filepath.Join(g.state, "maclab-pkgcache.img")) }, "the mini did not get ready for the builds at 10 cores"},
 		"no transfer in time": {func(g *gate) { g.env = append(g.env, "GATE_UPLOAD_SECONDS=0") }, "labd's page times were not read with a transfer in flight during the cold kernel build"},
 		"the cold cache":      {func(g *gate) { g.set("volume.fails", "") }, "the mini did not get ready for the builds at 10 cores"},
 		"the watch gone":      {func(g *gate) { g.set("watch.dies", "") }, "the watch on the mini ended while the cold kernel build ran"},
+		"other cores":         {func(g *gate) { g.set("vm.cores", "4\n") }, "the Builder gave the cold kernel build 4 cores, not 10"},
 		"a refused build":     {func(g *gate) { g.set("refuse", "M team builds are not open yet") }, "the cold kernel build could not be asked for: lab: M team builds are not open yet"},
 	} {
 		t.Run(name, func(t *testing.T) {

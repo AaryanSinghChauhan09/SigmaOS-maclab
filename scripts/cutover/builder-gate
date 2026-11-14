@@ -272,7 +272,7 @@ network_stop() {
 STATE=("" "" "" "")
 build() {
   local k="$1" title="$2" transfer="$3" id state="" t0 seconds stage file from to proved=0 tries=0 silent=0 row labd_time up=""
-  local readings unread worst slow inflight
+  local readings unread worst slow inflight peak
   shift 3
   t0="$(date +%s)"
   "$LAB_CMD" "$@" --force --no-wait > "$WORK/ask.$k" 2> "$WORK/ask.$k.err" \
@@ -325,21 +325,31 @@ build() {
   row="$("$LAB_CMD" builds 2> /dev/null | awk -v id="$id" '$1 == id && !seen { print $NF; seen = 1 }' || true)"
   labd_time=""
   [[ ! $row =~ ^[0-9hms.]+$ ]] || labd_time=", $row by labd's"
-  rec "$title (build $id): done in $seconds s by this Mac's clock$labd_time; its VM was up $(said "build $k end " seconds) s with $CORES cores and $(said "build $k begin " memory); the VM's process held $(gb "$(said "build $k end " vm_peak_kb)") GB at most, and the whole mini had $(gb "$(said "build $k end " machine_peak_kb)") GB in use at most"
+  peak="$(said "build $k end " vm_peak_kb)"
+  if [[ $peak =~ ^[1-9][0-9]*$ ]]; then
+    peak="the VM's process held $(gb "$peak") GB at most"
+  else
+    peak="the VM's own process was not found among the mini's, so its peak was not read"
+  fi
+  rec "$title (build $id): done in $seconds s by this Mac's clock$labd_time; its VM was up $(said "build $k end " seconds) s with $CORES cores and $(said "build $k begin " memory); $peak, and the whole mini had $(gb "$(said "build $k end " machine_peak_kb)") GB in use at most"
 
   read -r readings unread worst slow <<<"$(pages "$k")"
-  (( readings > unread )) || give_up "labd's page times could not be read while $title ran: $unread of $readings readings gave none. Run scripts/mini/page-times on the mini as the lab account to see why"
-  if [[ $transfer == yes ]]; then
-    (( proved )) || give_up "labd's page times were not read with a transfer in flight during $title: $tries transfer(s) and the build ended first"
-    rec "labd's pages during $title: $worst ms at the 95th percentile at the slowest of $readings readings, the slowest request $slow ms; with ${SIZE} bytes going up at $up Mbit/s, $inflight ms"
-    if (( unread )); then
-      rec "$unread of those readings gave no time at all: labd did not answer its pages. That misses the target"
-      PAGE[k]=fail
+  if [[ $transfer != yes ]]; then
+    if (( readings > unread )); then
+      rec "labd's pages during $title: $worst ms at the 95th percentile at the slowest of $readings readings (told, not judged)"
     else
-      PAGE[k]="$worst"
+      rec "labd's pages during $title: no reading gave a time (told, not judged)"
     fi
+    return 0
+  fi
+  (( readings > unread )) || give_up "labd's page times could not be read while $title ran: $unread of $readings readings gave none. Run scripts/mini/page-times on the mini as the lab account to see why"
+  (( proved )) || give_up "labd's page times were not read with a transfer in flight during $title: $tries transfer(s) and the build ended first"
+  rec "labd's pages during $title: $worst ms at the 95th percentile at the slowest of $readings readings, the slowest request $slow ms; with ${SIZE} bytes going up at $up Mbit/s, $inflight ms"
+  if (( unread )); then
+    rec "$unread of those readings gave no time at all: labd did not answer its pages. That misses the target"
+    PAGE[k]=fail
   else
-    rec "labd's pages during $title: $worst ms at the 95th percentile at the slowest of $readings readings (told, not judged)"
+    PAGE[k]="$worst"
   fi
 }
 
