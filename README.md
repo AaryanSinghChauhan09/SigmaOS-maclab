@@ -384,6 +384,19 @@ argument, variable or file. `labd import load --from FILE` fills an empty
 `reports.db` from that file alone, and `labd import check` runs the three
 checks the copy is accepted by.
 
+`labd old-lab` is for the data directory of the old lab's labd, copied to
+the server (`scripts/cutover/old-lab` stops that labd, copies the directory
+without its token files, checks it file for file and puts it in place).
+`labd old-lab counts --data DIR` says how many Mac records, jobs and builds
+it holds. `labd old-lab upgrade --data DIR --account-id N HANDLE` makes it
+this lab's where it lies, once, before labd first opens it: every record,
+job and build keeps its id, its Mac records are Retired, what was done under
+its admin token becomes the owner's, and nothing the old lab handed out is
+honoured. `--dry-run` says what it would do and changes nothing.
+`scripts/cutover/rehearsal-import` puts the machine-id key in place from a
+prompt and runs the import and its three checks on an emptied `reports.db`,
+while the lab is in Preview.
+
 labd listens on `127.0.0.1:7770` unless told otherwise. Plain http on any other
 address, such as `--listen <tailnet-ip>:7770` for Macs over Tailscale, needs
 `--allow-plain-http`: tokens and device secrets then cross that network in the
