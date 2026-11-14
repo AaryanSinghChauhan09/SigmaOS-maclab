@@ -1,6 +1,7 @@
 package reports
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -30,6 +31,16 @@ func NewRules(machineIDKey []byte) (*Rules, error) {
 	if len(machineIDKey) != machineIDKeyBytes {
 		return nil, fmt.Errorf("reports: the machine-id key is %d bytes, not %d", len(machineIDKey), machineIDKeyBytes)
 	}
+	rules, err := loadRules()
+	if err != nil {
+		return nil, err
+	}
+	rules.machineIDKey = append([]byte(nil), machineIDKey...)
+	return rules, nil
+}
+
+// loadRules is the rules that need no key: the schema and the catalogue.
+func loadRules() (*Rules, error) {
 	reportSchema, err := LoadSchema(schema.ReportV1)
 	if err != nil {
 		return nil, err
@@ -38,7 +49,7 @@ func NewRules(machineIDKey []byte) (*Rules, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Rules{reportSchema, features, append([]byte(nil), machineIDKey...)}, nil
+	return &Rules{schema: reportSchema, catalogue: features}, nil
 }
 
 func (r *Rules) Catalogue() *Catalogue { return r.catalogue }
@@ -48,6 +59,16 @@ func (r *Rules) SchemaErrors(document any) []string { return r.schema.Errors(doc
 
 // MachineID is the machine id of a Mac's public key.
 func (r *Rules) MachineID(key MachineKey) string { return MachineID(r.machineIDKey, key) }
+
+// MachineIDOf is the machine id of a Mac's Machine public key, written as
+// the Mac writes it: "ssh-ed25519" and the key in base64.
+func (r *Rules) MachineIDOf(publicKey string) (string, error) {
+	key, err := parsePublicKey(publicKey)
+	if err != nil {
+		return "", errors.New("that is not a Machine public key: one reads ssh-ed25519 AAAA...")
+	}
+	return r.MachineID(key), nil
+}
 
 // Refusal is why an upload was refused: the status and the body the old site
 // answered with.
