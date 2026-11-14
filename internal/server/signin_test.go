@@ -216,6 +216,9 @@ func TestSignInMakesAPersonByAccountID(t *testing.T) {
 	if q.Get("client_id") != l.gh.ClientID || q.Get("redirect_uri") != labAddress+"/auth/github/callback" || q.Get("state") == "" {
 		t.Errorf("labd sent GitHub %v", q)
 	}
+	if q.Has("client_secret") || strings.Contains(q.Encode(), l.gh.ClientSecret) {
+		t.Error("the app's secret went through the browser")
+	}
 
 	// The handle changes on GitHub; the person signs in from another browser.
 	l.gh.AddUser(7, "ada-lovelace")
@@ -639,8 +642,38 @@ func TestGitHubsRefusalSignsNobodyIn(t *testing.T) {
 	if w := b.do("GET", u.Path+"?"+q.Encode(), ""); w.Code != http.StatusBadRequest || b.session() != nil {
 		t.Errorf("a callback without a code: %d %s", w.Code, w.Body)
 	}
+	b = l.browser()
+	u, _ = url.Parse(b.toGitHub(ownerID, ""))
+	q = u.Query()
+	q.Set("code", "not-the-code")
+	if w := b.do("GET", u.Path+"?"+q.Encode(), ""); w.Code != http.StatusBadGateway || b.session() != nil {
+		t.Errorf("a callback with a code GitHub never gave: %d %s", w.Code, w.Body)
+	}
 	if n := l.count(`SELECT count(*) FROM people`); n != 0 {
 		t.Errorf("%d people after nobody signed in", n)
+	}
+}
+
+// An Admin is whoever the configuration names when the request comes: a
+// labd started without the account id serves the same session as no Admin.
+func TestAnAdminIsWhoeverTheConfigurationNamesNow(t *testing.T) {
+	l := newSignInLab(t, nil)
+	b := l.browser()
+	b.mustSignIn(ownerID)
+	if me := b.whoami(); me.Kind != "Admin" {
+		t.Fatalf("named in the configuration: %+v", me)
+	}
+	again := labServer(t, labAddress, func(c *Config) {
+		c.DataDir = l.dir
+		c.GitHub = l.s.cfg.GitHub
+		c.Admins = []int64{4711}
+	})
+	b.l = &signInLab{t: t, s: again, h: again.Handler(), gh: l.gh, clock: l.clock, dir: l.dir}
+	if me := b.whoami(); me.AccountID != ownerID || me.Kind != "Signed in, no role" {
+		t.Errorf("no longer named in the configuration: %+v", me)
+	}
+	if w := b.do("GET", "/api/maintainers", ""); w.Code != http.StatusForbidden {
+		t.Errorf("no longer an Admin, on a Maintainer's route: %d %s", w.Code, w.Body)
 	}
 }
 
