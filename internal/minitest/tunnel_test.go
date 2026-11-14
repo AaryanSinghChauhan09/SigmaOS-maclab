@@ -220,7 +220,8 @@ func formulaeList(t *testing.T) []string {
 			line = line[:i]
 		}
 		if f := strings.Fields(line); len(f) > 0 {
-			out = append(out, f[0])
+			// A formula of a tap is listed as tap/formula.
+			out = append(out, filepath.Base(f[0]))
 		}
 	}
 	return out

@@ -1,0 +1,42 @@
+#!/bin/bash
+# Nightly on the backup guest, as the mirror account: the owner's copy. A
+# mirror of the repository with every branch and tag, and every file of
+# every Lab release, under /srv/lab-backup/mirror. A release that is later
+# removed on GitHub stays here. How it went is written where the mini reads
+# it, and the mini tells the owner when it failed or stopped running.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/guest/lib.sh
+. "$here/lib.sh"
+JOB=mirror
+trap 'report; rm -rf "$work"' EXIT
+work="$(mktemp -d "${TMPDIR:-/tmp}/lab-mirror.XXXXXX")"
+
+WHAT="the repository"
+if [[ -d $MIRROR_DIR/omarchy-maclab.git ]]; then
+  git -C "$MIRROR_DIR/omarchy-maclab.git" remote update --prune >/dev/null
+else
+  git clone --quiet --mirror "$REPOSITORY_URL" "$MIRROR_DIR/omarchy-maclab.git"
+fi
+
+WHAT="the list of Lab releases"
+: > "$work/files"
+for (( page = 1; page <= 20; page++ )); do
+  curl -fsS --retry 2 --max-time 60 -H 'Accept: application/vnd.github+json' "$RELEASES_API?per_page=100&page=$page" > "$work/page"
+  jq -r '.[] | .tag_name as $tag | .assets[] | [$tag, .name, (.size | tostring), .browser_download_url] | @tsv' "$work/page" >> "$work/files"
+  [[ "$(jq length "$work/page")" == 100 ]] || break
+done
+
+name_ok='^[A-Za-z0-9_][A-Za-z0-9._+-]*$'
+while IFS=$'\t' read -r tag name size url; do
+  WHAT="a release file whose name is no file name"
+  [[ $tag =~ $name_ok && $name =~ $name_ok && $size =~ ^[0-9]+$ && $url == "$RELEASES_FILES"* ]] || exit 1
+  WHAT="the file $name of $tag"
+  file="$MIRROR_DIR/releases/$tag/$name"
+  if [[ -f $file && "$(wc -c < "$file" | tr -d ' ')" == "$size" ]]; then continue; fi
+  mkdir -p "$MIRROR_DIR/releases/$tag"
+  curl -fsSL --retry 2 --max-time 3600 -o "$file.part" "$url"
+  [[ "$(wc -c < "$file.part" | tr -d ' ')" == "$size" ]] || exit 1
+  mv -f "$file.part" "$file"
+done < "$work/files"

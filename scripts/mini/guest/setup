@@ -1,0 +1,332 @@
+#!/bin/bash
+# Set the backup guest up, on the guest itself (a small Debian machine on
+# pve2), with the folder this script is in copied there:
+#
+#   sudo ./setup [--dry-run] [--mini ADDRESS]
+#
+# Installs restic and rest-server at their pins, makes three accounts with
+# no login (restic, litestream, mirror), and starts: rest-server in
+# append-only mode, where the mini can add to its repository and delete
+# nothing; an SFTP account that sees one folder, for Litestream; the nightly
+# pruning of the house copy; the nightly mirror of the repository and of
+# every Lab release's files. Makes the keys the mini needs and leaves them
+# in /root/for-the-mini, to be carried to the mini once and removed here.
+# Safe to run again: it changes only what is not yet as it should be.
+#
+#   --dry-run       say what would change, and change nothing
+#   --mini ADDRESS  the only address rest-server answers (192.168.1.20)
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/guest/lib.sh
+. "$here/lib.sh"
+
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+DRY=0
+CHANGES=0
+mini=192.168.1.20
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --mini) [[ $# -ge 2 ]] || usage; mini="$2"; shift ;;
+    *) usage ;;
+  esac
+  shift
+done
+[[ $mini =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || fail "$mini is not an address such as 192.168.1.20"
+if [[ -z $GUEST_ROOT ]]; then
+  (( DRY )) || [[ "$(id -u)" == 0 ]] || fail "run it with sudo"
+  [[ -f /etc/debian_version ]] || fail "this is not Debian: the guest's set-up knows apt and systemd only"
+  [[ "$(uname -m)" == x86_64 ]] || fail "restic and rest-server are pinned for x86_64 only, and this is $(uname -m)"
+fi
+
+PACKAGES="openssh-server git curl jq openssl apache2-utils bzip2 ca-certificates"
+# What Debian does not bring, or brings older than the mini's: name, version,
+# sha256 of the download, where from. restic is the release the mini's
+# Homebrew gave on 2026-11-14.
+PINS="restic 0.19.1 f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c https://github.com/restic/restic/releases/download/v0.19.1/restic_0.19.1_linux_amd64.bz2
+rest-server 0.14.0 4c9c95bc079a0334e81fad379b19dc5c3353c71c2c88d652cafce2081c2b1c66 https://github.com/restic/rest-server/releases/download/v0.14.0/rest-server_0.14.0_linux_amd64.tar.gz"
+[[ -z $GUEST_ROOT || -z ${LAB_GUEST_PINS:-} ]] || PINS="$(<"$LAB_GUEST_PINS")"
+
+FOR_MINI="$GUEST_ROOT/root/for-the-mini"
+UNITS="$GUEST_ROOT/etc/systemd/system"
+SSHD_DROP="$GUEST_ROOT/etc/ssh/sshd_config.d/lab-backup.conf"
+HOST_KEY="$GUEST_ROOT/etc/ssh/ssh_host_ed25519_key.pub"
+RESTARTS=""
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/lab-guest.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+change() {
+  local what="$1"
+  shift
+  CHANGES=$((CHANGES + 1))
+  if (( DRY )); then
+    say "would $what"
+  else
+    say "$what"
+    "$@"
+  fi
+}
+
+sum() { sha256sum "$1" 2>/dev/null | awk '{ print $1 }' || shasum -a 256 "$1" | awk '{ print $1 }'; }
+mode_of() { stat -c '%a %U' "$1" 2>/dev/null || stat -f '%Lp %Su' "$1" 2>/dev/null || true; }
+
+# folder PATH OWNER MODE
+folder() {
+  [[ "$(mode_of "$1")" != "$3 $2" ]] || return 0
+  change "make $1 ($2, $3)" install -d -o "$2" -m "$3" "$1"
+}
+
+put() {
+  if ! mkdir -p "$(dirname "$4")" || ! install -o "$1" -m "$2" "$3" "$4"; then fail "could not write $4"; fi
+}
+
+# file PATH OWNER MODE: standard input is what PATH should hold. Status 1
+# when it already does.
+file() {
+  cat > "$work/new"
+  if cmp -s "$work/new" "$1" && [[ "$(mode_of "$1")" == "$3 $2" ]]; then return 1; fi
+  cp "$work/new" "$work/$(basename "$1")"
+  change "write $1" put "$2" "$3" "$work/$(basename "$1")" "$1"
+}
+
+packages() {
+  local p need=""
+  for p in $PACKAGES; do
+    dpkg -s "$p" >/dev/null 2>&1 || need+=" $p"
+  done
+  [[ -n $need ]] || return 0
+  # shellcheck disable=SC2086
+  change "install from Debian:$need" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $need
+}
+
+install_pin() {
+  local got="$work/${4##*/}"
+  curl -fsSL --retry 2 --max-time 600 -o "$got" "$4" || fail "could not download $4"
+  [[ "$(sum "$got")" == "$3" ]] || fail "$1 $2: the download's checksum is not the pinned one: it was not installed"
+  case "$got" in
+    *.bz2) bunzip2 -c "$got" > "$work/$1" ;;
+    *.tar.gz) tar -xzf "$got" -C "$work" && find "$work" -type f -name "$1" ! -path "$work/$1" -exec mv {} "$work/$1" \; ;;
+  esac
+  [[ -s $work/$1 ]] || fail "$1 $2: the download holds no $1"
+  install -d "$BIN"
+  install -o "$ROOT_USER" -m 0755 "$work/$1" "$BIN/$1"
+  { grep -v "^$1 " "$ETC/pins" 2>/dev/null || true; echo "$1 $2 $3"; } > "$work/pins"
+  install -o "$ROOT_USER" -m 0644 "$work/pins" "$ETC/pins"
+}
+
+pins() {
+  local name version sha url
+  while read -r name version sha url; do
+    [[ -n $name ]] || continue
+    [[ ${#sha} == 64 && $url == https://* || -n $GUEST_ROOT ]] || fail "the pin of $name is not: name version sha256 url"
+    if [[ -x $BIN/$name ]] && grep -qx "$name $version $sha" "$ETC/pins" 2>/dev/null; then continue; fi
+    change "install $name $version at its pin" install_pin "$name" "$version" "$sha" "$url"
+  done <<<"$PINS"
+}
+
+accounts() {
+  local user home
+  for user in "$RESTIC_USER:$RESTIC_DIR" "$SFTP_USER:$SFTP_DIR" "$MIRROR_USER:$MIRROR_DIR"; do
+    home="${user#*:}" user="${user%%:*}"
+    id -u "$user" >/dev/null 2>&1 || change "make the account $user: no password, no shell" useradd --system --home-dir "${home#"$GUEST_ROOT"}" --no-create-home --shell /usr/sbin/nologin "$user"
+  done
+}
+
+folders() {
+  folder "$SRV" "$ROOT_USER" 755
+  folder "$RESTIC_DIR" "$RESTIC_USER" 700
+  # sshd shuts an account into a folder only when root owns it and nobody else writes there.
+  folder "$SFTP_DIR" "$ROOT_USER" 755
+  folder "$SFTP_DIR/db" "$SFTP_USER" 700
+  folder "$STATUS_DIR" "$ROOT_USER" 755
+  folder "$MIRROR_DIR" "$MIRROR_USER" 755
+  folder "$ETC" "$ROOT_USER" 755
+  folder "$LIB" "$ROOT_USER" 755
+  local job owner
+  for job in "prune:$RESTIC_USER" "mirror:$MIRROR_USER"; do
+    owner="${job#*:}" job="${job%%:*}"
+    [[ "$(mode_of "$STATUS_DIR/$job")" == "644 $owner" ]] || change "let $owner say how the nightly $job went, in $STATUS_DIR/$job" install -o "$owner" -m 0644 /dev/null "$STATUS_DIR/$job"
+  done
+}
+
+scripts() {
+  local f
+  for f in lib.sh prune mirror; do
+    file "$LIB/$f" "$ROOT_USER" "$([[ $f == lib.sh ]] && echo 644 || echo 755)" < "$here/$f" || true
+  done
+}
+
+secret() { (umask 077; openssl rand -base64 32 > "$1"); [[ -s $1 ]] || fail "openssl made no secret"; }
+
+make_guest_key() {
+  secret "$work/key"
+  install -o "$RESTIC_USER" -m 0400 "$work/key" "$ETC/restic-password"
+}
+
+make_certificate() {
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 -subj "/CN=lab-backup" \
+    -addext "subjectAltName=DNS:lab-backup" -keyout "$work/tls.key" -out "$work/tls.crt" 2>/dev/null || fail "openssl made no certificate"
+  install -o "$RESTIC_USER" -m 0400 "$work/tls.key" "$ETC/tls.key"
+  install -o "$ROOT_USER" -m 0644 "$work/tls.crt" "$ETC/tls.crt"
+}
+
+restic_here() { RESTIC_REPOSITORY="$REPOSITORY" RESTIC_PASSWORD_FILE="$ETC/restic-password" RESTIC_CACHE_DIR="$RESTIC_DIR/.cache" "$BIN/restic" "$@"; }
+
+make_repository() {
+  restic_here init >/dev/null || fail "restic made no repository at $REPOSITORY"
+  chown -R "$RESTIC_USER" "$RESTIC_DIR"
+}
+
+# The mini's keys are made once, together: its own restic key, which can be
+# removed without touching the guest's or the owner's; its password at
+# rest-server; the SFTP account's key. They wait in a folder only root reads.
+make_mini_keys() {
+  install -d -o "$ROOT_USER" -m 0700 "$FOR_MINI"
+  secret "$FOR_MINI/restic-password"
+  restic_here key add --new-password-file "$FOR_MINI/restic-password" --user mini --host lab-mini >/dev/null || fail "restic added no key for the mini"
+  chown -R "$RESTIC_USER" "$RESTIC_DIR"
+  secret "$FOR_MINI/rest-password"
+  htpasswd -B -i -c "$work/htpasswd" mini < "$FOR_MINI/rest-password" >/dev/null 2>&1 || fail "htpasswd made no entry for the mini"
+  install -o "$RESTIC_USER" -m 0400 "$work/htpasswd" "$ETC/htpasswd"
+  rm -f "$FOR_MINI/litestream-sftp-key" "$FOR_MINI/litestream-sftp-key.pub"
+  ssh-keygen -q -t ed25519 -N "" -C "litestream on the mini" -f "$FOR_MINI/litestream-sftp-key"
+  install -o "$ROOT_USER" -m 0644 "$FOR_MINI/litestream-sftp-key.pub" "$ETC/litestream.authorized_keys"
+  rm -f "$FOR_MINI/litestream-sftp-key.pub"
+  cp "$ETC/tls.crt" "$FOR_MINI/guest.crt"
+  awk '{ print $1, $2 }' "$HOST_KEY" > "$FOR_MINI/host-key"
+  chmod 0600 "$FOR_MINI"/*
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$ETC/mini-keys-made"
+}
+
+keys() {
+  [[ -s $ETC/restic-password ]] || change "make the guest's own restic key at $ETC/restic-password, which only $RESTIC_USER reads" make_guest_key
+  [[ -s $ETC/tls.crt && -s $ETC/tls.key ]] || change "make rest-server's certificate, for the name lab-backup" make_certificate
+  [[ -f $REPOSITORY/config ]] || change "make the mini's restic repository at $REPOSITORY" make_repository
+  if [[ ! -f $ETC/mini-keys-made ]]; then
+    (( DRY )) || [[ -s $HOST_KEY ]] || fail "no $HOST_KEY: the SSH server has no host key yet"
+    change "make the mini's keys and leave them in $FOR_MINI" make_mini_keys
+  fi
+}
+
+sftp_account() {
+  file "$SSHD_DROP" "$ROOT_USER" 644 <<EOF || return 0
+# Litestream on the mini reaches the backup guest as this account: SFTP
+# only, shut into one folder, by key only.
+Match User $SFTP_USER
+    ChrootDirectory ${SFTP_DIR#"$GUEST_ROOT"}
+    ForceCommand internal-sftp
+    AuthorizedKeysFile ${ETC#"$GUEST_ROOT"}/litestream.authorized_keys
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AllowTcpForwarding no
+    X11Forwarding no
+    PermitTTY no
+EOF
+  (( DRY )) || sshd -t || fail "sshd does not take $SSHD_DROP"
+  RESTARTS+=" ssh"
+}
+
+unit() { file "$UNITS/$1" "$ROOT_USER" 644 && RESTARTS+=" $1"; return 0; }
+
+units() {
+  local lib="${LIB#"$GUEST_ROOT"}" etc="${ETC#"$GUEST_ROOT"}" srv="${SRV#"$GUEST_ROOT"}"
+  unit lab-backup-rest.service <<EOF
+[Unit]
+Description=Omarchy Mac Lab: rest-server, where the mini adds to its backups and deletes nothing
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=$RESTIC_USER
+ExecStart=/usr/local/bin/rest-server --path $srv/restic --listen :8000 --append-only --private-repos --tls --tls-cert $etc/tls.crt --tls-key $etc/tls.key --htpasswd-file $etc/htpasswd
+Restart=always
+RestartSec=10
+IPAddressDeny=any
+IPAddressAllow=$mini
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=$srv/restic
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  unit lab-backup-prune.service <<EOF
+[Unit]
+Description=Omarchy Mac Lab: keep the house copy to 7 daily, 4 weekly, 6 monthly and to six months
+
+[Service]
+Type=oneshot
+User=$RESTIC_USER
+ExecStart=$lib/prune
+EOF
+  unit lab-backup-prune.timer <<EOF
+[Unit]
+Description=Omarchy Mac Lab: prune the house copy each night, after the mini's run of 02:30
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 Australia/Brisbane
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  unit lab-backup-mirror.service <<EOF
+[Unit]
+Description=Omarchy Mac Lab: the owner's copy, a mirror of the repository and of every Lab release's files
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$MIRROR_USER
+ExecStart=$lib/mirror
+EOF
+  unit lab-backup-mirror.timer <<EOF
+[Unit]
+Description=Omarchy Mac Lab: the owner's copy each night
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Australia/Brisbane
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+restart() {
+  systemctl daemon-reload
+  [[ " $RESTARTS " != *" ssh "* ]] || systemctl reload ssh
+  systemctl enable --quiet lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer
+  systemctl restart lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer
+}
+
+packages
+accounts
+folders
+pins
+scripts
+keys
+sftp_account
+units
+if [[ -n $RESTARTS ]]; then
+  change "start what changed:$RESTARTS" restart
+elif ! systemctl is-active --quiet lab-backup-rest.service lab-backup-prune.timer lab-backup-mirror.timer; then
+  change "start rest-server and the two nightly timers" restart
+fi
+
+if (( CHANGES == 0 )); then
+  say "nothing to change"
+elif (( DRY )); then
+  say "$CHANGES changes would be made; nothing was changed"
+else
+  say "$CHANGES changes made"
+fi
+if [[ -d $FOR_MINI ]]; then
+  say "the mini's keys wait in $FOR_MINI: carry that folder to the mini, give it to scripts/mini/setup --backup-keys, then remove it here"
+fi

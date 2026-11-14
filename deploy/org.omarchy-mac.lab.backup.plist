@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The nightly backup on the mini, as the unprivileged lab account, at
+     02:30 by the mini's clock. It runs the Deployed build's own script, which
+     runs restic from the copy of the Homebrew tools only root can write.
+     scripts/mini/setup installs this file; nothing here is a secret: what
+     opens the two targets is in files only lab reads. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.backup</string>
+  <key>UserName</key><string>lab</string>
+  <key>GroupName</key><string>lab</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/current/scripts/mini/backup</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/lab</string>
+  <key>Umask</key><integer>63</integer>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>2</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key><string>/var/lab/log/backup.log</string>
+  <key>StandardErrorPath</key><string>/var/lab/log/backup.log</string>
+</dict>
+</plist>

@@ -18,6 +18,12 @@ RESET_TOOL_NAME="macvdmtool"
 CLOUDFLARED_LABEL="org.omarchy-mac.lab.cloudflared"
 FRONT_DOOR="https://$LAB_HOST"
 SIGNAL_LABEL="org.omarchy-mac.lab.signal-cli"
+LITESTREAM_LABEL="org.omarchy-mac.lab.litestream"
+BACKUP_LABEL="org.omarchy-mac.lab.backup"
+# The backup guest on pve2, by the name the set-up writes into /etc/hosts.
+BACKUP_GUEST="lab-backup"
+BACKUP_HOUSE="rest:https://$BACKUP_GUEST:8000/mini/"
+BACKUP_HOST="lab-mini"
 
 ROOT_OWNER=root
 ROOT_GROUP=wheel
@@ -35,6 +41,7 @@ if [[ -n $SYSROOT ]]; then
   LABD_LISTEN="${LAB_LOOPBACK:-$LABD_LISTEN}"
   OOBD_LISTEN="${LAB_OOBD_LOOPBACK:-$OOBD_LISTEN}"
   FRONT_DOOR="${LAB_FRONT_DOOR:-$FRONT_DOOR}"
+  BACKUP_HOUSE="${LAB_BACKUP_HOUSE:-$BACKUP_HOUSE}"
 else
   PATH=/usr/bin:/bin:/usr/sbin:/sbin
   export PATH
@@ -59,6 +66,20 @@ LABD_OOBD_TOKEN="$LAB_HOME/secrets/oobd.token"
 # The tunnel's credential, as cloudflared reads it with --token-file.
 TUNNEL_TOKEN="$LAB_HOME/secrets/cloudflared.token"
 LAUNCHD_DIR="$SYSROOT/Library/LaunchDaemons"
+# Backups. The live databases stay out of restic: it carries the copies the
+# nightly run makes in snapshots/. What the guest and R2 are reached with is
+# in one folder only the lab account reads.
+LAB_DATA="$LAB_HOME/data"
+LAB_SNAPSHOTS="$LAB_DATA/snapshots"
+LAB_DATABASES="labd.db reports.db"
+BACKUP_KEYS="$LAB_HOME/secrets/backup"
+BACKUP_KEYS_HOUSE="restic-password rest-password guest.crt litestream-sftp-key host-key"
+BACKUP_KEYS_OFFSITE="r2-repository r2-access-key-id r2-secret-access-key"
+BACKUP_OK="$LAB_HOME/log/backup.ok"
+LITESTREAM_CONFIG="$LAB_ROOT/litestream.yml"
+LITESTREAM="$LAB_TOOLS/current/litestream/bin/litestream"
+RESTIC="$LAB_TOOLS/current/restic/bin/restic"
+HOSTS_FILE="$SYSROOT/etc/hosts"
 OOBD_PLIST="$LAUNCHD_DIR/$OOBD_LABEL.plist"
 # The lab's Signal sender: signal-cli from the copy of the Homebrew tools,
 # its account's keys and the two groups' ids as files of the lab account.
@@ -194,4 +215,13 @@ start_sender() {
   launchctl enable "system/$SIGNAL_LABEL" || true
   launchctl bootstrap system "$SIGNAL_PLIST" || fail "launchd did not take $SIGNAL_PLIST"
   loaded "$SIGNAL_LABEL" || fail "$SIGNAL_LABEL is not loaded after its start: see $LAB_HOME/log/signal-cli.log"
+}
+
+# notify TEXT: one operations line for "Agents". A line that cannot be sent
+# is still printed, so it is in the log of whatever ran.
+notify() {
+  local hook
+  hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/notify"
+  say "$1"
+  [[ ! -x $hook ]] || "$hook" agents "$1" || say "that line was not sent"
 }

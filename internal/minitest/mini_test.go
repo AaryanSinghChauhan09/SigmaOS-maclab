@@ -147,12 +147,13 @@ exec "$@"
 const brewStub = `#!/bin/bash
 prefix="$(cd "$(dirname "$0")/.." && pwd)"
 echo "brew $* [auto_update=${HOMEBREW_NO_AUTO_UPDATE:-} upgrade=${HOMEBREW_NO_INSTALL_UPGRADE:-} uid=$(id -u)]" >> "$STUB_LOG"
+# A formula of a tap is asked for as tap/formula and kept under its own name.
 case "$1" in
-  list) ls "$prefix/Cellar/$3" 2>/dev/null | sed "s/^/$3 /" ;;
-  deps) cat "$prefix/deps/$2" 2>/dev/null || true ;;
-  --prefix) echo "$prefix/opt/$2" ;;
+  list) ls "$prefix/Cellar/${3##*/}" 2>/dev/null | sed "s/^/${3##*/} /" ;;
+  deps) cat "$prefix/deps/${2##*/}" 2>/dev/null || true ;;
+  --prefix) echo "$prefix/opt/${2##*/}" ;;
   install)
-    for f in "$2" $(cat "$prefix/deps/$2" 2>/dev/null); do
+    for f in "${2##*/}" $(cat "$prefix/deps/${2##*/}" 2>/dev/null); do
       mkdir -p "$prefix/Cellar/$f/1.0/bin" "$prefix/opt"
       printf '#!/bin/sh\necho %s 1.0\n' "$f" > "$prefix/Cellar/$f/1.0/bin/$f"
       chmod 0775 "$prefix/Cellar/$f/1.0/bin/$f" "$prefix/Cellar/$f/1.0/bin"
@@ -187,6 +188,9 @@ func newMini(t *testing.T) *mini {
 		t.Fatalf("the mini's scripts: %v", err)
 	}
 	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
 		b, err := os.ReadFile(filepath.Join(src, e.Name()))
 		if err != nil {
 			t.Fatal(err)
@@ -198,6 +202,9 @@ func newMini(t *testing.T) *mini {
 	write(t, m.tree+"/deploy/homebrew-formulae", "# none\n", 0o644)
 	write(t, m.tree+"/deploy/"+cloudflaredLabel+".plist", read(t, filepath.Join(repo(t), "deploy", cloudflaredLabel+".plist")), 0o644)
 	write(t, m.tree+"/deploy/"+signalLabel+".plist", read(t, filepath.Join(repo(t), "deploy", signalLabel+".plist")), 0o644)
+	for _, f := range []string{litestreamLabel + ".plist", backupLabel + ".plist", "litestream.yml"} {
+		write(t, m.tree+"/deploy/"+f, read(t, filepath.Join(repo(t), "deploy", f)), 0o644)
+	}
 	write(t, m.tree+"/deploy/pins", "# none\n", 0o644)
 	m.env = append(os.Environ(),
 		"LAB_SYSROOT="+m.root,

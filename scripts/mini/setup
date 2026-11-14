@@ -2,6 +2,7 @@
 # Set the mini up for the lab:
 #
 #   sudo scripts/mini/setup [--dry-run] [--release-key FILE] [--tunnel-credential FILE]
+#                           [--backup-guest ADDRESS] [--backup-keys FOLDER]
 #
 # Makes the lab account and its folders, pins the release key, installs the
 # Homebrew formulae deploy/homebrew-formulae names and what deploy/pins
@@ -11,9 +12,11 @@
 # a build is Deployed, starts it. Starts the tunnel once it has a credential
 # and a Deployed build to read its routes from. Installs the Signal sender's
 # LaunchDaemon file and starts signal-cli from the copy; its number is
-# registered with scripts/mini/signal. Safe to run again: it changes only
-# what is not yet as it should be. It never starts labd: Deploy does. Needs
-# only what macOS has, and Homebrew for its own formulae.
+# registered with scripts/mini/signal. Starts Litestream and schedules the
+# nightly backup once the guest's and R2's keys are in place. Safe to run
+# again: it changes only what is not yet as it should be. It never starts
+# labd: Deploy does. Needs only what macOS has, and Homebrew for its own
+# formulae.
 #
 #   --dry-run           say what would change, and change nothing
 #   --release-key FILE  the allowed_signers file Deploy checks a bundle
@@ -23,6 +26,18 @@
 #                       the tunnel's credential, as scripts/cloud/tunnel.sh
 #                       wrote it. It is put where only the lab account reads
 #                       it, and FILE is removed. Needed once.
+#   --backup-guest ADDRESS
+#                       the backup guest's address in the house. It is
+#                       written to /etc/hosts as lab-backup, the name the
+#                       backups reach it by.
+#   --backup-keys FOLDER
+#                       what the backups are opened with: the files the
+#                       guest's set-up left for the mini (restic-password,
+#                       rest-password, guest.crt, litestream-sftp-key,
+#                       host-key) and R2's three (r2-repository,
+#                       r2-access-key-id, r2-secret-access-key). Each file
+#                       found is put where only the lab account reads it and
+#                       removed from FOLDER; the rest can come in a later run.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,16 +45,20 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
 credential=""
+guest=""
+keys=""
 while (( $# )); do
   case "$1" in
     --dry-run) DRY=1 ;;
     --release-key) [[ $# -ge 2 ]] || usage; key="$2"; shift ;;
     --tunnel-credential) [[ $# -ge 2 ]] || usage; credential="$2"; shift ;;
+    --backup-guest) [[ $# -ge 2 ]] || usage; guest="$2"; shift ;;
+    --backup-keys) [[ $# -ge 2 ]] || usage; keys="$2"; shift ;;
     *) usage ;;
   esac
   shift
@@ -62,6 +81,37 @@ if [[ -n $credential ]]; then
   if [[ "$(wc -l < "$credential" | tr -d ' ')" -gt 1 ]] || ! grep -Eq '^[A-Za-z0-9+/]{40,}={0,2}$' "$credential"; then
     fail "$credential is not a tunnel credential: one line of base64, as scripts/cloud/tunnel.sh writes it"
   fi
+fi
+
+if [[ -n $guest ]]; then
+  [[ $guest =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || fail "$guest is not an address such as 192.168.0.186"
+fi
+if [[ -n $keys ]]; then
+  [[ -d $keys ]] || fail "no folder $keys"
+  found=0
+  for name in $BACKUP_KEYS_HOUSE $BACKUP_KEYS_OFFSITE; do
+    [[ -e $keys/$name ]] || continue
+    found=1
+    [[ -f $keys/$name && ! -L $keys/$name && -s $keys/$name ]] || fail "$keys/$name is empty or no plain file"
+    case "$name" in
+      guest.crt)
+        grep -q -- '-----BEGIN CERTIFICATE-----' "$keys/$name" || fail "$keys/$name is no certificate"
+        continue ;;
+      host-key)
+        if [[ "$(wc -l < "$keys/$name" | tr -d ' ')" -gt 1 ]] || ! grep -Eq '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+) [A-Za-z0-9+/]+={0,2}$' "$keys/$name"; then
+          fail "$keys/$name is not one SSH host key: a key type and the key, as the guest's set-up writes it"
+        fi
+        continue ;;
+      r2-repository)
+        grep -Eq '^s3:https://[a-z0-9.-]+/[a-z0-9.-]+$' "$keys/$name" || fail "$keys/$name is not s3:https://<account>.r2.cloudflarestorage.com/<bucket>"
+        ;;
+    esac
+    case "$(looks "$keys/$name")" in
+      -r--------\ * | -rw-------\ *) ;;
+      *) fail "$keys/$name can be read by others: make it again, and keep it to its owner (chmod 600)" ;;
+    esac
+  done
+  (( found )) || fail "$keys holds none of: $BACKUP_KEYS_HOUSE $BACKUP_KEYS_OFFSITE"
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/lab-setup.XXXXXX")"
@@ -236,9 +286,10 @@ copy_tools() {
       change "copy the Homebrew tools into a new folder under $LAB_TOOLS that only $ROOT_OWNER can write" true
       return 0
     fi
-    KEG_NAMES+=("$name")
+    # A formula of a tap is named tap/formula; its copy is the formula's name.
+    KEG_NAMES+=("${name##*/}")
     KEG_PATHS+=("$keg")
-    manifest+="$name $(basename "$keg")"$'\n'
+    manifest+="${name##*/} $(basename "$keg")"$'\n'
   done
   if [[ -f $LAB_TOOLS/current/VERSIONS && "$(<"$LAB_TOOLS/current/VERSIONS")"$'\n' == "$manifest" ]]; then return 0; fi
   TOOLS_COPIED=1
@@ -246,7 +297,7 @@ copy_tools() {
 }
 
 homebrew() {
-  local list f
+  local list f absent=0
   list="$(formulae)"
   [[ -n $list ]] || return 0
   [[ -x $BREW_PREFIX/bin/brew ]] || fail "deploy/homebrew-formulae names tools, and there is no Homebrew at $BREW_PREFIX"
@@ -256,8 +307,16 @@ homebrew() {
   for f in $list; do
     if [[ -z "$(brew_as_owner list --versions "$f" 2>/dev/null)" ]]; then
       change "install $f from Homebrew, as $BREW_OWNER" brew_as_owner install "$f"
+      absent=1
     fi
   done
+  # Before a tap's formula is installed brew cannot say what it needs
+  # without fetching the tap, which a dry run must not do.
+  if (( DRY && absent )); then
+    TOOLS_COPIED=1
+    change "copy the Homebrew tools into a new folder under $LAB_TOOLS that only $ROOT_OWNER can write" true
+    return 0
+  fi
   # shellcheck disable=SC2086
   copy_tools $list
 }
@@ -460,6 +519,140 @@ sender() {
   fi
 }
 
+# Backups. Litestream sends both databases to the guest in the house as they
+# change; restic sends the data directory there nightly, and the databases'
+# copies to R2. Both tools run from the root-owned copy. What opens the guest
+# and R2 comes once, in a folder, and goes where only the lab account reads.
+
+KEYS_NEW=0
+GUEST_KEY=""
+
+take_key() {
+  lab_file "$BACKUP_KEYS/$1" 400 < "$keys/$1"
+  rm -f "$keys/$1"
+}
+
+# has_key NAME: whether the key is in place, or in a dry run would be.
+has_key() {
+  [[ -s $BACKUP_KEYS/$1 ]] || { (( DRY )) && [[ -n $keys && -s $keys/$1 ]]; }
+}
+
+# lacks NAME...: the first key that is not in place, or nothing.
+lacks() {
+  local name
+  for name in "$@"; do
+    if ! has_key "$name"; then
+      echo "$name"
+      return 0
+    fi
+  done
+}
+
+# The host key goes into a file everyone reads, so what the lab account
+# keeps is taken for one only when it has the form of one.
+host_key() {
+  local line
+  no_link "$BACKUP_KEYS/host-key"
+  line="$(cat "$BACKUP_KEYS/host-key" 2>/dev/null || cat "$keys/host-key")"
+  [[ $line =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+)\ [A-Za-z0-9+/]+=*$ ]] || fail "$BACKUP_KEYS/host-key is not one SSH host key"
+  echo "$line"
+}
+
+known_hosts() { echo "$BACKUP_GUEST $GUEST_KEY" | lab_file "$BACKUP_KEYS/known_hosts" 400; }
+
+# write_as OWNER GROUP MODE FILE: standard input becomes FILE.
+write_as() {
+  rm -f "$4.new"
+  (umask 077; cat > "$4.new")
+  chown "$1:$2" "$4.new"
+  chmod "$3" "$4.new"
+  mv -f "$4.new" "$4"
+}
+
+name_guest() {
+  { grep -v "[[:space:]]$BACKUP_GUEST\$" "$HOSTS_FILE" 2>/dev/null || true; printf '%s\t%s\n' "$guest" "$BACKUP_GUEST"; } > "$work/hosts"
+  cat "$work/hosts" > "$HOSTS_FILE"
+}
+
+guest_named() { grep -Eq "^[0-9.]+[[:space:]]+$BACKUP_GUEST\$" "$HOSTS_FILE" 2>/dev/null || { (( DRY )) && [[ -n $guest ]]; }; }
+
+start_daemon() {
+  local plist="$LAUNCHD_DIR/$1.plist"
+  stopped "$1" || fail "$1 did not stop (20 s)"
+  cp "$deploy/$1.plist" "$plist"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$plist"
+  chmod 0644 "$plist"
+  launchctl enable "system/$1" || true
+  launchctl bootstrap system "$plist" || fail "launchd did not take $plist"
+}
+
+backup_keys() {
+  local name
+  if [[ -n $keys ]]; then
+    for name in $BACKUP_KEYS_HOUSE $BACKUP_KEYS_OFFSITE; do
+      [[ -f $keys/$name ]] || continue
+      if cmp -s "$keys/$name" "$BACKUP_KEYS/$name"; then
+        change "remove $keys/$name: it is already at $BACKUP_KEYS/$name" rm -f "$keys/$name"
+      else
+        change "put $name at $BACKUP_KEYS/$name, which only $LAB_OWNER reads, and remove it from $keys" take_key "$name"
+        KEYS_NEW=1
+      fi
+    done
+  fi
+  has_key host-key || return 0
+  GUEST_KEY="$(host_key)" || exit 1
+  if [[ "$(cat "$BACKUP_KEYS/known_hosts" 2>/dev/null)" != "$BACKUP_GUEST $GUEST_KEY" ]]; then
+    change "write the guest's SSH host key to $BACKUP_KEYS/known_hosts" known_hosts
+  fi
+}
+
+backups() {
+  local missing restart=0
+  formulae | grep -qx restic || return 0
+  if [[ -n $guest ]] && ! grep -Eq "^${guest//./\\.}[[:space:]]+$BACKUP_GUEST\$" "$HOSTS_FILE" 2>/dev/null; then
+    change "name the backup guest in $HOSTS_FILE: $guest $BACKUP_GUEST" name_guest
+  fi
+  if [[ -d $BACKUP_KEYS && ! -r $BACKUP_KEYS ]] || [[ ! -d $BACKUP_KEYS && -d $LAB_HOME/secrets && ! -r $LAB_HOME/secrets ]]; then
+    say "$LAB_HOME/secrets is $LAB_OWNER's: the backups' keys are not looked at without sudo"
+    return 0
+  fi
+  if [[ "$(looks "$BACKUP_KEYS")" != "$(shape d 700) $LAB_OWNER:$LAB_GROUP" ]]; then
+    change "make $BACKUP_KEYS ($LAB_OWNER:$LAB_GROUP, 700)" lab_folder "$BACKUP_KEYS" 700
+  fi
+  backup_keys
+
+  missing="$(lacks litestream-sftp-key host-key)"
+  if [[ -n $missing ]]; then
+    say "Litestream is not started: it has no $missing yet (--backup-keys FOLDER, with what the guest's set-up left for the mini)"
+  elif ! guest_named; then
+    say "Litestream is not started: $HOSTS_FILE does not name $BACKUP_GUEST yet (--backup-guest ADDRESS)"
+  else
+    sed "s|GUEST_HOST_KEY|$GUEST_KEY|" "$deploy/litestream.yml" > "$work/litestream.yml"
+    if ! cmp -s "$work/litestream.yml" "$LITESTREAM_CONFIG" || [[ "$(looks "$LITESTREAM_CONFIG")" != "$(shape - 644) $ROOT_OWNER:$ROOT_GROUP" ]]; then
+      change "write Litestream's configuration to $LITESTREAM_CONFIG, with the guest's host key" write_as "$ROOT_OWNER" "$ROOT_GROUP" 0644 "$LITESTREAM_CONFIG" < "$work/litestream.yml"
+      restart=1
+    fi
+    if (( ! DRY )) && [[ ! -x $LITESTREAM ]]; then
+      fail "Litestream is not in $LAB_TOOLS/current: it was not started"
+    fi
+    if (( restart || TOOLS_COPIED || KEYS_NEW )) || ! cmp -s "$deploy/$LITESTREAM_LABEL.plist" "$LAUNCHD_DIR/$LITESTREAM_LABEL.plist" || ! loaded "$LITESTREAM_LABEL"; then
+      change "start Litestream ($LITESTREAM_LABEL) under $LAUNCHD_DIR/$LITESTREAM_LABEL.plist" start_daemon "$LITESTREAM_LABEL"
+    fi
+  fi
+
+  # shellcheck disable=SC2086
+  missing="$(lacks $BACKUP_KEYS_HOUSE $BACKUP_KEYS_OFFSITE)"
+  if [[ -n $missing ]]; then
+    say "the nightly backup is not scheduled: it has no $missing yet (--backup-keys FOLDER)"
+  elif ! guest_named; then
+    say "the nightly backup is not scheduled: $HOSTS_FILE does not name $BACKUP_GUEST yet (--backup-guest ADDRESS)"
+  elif [[ ! -x $LAB_CURRENT/scripts/mini/backup ]]; then
+    say "the nightly backup is not scheduled: no build is Deployed yet for it to run from. Deploy, then run the set-up again"
+  elif ! cmp -s "$deploy/$BACKUP_LABEL.plist" "$LAUNCHD_DIR/$BACKUP_LABEL.plist" || ! loaded "$BACKUP_LABEL"; then
+    change "schedule the nightly backup ($BACKUP_LABEL) under $LAUNCHD_DIR/$BACKUP_LABEL.plist" start_daemon "$BACKUP_LABEL"
+  fi
+}
+
 no_planted_link
 account
 folders
@@ -470,6 +663,7 @@ oobd_token
 controller
 tunnel
 sender
+backups
 
 if (( CHANGES == 0 )); then
   say "nothing to change"

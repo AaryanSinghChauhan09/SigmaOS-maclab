@@ -1,0 +1,34 @@
+# Litestream on the mini: both databases, continuously, to the backup guest
+# in the house over SFTP. Written for Litestream 0.5 (0.5.18 is what the
+# benbjohnson/litestream tap gave on 2026-11-14): one "replica" for each
+# database, and snapshots under "snapshot". A replica is about a second
+# behind (sync-interval) and reaches back 30 days (retention).
+#
+# scripts/mini/setup writes this file to /usr/local/lab/litestream.yml with
+# the guest's SSH host key in place of GUEST_HOST_KEY; without that key
+# Litestream would take any machine that answers as the guest. Nothing here
+# is a secret: the SFTP account's key is in the file named, which only the
+# lab account reads. The replicas are not encrypted by Litestream; they
+# stay in the house.
+snapshot:
+  interval: 24h
+  retention: 720h
+dbs:
+  - path: /var/lab/data/labd.db
+    replica:
+      type: sftp
+      host: lab-backup:22
+      user: litestream
+      path: /db/labd
+      key-path: /var/lab/secrets/backup/litestream-sftp-key
+      host-key: GUEST_HOST_KEY
+      sync-interval: 1s
+  - path: /var/lab/data/reports.db
+    replica:
+      type: sftp
+      host: lab-backup:22
+      user: litestream
+      path: /db/reports
+      key-path: /var/lab/secrets/backup/litestream-sftp-key
+      host-key: GUEST_HOST_KEY
+      sync-interval: 1s

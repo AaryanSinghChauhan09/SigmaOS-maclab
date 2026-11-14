@@ -21,7 +21,10 @@ func scripts(t *testing.T) []string {
 	}
 	var out []string
 	for _, e := range entries {
-		out = append(out, filepath.Join(dir, e.Name()))
+		// guest/ is the backup guest's, not the mini's: guest_test.go.
+		if !e.IsDir() {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
 	}
 	if len(out) == 0 {
 		t.Fatal("scripts/mini is empty")

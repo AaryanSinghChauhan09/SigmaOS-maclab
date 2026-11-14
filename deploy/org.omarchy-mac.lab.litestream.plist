@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Litestream on the mini, as the unprivileged lab account, beside labd: it
+     replicates labd.db and reports.db to the backup guest in the house. It
+     runs from the copy of the Homebrew tools only root can write, never from
+     Homebrew's own folder, and reads the configuration the set-up wrote from
+     deploy/litestream.yml. scripts/mini/setup installs this file and starts
+     it; nothing here is a secret. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.litestream</string>
+  <key>UserName</key><string>lab</string>
+  <key>GroupName</key><string>lab</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/tools/current/litestream/bin/litestream</string>
+    <string>replicate</string>
+    <string>-config</string><string>/usr/local/lab/litestream.yml</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/lab</string>
+  <key>Umask</key><integer>63</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/var/lab/log/litestream.log</string>
+  <key>StandardErrorPath</key><string>/var/lab/log/litestream.log</string>
+</dict>
+</plist>

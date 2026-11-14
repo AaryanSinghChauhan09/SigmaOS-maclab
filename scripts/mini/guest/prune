@@ -1,0 +1,30 @@
+#!/bin/bash
+# Nightly on the backup guest, as the restic account: keep the house copy to
+# the retention. The mini cannot do this itself: rest-server only lets it
+# add. Also removes any file of a Litestream replica older than six months,
+# which only happens once Litestream has stopped tidying its own. How it
+# went is written where the mini reads it.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/guest/lib.sh
+. "$here/lib.sh"
+JOB=prune
+trap report EXIT
+
+export RESTIC_REPOSITORY="$REPOSITORY" RESTIC_PASSWORD_FILE="$ETC/restic-password" RESTIC_CACHE_DIR="$RESTIC_DIR/.cache"
+
+WHAT="restic forget by the keep rules"
+restic forget --group-by host "${KEEP[@]}" --prune
+
+WHAT="reading the snapshots' ages"
+cut="$(days_ago "$KEEP_DAYS")"
+ids="$(restic snapshots --json | jq -r --arg cut "$cut" '.[] | select(.time[0:10] < $cut) | .id')"
+if [[ -n $ids ]]; then
+  WHAT="restic forget of snapshots made before $cut"
+  # shellcheck disable=SC2086
+  restic forget --prune $ids
+fi
+
+WHAT="removing Litestream files older than six months"
+find "$SFTP_DIR/db" -type f -mtime +"$KEEP_DAYS" -delete

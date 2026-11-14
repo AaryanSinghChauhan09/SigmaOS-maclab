@@ -1,0 +1,242 @@
+#!/bin/bash
+# The nightly backup, run as the lab account by its LaunchDaemon:
+#
+#   scripts/mini/backup [--dry-run]
+#   scripts/mini/backup restic house|offsite ARGUMENT...
+#
+# The nightly run makes a VACUUM INTO copy of each database in
+# data/snapshots, sends the data directory to the backup guest in the house
+# (restic through rest-server, which only lets the mini add), sends the two
+# copies alone to R2, applies the retention there, and asks the guest how its
+# own jobs went: the pruning of the house copy and the owner's copy, the
+# nightly mirror. The live database files, Litestream's own folders, uploads
+# still arriving and the caller log are never sent. Anything that failed is
+# one line to "Agents", and the run exits 1.
+#
+#   --dry-run   say what would run, and run nothing
+#   restic      run restic against one of the two targets as the nightly run
+#               reaches it: snapshots, init, key add, restore, check.
+#
+# By hand: sudo -u lab /usr/local/lab/current/scripts/mini/backup
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+umask 077
+
+usage() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+KEEP=(--keep-daily 7 --keep-weekly 4 --keep-monthly 6)
+# No copy is kept longer than 6 months, whatever the keep rules leave.
+KEEP_DAYS=183
+# The guest's jobs run nightly: one that last ran longer ago than this is late.
+LATE=$((36 * 3600))
+FAILED=""
+
+failed() {
+  FAILED+="${FAILED:+; }$1"
+  say "failed: $1"
+}
+
+days_ago() { date -u -v-"$1"d +%Y-%m-%d 2>/dev/null || date -u -d "$1 days ago" +%Y-%m-%d; }
+
+# missing NAME...: the first of the keys that is not there, or nothing.
+missing() {
+  local name
+  for name in "$@"; do
+    if [[ ! -s $BACKUP_KEYS/$name ]]; then
+      echo "$name"
+      return 0
+    fi
+  done
+}
+
+# restic_at house|offsite ARGUMENT...: restic against one target. What opens
+# the target is put in restic's own environment from files only lab reads;
+# none of it is an argument of any process.
+restic_at() {
+  local target="$1" lacks
+  shift
+  [[ -x $RESTIC ]] || { say "no restic at $RESTIC: run the set-up"; return 1; }
+  case "$target" in
+    house)
+      # shellcheck disable=SC2086
+      lacks="$(missing $BACKUP_KEYS_HOUSE)"
+      [[ -z $lacks ]] || { say "no $BACKUP_KEYS/$lacks: the set-up puts the guest's keys there (--backup-keys)"; return 1; }
+      RESTIC_REPOSITORY="$BACKUP_HOUSE" \
+        RESTIC_PASSWORD_FILE="$BACKUP_KEYS/restic-password" \
+        RESTIC_CACERT="$BACKUP_KEYS/guest.crt" \
+        RESTIC_REST_USERNAME=mini \
+        RESTIC_REST_PASSWORD="$(<"$BACKUP_KEYS/rest-password")" \
+        RESTIC_CACHE_DIR="$LAB_HOME/cache/restic" \
+        "$RESTIC" "$@"
+      ;;
+    offsite)
+      # shellcheck disable=SC2086
+      lacks="$(missing restic-password $BACKUP_KEYS_OFFSITE)"
+      [[ -z $lacks ]] || { say "no $BACKUP_KEYS/$lacks: the set-up puts the R2 keys there (--backup-keys)"; return 1; }
+      RESTIC_REPOSITORY_FILE="$BACKUP_KEYS/r2-repository" \
+        RESTIC_PASSWORD_FILE="$BACKUP_KEYS/restic-password" \
+        AWS_ACCESS_KEY_ID="$(<"$BACKUP_KEYS/r2-access-key-id")" \
+        AWS_SECRET_ACCESS_KEY="$(<"$BACKUP_KEYS/r2-secret-access-key")" \
+        AWS_DEFAULT_REGION=auto \
+        RESTIC_CACHE_DIR="$LAB_HOME/cache/restic" \
+        "$RESTIC" "$@"
+      ;;
+    *) usage ;;
+  esac
+}
+
+# step WHAT TARGET ARGUMENT...: one restic run of the nightly backup.
+step() {
+  local what="$1"
+  shift
+  if (( DRY )); then
+    say "would run, for $what: restic ${*:2}"
+    return 0
+  fi
+  say "$what"
+  restic_at "$@" || { failed "$what"; return 1; }
+}
+
+# A VACUUM INTO copy is a whole, consistent database made while labd runs.
+# Last night's copy goes first: a copy that cannot be made leaves none, so
+# no snapshot carries an old database as if it were tonight's.
+copy_databases() {
+  local name new
+  (( DRY )) || mkdir -p "$LAB_SNAPSHOTS"
+  for name in $LAB_DATABASES; do
+    if (( DRY )); then
+      say "would copy $LAB_DATA/$name to $LAB_SNAPSHOTS/$name with VACUUM INTO"
+      continue
+    fi
+    new="$LAB_SNAPSHOTS/.$name.new"
+    rm -f "$LAB_SNAPSHOTS/$name" "$new" "$new"-*
+    if [[ -f $LAB_DATA/$name ]] \
+      && sqlite3 "$LAB_DATA/$name" ".timeout 5000" "VACUUM INTO '$new'" >/dev/null \
+      && [[ "$(sqlite3 "$new" 'PRAGMA integrity_check' 2>/dev/null)" == ok ]]; then
+      rm -f "$new"-*
+      mv -f "$new" "$LAB_SNAPSHOTS/$name"
+      say "copied $name"
+    else
+      rm -f "$new" "$new"-*
+      failed "the copy of $name"
+    fi
+  done
+}
+
+house() {
+  local name leave=()
+  for name in $LAB_DATABASES; do
+    leave+=(--exclude "$LAB_DATA/$name" --exclude "$LAB_DATA/$name-*" --exclude "$LAB_DATA/.$name-litestream")
+  done
+  leave+=(--exclude "$LAB_DATA/callers" --exclude ".upload-*")
+  step "the house copy: the data directory to $BACKUP_GUEST" house backup --host "$BACKUP_HOST" "${leave[@]}" "$LAB_DATA" || true
+}
+
+# R2 takes the databases' copies and nothing else. Its token can delete, so
+# the mini applies the retention there itself; on the guest the mini cannot.
+offsite() {
+  local cut ids
+  step "the off-site copy: the databases' copies to R2" offsite backup --host "$BACKUP_HOST" "$LAB_SNAPSHOTS" || return 0
+  step "the off-site copy's retention" offsite forget --group-by host "${KEEP[@]}" --prune || return 0
+  cut="$(days_ago "$KEEP_DAYS")"
+  if (( DRY )); then
+    say "would forget every off-site snapshot made before $cut"
+    return 0
+  fi
+  if ! ids="$(restic_at offsite snapshots --json | jq -r --arg cut "$cut" '.[] | select(.time[0:10] < $cut) | .id')"; then
+    failed "reading the off-site snapshots' ages"
+    return 0
+  fi
+  [[ -n $ids ]] || return 0
+  # shellcheck disable=SC2086
+  step "forgetting off-site snapshots made before $cut" offsite forget --prune $ids || true
+}
+
+# The guest writes how its two nightly jobs went where its SFTP account can
+# read: "ok|failed <seconds since 1970> <time> <reason>".
+guest() {
+  local dir name what state at rest now
+  if (( DRY )); then
+    say "would ask $BACKUP_GUEST how its pruning and the owner's copy went"
+    return 0
+  fi
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/lab-backup.XXXXXX")"
+  if ! printf -- '-get /status/%s %s\n' mirror "$dir/mirror" prune "$dir/prune" \
+    | sftp -q -b - -i "$BACKUP_KEYS/litestream-sftp-key" -o IdentitiesOnly=yes -o BatchMode=yes \
+      -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$BACKUP_KEYS/known_hosts" \
+      "litestream@$BACKUP_GUEST" >/dev/null 2>&1; then
+    failed "$BACKUP_GUEST did not answer over SFTP, so its own jobs are not known"
+    rm -rf "$dir"
+    return 0
+  fi
+  now="$(date -u +%s)"
+  for name in prune mirror; do
+    what="the pruning of the house copy"
+    [[ $name == prune ]] || what="the owner's copy (the nightly mirror)"
+    state="" at="" rest=""
+    read -r state at _ rest < "$dir/$name" 2>/dev/null || true
+    rest="$(printf '%s' "$rest" | tr -cd 'A-Za-z0-9 .:,_/-' | cut -c 1-160)"
+    case "$state" in
+      ok)
+        if [[ ! $at =~ ^[0-9]+$ ]] || (( now - at > LATE )); then
+          failed "$what last ran more than 36 hours ago"
+        fi
+        ;;
+      failed) failed "$what failed on $BACKUP_GUEST: $rest" ;;
+      *) failed "$what has never run on $BACKUP_GUEST" ;;
+    esac
+  done
+  rm -rf "$dir"
+}
+
+be_lab() {
+  [[ -n $SYSROOT || "$(id -un)" == "$LAB_OWNER" ]] || fail "run it as $LAB_OWNER: sudo -u $LAB_OWNER $0"
+}
+
+if [[ ${1:-} == restic ]]; then
+  [[ $# -ge 3 && ( $2 == house || $2 == offsite ) ]] || usage
+  be_lab
+  shift
+  restic_at "$@"
+  exit
+fi
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    *) usage ;;
+  esac
+  shift
+done
+be_lab
+
+if (( ! DRY )); then
+  lock="$LAB_HOME/run/backup.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    if kill -0 "$(cat "$lock/pid" 2>/dev/null || echo 0)" 2>/dev/null; then
+      fail "another backup is running"
+    fi
+    rm -rf "$lock"
+    mkdir "$lock"
+  fi
+  echo $$ > "$lock/pid"
+  trap 'rm -rf "$lock"' EXIT
+fi
+
+copy_databases
+house
+offsite
+guest
+
+if [[ -n $FAILED ]]; then
+  notify "The nightly backup failed: $FAILED."
+  exit 1
+fi
+if (( DRY )); then
+  say "nothing was run"
+else
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$BACKUP_OK"
+  say "done"
+fi
