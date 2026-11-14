@@ -115,8 +115,8 @@ func parseCSV(t *testing.T, text string) [][]string {
 	return rows
 }
 
-// named are a CSV's rows, each by its column names.
-func named(rows [][]string) []map[string]string {
+// byColumn are a CSV's rows, each by its column names.
+func byColumn(rows [][]string) []map[string]string {
 	var out []map[string]string
 	for _, row := range rows[1:] {
 		entry := map[string]string{}
@@ -130,7 +130,7 @@ func named(rows [][]string) []map[string]string {
 
 func column(rows [][]string, name string) []string {
 	var out []string
-	for _, row := range named(rows) {
+	for _, row := range byColumn(rows) {
 		out = append(out, row[name])
 	}
 	return out
@@ -760,7 +760,7 @@ func TestReportsCSVHasOneRowPerReport(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("%d rows", len(rows))
 	}
-	row := named(rows)[0]
+	row := byColumn(rows)[0]
 	for name, want := range map[string]string{"id": m2, "board": "j416c", "stack": "converged", "omarchy_version": "4.0.0-alpha", "checks": "86",
 		"pass": "37", "fail": "4", "skip": "45", "encryption": "on", "url": labAddress + "/reports/" + m2, "schema_version": "1", "expected_gaps": "2"} {
 		if row[name] != want {
@@ -787,7 +787,7 @@ func TestChecksCSVHasOneRowPerCheckResult(t *testing.T) {
 	if len(rows) != want {
 		t.Errorf("%d rows, want %d", len(rows), want)
 	}
-	for _, row := range named(rows) {
+	for _, row := range byColumn(rows) {
 		if row["report_id"] == m2 && row["status"] == "fail" {
 			for name, want := range map[string]string{"check_id": "setup.first-boot-hardware", "outcome": "fails", "feature": "first-boot-hardware-setup",
 				"layer": "omarchy", "expected_aurora": "supported", "expected_omarchy": "supported", "expected_asahi": "", "kind": "automatic",
@@ -811,7 +811,7 @@ func TestChecksCSVSaysWhichAnswersWereTheDefault(t *testing.T) {
 	l.add(byDefault, "a")
 	l.add(goldenDoc(t, "m2-max-image2"), "b")
 	var answers []string
-	for _, row := range named(parseCSV(t, l.export("/api/v1/checks.csv"))) {
+	for _, row := range byColumn(parseCSV(t, l.export("/api/v1/checks.csv"))) {
 		if row["check_id"] == "input.trackpad-gestures" {
 			answers = append(answers, row["answered_by_default"])
 		}
@@ -889,7 +889,7 @@ func TestTheExportsCarryTheBuildOfEveryReport(t *testing.T) {
 			same(t, "the M3's report", exportedBy[m3ID]["report"], any(entry.Report))
 		}
 	}
-	for _, row := range named(parseCSV(t, l.export("/api/v1/reports.csv"))) {
+	for _, row := range byColumn(parseCSV(t, l.export("/api/v1/reports.csv"))) {
 		if row["id"] != m3ID {
 			continue
 		}
@@ -900,7 +900,7 @@ func TestTheExportsCarryTheBuildOfEveryReport(t *testing.T) {
 		}
 	}
 	var builds []string
-	for _, row := range named(parseCSV(t, l.export("/api/v1/checks.csv"))) {
+	for _, row := range byColumn(parseCSV(t, l.export("/api/v1/checks.csv"))) {
 		if row["report_id"] == m3ID {
 			builds = append(builds, row["build"])
 		}
@@ -947,8 +947,8 @@ func TestTheReportsExportsTakeTheFilters(t *testing.T) {
 		}
 	}
 	rows = parseCSV(t, l.export("/api/v1/reports.csv?model=j613&confirmed=1"))
-	if len(rows) != 2 || named(rows)[0]["checks"] != fmt.Sprint(counted) {
-		t.Errorf("confirmed only: %d rows, checks %q, want %d", len(rows), named(rows)[0]["checks"], counted)
+	if len(rows) != 2 || byColumn(rows)[0]["checks"] != fmt.Sprint(counted) {
+		t.Errorf("confirmed only: %d rows, checks %q, want %d", len(rows), byColumn(rows)[0]["checks"], counted)
 	}
 }
 

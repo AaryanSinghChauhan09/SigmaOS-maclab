@@ -589,7 +589,7 @@ func TestTheComparisonAndEveryScoreDownloadUnderCC0(t *testing.T) {
 	if strings.Contains(text, "key:a") {
 		t.Error("benchmarks.json carries a Machine key")
 	}
-	for _, row := range named(parseCSV(t, l.export("/api/v1/checks.csv"))) {
+	for _, row := range byColumn(parseCSV(t, l.export("/api/v1/checks.csv"))) {
 		if row["check_id"] == "benchmark.vulkan" {
 			same(t, "checks.csv's score", []string{row["score"], row["score_unit"], row["score_tool"], row["score_suite"]}, []string{"6124", "points", "vkmark 2025.01", "1"})
 		}
