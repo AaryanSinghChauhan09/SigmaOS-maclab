@@ -448,6 +448,9 @@ func TestSetupStartsTailscaledFromTheCopyAndJoinsTaggedOnce(t *testing.T) {
 		if out := m.refused("setup", "--tailscale-key", file); strings.Contains(out, "tskey-") {
 			t.Errorf("%s: the refusal shows the key:\n%s", name, out)
 		}
+		if strings.Contains(m.calls(), " up ") {
+			t.Fatalf("%s: it was handed to tailscale all the same:\n%s", name, m.calls())
+		}
 	}
 	m.refused("setup", "--tailscale-key", filepath.Join(t.TempDir(), "absent"))
 
