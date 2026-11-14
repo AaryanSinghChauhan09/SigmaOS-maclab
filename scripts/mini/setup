@@ -110,6 +110,7 @@ if [[ -n $credential ]]; then
   if [[ "$(wc -l < "$credential" | tr -d ' ')" -gt 1 ]] || ! grep -Eq '^[A-Za-z0-9+/]{40,}={0,2}$' "$credential"; then
     fail "$credential is not a tunnel credential: one line of base64, as scripts/cloud/tunnel.sh writes it"
   fi
+  [[ ! $credential -ef $TUNNEL_TOKEN ]] || fail "$credential is where the set-up keeps the tunnel's credential: it is in place, and a file given here is removed once taken. Leave --tunnel-credential out"
 fi
 
 if [[ -n $guest ]]; then

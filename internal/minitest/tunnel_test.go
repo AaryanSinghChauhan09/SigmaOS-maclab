@@ -453,3 +453,29 @@ func TestDeployRestartsTheTunnelOnlyWhenItsRoutesChange(t *testing.T) {
 		}
 	}
 }
+
+// Given the installed credential as its own source, the set-up would find it
+// "already" in place and remove it; it was delivered once and cannot be made
+// again without making the tunnel again.
+func TestSetupRefusesItsOwnInstalledCredentialAsTheSource(t *testing.T) {
+	m, k := withTunnel(t)
+	m.ok("setup", "--release-key", k.signers, "--tunnel-credential", credentialFile(t, madeUpCredential+"\n", 0o600))
+	token := m.path(strings.TrimPrefix(tunnelToken, "/"))
+	os.Remove(m.log)
+
+	for _, args := range [][]string{{"--tunnel-credential", token}, {"--dry-run", "--tunnel-credential", token}} {
+		out := m.refused("setup", args...)
+		if !strings.Contains(out, "is where the set-up keeps the tunnel's credential") {
+			t.Errorf("setup %v does not say why:\n%s", args, out)
+		}
+		if strings.Contains(out, "remove") {
+			t.Errorf("setup %v spoke of removing it:\n%s", args, out)
+		}
+	}
+	if got := read(t, token); got != madeUpCredential+"\n" {
+		t.Fatalf("the tunnel's credential is %q after the set-up was given it as its own source", got)
+	}
+	if !m.tunnelLoaded() || strings.Contains(m.calls(), "bootout") {
+		t.Errorf("the tunnel was touched:\n%s", m.calls())
+	}
+}
