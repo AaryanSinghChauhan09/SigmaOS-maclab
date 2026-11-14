@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- labd on the mini, as the unprivileged lab account. It runs from the build
+     Deploy switched to and listens on this machine only: the tunnel's socket,
+     which only lab can open, and a loopback port. scripts/mini/deploy installs
+     this file and starts it; nothing here is a secret. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.labd</string>
+  <key>UserName</key><string>lab</string>
+  <key>GroupName</key><string>lab</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/current/bin/labd</string>
+    <string>--listen</string><string>127.0.0.1:7770</string>
+    <string>--socket</string><string>/var/lab/run/labd.sock</string>
+    <string>--public-url</string><string>https://lab.omarchy-mac.org</string>
+    <string>--preview</string>
+    <string>--data</string><string>/var/lab/data</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/lab</string>
+  <key>Umask</key><integer>63</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/var/lab/log/labd.log</string>
+  <key>StandardErrorPath</key><string>/var/lab/log/labd.log</string>
+</dict>
+</plist>

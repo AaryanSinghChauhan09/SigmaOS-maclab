@@ -12,6 +12,7 @@ Omarchy Mac Lab tests Omarchy on real Apple Silicon Macs and publishes what it f
 - Names an enrolled Mac or a stored record carries keep their `maclab` spelling: the `MACLAB_*` variables, `/var/lib/maclab`, `/etc/maclab`, `~/.config/maclab`, `~/.local/share/maclab`, the systemd units, `com.maclab.oobd`, the kernel command-line keys, the schema ids, the ESP names. `internal/repotest` fails when one changes.
 - No Docker, Kubernetes or Node build chain. `builder/Containerfile` and `builder/pkg/Containerfile` are the Builder's VMs and stay.
 - Run `scripts/ci-local` before a pull request. It runs what `.github/workflows/tests.yml` runs.
+- `scripts/mini/` runs on the mini with only what macOS has: no `python3`, `git` or `cc`, and `brew` only in the set-up, never as root. No LaunchDaemon file in `deploy/` names a path under `/opt/homebrew`: a Homebrew tool runs from its root-owned copy, `/usr/local/lab/tools/current/<formula>/`. `internal/minitest` runs the scripts against a made-up machine.
 - A Lab release is made by `.github/workflows/release.yml` from a tag the owner pushes. `release/local.sh vX.Y.Z-rc.N` makes one on this machine, signed with a throwaway key, under `dist/release/`; `release/check.sh` checks every file of one.
 
 ## Agent skills
