@@ -17,11 +17,16 @@ CREATE TABLE requests_to_lend (
 CREATE UNIQUE INDEX requests_to_lend_waiting ON requests_to_lend(account_id) WHERE state = 'waiting';
 CREATE INDEX requests_to_lend_account ON requests_to_lend(account_id, id);
 ALTER TABLE people ADD COLUMN lend_cap INTEGER;
--- A Join command's token. made_by is the account that made it and made
--- when; volunteer_id is whose Mac it enrolls, 0 for a Lab-owned Mac.
--- bound_to is the hash of the activation key of the first Mac that used it:
--- no other Mac uses it after that.
-ALTER TABLE tokens ADD COLUMN made_by INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE tokens ADD COLUMN made INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE tokens ADD COLUMN volunteer_id INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE tokens ADD COLUMN bound_to TEXT NOT NULL DEFAULT '';
+-- What a Join command adds to its token's row in tokens, which stays as
+-- maclab made it. made_by is the account that made it and made when;
+-- volunteer_id is whose Mac it enrolls, 0 for a Lab-owned Mac. bound_to is
+-- the hash of the activation key of the first Mac that used the token: no
+-- other Mac uses it after that. A row goes when its token does.
+CREATE TABLE join_commands (
+  token_hash TEXT PRIMARY KEY,
+  made_by INTEGER NOT NULL DEFAULT 0,
+  made INTEGER NOT NULL DEFAULT 0,
+  volunteer_id INTEGER NOT NULL DEFAULT 0,
+  bound_to TEXT NOT NULL DEFAULT ''
+) STRICT;
+CREATE INDEX join_commands_volunteer ON join_commands(volunteer_id);

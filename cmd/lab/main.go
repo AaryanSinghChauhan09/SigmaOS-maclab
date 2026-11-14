@@ -45,7 +45,7 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
                                       Volunteer, signed in, from "Lend a Mac" on the site
   lab remove <mac>                    end a Mac's enrollment: its device secret stops working at once, and lab-agent
                                       removes the lab from the Mac at its next check-in (a Volunteer is told)
-  lab device <name> [--label ..] [--model ..] [--oob-url http://m3:7780 --oob-token ..] [--no-oob]
+  lab device <name> [--label ..] [--model ..]
   lab baseline <device>               prove the one-shot boot works; required once per Mac
   lab build <github-url> --device <mac> | --config <file>   build a kernel from a repo, branch, commit or PR URL (reused if built before)
   lab package <recipe-dir> [--commit <github-url>] [--pkgrel 11.14] [-o dir]
@@ -162,21 +162,12 @@ func enrollFlags(fs *flag.FlagSet) enrollOpts {
 	}
 }
 
-// deviceOpts are lab device's flags: a Mac's label and model, and the
-// out-of-band controller a Maintainer attaches to it.
-type deviceOpts struct {
-	label, model, oobURL, oobToken *string
-	noOOB                          *bool
-}
+// deviceOpts are lab device's flags: a Mac's label and its model, and
+// nothing else. Whose a Mac is and which port resets it are not set here.
+type deviceOpts struct{ label, model *string }
 
 func deviceFlags(fs *flag.FlagSet) deviceOpts {
-	return deviceOpts{
-		label:    fs.String("label", "", ""),
-		model:    fs.String("model", "", ""),
-		oobURL:   fs.String("oob-url", "", "oobd URL for the controller host attached to this Mac"),
-		oobToken: fs.String("oob-token", "", ""),
-		noOOB:    fs.Bool("no-oob", false, "detach the out-of-band controller"),
-	}
+	return deviceOpts{label: fs.String("label", "", ""), model: fs.String("model", "", "")}
 }
 
 func parse(fs *flag.FlagSet, args []string) []string {
@@ -244,7 +235,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 	case "device":
 		o := deviceFlags(fs)
 		pos := parse(fs, args)
-		if err := need(pos, 1, "lab device <name> [flags]"); err != nil {
+		if err := need(pos, 1, "lab device <name> [--label ..] [--model ..]"); err != nil {
 			return err
 		}
 		var p api.DevicePatch
@@ -256,10 +247,6 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 				p.Model = o.model
 			}
 		})
-		if *o.oobURL != "" {
-			p.OOB = &api.OOBConfig{Driver: "oobd", URL: *o.oobURL, Token: *o.oobToken}
-		}
-		p.NoOOB = *o.noOOB
 		if _, err := c.PatchDevice(ctx, pos[0], p); err != nil {
 			return err
 		}

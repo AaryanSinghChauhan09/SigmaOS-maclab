@@ -179,15 +179,14 @@ func TestLabOwnedEnrollmentGetsNoVolunteerTopic(t *testing.T) {
 
 func TestRetriedEnrollmentOfAVolunteerMacKeepsItsTopic(t *testing.T) {
 	l := newLab(t, false)
-	resp, body := l.post("/api/enroll-tokens", map[string]any{"name": "ada-mbp", "model": api.ModelLaptop, "volunteer_name": "Ada Lovelace", "contact": "ada@example.org"})
-	var tok api.EnrollTokenResponse
-	if resp.StatusCode != 200 || json.Unmarshal([]byte(body), &tok) != nil {
-		t.Fatalf("token: %s %s", resp.Status, body)
+	tok := api.EnrollTokenResponse{Token: "enr_retried_ada_mbp"}
+	if err := l.s.store.addToken(hashSecret(tok.Token), api.EnrollTokenRequest{Name: "ada-mbp", Model: api.ModelLaptop, VolunteerName: "Ada Lovelace", Contact: "ada@example.org"}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
 	}
 	sim := agent.NewSim(t.TempDir())
 	var topics [2]string
 	for i := range topics {
-		resp, body = l.as("", "POST", "/api/agent/enroll", api.EnrollRequest{Token: tok.Token, Facts: sim.Facts(), ActivationKey: testActivationKey, TermsSHA256: termsSum()})
+		resp, body := l.as("", "POST", "/api/agent/enroll", api.EnrollRequest{Token: tok.Token, Facts: sim.Facts(), ActivationKey: testActivationKey, TermsSHA256: termsSum()})
 		out := map[string]any{}
 		json.Unmarshal([]byte(body), &out)
 		topics[i], _ = out["ntfy_topic"].(string)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func TestEnrollAndDeviceNameNoVolunteer(t *testing.T) {
 	enrollFlags(enroll)
 	device := flag.NewFlagSet("device", flag.ContinueOnError)
 	deviceFlags(device)
-	for _, gone := range []string{"volunteer", "contact", "login", "unlink"} {
+	for _, gone := range []string{"volunteer", "contact", "login", "unlink", "oob-url", "oob-token", "no-oob"} {
 		for _, fs := range []*flag.FlagSet{enroll, device} {
 			if fs.Lookup(gone) != nil {
 				t.Errorf("lab %s still takes --%s", fs.Name(), gone)
@@ -70,14 +71,14 @@ func TestEnrollAndDeviceNameNoVolunteer(t *testing.T) {
 		}
 	}
 	for fs, kept := range map[*flag.FlagSet][]string{enroll: {"label", "model", "revoke"}, device: {"label", "model"}} {
-		for _, name := range kept {
-			if fs.Lookup(name) == nil {
-				t.Errorf("lab %s lost --%s", fs.Name(), name)
-			}
+		var has []string
+		fs.VisitAll(func(f *flag.Flag) { has = append(has, f.Name) })
+		if !slices.Equal(has, kept) {
+			t.Errorf("lab %s takes %v, want %v", fs.Name(), has, kept)
 		}
 	}
 	for _, line := range strings.Split(usage, "\n") {
-		if strings.Contains(line, "--volunteer ") || strings.Contains(line, "--contact") || strings.Contains(line, "--login") || strings.Contains(line, "--unlink") {
+		if strings.Contains(line, "--volunteer ") || strings.Contains(line, "--contact") || strings.Contains(line, "--login") || strings.Contains(line, "--unlink") || strings.Contains(line, "--oob-") || strings.Contains(line, "--no-oob") {
 			t.Errorf("lab's usage still offers: %s", strings.TrimSpace(line))
 		}
 	}

@@ -214,16 +214,31 @@ type joinCommand struct {
 // unusedJoinCommand is the Join command the person made for a Mac of their
 // own that no Mac has enrolled with, and that has not expired.
 func (st *store) unusedJoinCommand(accountID int64, now time.Time) (*joinCommand, error) {
+	return scanJoinCommand(st.db.QueryRow(unusedOf, accountID, now.Unix()).Scan)
+}
+
+const (
+	joinCommandColumns = `t.name, j.made_by, j.volunteer_id, t.expires`
+	unusedOf           = `SELECT ` + joinCommandColumns + ` FROM tokens t JOIN join_commands j ON j.token_hash = t.token_hash
+		WHERE j.volunteer_id = ? AND t.activated_by = '' AND t.expires >= ? ORDER BY t.expires DESC LIMIT 1`
+	// dropUnusedOf drops a person's unused Join commands, and dropOrphans
+	// what was kept of tokens that are gone: used up, revoked or dropped.
+	dropUnusedOf = `DELETE FROM tokens WHERE activated_by = '' AND token_hash IN (SELECT token_hash FROM join_commands WHERE volunteer_id = ?)`
+	dropOrphans  = `DELETE FROM join_commands WHERE token_hash NOT IN (SELECT token_hash FROM tokens)`
+)
+
+// scanJoinCommand is the Join command a row holds, nil when there is none.
+func scanJoinCommand(scan func(...any) error) (*joinCommand, error) {
 	var c joinCommand
 	var exp int64
-	err := st.db.QueryRow(`SELECT name, made_by, volunteer_id, expires FROM tokens
-		WHERE volunteer_id = ? AND activated_by = '' AND expires >= ? ORDER BY expires DESC LIMIT 1`, accountID, now.Unix()).
-		Scan(&c.Name, &c.MadeBy, &c.VolunteerID, &exp)
-	if errors.Is(err, sql.ErrNoRows) {
+	switch err := scan(&c.Name, &c.MadeBy, &c.VolunteerID, &exp); {
+	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
+	case err != nil:
+		return nil, err
 	}
 	c.Expires = time.Unix(exp, 0)
-	return &c, err
+	return &c, nil
 }
 
 // errNameHeld is a Join command asked for a name another unused one holds.
@@ -240,31 +255,30 @@ func (st *store) addJoinCommand(hash string, req api.EnrollTokenRequest, madeBy 
 	}
 	defer tx.Rollback()
 	if req.VolunteerID != 0 {
-		var old joinCommand
-		var oldExp int64
-		err := tx.QueryRow(`SELECT name, made_by, volunteer_id, expires FROM tokens WHERE volunteer_id = ? AND activated_by = '' AND expires >= ?`,
-			req.VolunteerID, now.Unix()).Scan(&old.Name, &old.MadeBy, &old.VolunteerID, &oldExp)
-		switch {
-		case err == nil:
-			old.Expires = time.Unix(oldExp, 0)
-			cancelled = &old
-		case !errors.Is(err, sql.ErrNoRows):
+		if cancelled, err = scanJoinCommand(tx.QueryRow(unusedOf, req.VolunteerID, now.Unix()).Scan); err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(`DELETE FROM tokens WHERE volunteer_id = ? AND activated_by = ''`, req.VolunteerID); err != nil {
+		if _, err := tx.Exec(dropUnusedOf, req.VolunteerID); err != nil {
 			return nil, err
 		}
 	}
 	var held int
-	if err := tx.QueryRow(`SELECT count(*) FROM tokens WHERE name = ? AND activated_by = '' AND expires >= ? AND (volunteer_id != 0 OR ? != 0)`,
+	if err := tx.QueryRow(`SELECT count(*) FROM tokens t LEFT JOIN join_commands j ON j.token_hash = t.token_hash
+		WHERE t.name = ? AND t.activated_by = '' AND t.expires >= ? AND (COALESCE(j.volunteer_id, 0) != 0 OR ? != 0)`,
 		req.Name, now.Unix(), req.VolunteerID).Scan(&held); err != nil {
 		return nil, err
 	}
 	if held > 0 {
 		return nil, errNameHeld
 	}
-	if _, err := tx.Exec(`INSERT INTO tokens(token_hash,name,label,model,volunteer,requester,volunteer_name,contact,volunteer_login,expires,made_by,made,volunteer_id)
-		VALUES(?,?,?,?,?,'','','','',?,?,?,?)`, hash, req.Name, req.Label, req.Model, req.Volunteer, exp.Unix(), madeBy, now.UnixMicro(), req.VolunteerID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO tokens(token_hash,name,label,model,volunteer,requester,volunteer_name,contact,volunteer_login,expires)
+		VALUES(?,?,?,?,?,'','','','',?)`, hash, req.Name, req.Label, req.Model, req.Volunteer, exp.Unix()); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(dropOrphans); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`INSERT INTO join_commands(token_hash, made_by, made, volunteer_id) VALUES(?,?,?,?)`, hash, madeBy, now.UnixMicro(), req.VolunteerID); err != nil {
 		return nil, err
 	}
 	return cancelled, tx.Commit()
@@ -273,12 +287,22 @@ func (st *store) addJoinCommand(hash string, req api.EnrollTokenRequest, madeBy 
 // cancelJoinCommand drops the person's unused Join command and returns it,
 // nil when they had none.
 func (st *store) cancelJoinCommand(accountID int64, now time.Time) (*joinCommand, error) {
-	c, err := st.unusedJoinCommand(accountID, now)
-	if err != nil || c == nil {
+	tx, err := st.db.Begin()
+	if err != nil {
 		return nil, err
 	}
-	_, err = st.db.Exec(`DELETE FROM tokens WHERE volunteer_id = ? AND activated_by = ''`, accountID)
-	return c, err
+	defer tx.Rollback()
+	c, err := scanJoinCommand(tx.QueryRow(unusedOf, accountID, now.Unix()).Scan)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(dropUnusedOf, accountID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(dropOrphans); err != nil {
+		return nil, err
+	}
+	return c, tx.Commit()
 }
 
 // unusedTokensFor are the unused, unexpired Join commands for a name.
@@ -295,28 +319,29 @@ func (st *store) expireJoinCommands(now time.Time) ([]joinCommand, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT name, made_by, volunteer_id, expires FROM tokens WHERE activated_by = '' AND expires < ? AND made != 0 ORDER BY expires`, now.Unix())
+	const ranOut = ` FROM tokens t JOIN join_commands j ON j.token_hash = t.token_hash WHERE t.activated_by = '' AND t.expires < ? AND j.made != 0`
+	rows, err := tx.Query(`SELECT `+joinCommandColumns+ranOut+` ORDER BY t.expires, t.name`, now.Unix())
 	if err != nil {
 		return nil, err
 	}
 	var out []joinCommand
 	for rows.Next() {
-		var c joinCommand
-		var exp int64
-		if err := rows.Scan(&c.Name, &c.MadeBy, &c.VolunteerID, &exp); err != nil {
+		c, err := scanJoinCommand(rows.Scan)
+		if err != nil {
 			rows.Close()
 			return nil, err
 		}
-		c.Expires = time.Unix(exp, 0)
-		out = append(out, c)
+		out = append(out, *c)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if len(out) == 0 {
-		return nil, nil
+	if len(out) > 0 {
+		if _, err := tx.Exec(`DELETE FROM tokens WHERE token_hash IN (SELECT t.token_hash`+ranOut+`)`, now.Unix()); err != nil {
+			return nil, err
+		}
 	}
-	if _, err := tx.Exec(`DELETE FROM tokens WHERE activated_by = '' AND expires < ? AND made != 0`, now.Unix()); err != nil {
+	if _, err := tx.Exec(dropOrphans); err != nil {
 		return nil, err
 	}
 	return out, tx.Commit()
@@ -326,11 +351,12 @@ func (st *store) expireJoinCommands(now time.Time) ([]joinCommand, error) {
 // keyHash, and says whether the token is that Mac's now: the first Mac to
 // use a Join command is the only one it serves.
 func (st *store) bindToken(hash, keyHash string) (bool, error) {
-	if _, err := st.db.Exec(`UPDATE tokens SET bound_to = ? WHERE token_hash = ? AND bound_to = ''`, keyHash, hash); err != nil {
+	if _, err := st.db.Exec(`INSERT INTO join_commands(token_hash, bound_to) SELECT token_hash, ? FROM tokens WHERE token_hash = ?
+		ON CONFLICT(token_hash) DO UPDATE SET bound_to = excluded.bound_to WHERE join_commands.bound_to = ''`, keyHash, hash); err != nil {
 		return false, err
 	}
 	var bound string
-	err := st.db.QueryRow(`SELECT bound_to FROM tokens WHERE token_hash = ?`, hash).Scan(&bound)
+	err := st.db.QueryRow(`SELECT bound_to FROM join_commands WHERE token_hash = ?`, hash).Scan(&bound)
 	return err == nil && bound == keyHash, err
 }
 

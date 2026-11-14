@@ -505,7 +505,7 @@ func TestWhoSeesTheFleet(t *testing.T) {
 			t.Errorf("an External volunteer asking for %s: %d, want it not found", other, w.Code)
 		}
 	}
-	if w := edith.write("POST", "/api/volunteer", `{}`); w.Code != http.StatusForbidden {
+	if w := edith.write("POST", "/api/volunteer", `{}`); w.Code != http.StatusGone {
 		t.Errorf("an External volunteer on the old ./volunteer route: %d %s", w.Code, w.Body)
 	}
 
@@ -530,7 +530,6 @@ func TestWhoSeesTheFleet(t *testing.T) {
 		{"DELETE", "/api/devices/edith-air", ""},
 		{"GET", "/api/builds", ""},
 		{"GET", "/api/devices/edith-air/audit", ""},
-		{"POST", "/api/volunteer", `{}`},
 	} {
 		if w := grace.write(c.method, c.target, c.body); w.Code != http.StatusForbidden {
 			t.Errorf("an M team member on %s %s: %d %s", c.method, c.target, w.Code, w.Body)

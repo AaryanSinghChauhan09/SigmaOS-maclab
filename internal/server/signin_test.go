@@ -237,7 +237,7 @@ func TestSignInMakesAPersonByAccountID(t *testing.T) {
 		t.Error("the person is not kept by account id with the new handle")
 	}
 
-	if got, want := l.columns("people"), []string{"account_id", "added", "blocked_at", "blocked_by", "blocked_reason", "handle", "last_seen", "leave_to_lend", "m_team", "maintainer"}; !slices.Equal(got, want) {
+	if got, want := l.columns("people"), []string{"account_id", "added", "blocked_at", "blocked_by", "blocked_reason", "handle", "last_seen", "leave_to_lend", "lend_cap", "m_team", "maintainer"}; !slices.Equal(got, want) {
 		t.Errorf("people keeps %v, want %v", got, want)
 	}
 	disk := l.onDisk()

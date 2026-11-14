@@ -290,7 +290,7 @@ func TestPersonSeesOnlyTheirOwnMacs(t *testing.T) {
 	if code, err := s.forget(s.dev("lab"), "", true); code != 200 {
 		t.Fatalf("forget lab: %d %v", code, err)
 	}
-	volunteer(visitor, "lab")
+	volunteer("visitor@github", "lab")
 	if s.dev("lab") == nil {
 		t.Fatal("the visitor didn't get the name lab")
 	}
