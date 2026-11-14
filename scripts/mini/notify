@@ -14,4 +14,5 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 [[ $# == 2 && $1 == agents && -n $2 ]] || { sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 log="$LAB_HOME/log/notify.log"
+no_link "$log"
 printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$(tr '\n' ' ' <<<"$2")" >> "$log" || fail "could not write $log"

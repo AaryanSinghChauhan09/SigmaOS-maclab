@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- container's server on the mini, started as root in the session of the
+     account that owns container's state (CONTAINER_USER, which the set-up
+     writes in). With nobody logged in nothing else starts it. It runs at
+     boot and every minute after: the Deployed build's own script starts the
+     server when it is not running, through
+       launchctl asuser <uid> sudo -n -u <account> /usr/local/bin/container system start
+     and tells "Agents" a line on each change (decision S11). The Builder
+     never starts it. scripts/mini/setup installs this file. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.container</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/current/scripts/mini/container</string>
+    <string>watch</string>
+    <string>CONTAINER_USER</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/empty</string>
+  <key>Umask</key><integer>18</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>/var/log/lab-container.log</string>
+  <key>StandardErrorPath</key><string>/var/log/lab-container.log</string>
+</dict>
+</plist>

@@ -1,0 +1,129 @@
+#!/bin/bash
+# container's server on the mini, for the Builder:
+#
+#   scripts/mini/container watch USER
+#   scripts/mini/container wait USER -- COMMAND...
+#   scripts/mini/container status USER
+#   scripts/mini/container as USER ARGUMENTS...
+#
+# Apple's container keeps its server in the session of the account that owns
+# its state, and with nobody logged in nothing starts it. Everything here
+# reaches it the one way that works then, as root:
+#
+#   launchctl asuser <uid> sudo -n -u USER /usr/local/bin/container ...
+#
+# watch is what the LaunchDaemon org.omarchy-mac.lab.container runs at boot
+# and every minute after: it starts the server when it is not running, and
+# tells "Agents" one line for each change: found stopped, started again,
+# could not be started, running again. It says nothing at boot, and never
+# the same thing twice in a row.
+#
+# wait is what the Builder's LaunchDaemon runs: it waits until the server
+# answers, then becomes COMMAND. It starts nothing: lab-builder never starts
+# the server, and neither does this.
+#
+# status exits 0 when the server answers. as runs one container command as
+# USER, for the set-up.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+
+usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+[[ $# -ge 2 ]] || usage
+verb="$1" user="$2"
+shift 2
+[[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "$user is not an account's name"
+uid="$(id -u "$user" 2>/dev/null)" || fail "this machine has no account $user"
+[[ $uid != 0 ]] || fail "container does not run as root: name the account that owns its state"
+need_root
+
+as_user() { (cd / && launchctl asuser "$uid" sudo -n -u "$user" "$CONTAINER" "$@"); }
+
+running() { as_user system status >/dev/null 2>&1; }
+
+# The state is what the last run found, with the boot it was found in: after
+# a restart the server is expected to be stopped, and starting it is no news.
+boot() {
+  if [[ -n $SYSROOT && -n ${LAB_BOOT:-} ]]; then
+    echo "$LAB_BOOT"
+  else
+    sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9]*\),.*/\1/p'
+  fi
+}
+
+was() {
+  local state at
+  state="" at=""
+  if [[ -f $CONTAINER_STATE ]]; then read -r state at < "$CONTAINER_STATE" || true; fi
+  if [[ $at == "$(boot)" ]]; then echo "$state"; fi
+}
+
+now() {
+  rm -f "$CONTAINER_STATE.new"
+  echo "$1 $(boot)" > "$CONTAINER_STATE.new"
+  mv -f "$CONTAINER_STATE.new" "$CONTAINER_STATE"
+}
+
+# tell TEXT: one line for "Agents", written by the lab account: its log is
+# under /var/lab, where root writes nothing with its own hand.
+tell() {
+  say "$1"
+  as_lab "$here/notify" agents "$1" || say "that line was not sent"
+}
+
+started() {
+  local n
+  as_user system start --enable-kernel-install || return 1
+  for (( n = 0; n < ${LAB_START_TRIES:-15}; n++ )); do
+    running && return 0
+    sleep 2
+  done
+  return 1
+}
+
+watch() {
+  local before
+  before="$(was)"
+  if running; then
+    [[ $before != down ]] || tell "container's server on the mini is running again; the Builder can build"
+    now up
+    return 0
+  fi
+  [[ $before != up ]] || tell "container's server on the mini was found stopped; starting it again"
+  if started; then
+    [[ -z $before ]] || tell "container's server on the mini was started again; the Builder can build"
+    now up
+    return 0
+  fi
+  [[ $before == down ]] || tell "container's server on the mini could not be started: builds fail until it runs. It is tried again every minute; see $CONTAINER_LOG"
+  now down
+  return 1
+}
+
+case "$verb" in
+  watch)
+    [[ $# == 0 ]] || usage
+    [[ -x $CONTAINER ]] || fail "no container at $CONTAINER: the set-up installs it from deploy/pins"
+    watch
+    ;;
+  wait)
+    [[ $# -ge 2 && $1 == -- ]] || usage
+    shift
+    until running; do
+      sleep "${LAB_WAIT_STEP:-5}"
+    done
+    exec "$@"
+    ;;
+  status)
+    [[ $# == 0 ]] || usage
+    running
+    ;;
+  as)
+    [[ $# -ge 1 ]] || usage
+    as_user "$@"
+    ;;
+  *) usage ;;
+esac

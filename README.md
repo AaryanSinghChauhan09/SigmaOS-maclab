@@ -790,46 +790,39 @@ Measured on a base M5 (10 cores, VM with 16 GB) with aurora's config: first buil
 rebuild of a warm tree about 40 seconds. Progress (stage, object count, ETA) and the log stream
 live on `/api/stream` (`build`, `buildlog`) and `/api/builds/{id}/log?follow=1`.
 
-### Builders
+### The Builder
 
-The controller's own `lab-builder` may use labd's `builder.token`. That token can do anything a builder can, on any build and
-any artifact, so it never leaves the controller.
+The lab has one Builder: `lab-builder` on the mini, as root, for kernels and packages, one build at a time.
 
-Any other builder is added by a Maintainer and gets a token of its own:
+- **Its limits.** A build gets 10 of the mini's 18 cores and 16 of its 64 GB. `--cpus` takes 10, 8 or 6 and nothing else (the
+  steps after a failed gate test); the memory is no setting. The kernel cache volume is 40 GB, the package volume 120 GB, the
+  artifact store 20 GB.
+- **Its token.** A Maintainer adds the builder and gets a token of its own, once; labd makes and accepts no shared builder
+  token. On the mini the token sits in `/usr/local/lab/secrets/builder.token`, which only root reads, and lab-builder takes it
+  from `--token-file` alone: there is no `--token`, and no variable holds one.
+- **What the token does.** The builder takes queued builds of its kinds (`kernel`, `package`). For the build it runs it reads
+  that build's inputs, reports progress, uploads outputs and finishes it, naming only what it uploaded for that build. An
+  artifact is served to it only as the input of the build it is running. It reaches no other route.
+- **Sources** are public. labd takes `https://github.com/<owner>/<repo>` (a branch, commit or pull request of it), and another
+  host only when labd is started with `--source-host <host>`. An address that carries credentials is refused. A refused source
+  is never contacted. The Builder holds no GitHub token.
+- **Who builds.** Maintainers. An M team member's `lab build` and `lab package` are refused in one line until M team builds
+  open. An M team member uploads an artifact only for a job on a Mac they lease (`lab run <mac> --kernel FILE`, or
+  `lab upload FILE --for <mac>`). Every build records who asked.
+- **`container`.** With nobody logged in nothing starts its server, so a LaunchDaemon does, at boot and every minute after
+  (`scripts/mini/container watch`), in the session of the account that owns `container`'s state, and tells "Agents" a line on
+  each change. lab-builder never starts it; its own LaunchDaemon waits until the server answers.
+- **A labd restart fails a running build**: the builder's claim on it is kept in labd's memory. Ask for the build again.
 
 ```sh
-lab builder add m5mbp --kinds kernel -o m5mbp.token   # the token goes only into this new file (mode 0600)
-lab builder list                                       # named builders, shared-token hosts, last seen, current build
-lab builder remove m5mbp                                # its token stops working; what it was building fails
-lab builder remove m5mbp --generation G                 # only while it is the builder that add printed as G
+lab builder add mini --kinds kernel,package -o mini.token   # as a Maintainer; the token goes only into this new file (0600)
+sudo scripts/mini/setup --container-user <account> --builder-token mini.token   # on the mini
+lab builder list                                            # last seen, current build
+lab builder remove mini                                     # its token stops working; what it was building fails
 ```
 
-A named builder may only build:
-- it takes queued builds of its kinds (`kernel`, `package`);
-- for the builds it took, it reads their inputs, reports progress, uploads outputs and finishes them, naming only what it
-  uploaded for that build;
-- it reaches no Maintainer, device or job route.
-
-Removing it ends its open requests at once. Adding the same name again makes a new builder that inherits nothing. labd keeps a
-named builder's claims in memory, so a labd restart fails the builds it was running: ask for them again. **A builder's kernels boot as root on lab Macs. Add only builders whose operators you trust with that.**
-
-On the builder Mac, copy the file to a place only root can read and run, as root (a LaunchDaemon, as above):
-
-```sh
-lab-builder --server https://labd.example.com --token-file /usr/local/etc/maclab/builder.token --as-user <user>
-```
-
-- **The token:** `--token-file` refuses a file others can read. `--token` still works, but the token then shows in `ps`.
-- **What children see:** lab-builder starts the container CLI and the build VMs with no `MACLAB_` variables, so they never see
-  the token.
-- **At start:** it logs the name labd knows it by, and stops if labd refuses the token.
-- **A second lab-builder on one Mac**, for another labd, needs its own:
-  - LaunchDaemon label and binary path;
-  - token file;
-  - `--io` directory;
-  - `--volume` (and `--pkg-volume`, or `--pkg-image ''` for kernels only);
-  - `--container-prefix`, since the build VMs are named `<prefix>-<build id>`.
-  Two builders must never share a cache volume. Size `--cpus` and `--memory` so both fit.
+**A builder's kernels boot as root on lab Macs.** What the artifact store's 20 GB budget clears is in
+[docs/builder.md](docs/builder.md).
 
 ## omarchy-m-test: hardware checks in every job
 

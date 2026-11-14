@@ -4,6 +4,7 @@
 #   sudo scripts/mini/setup [--dry-run] [--release-key FILE] [--tunnel-credential FILE]
 #                           [--backup-guest ADDRESS] [--backup-keys FOLDER]
 #                           [--checks FOLDER]
+#                           [--container-user NAME] [--builder-token FILE] [--builder-cpus N]
 #
 # Makes the lab account and its folders, pins the release key, installs the
 # Homebrew formulae deploy/homebrew-formulae names and what deploy/pins
@@ -16,9 +17,10 @@
 # registered with scripts/mini/signal. Starts Litestream and schedules the
 # nightly backup and the monthly Restore drill once the guest's and R2's keys
 # are in place. Starts the Dead-man switch's ping once it has its check.
-# Safe to run again: it changes only what is not yet as it should be. It
-# never starts labd: Deploy does. Needs only what macOS has, and Homebrew
-# for its own formulae.
+# Starts container's server and keeps it up, makes the Builder's volumes and
+# images, and starts the Builder once it has its token. Safe to run again:
+# it changes only what is not yet as it should be. It never starts labd:
+# Deploy does. Needs only what macOS has, and Homebrew for its own formulae.
 #
 #   --dry-run           say what would change, and change nothing
 #   --release-key FILE  the allowed_signers file Deploy checks a bundle
@@ -46,6 +48,17 @@
 #                       https://hc-ping.com/<the check's id>. Each file found
 #                       is put where only the lab account reads it and
 #                       removed from FOLDER.
+#   --container-user NAME
+#                       the account container's server runs under: the one
+#                       that owns container's state (the admin account the
+#                       check was made with). Needed once; kept afterwards.
+#   --builder-token FILE
+#                       the Builder's own token, as a Maintainer made it with
+#                       lab builder add mini --kinds kernel,package -o FILE.
+#                       It is put where only root reads it, and FILE is
+#                       removed.
+#   --builder-cpus N    the cores a build gets: 10, or 8 or 6 after a failed
+#                       gate test. Every build gets 16 GB.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,7 +66,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,48p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,61p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
@@ -61,8 +74,14 @@ credential=""
 guest=""
 keys=""
 checks=""
+container_user=""
+builder_token=""
+builder_cpus=""
 while (( $# )); do
   case "$1" in
+    --container-user) [[ $# -ge 2 ]] || usage; container_user="$2"; shift ;;
+    --builder-token) [[ $# -ge 2 ]] || usage; builder_token="$2"; shift ;;
+    --builder-cpus) [[ $# -ge 2 ]] || usage; builder_cpus="$2"; shift ;;
     --dry-run) DRY=1 ;;
     --release-key) [[ $# -ge 2 ]] || usage; key="$2"; shift ;;
     --tunnel-credential) [[ $# -ge 2 ]] || usage; credential="$2"; shift ;;
@@ -138,6 +157,26 @@ if [[ -n $checks ]]; then
   done
   (( found )) || fail "$checks holds none of: $CHECK_NAMES"
 fi
+
+if [[ -n $container_user ]]; then
+  [[ $container_user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "$container_user is not an account's name"
+  id -u "$container_user" >/dev/null 2>&1 || fail "this machine has no account $container_user"
+  [[ "$(id -u "$container_user")" != 0 && $container_user != "$ACCOUNT" ]] || fail "container runs under the account that owns its state, not $container_user"
+fi
+if [[ -n $builder_token ]]; then
+  [[ -f $builder_token && ! -L $builder_token ]] || fail "$builder_token is no plain file"
+  case "$(looks "$builder_token")" in
+    -r--------\ * | -rw-------\ *) ;;
+    *) fail "$builder_token can be read by others: whoever has the Builder's token can hand the lab's Macs a kernel. Remove the builder (lab builder remove) and add it again with -o" ;;
+  esac
+  if [[ "$(wc -l < "$builder_token" | tr -d ' ')" -gt 1 ]] || ! grep -Eq '^bldr_[0-9a-f]{40}$' "$builder_token"; then
+    fail "$builder_token is not a builder's token, as lab builder add -o writes it"
+  fi
+fi
+case "$builder_cpus" in
+  "" | 10 | 8 | 6) ;;
+  *) fail "--builder-cpus $builder_cpus: a build gets 10 cores, or 8 or 6" ;;
+esac
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/lab-setup.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
@@ -734,6 +773,123 @@ dead_man() {
   fi
 }
 
+# The Builder. container's server runs in the session of the account that
+# owns container's state; root starts it there, at boot and whenever it is
+# found stopped, and the Builder waits for it. The Builder's token is made by
+# a Maintainer (lab builder add) and sits where only root reads it.
+
+BUILDER_AGAIN=0
+
+install_rendered() {
+  cp "$work/$1.plist" "$LAUNCHD_DIR/$1.plist"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$LAUNCHD_DIR/$1.plist"
+  chmod 0644 "$LAUNCHD_DIR/$1.plist"
+}
+
+# rendered LABEL USER CPUS: the LaunchDaemon file with the account and the
+# cores written in, installed when it is not the one in place.
+rendered() {
+  [[ -f $deploy/$1.plist ]] || fail "no deploy/$1.plist beside scripts/"
+  sed -e "s|CONTAINER_USER|$2|g" -e "s|BUILDER_CPUS|$3|g" "$deploy/$1.plist" > "$work/$1.plist"
+  if ! cmp -s "$work/$1.plist" "$LAUNCHD_DIR/$1.plist" || [[ "$(looks "$LAUNCHD_DIR/$1.plist")" != "$(shape - 644) $ROOT_OWNER:$ROOT_GROUP" ]]; then
+    change "install $LAUNCHD_DIR/$1.plist" install_rendered "$1"
+    return 0
+  fi
+  return 1
+}
+
+start_rendered() {
+  stopped "$1" || fail "$1 did not stop (20 s)"
+  launchctl enable "system/$1" || true
+  launchctl bootstrap system "$LAUNCHD_DIR/$1.plist" || fail "launchd did not take $LAUNCHD_DIR/$1.plist"
+  loaded "$1" || fail "$1 is not loaded after its start"
+}
+
+take_builder_token() {
+  write_as "$ROOT_OWNER" "$ROOT_GROUP" 0600 "$BUILDER_TOKEN" < "$builder_token"
+  rm -f "$builder_token"
+}
+
+# installed_cpus: the cores the Builder's installed file gives a build.
+installed_cpus() {
+  awk '/<string>--cpus<\/string>/ { sub(/.*<string>--cpus<\/string><string>/, ""); sub(/<.*/, ""); print; exit }' "$LAUNCHD_DIR/$BUILDER_LABEL.plist" 2>/dev/null || true
+}
+
+builder() {
+  local user cpus pair name size tag dir watch="$LAB_CURRENT/scripts/mini/container" again=0 token_new=0
+
+  user="$(cat "$CONTAINER_USER_FILE" 2>/dev/null || true)"
+  if [[ -n $container_user && $container_user != "$user" ]]; then
+    user="$container_user"
+    change "write down that container runs under the account $user ($CONTAINER_USER_FILE)" write_as "$ROOT_OWNER" "$ROOT_GROUP" 0644 "$CONTAINER_USER_FILE" <<<"$user"
+  fi
+  if [[ -n $builder_token ]]; then
+    if [[ -d $LAB_SECRETS && ! -r $LAB_SECRETS ]]; then
+      say "$LAB_SECRETS is $ROOT_OWNER's: the Builder's token is not put there without sudo"
+    elif [[ -s $BUILDER_TOKEN ]] && cmp -s "$builder_token" "$BUILDER_TOKEN"; then
+      change "remove $builder_token: the Builder's token is already at $BUILDER_TOKEN" rm -f "$builder_token"
+    else
+      change "put the Builder's token at $BUILDER_TOKEN, which only $ROOT_OWNER reads, and remove $builder_token" take_builder_token
+      token_new=1
+    fi
+  fi
+  if [[ -z $user ]]; then
+    say "the Builder is not set up: name the account container runs under (--container-user NAME)"
+    return 0
+  fi
+  [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "$CONTAINER_USER_FILE does not hold an account's name"
+  cpus="${builder_cpus:-$(installed_cpus)}"
+  cpus="${cpus:-10}"
+
+  if rendered "$CONTAINER_LABEL" "$user" "$cpus"; then again=1; fi
+  if rendered "$BUILDER_LABEL" "$user" "$cpus"; then BUILDER_AGAIN=1; fi
+  if [[ ! -x $watch || ! -x $LAB_CURRENT/bin/lab-builder ]]; then
+    say "container's server and the Builder start once a build is Deployed: run the set-up again after the first Deploy"
+    return 0
+  fi
+  if [[ ! -x $CONTAINER ]]; then
+    (( DRY )) || fail "no container at $CONTAINER, though deploy/pins names it: the Builder was not set up"
+    change "start container's server ($CONTAINER_LABEL), make the Builder's volumes and images and start the Builder" true
+    return 0
+  fi
+  if (( again )) && loaded "$CONTAINER_LABEL"; then
+    change "start $CONTAINER_LABEL again, for its new file" start_rendered "$CONTAINER_LABEL"
+  elif ! loaded "$CONTAINER_LABEL"; then
+    change "start $CONTAINER_LABEL, which starts container's server under $user and keeps it up" start_rendered "$CONTAINER_LABEL"
+  fi
+  if (( DRY )); then
+    "$watch" status "$user" 2>/dev/null || { change "make the Builder's volumes and images, once container's server answers" true; return 0; }
+  else
+    "$watch" watch "$user" || fail "container's server did not start under $user: see $CONTAINER_LOG. The Builder was not set up"
+  fi
+
+  for pair in $BUILDER_VOLUMES; do
+    name="${pair%%:*}" size="${pair##*:}"
+    "$watch" as "$user" volume inspect "$name" >/dev/null 2>&1 ||
+      change "make the Builder's volume $name ($size)" "$watch" as "$user" volume create -s "$size" "$name"
+  done
+  for pair in $BUILDER_IMAGES; do
+    tag="${pair%:*}" dir="$LAB_CURRENT/${pair##*:}"
+    [[ -f $dir/Containerfile ]] || fail "the Deployed build has no $dir/Containerfile"
+    "$watch" as "$user" image inspect "$tag" >/dev/null 2>&1 ||
+      change "build the Builder's image $tag from $dir" "$watch" as "$user" build -t "$tag" "$dir"
+  done
+
+  if [[ ! -s $BUILDER_TOKEN ]] && (( ! token_new )); then
+    say "the Builder is not started: it has no token yet. As a Maintainer: lab builder add mini --kinds kernel,package -o FILE; then the set-up with --builder-token FILE"
+    return 0
+  fi
+  if (( ! DRY )) && [[ "$(looks "$BUILDER_TOKEN")" != "$(shape - 600) $ROOT_OWNER:$ROOT_GROUP" ]]; then
+    change "give $BUILDER_TOKEN back to $ROOT_OWNER alone" chown "$ROOT_OWNER:$ROOT_GROUP" "$BUILDER_TOKEN"
+    chmod 0600 "$BUILDER_TOKEN"
+  fi
+  if (( BUILDER_AGAIN || token_new )) && loaded "$BUILDER_LABEL"; then
+    change "start $BUILDER_LABEL again, for its new token or file" start_rendered "$BUILDER_LABEL"
+  elif ! loaded "$BUILDER_LABEL"; then
+    change "start $BUILDER_LABEL, from $LAB_CURRENT/bin/lab-builder, at $cpus cores a build" start_rendered "$BUILDER_LABEL"
+  fi
+}
+
 no_planted_link
 account
 folders
@@ -746,6 +902,7 @@ tunnel
 sender
 backups
 dead_man
+builder
 
 if (( CHANGES == 0 )); then
   say "nothing to change"

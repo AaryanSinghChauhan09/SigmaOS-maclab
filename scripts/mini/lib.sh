@@ -24,6 +24,12 @@ DRILL_LABEL="org.omarchy-mac.lab.restore-drill"
 DEAD_MAN_LABEL="org.omarchy-mac.lab.dead-man"
 # Where the checks kept outside the house are pinged: healthchecks.io.
 CHECKS_AT="https://hc-ping.com"
+# The Builder, and the daemon that starts container's server for it and
+# keeps it up. The volumes are the sizes of the spec.
+CONTAINER_LABEL="org.omarchy-mac.lab.container"
+BUILDER_LABEL="org.omarchy-mac.lab.builder"
+BUILDER_VOLUMES="maclab-cache:40G maclab-pkgcache:120G"
+BUILDER_IMAGES="maclab-kbuild:1:builder maclab-pkgbuild:1:builder/pkg"
 # The backup guest on pve2, by the name the set-up writes into /etc/hosts.
 BACKUP_GUEST="lab-backup"
 BACKUP_HOUSE="rest:https://$BACKUP_GUEST:8000/mini/"
@@ -94,6 +100,14 @@ LITESTREAM="$LAB_TOOLS/current/litestream/bin/litestream"
 RESTIC="$LAB_TOOLS/current/restic/bin/restic"
 HOSTS_FILE="$SYSROOT/etc/hosts"
 OOBD_PLIST="$LAUNCHD_DIR/$OOBD_LABEL.plist"
+# Apple's container, as its package installs it; the account whose session
+# its server runs in, as the set-up was told; the builder's own token, which
+# only root reads; and what the watch last found.
+CONTAINER="$SYSROOT/usr/local/bin/container"
+CONTAINER_USER_FILE="$LAB_ROOT/container-user"
+CONTAINER_STATE="$LAB_ROOT/container.state"
+CONTAINER_LOG="$SYSROOT/var/log/lab-container.log"
+BUILDER_TOKEN="$LAB_SECRETS/builder.token"
 # The lab's Signal sender: signal-cli from the copy of the Homebrew tools,
 # its account's keys and the two groups' ids as files of the lab account.
 SIGNAL_PLIST="$LAUNCHD_DIR/$SIGNAL_LABEL.plist"

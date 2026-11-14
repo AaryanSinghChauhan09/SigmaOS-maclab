@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Builder on the mini, as root, which macOS Local Network privacy does
+     not block: one lab-builder, one build at a time, 16 GB and BUILDER_CPUS
+     cores a build (10, then 8, then 6 if the gate test fails). It waits
+     until container's server answers, then becomes lab-builder, which runs
+     container in the session of CONTAINER_USER and never starts the server.
+     It reaches labd on the loopback port. Nothing here is a secret: the
+     builder's token is in the file named, which only root reads.
+     scripts/mini/setup writes the account and the cores in and installs
+     this file. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.builder</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/current/scripts/mini/container</string>
+    <string>wait</string>
+    <string>CONTAINER_USER</string>
+    <string>--</string>
+    <string>/usr/local/lab/current/bin/lab-builder</string>
+    <string>--server</string><string>http://127.0.0.1:7770</string>
+    <string>--token-file</string><string>/usr/local/lab/secrets/builder.token</string>
+    <string>--as-user</string><string>CONTAINER_USER</string>
+    <string>--cpus</string><string>BUILDER_CPUS</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/empty</string>
+  <key>Umask</key><integer>63</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/var/log/lab-builder.log</string>
+  <key>StandardErrorPath</key><string>/var/log/lab-builder.log</string>
+</dict>
+</plist>

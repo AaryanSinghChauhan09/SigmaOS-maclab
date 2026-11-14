@@ -227,10 +227,13 @@ func TestTheSetUpInstallsNothingForTheResetToolsPin(t *testing.T) {
 	m := newMini(t)
 	k := newKey(t)
 	pins := read(t, filepath.Join(repo(t), "deploy", "pins"))
-	if !regexp.MustCompile(`(?m)^macvdmtool [0-9a-f]{40} [0-9a-f]{64} https://github\.com/omacom/macvdmtool$`).MatchString(pins) {
+	line := regexp.MustCompile(`(?m)^macvdmtool [0-9a-f]{40} [0-9a-f]{64} https://github\.com/omacom/macvdmtool$`).FindString(pins)
+	if line == "" {
 		t.Fatalf("deploy/pins has no line for the reset tool: its commit, the checksum of its source, the lab's fork:\n%s", pins)
 	}
-	write(t, m.tree+"/deploy/pins", pins, 0o644)
+	// Its line alone: the file's other pins are packages the set-up would
+	// download.
+	write(t, m.tree+"/deploy/pins", line+"\n", 0o644)
 	out := m.ok("setup", "--release-key", k.signers)
 	if strings.Contains(m.calls(), "installer") || strings.Contains(out, "macvdmtool") {
 		t.Errorf("the set-up acted on the reset tool's pin:\n%s\n%s", out, m.calls())
