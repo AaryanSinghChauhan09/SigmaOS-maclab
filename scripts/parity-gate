@@ -14,7 +14,11 @@
 #    Needs Postgres running and the Ruby of site/.ruby-version.
 # 4. The import of the old site's reports reads its three tables from the
 #    Postgres Rails made and from the committed SQL that takes over once
-#    site/ is gone. Needs the import (internal/oldsite) and Postgres.
+#    site/ is gone. Needs the import (internal/oldsite), Postgres, Ruby, and
+#    LAB_TEST_POSTGRES naming the database Rails prepared: the test database
+#    of site/config/database.yml, omarchy_m_testing_test. Rails makes the
+#    three tables anew and they are read first; only then does anything make
+#    them again from the committed SQL.
 # 5. installer/test.sh, and release/smoke.sh against a labd started here.
 #
 # Exit status: 0 when every part ran and passed, 1 when one failed, 2 when
@@ -71,7 +75,9 @@ run "the 11 production reports give their expected builds" go test -count=1 -run
 postgres=0
 if have pg_isready && pg_isready -q 2>/dev/null; then postgres=1; fi
 want_ruby="$(tr -d 'ruby-\n' < site/.ruby-version)"
-if (( postgres )) && have ruby && [[ "$(ruby -e 'print RUBY_VERSION')" == "$want_ruby" ]]; then
+rails=0
+if (( postgres )) && have ruby && [[ "$(ruby -e 'print RUBY_VERSION')" == "$want_ruby" ]]; then rails=1; fi
+if (( rails )); then
   parity="$LOGS/report-parity"
   pages="$LOGS/page-parity"
   run "the port writes the corpus of reports both will judge" env REPORT_PARITY_DIR="$parity" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
@@ -86,16 +92,26 @@ else
 fi
 
 # 4. The import's fixture: the committed SQL of the old site's three tables.
+# The test that reads a real Postgres drops the three tables and makes them
+# again from the committed SQL unless it is told they are Rails'. So Rails'
+# tables are read first, straight after Rails made them, and no other run
+# before that is given the database.
 fixture=internal/oldsite/pg/testdata/old-site.sql.gz
+real=TestTheReaderReadsARealPostgres
 if [[ ! -f $fixture ]]; then
   not_run "the import reads the old site's three tables" "no $fixture: the import is not in this tree yet"
 else
-  run "the import's own tests, on the tables the committed SQL makes" away go test -count=1 ./internal/oldsite/...
-  if (( postgres )) && [[ -n ${LAB_TEST_POSTGRES:-} ]]; then
-    run "the import reads the three tables from the Postgres Rails made" env LAB_TEST_POSTGRES_SCHEMA=rails go test -count=1 -run TestTheReaderReadsARealPostgres ./internal/oldsite/pg
-    run "the import reads the three tables the committed SQL makes" go test -count=1 -run TestTheReaderReadsARealPostgres ./internal/oldsite/pg
+  if (( rails )) && [[ -n ${LAB_TEST_POSTGRES:-} ]]; then
+    run "Rails: its three tables made anew in its test database" in_dir site env RAILS_ENV=test bin/rails db:schema:load
+    run "the import reads the three tables from the Postgres Rails made" env LAB_TEST_POSTGRES_SCHEMA=rails go test -count=1 -run "$real" ./internal/oldsite/pg
   else
-    not_run "the import reads a real Postgres: Rails' tables, then the committed SQL's" "needs Postgres running and LAB_TEST_POSTGRES naming a database"
+    not_run "the import reads the three tables from the Postgres Rails made" "needs Postgres running, Ruby $want_ruby and LAB_TEST_POSTGRES naming the database Rails prepared (omarchy_m_testing_test, the test database of site/config/database.yml)"
+  fi
+  run "the import's own tests, with no Postgres" away env -u LAB_TEST_POSTGRES -u LAB_TEST_POSTGRES_SCHEMA go test -count=1 -skip "$real" ./internal/oldsite/...
+  if (( postgres )) && [[ -n ${LAB_TEST_POSTGRES:-} ]]; then
+    run "the import reads the three tables the committed SQL makes" env -u LAB_TEST_POSTGRES_SCHEMA go test -count=1 -run "$real" ./internal/oldsite/pg
+  else
+    not_run "the import reads the three tables the committed SQL makes" "needs Postgres running and LAB_TEST_POSTGRES naming a throwaway database on this machine"
   fi
 fi
 
