@@ -136,7 +136,9 @@ func leftByHand(workDir string) []string {
 	}
 	return []string{
 		"The lab-agent package: remove it with your package manager (or delete /usr/local/bin/lab-agent). It no longer runs, but the program is still installed.",
-		"Your Audit log, " + filepath.Join(workDir, auditFile) + ", stays on your Mac for you to read with `sudo lab-agent log`; delete it yourself if you want it gone.",
+		"Your Audit log, " + filepath.Join(workDir, auditFile) + ", stays on your Mac for you to read with `sudo lab-agent log`.",
+		"Your Availability window and your Access level, " + filepath.Join(workDir, windowFile) + " and " + filepath.Join(workDir, accessFile) + ", stay as you set them.",
+		"One command removes the Audit log and those settings: `sudo lab-agent uninstall`.",
 	}
 }
 
@@ -335,7 +337,7 @@ func leaveCmd(ctx context.Context, cfg *Config, sys System, args []string, out i
 	if !rec.Told {
 		fmt.Fprintln(out, "labd could not be reached; lab-agent tells it as soon as it can, and finishes leaving then.")
 	}
-	fmt.Fprintln(out, "Left for you to remove by hand:")
+	fmt.Fprintln(out, "What stays on this Mac, yours to remove:")
 	for _, s := range leftByHand(cfg.workDir()) {
 		fmt.Fprintf(out, "  - %s\n", s)
 	}

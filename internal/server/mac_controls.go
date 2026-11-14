@@ -21,6 +21,7 @@ func init() {
 	addPage("POST /my-macs/{name}/limit", web.SignedIn, controlOf((*Server).limitMac))
 	addPage("POST /my-macs/{name}/remove-limit", web.SignedIn, controlOf((*Server).unlimitMac))
 	addPage("POST /my-macs/{name}/leave", web.SignedIn, (*Server).pLeaveMac)
+	addPage("POST /people/{id}/enrollments/{mac}/end", web.Maintainers, (*Server).pEndEnrollment)
 }
 
 // myMac is the Mac a button of My Macs names, when the person signed in on
@@ -94,4 +95,24 @@ func (s *Server) pLeaveMac(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.controlDone(w, r, v, s.leaveMac(v, *PersonOf(r)))
+}
+
+// pEndEnrollment is "End enrollment" beside one of a person's Macs on
+// People: a Maintainer ends it as `lab remove` does. It asks twice.
+func (s *Server) pEndEnrollment(w http.ResponseWriter, r *http.Request) {
+	k, err := s.personAt(r)
+	mac := r.PathValue("mac")
+	v := s.dev(mac)
+	if err == nil && (v == nil || v.snapshot().VolunteerID != k.AccountID) {
+		err = refuse(http.StatusConflict, "@%s lends no Mac called %s.", k.Handle, mac)
+	}
+	if err == nil {
+		if !s.sure(w, r, "End the enrollment of "+mac+": it leaves the lab now, and any job on it stops", "/people?open="+r.PathValue("id")) {
+			return
+		}
+		if !s.endEnrollment(v, leaving{how: leftByMaintainer, by: *PersonOf(r)}) {
+			err = refuse(http.StatusConflict, "@%s lends no Mac called %s.", k.Handle, mac)
+		}
+	}
+	s.done(w, r, k.AccountID, err)
 }

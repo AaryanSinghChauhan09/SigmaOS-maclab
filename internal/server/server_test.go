@@ -112,7 +112,7 @@ type labConfig struct {
 	volunteer bool             // the Mac is a Volunteer's; drive its commands with l.volunteer
 	// lender is the account id of the person who lends the Mac, a
 	// Volunteer's, as a Join command made on "Lend a Mac" has it: the lab
-	// knows the person (@ada) and they have leave to lend.
+	// knows the person (@vera) and they have leave to lend.
 	lender int64
 	// wrap puts a test's transport (a flaky link, a stalled download) in front
 	// of labd's handler, so every request from the Mac and the Maintainers
@@ -214,7 +214,7 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	}
 	var tok string
 	if c.lender != 0 {
-		if err := s.store.know(c.lender, "ada", clock.Now()); err != nil {
+		if err := s.store.know(c.lender, "vera", clock.Now()); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.store.setMark(c.lender, "leave_to_lend", true); err != nil {

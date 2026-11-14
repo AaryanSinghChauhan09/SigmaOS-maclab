@@ -14,6 +14,7 @@ import (
 
 	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/window"
 )
 
 // weekly is the `window add` arguments for a window that starts at start
@@ -445,4 +446,174 @@ func TestBaselineWaitsForAWindowOnAVolunteerMacWithNone(t *testing.T) {
 	l.staysQueued(id, 2*time.Second, "the Volunteer has set no window")
 	l.mustVolunteer("open", "--until", time.Now().Add(12*time.Hour).Format("15:04"))
 	l.expect(l.jobAPI(id, 60*time.Second), api.OutcomePass)
+}
+
+// ---- the lab's copy of the window, and a Pause taken on the site ----
+
+const veraID = 4242
+
+// vera is the person who lends the Mac of a lab made with lender: veraID.
+func (l *lab) vera() Person {
+	l.t.Helper()
+	p, err := l.s.person(veraID)
+	if err != nil {
+		l.t.Fatal(err)
+	}
+	return p
+}
+
+// windowOnRecord is labd's copy of the Mac's window settings.
+func (l *lab) windowOnRecord() window.Settings {
+	l.t.Helper()
+	d := l.s.dev(l.name).snapshot()
+	if d.Window == nil {
+		return window.Settings{}
+	}
+	return *d.Window
+}
+
+// A check-in's copy of the window carries Pause and Open now as the
+// Volunteer set them on the Mac, to the second: the Mac's record and the
+// Lab group say each as it reaches the lab. A window that opens and closes
+// on its schedule is no event.
+func TestACheckinsCopyOfTheWindowCarriesPauseAndOpenNow(t *testing.T) {
+	l, clock, _ := windowLab(t, labConfig{})
+	id := l.s.dev(l.name).snapshot().ID
+	settled := func(what string, cond func(window.Settings) bool) window.Settings {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			if s := l.windowOnRecord(); cond(s) {
+				return s
+			}
+		}
+		t.Fatalf("labd's copy of the window never showed %s: %+v", what, l.windowOnRecord())
+		return window.Settings{}
+	}
+
+	until := clock.Now().Add(3 * time.Hour).Truncate(time.Minute)
+	l.mustVolunteer("open", "--until", until.Format("15:04"))
+	if s := settled("the Open now", func(s window.Settings) bool { return !s.OpenUntil.IsZero() }); !s.OpenUntil.Equal(until) {
+		t.Errorf("labd's copy of the Open now ends %s, the Mac's ends %s", s.OpenUntil, until)
+	}
+	if got := labLinesOf(t, l.s); !has(got, l.name+" is open now, until "+when(until)+".") {
+		t.Errorf("the Lab group has no line for the Open now:\n%s", strings.Join(got, "\n"))
+	}
+
+	// `pause` ends the window that is open now: the Open now goes, and the
+	// Mac is Paused until that window's end.
+	l.mustVolunteer("pause")
+	if s := settled("the Pause", func(s window.Settings) bool { return !s.PausedUntil.IsZero() }); !s.PausedUntil.Equal(until) || !s.OpenUntil.IsZero() {
+		t.Errorf("labd's copy after `pause`: paused until %s, open until %s; want paused until %s and no Open now", s.PausedUntil, s.OpenUntil, until)
+	}
+	if !l.s.dev(l.name).paused() {
+		t.Error("labd does not read the Mac as Paused")
+	}
+	day := clock.Now().AddDate(0, 0, 3).Format("2006-01-02")
+	l.mustVolunteer("pause", "--until", day)
+	later := settled("the Pause until a date", func(s window.Settings) bool { return s.PausedUntil.After(until) })
+	if got := later.PausedUntil.In(time.Local).Format("2006-01-02 15:04"); got != day+" 00:00" {
+		t.Errorf("labd's copy of `pause --until %s` ends %s", day, got)
+	}
+	record, lines := macRecordOf(t, l.s, id), labLinesOf(t, l.s)
+	for _, want := range []string{"its Volunteer opened it now, until ", "its Volunteer Paused it at the Mac until "} {
+		if !has(record, want) {
+			t.Errorf("the Mac's record lacks %q:\n%s", want, strings.Join(record, "\n"))
+		}
+	}
+	if !has(lines, l.name+" is Paused until "+when(until)+".") || !has(lines, l.name+" is Paused until "+when(later.PausedUntil)+".") {
+		t.Errorf("the Lab group lacks the two Pauses:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestAWindowOpeningAndClosingOnScheduleIsNoEvent(t *testing.T) {
+	l, clock, _ := windowLab(t, labConfig{})
+	id := l.s.dev(l.name).snapshot().ID
+	start := clock.Now().Truncate(time.Minute).Add(2 * time.Minute)
+	l.addWindow(weekly(start, time.Minute))
+	before := len(macRecordOf(t, l.s, id)) + len(labLinesOf(t, l.s))
+	if l.s.dev(l.name).windowClosed() == false {
+		t.Fatal("the window is open before its time")
+	}
+	advanceTo(clock, start.Add(10*time.Second))
+	time.Sleep(500 * time.Millisecond)
+	if l.s.dev(l.name).windowClosed() {
+		t.Fatal("the window did not open on schedule")
+	}
+	advanceTo(clock, start.Add(70*time.Second))
+	time.Sleep(500 * time.Millisecond)
+	if !l.s.dev(l.name).windowClosed() {
+		t.Fatal("the window did not close on schedule")
+	}
+	if after := len(macRecordOf(t, l.s, id)) + len(labLinesOf(t, l.s)); after != before {
+		t.Errorf("a window opening and closing on schedule made %d lines:\n%s\n%s", after-before,
+			strings.Join(macRecordOf(t, l.s, id), "\n"), strings.Join(labLinesOf(t, l.s), "\n"))
+	}
+}
+
+// A Pause taken on the site stops a running job as a closing window does:
+// the Mac returns to its own system, the job ends incomplete and is tried
+// again once the Mac is open. lab-agent is told nothing new.
+func TestAPauseFromTheSiteStopsARunningJobAsAClosingWindowDoes(t *testing.T) {
+	l, _ := windowEndLab(t, labConfig{lender: veraID})
+	v := l.s.dev(l.name)
+	id, kernel := l.longJob("7.2-paused")
+	labBoot, _, _ := l.sim.Identity()
+	if err := l.s.pauseMac(v, l.vera(), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	l.backOnItsOwnSystem(labBoot, 15*time.Second, "its Volunteer Paused the Mac from the site")
+	j := l.jobAPI(id, 60*time.Second)
+	l.expect(j, api.OutcomeIncomplete)
+	if !strings.Contains(j.Summary, "its Volunteer Paused the Mac from the site") {
+		t.Errorf("the job a Pause stopped says %q", j.Summary)
+	}
+	l.waitDevice(func(d api.Device) bool {
+		return d.State == api.StateReady && d.Kernel == agent.SimKnownGood && d.Health.JobTag == ""
+	})
+	l.sim.SetTestLength(0)
+	l.retryWaits(id, kernel, 2*time.Second, "the Mac is Paused from the site")
+	if why := fmt.Sprint(l.retryEvents(id, kernel)); !strings.Contains(why, "Paused by its Volunteer until they resume it") {
+		t.Errorf("the job waiting for the Paused Mac does not say why: %s", why)
+	}
+	if err := l.s.resumeMac(v, l.vera()); err != nil {
+		t.Fatal(err)
+	}
+	l.expect(l.retryOf(id, kernel, 60*time.Second), api.OutcomePass)
+	if got := labLinesOf(t, l.s); !has(got, l.name+" is Paused.") || !has(got, l.name+" resumed.") {
+		t.Errorf("the Lab group's lines:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// retryEvents is what the job retrying id has said so far.
+func (l *lab) retryEvents(id, kernel string) []string {
+	l.t.Helper()
+	var out []string
+	for _, j := range l.jobsOf() {
+		if j.ID != id && j.Spec.Kernel == kernel {
+			for _, e := range j.Events {
+				out = append(out, e.Msg)
+			}
+		}
+	}
+	return out
+}
+
+// A Pause taken on the site ends a Lease, and no new one is taken while it
+// holds.
+func TestAPauseFromTheSiteEndsALease(t *testing.T) {
+	l, _ := windowEndLab(t, labConfig{lender: veraID})
+	v := l.s.dev(l.name)
+	l.takeLease("connor (homework)", time.Hour)
+	if err := l.s.pauseMac(v, l.vera(), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if lease := l.leaseNow(); lease != nil {
+		t.Fatalf("the Lease outlived the Pause: %+v", lease)
+	}
+	if got := strings.Join(l.leaseEvents(), "\n"); !strings.Contains(got, "its Volunteer Paused the Mac from the site") {
+		t.Errorf("the Lease record does not say why the Lease ended:\n%s", got)
+	}
+	if r, body := l.post("/api/devices/"+l.name+"/lease", api.LeaseRequest{Holder: "connor", TTLSec: 600}); r.StatusCode == 200 {
+		t.Errorf("a Lease was taken on a Paused Mac: %s", body)
+	}
 }

@@ -51,7 +51,7 @@
 {{end}}</div>
 <div>
 <h3>Their Macs</h3>
-{{if $row.Macs}}<ul>{{range $row.Macs}}<li>{{.}}</li>{{end}}</ul>{{else}}<p class="dim">Lends no Mac.</p>{{end}}
+{{if $row.Macs}}<ul>{{range $row.Macs}}<li>{{.}} {{template "take" ($.Take (printf "/people/%d/enrollments/%s/end" $row.AccountID .) "End enrollment" (printf "End the enrollment of %s: it leaves the lab now, and any job on it stops" .))}}</li>{{end}}</ul>{{else}}<p class="dim">Lends no Mac.</p>{{end}}
 {{if .JoinCommand}}<p class="dim">An unused Join command for {{.JoinCommand}} counts as one.</p>
 {{end}}{{if $row.Blocked}}{{else if .Cap}}<p>Cap: {{.Lends}} of {{.Cap}}</p>
 <form class="form form-inline" method="post" action="{{href (printf "/people/%d/cap" $row.AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="text" name="macs" inputmode="numeric" maxlength="2" size="3" placeholder="{{.Cap}}" aria-label="Cap, in Macs" autocomplete="off"> <button class="button button-small" type="submit">Raise cap</button></form>

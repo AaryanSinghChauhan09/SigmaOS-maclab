@@ -1,7 +1,12 @@
 package server
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -479,5 +484,331 @@ func TestMaintainerEndingALabOwnedMacSendsNoVolunteerNotice(t *testing.T) {
 	}
 	if r := n.checkinAs(n.secret); r.StatusCode != 401 {
 		t.Fatalf("a Lab-owned Mac's secret works after its enrollment ended: %s", r.Status)
+	}
+}
+
+// ---- leaving Retires the record ----
+
+// retiredNow is the lab's Retired Macs as a Maintainer reads them.
+func (l *signInLab) retiredNow(maintainer *browser) []RetiredMac {
+	l.t.Helper()
+	w := maintainer.do("GET", "/api/retired", "")
+	var out []RetiredMac
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+		l.t.Fatalf("GET /api/retired: %d %s", w.Code, w.Body)
+	}
+	return out
+}
+
+// kept writes what labd keeps under a Mac's name: a screenshot, its serial
+// log, its two baselines and labd's copy of its Audit log; and one job it
+// ran. It returns the files, in that order, and the job.
+func (l *signInLab) kept(name string) (files []string, job string) {
+	l.t.Helper()
+	files = []string{filepath.Join(l.s.screenDir(name), "shot.png"), l.s.serialPath(name), l.s.baselinePath(name), l.s.omtBaselinePath(name), l.s.auditPath(name)}
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			l.t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("{}\n"), 0o644); err != nil {
+			l.t.Fatal(err)
+		}
+	}
+	j := &api.Job{ID: "j-kept-" + name, Spec: api.JobSpec{Device: name}, Created: l.clock.Now(), State: api.JobDone, Outcome: api.OutcomePass, Summary: "ok"}
+	if err := l.s.store.saveJob(j); err != nil {
+		l.t.Fatal(err)
+	}
+	return files, j.ID
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// Leaving, by the Volunteer on My Macs: it asks twice; then the record is
+// Retired at once, its name is free and it stops counting toward the cap.
+// Screenshots, serial log and baselines are deleted; jobs, the Audit log
+// copy and the Mac's record stay for Maintainers. The Mac, which was not
+// reaching the lab, learns of it when it next does. The leaving is a line
+// of the Mac's record, of the People record and of the Lab group.
+func TestLeavingFromMyMacsRetiresTheRecordAtOnce(t *testing.T) {
+	l, _ := lendLab(t)
+	ravi := l.signedIn(maintainerID)
+	ravi.did("/people/mark", "handle", "grace", "as", "invite")
+	grace := l.signedIn(graceID)
+	for i := 1; i <= 4; i++ {
+		l.addMac(fmt.Sprintf("grace-%d", i), graceID)
+	}
+	v, secret := grace.lent("shelf-mac")
+	id := v.snapshot().ID
+	first := v.snapshot().FirstBaseline.Job
+	files, job := l.kept("shelf-mac")
+	grace.refused("your cap", "/lend/join-command", "model", lendModelID, "name", "one-more")
+
+	// Leave asks twice: the first press changes nothing.
+	if w := grace.post("/my-macs/shelf-mac/leave"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "shelf-mac leaves the lab now") || !strings.Contains(w.Body.String(), `name="sure" value="yes"`) {
+		t.Fatalf("Leave, pressed once: %d\n%.600s", w.Code, w.Body)
+	}
+	if l.s.dev("shelf-mac") == nil || len(l.retiredNow(ravi)) != 0 {
+		t.Fatal("one press of Leave ended the enrollment")
+	}
+	if w := grace.post("/my-macs/shelf-mac/leave", "sure", "yes"); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/my-macs" {
+		t.Fatalf("Leave, pressed twice: %d to %q", w.Code, w.Header().Get("Location"))
+	}
+
+	// In the lab: out of the fleet, at once.
+	if l.s.dev("shelf-mac") != nil {
+		t.Fatal("the Mac that left is still in the fleet")
+	}
+	if got := grace.macs(); slices.Contains(got, "shelf-mac") {
+		t.Errorf("its Volunteer still sees the Mac that left: %v", got)
+	}
+	if n := l.count(`SELECT count(*) FROM devices WHERE name = 'shelf-mac'`); n != 0 {
+		t.Errorf("the Mac that left still has %d rows in the fleet's table", n)
+	}
+	retired := l.retiredNow(ravi)
+	if len(retired) != 1 || retired[0].ID != id || retired[0].Name != "shelf-mac" || retired[0].How != leftByVolunteer || retired[0].VolunteerID != graceID || !retired[0].Retired.Equal(l.clock.Now()) {
+		t.Fatalf("the Retired record: %+v", retired)
+	}
+	if d := retired[0].Device; d.Kind != api.KindVolunteer || d.TermsSHA256 != termsSum() || d.Lease != nil {
+		t.Errorf("the Retired Mac as it stood: %+v", d)
+	}
+	var record []string
+	for _, e := range retired[0].Record {
+		record = append(record, e.Line)
+	}
+	if !has(record, "Joined as a Volunteer's Mac") || !has(record, "left the lab: its Volunteer ended it") {
+		t.Errorf("the Retired Mac's record: %q", record)
+	}
+	// Retired Macs are for Maintainers.
+	if w := grace.do("GET", "/api/retired", ""); w.Code == http.StatusOK {
+		t.Errorf("a Volunteer reads the Retired Macs: %d", w.Code)
+	}
+
+	// Screenshots, serial log and baselines are deleted; the Audit log copy
+	// and the jobs stay.
+	for _, f := range files[:4] {
+		if exists(f) {
+			t.Errorf("%s is kept after the Mac left", strings.TrimPrefix(f, l.dir))
+		}
+	}
+	if exists(files[4]) || !exists(strings.TrimSuffix(files[4], ".jsonl")+"."+id+".jsonl") {
+		t.Error("labd's copy of the Audit log is not kept under the enrollment that ended")
+	}
+	if j, err := l.s.store.job(job); err != nil || j.Outcome != api.OutcomePass {
+		t.Errorf("a job the Mac ran is gone with it: %v", err)
+	}
+	if j, err := l.s.store.job(first); err != nil || j.State != api.JobDone || j.Outcome != api.OutcomeCanceled {
+		t.Errorf("the first baseline of a Mac that left: %+v, %v; want canceled, and kept", j, err)
+	}
+	if w := grace.do("GET", "/api/jobs/"+job, ""); w.Code == http.StatusOK {
+		t.Error("the Volunteer still reads the jobs of the Mac that left")
+	}
+
+	// The three lines.
+	if got := macRecordOf(t, l.s, id); !has(got, "left the lab: its Volunteer ended it") {
+		t.Errorf("the Mac's record: %q", got)
+	}
+	if got := l.labLines(); !has(got, "shelf-mac left the lab: its Volunteer ended it.") {
+		t.Errorf("the Lab group's lines:\n%s", strings.Join(got, "\n"))
+	}
+	if got := l.recorded(); !has(got, "@grace left the lab with shelf-mac") {
+		t.Errorf("the People record:\n%s", strings.Join(got, "\n"))
+	}
+
+	// The Mac did not hear. When it next reaches the lab it learns its
+	// enrollment ended, and by whom: lab-agent removes the lab then.
+	w := l.checkin(secret, api.Checkin{})
+	if w.Code != http.StatusUnauthorized || w.Header().Get(api.EndedHeader) != "grace" {
+		t.Errorf("the Mac's next check-in: %d, ended by %q; want 401 naming who ended it", w.Code, w.Header().Get(api.EndedHeader))
+	}
+
+	// It stopped counting toward the cap, and its name is free: the same
+	// person lends another Mac under it.
+	if lends, err := l.s.lendsOf(l.who(graceID)); err != nil || lends.Count() != 4 {
+		t.Errorf("after one of 5 left, the person lends %d (%v)", lends.Count(), err)
+	}
+	again, _ := grace.lent("shelf-mac")
+	if again.snapshot().ID == id {
+		t.Error("the name's new Mac is the old enrollment")
+	}
+	if got := macRecordOf(t, l.s, again.snapshot().ID); len(got) != 1 {
+		t.Errorf("the new Mac under a freed name starts with the old one's record: %q", got)
+	}
+	if got := l.retiredNow(ravi); len(got) != 1 {
+		t.Errorf("%d Retired records after the name was taken again, want the one", len(got))
+	}
+}
+
+// A Maintainer ends an enrollment with `lab remove`, and a Block ends
+// every enrollment of the person: each Retires the record the same way,
+// with its own line, and the Mac learns who ended it.
+func TestAMaintainerAndABlockEndEnrollmentsTheSameWay(t *testing.T) {
+	l, _ := lendLab(t)
+	ravi := l.signedIn(maintainerID)
+	ravi.did("/people/mark", "handle", "grace", "as", "invite")
+	grace := l.signedIn(graceID)
+	one, secretOne := grace.lent("shelf-one")
+	two, secretTwo := grace.lent("shelf-two")
+	three, _ := grace.lent("shelf-three")
+	ids := []string{one.snapshot().ID, two.snapshot().ID, three.snapshot().ID}
+
+	// `lab remove shelf-one`.
+	if w := ravi.write("POST", "/api/devices/shelf-one/end-enrollment", ""); w.Code != http.StatusOK {
+		t.Fatalf("a Maintainer ending an enrollment: %d %s", w.Code, w.Body)
+	}
+	if l.s.dev("shelf-one") != nil || l.s.dev("shelf-two") == nil {
+		t.Fatal("lab remove did not take out the one Mac it named")
+	}
+	if got := l.labLines(); !has(got, "shelf-one left the lab: a Maintainer ended it.") {
+		t.Errorf("the Lab group's lines:\n%s", strings.Join(got, "\n"))
+	}
+	if got := l.recorded(); !has(got, "@ravi ended the enrollment of shelf-one, a Mac of @grace") {
+		t.Errorf("the People record:\n%s", strings.Join(got, "\n"))
+	}
+	if got := macRecordOf(t, l.s, ids[0]); !has(got, "left the lab: a Maintainer ended it") {
+		t.Errorf("the Mac's record: %q", got)
+	}
+	if w := l.checkin(secretOne, api.Checkin{}); w.Code != http.StatusUnauthorized || w.Header().Get(api.EndedHeader) != "ravi" {
+		t.Errorf("the ended Mac's next check-in: %d, by %q", w.Code, w.Header().Get(api.EndedHeader))
+	}
+	if w := ravi.write("POST", "/api/devices/shelf-one/end-enrollment", ""); w.Code != http.StatusNotFound {
+		t.Errorf("ending it twice: %d", w.Code)
+	}
+
+	// "End enrollment" on People does the same, asking twice.
+	four, _ := grace.lent("shelf-four")
+	end := personPath(graceID, "enrollments/shelf-four/end")
+	if page := ravi.do("GET", "/people?open=8", "").Body.String(); !strings.Contains(page, `action="`+end+`"`) || !strings.Contains(page, "End enrollment") {
+		t.Error("People has no End enrollment beside the person's Mac")
+	}
+	if w := ravi.post(end); w.Code != http.StatusOK || l.s.dev("shelf-four") == nil {
+		t.Fatalf("End enrollment, pressed once: %d", w.Code)
+	}
+	ravi.did(end, "sure", "yes")
+	if l.s.dev("shelf-four") != nil {
+		t.Fatal("End enrollment on People left the Mac in the fleet")
+	}
+	if got := macRecordOf(t, l.s, four.snapshot().ID); !has(got, "left the lab: a Maintainer ended it") {
+		t.Errorf("the Mac's record: %q", got)
+	}
+	ravi.refused("lends no Mac called shelf-two", personPath(maintainerID, "enrollments/shelf-two/end"), "sure", "yes")
+	if w := grace.post(personPath(graceID, "enrollments/shelf-two/end"), "sure", "yes"); w.Code != http.StatusNotFound || l.s.dev("shelf-two") == nil {
+		t.Errorf("a Volunteer pressing People's End enrollment: %d", w.Code)
+	}
+
+	// Blocked: every Mac the person lends leaves.
+	ravi.did(personPath(graceID, "block"), "reason", "floods the group", "sure", "yes")
+	if l.s.dev("shelf-two") != nil || l.s.dev("shelf-three") != nil {
+		t.Fatal("a Blocked person's Macs are still in the fleet")
+	}
+	for i, name := range []string{"shelf-two", "shelf-three"} {
+		if got := l.labLines(); !has(got, name+" left the lab: its Volunteer was Blocked.") {
+			t.Errorf("the Lab group's lines lack %s:\n%s", name, strings.Join(got, "\n"))
+		}
+		if got := macRecordOf(t, l.s, ids[i+1]); !has(got, "left the lab: its Volunteer was Blocked") {
+			t.Errorf("%s's record: %q", name, got)
+		}
+	}
+	if got := l.recorded(); !has(got, "@ravi blocked its Volunteer, which ended the enrollment of shelf-two, a Mac of @grace") {
+		t.Errorf("the People record:\n%s", strings.Join(got, "\n"))
+	}
+	if w := l.checkin(secretTwo, api.Checkin{}); w.Code != http.StatusUnauthorized || w.Header().Get(api.EndedHeader) != "ravi" {
+		t.Errorf("a Blocked person's Mac at its next check-in: %d, by %q", w.Code, w.Header().Get(api.EndedHeader))
+	}
+	how := map[string]string{}
+	for _, m := range l.retiredNow(ravi) {
+		how[m.Name] = m.How
+	}
+	if len(how) != 4 || how["shelf-one"] != leftByMaintainer || how["shelf-four"] != leftByMaintainer || how["shelf-two"] != leftBlocked || how["shelf-three"] != leftBlocked {
+		t.Errorf("the Retired records: %v", how)
+	}
+	for _, line := range l.labLines() {
+		if strings.Contains(line, "left the lab") && strings.Contains(line, "grace") {
+			t.Errorf("a line about a Mac names its Volunteer: %q", line)
+		}
+	}
+}
+
+// A Mac that is not reaching the lab when its Volunteer ends it from the
+// site finishes leaving when it next does: any job stops, the Mac is on its
+// own system, the lab is removed from it. What stays is the Volunteer's:
+// lab-agent, the Audit log, the window and the Access level.
+func TestAMacEndedFromTheSiteFinishesLeavingWhenItNextReachesTheLab(t *testing.T) {
+	link := &leavingLink{}
+	n, _ := leavingLab(t, labConfig{lender: veraID, wrap: link.wrap})
+	v := n.s.dev(n.name)
+	n.mustVolunteer("window", "add", "mon-fri", "19:00-07:00")
+	n.mustVolunteer("access", "full")
+	n.waitDevice(func(d api.Device) bool { return d.AccessLevel == api.AccessFull })
+	id, _ := n.longJob("7.2-site-leave")
+	labBoot, _, _ := n.sim.Identity()
+
+	link.down.Store(true)
+	if err := n.s.leaveMac(v, n.vera()); err != nil {
+		t.Fatal(err)
+	}
+	// In the lab it is done at once, with the Mac out of reach.
+	if n.s.dev(n.name) != nil {
+		t.Fatal("the Mac is still in the fleet")
+	}
+	time.Sleep(time.Second)
+	if leavingDesktopNotice(n.sim, "vera") {
+		t.Fatal("the Mac left before it could have heard")
+	}
+	link.down.Store(false)
+
+	n.backOnItsOwnSystem(labBoot, 20*time.Second, "its Volunteer left from the site during the Lab boot")
+	for deadline := time.Now().Add(15 * time.Second); !leavingDesktopNotice(n.sim, "vera"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the Mac never learned its enrollment ended once it reached the lab again: %q", n.sim.Notices())
+		}
+	}
+	if k := n.sim.LeavingStagedEntries(); k != 0 {
+		t.Errorf("%d lab boot entries are still staged on the Mac that left", k)
+	}
+	if j := n.jobAPI(id, 60*time.Second); j.Outcome != api.OutcomeIncomplete {
+		t.Errorf("the job running when the Mac left ended %s: %s", j.Outcome, j.Summary)
+	}
+	// The Volunteer's own stay on the Mac.
+	for _, f := range []string{"audit.log", "availability.json", "access.json"} {
+		if !exists(filepath.Join(n.agent.WorkDir, f)) {
+			t.Errorf("%s did not stay on the Mac that left", f)
+		}
+	}
+	if out := n.mustVolunteer("window", "show"); !strings.Contains(out, "mon-fri 19:00-07:00") {
+		t.Errorf("the Volunteer's window did not stay:\n%s", out)
+	}
+	if out := n.mustVolunteer("log"); !strings.Contains(out, "ended this Mac's enrollment in the lab") {
+		t.Errorf("the Audit log does not record the ending:\n%s", out)
+	}
+}
+
+// Leaving at the Mac says what stays and names the one command that
+// removes it.
+func TestLeavingNamesWhatStaysAndTheOneCommandThatRemovesIt(t *testing.T) {
+	n, _ := leavingLab(t, labConfig{lender: veraID})
+	id := n.s.dev(n.name).snapshot().ID
+	out := n.mustVolunteer("leave", "--yes")
+	for _, want := range []string{"lab-agent", "Audit log", "Availability window", "Access level", "`sudo lab-agent uninstall`"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("leave does not name %q:\n%s", want, out)
+		}
+	}
+	n.leavingRequireGone(n.name)
+	// Told by the Mac itself, the lab keeps no word for it to come back to.
+	if got := labLinesOf(t, n.s); !has(got, n.name+" left the lab: its Volunteer ended it.") {
+		t.Errorf("the Lab group's lines:\n%s", strings.Join(got, "\n"))
+	}
+	if got := macRecordOf(t, n.s, id); !has(got, "left the lab: its Volunteer ended it") {
+		t.Errorf("the Mac's record: %q", got)
+	}
+	var how string
+	if err := n.s.store.db.QueryRow(`SELECT how FROM retired_macs WHERE id = ?`, id).Scan(&how); err != nil || how != leftByVolunteer {
+		t.Errorf("the Retired record: %q, %v", how, err)
+	}
+	if r := n.checkinAs(n.secret); r.StatusCode != 401 || r.Header.Get(api.EndedHeader) != "" {
+		t.Errorf("the secret of a Mac that left by itself: %s, ended by %q", r.Status, r.Header.Get(api.EndedHeader))
 	}
 }
