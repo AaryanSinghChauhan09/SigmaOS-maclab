@@ -281,6 +281,11 @@ func (s *Server) pPromote(w http.ResponseWriter, r *http.Request) {
 	}
 	req := promoteReq{Device: mac, Job: of.PassedRun, Confirm: r.PostFormValue("sure") == "yes"}
 	out, err := s.promotion(r.Context(), *PersonOf(r), release, req)
+	// The Release and its Mac are there: what the Promotion lacks is said
+	// on the page, never as a page that is not found.
+	if no := (*refusal)(nil); errors.As(err, &no) && no.code == http.StatusNotFound {
+		err = refuse(http.StatusConflict, "%s", no.msg)
+	}
 	if sentence, _ := out["confirm"].(string); err == nil && !req.Confirm {
 		s.showReleases(w, r, http.StatusOK, release, "", &releaseAsking{Action: "/releases/" + url.PathEscape(release) + "/macs/" + url.PathEscape(mac) + "/promote",
 			Sentence: sentence, Back: releasePath(release)})

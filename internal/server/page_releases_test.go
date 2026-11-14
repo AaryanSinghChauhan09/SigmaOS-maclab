@@ -500,6 +500,15 @@ func TestPromoteIsOnEachMacRowWithAPassedRunForAMaintainer(t *testing.T) {
 			t.Errorf("a Promotion with no passed run (sure %q): %d %s", sure, w.Code, w.Body)
 		}
 	}
+	// What a Promotion lacks is the lab's to say, on the page: here a run
+	// with no evidence behind it.
+	relFreeze(t, l.s, "9.7", l.s.now().Add(-72*time.Hour), l.who(maintainerID), kernelPackage("9.7-1"),
+		api.ReleaseMac{Mac: "left-mac", DeviceID: "d-left-mac", Board: "apple,j313", Configuration: "j313, 8 CPU and 8 GPU cores"})
+	relRun(t, l.s, "job-l1", "9.7", "left-mac", l.s.now().Add(-71*time.Hour), api.OutcomePass)
+	if w := ravi.form("/releases/9.7/macs/left-mac/promote"); w.Code != http.StatusBadRequest || !parseHTML(t, w.Body.String()).says(t, ".flash-alert", "job-l1") ||
+		parseHTML(t, w.Body.String()).count(t, "tr.release-detail") != 1 {
+		t.Errorf("a Promotion the lab cannot make for a Mac of the Release: %d %s", w.Code, w.Body)
+	}
 	for _, target := range []string{"/releases/9.9/macs/no-such-mac/promote", "/releases/7.7/macs/m1-pro/promote"} {
 		if w := ravi.form(target, "sure", "yes"); w.Code != http.StatusNotFound {
 			t.Errorf("POST %s: %d", target, w.Code)
@@ -566,6 +575,20 @@ func TestPromoteOnTheReleasesPageAsksTwiceThenPromotesFromThePassedRun(t *testin
 		t.Fatal(err)
 	}
 	at := map[string]string{"release": "9.9", "mac": "sim-mac"}
+
+	// A Mac of the Release that the lab no longer has: said on the page,
+	// which is still there.
+	l.s.mu.Lock()
+	gone := l.s.devs["sim-mac"]
+	delete(l.s.devs, "sim-mac")
+	l.s.mu.Unlock()
+	if w := l.pageAs(ada, (*Server).pPromote, "/releases/9.9/macs/sim-mac/promote", at, "sure", "yes"); w.Code != http.StatusConflict ||
+		!parseHTML(t, w.Body.String()).says(t, ".flash-alert", "no device sim-mac") {
+		t.Errorf("a Promotion for a Mac the lab no longer has: %d %s", w.Code, w.Body)
+	}
+	l.s.mu.Lock()
+	l.s.devs["sim-mac"] = gone
+	l.s.mu.Unlock()
 
 	w := l.pageAs(ada, (*Server).pPromote, "/releases/9.9/macs/sim-mac/promote", at)
 	if w.Code != http.StatusOK {
