@@ -219,3 +219,34 @@ func TestEnvironmentProxiesAreNotUsed(t *testing.T) {
 		t.Errorf("%d requests went through the environment's proxy", n)
 	}
 }
+
+// A client given a name sends it on every request. One given none sends
+// Go's own, which is what a lab built from maclab sends: labd tells the two
+// apart by it.
+func TestAPolicyWithANameSendsItOnEveryRequest(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.UserAgent())
+	}))
+	t.Cleanup(srv.Close)
+	named, err := Policy{UserAgent: "lab/0.2.0"}.Client(5 * time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := Policy{}.Client(5 * time.Second)
+	req, _ := http.NewRequest("POST", srv.URL, strings.NewReader("body"))
+	if _, err := named.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	if ua := req.Header.Get("User-Agent"); ua != "" {
+		t.Errorf("the caller's request was changed: User-Agent %q", ua)
+	}
+	get(t, named, srv.URL)
+	own, _ := http.NewRequest("GET", srv.URL, nil)
+	own.Header.Set("User-Agent", "lab-mcp/1")
+	named.Do(own)
+	get(t, plain, srv.URL)
+	if len(got) != 4 || got[0] != "lab/0.2.0" || got[1] != "lab/0.2.0" || got[2] != "lab-mcp/1" || !strings.HasPrefix(got[3], "Go-http-client/") {
+		t.Fatalf("User-Agent of each request: %q", got)
+	}
+}

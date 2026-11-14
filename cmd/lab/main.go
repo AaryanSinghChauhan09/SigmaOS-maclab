@@ -1,9 +1,10 @@
-// Command lab is the CLI for the Mac test lab: enroll Macs, run kernels and
+// Command lab is the CLI for Omarchy Mac Lab: enroll Macs, run kernels and
 // tests on them, and see what state they are in. `lab mcp` serves the same
 // operations to AI agents over MCP.
 package main
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -12,7 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -22,16 +23,19 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/client"
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
-const usage = `lab: run kernels and tests on Omarchy Macs
+const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
 
   lab boot-test --catalog-descriptor PIN --profile ID --request FILE --review-descriptor PIN --out DIR [--compile | --execute --authorization FILE]
-  lab login <labd-url> <your-maintainer-token> [--ca-file <pem>] [--allow-plain-http]
-  lab maintainer add <name> | remove <name> | list   the people with their own labd token
+  lab login <url> [--ca-file <pem>] [--allow-plain-http]
+                                      log in to Omarchy Mac Lab: asks for a Lab token, which you make on your own
+                                      page of the lab and never give as an argument
   lab builder add <name> [--kinds kernel[,package]] [-o FILE] | remove <name> [--generation G] | list
                                       builder hosts with their own token (it may only build)
   lab status [device]                 devices, what they're doing, and anything a human must do
@@ -69,8 +73,6 @@ const usage = `lab: run kernels and tests on Omarchy Macs
                                       jobs wait. Running it again renews the Lease: it ends 4 hours from then.
                                       An M team member holds one Mac of each Configuration. Only you release
                                       your Lease; --force ends another person's (Maintainers), and is recorded
-  lab forget <device> [--force]       take a Mac out of the lab (after lab-agent uninstall); its jobs stay.
-                                      Refused while someone else leases it or its agent checks in, unless --force
   lab installed freeze-manifest --release R <manifest.json> <payload.sha256> [--approved-by a,b]
   lab installed freeze-entry <device> --release R    freeze the installer's boot entry, after the install
   lab installed promote <device> --release R --job <id>   accepted by you
@@ -83,7 +85,7 @@ const usage = `lab: run kernels and tests on Omarchy Macs
   lab audit <device>                  labd's copy of a Volunteer's Mac's Audit log: every Maintainer action on it
   lab upload <file>                   to the artifact store, in 32 MiB parts; cut, the same command resumes
   lab mcp                             MCP server on stdio, for AI agents
-  lab version                         the Lab release this lab came from
+  lab version                         the Lab release this lab came from, and the one Omarchy Mac Lab runs
 `
 
 // The tag of the Lab release this build came from, stamped in by the Makefile.
@@ -94,6 +96,7 @@ func main() {
 		fmt.Print(usage)
 		os.Exit(2)
 	}
+	client.Release = version
 	ctx := context.Background()
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
@@ -101,7 +104,9 @@ func main() {
 	case "boot-test":
 		err = bootTest(args)
 	case "login":
-		err = login(args)
+		err = login(args, os.Stdin, os.Stdout)
+	case "forget", "maintainer":
+		err = retired(cmd)
 	case "pack":
 		err = pack(args)
 	case "mcp":
@@ -109,7 +114,7 @@ func main() {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	case "version":
-		fmt.Println(version)
+		err = showVersion(ctx, os.Stdout)
 	default:
 		var c *client.Client
 		if c, err = client.Load(); err == nil {
@@ -475,9 +480,6 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 	case "installed":
 		return installedCmd(ctx, c, args)
 
-	case "maintainer":
-		return maintainerCmd(ctx, c, args)
-
 	case "builder":
 		return builderCmd(ctx, c, args)
 
@@ -706,25 +708,6 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		if l.Warning != "" {
 			fmt.Fprintln(os.Stderr, "warning: "+l.Warning)
 		}
-		return nil
-
-	case "forget":
-		force := fs.Bool("force", false, "forget it even while someone else holds a lease on it, or its lab-agent still checks in")
-		pos := parse(fs, args)
-		if err := need(pos, 1, "lab forget <device> [--force]"); err != nil {
-			return err
-		}
-		err := c.ForgetDevice(ctx, pos[0], holder(), *force)
-		// a forget run twice, or after a forget that timed out, is done already
-		var se *client.StatusError
-		if errors.As(err, &se) && se.Code == http.StatusNotFound {
-			fmt.Printf("%s is not in the lab: nothing to forget\n", pos[0])
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Printf("forgot %s; its jobs stay. `lab enroll %s` adds it again.\n", pos[0], pos[0])
 		return nil
 
 	case "release":
@@ -1218,41 +1201,98 @@ func trunc(s string, n int) string {
 	return s
 }
 
-func login(args []string) error {
-	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	caFile := fs.String("ca-file", "", "PEM file of CA certificates for labd's https certificate, when the system doesn't trust it (a private CA, or labd's own certificate)")
-	plain := fs.Bool("allow-plain-http", false, "let an http:// URL reach labd on another machine: the token then crosses the network unencrypted")
-	pos := parse(fs, args)
-	if len(pos) != 2 {
-		return fmt.Errorf("usage: lab login <labd-url> <your-maintainer-token> [--ca-file <pem>] [--allow-plain-http]")
+// retired is what a command the lab no longer has says, nil for any other.
+func retired(cmd string) error {
+	switch cmd {
+	case "forget":
+		return errors.New("`lab forget` is not part of Omarchy Mac Lab.")
+	case "maintainer":
+		return errors.New("`lab maintainer` is not part of Omarchy Mac Lab: Maintainer is a mark on People.")
 	}
-	c := &client.Client{URL: strings.TrimRight(pos[0], "/"), Token: pos[1], AllowPlainHTTP: *plain}
-	// Refused before anything is saved or sent.
-	if err := labhttp.CheckServer(c.URL, c.AllowPlainHTTP); err != nil {
-		return err
+	return nil
+}
+
+// showVersion prints lab's release, then the one the lab of the saved login
+// runs. With no login it says so and asks nobody: an install and a release
+// check run it before anyone has logged in.
+func showVersion(ctx context.Context, out io.Writer) error {
+	fmt.Fprintln(out, "lab", version)
+	c, err := client.Load()
+	if errors.Is(err, client.ErrNotLoggedIn) {
+		fmt.Fprintln(out, err)
+		return nil
 	}
-	if *caFile != "" {
-		abs, err := filepath.Abs(*caFile)
-		if err != nil {
-			return err
-		}
-		if _, err := labhttp.ReadCAFile(abs); err != nil {
-			return err
-		}
-		c.CAFile = abs
-	}
-	if err := c.Save(); err != nil {
-		return err
-	}
-	lc, err := client.Load()
 	if err != nil {
 		return err
 	}
-	if _, err := lc.Devices(context.Background()); err != nil {
-		return fmt.Errorf("saved, but labd rejected it: %w", err)
+	who, err := c.WhoAmI(ctx)
+	if err != nil {
+		return err
 	}
-	fmt.Println("logged in to", c.URL)
+	fmt.Fprintln(out, "Omarchy Mac Lab", orDash(who.LabRelease, "did not say which release it runs"))
 	return nil
+}
+
+// login keeps the one login. The Lab token is asked for, without echo at a
+// terminal, or read as the first line of anything else given as input: an
+// argument would stay in the shell's history and show in the process list.
+func login(args []string, in io.Reader, out io.Writer) error {
+	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	caFile := fs.String("ca-file", "", "PEM file of CA certificates for the lab's https certificate, when the system doesn't trust it (a private CA, or labd's own certificate)")
+	plain := fs.Bool("allow-plain-http", false, "let an http:// URL reach a lab on another machine: the token then crosses the network unencrypted")
+	pos := parse(fs, args)
+	const use = "usage: lab login <url> [--ca-file <pem>] [--allow-plain-http]"
+	switch {
+	case len(pos) == 2:
+		return errors.New("the Lab token is never an argument: run `lab login <url>` and give it at the prompt. One typed on a command line stays in the shell's history: revoke it on your own page and make another")
+	case len(pos) != 1:
+		return errors.New(use)
+	}
+	// Refused before the token is asked for.
+	if err := labhttp.CheckServer(pos[0], *plain); err != nil {
+		return err
+	}
+	if *caFile != "" {
+		if _, err := labhttp.ReadCAFile(*caFile); err != nil {
+			return err
+		}
+	}
+	token, err := askToken(in)
+	if err != nil {
+		return err
+	}
+	who, err := client.Login(context.Background(), pos[0], token, *caFile, *plain)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Logged in to Omarchy Mac Lab as @%s.\n", who.Handle)
+	if api.ReleaseOlder(version, who.LabRelease) {
+		fmt.Fprintf(out, "Omarchy Mac Lab runs a newer release, %s. Update lab: curl -fsSL %s/install/lab | bash\n", who.LabRelease, who.Address)
+	}
+	return nil
+}
+
+// askToken reads the Lab token from in.
+func askToken(in io.Reader) (string, error) {
+	var line string
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		fmt.Fprint(os.Stderr, "Lab token: ")
+		b, err := term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		line = string(b)
+	} else {
+		var err error
+		if line, err = bufio.NewReader(io.LimitReader(in, 4096)).ReadString('\n'); err != nil && err != io.EOF {
+			return "", err
+		}
+	}
+	if line = strings.TrimSpace(line); line == "" {
+		return "", errors.New("no Lab token given: make one on your own page of the lab, then give it at the prompt")
+	}
+	return line, nil
 }
 
 // pack builds a kernel artifact in the Arch package layout from an O= build tree.
@@ -1573,47 +1613,4 @@ func installedCmd(ctx context.Context, c *client.Client, args []string) error {
 	b, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(b))
 	return nil
-}
-
-// maintainerCmd handles `lab maintainer ...`: the people with their own labd
-// token. labd logs each change under the Maintainer who made it.
-func maintainerCmd(ctx context.Context, c *client.Client, args []string) error {
-	const use = "lab maintainer add <name> | remove <name> | list"
-	if len(args) < 1 {
-		return errors.New(use)
-	}
-	switch args[0] {
-	case "add":
-		if err := need(args[1:], 1, "lab maintainer add <name>"); err != nil {
-			return err
-		}
-		m, err := c.AddMaintainer(ctx, args[1])
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Token for %s (shown only this once; labd keeps only its hash):\n\n  %s\n\n", m.Name, m.Token)
-		fmt.Printf("They log in with:\n\n  lab login %s <token>\n", c.URL)
-		return nil
-	case "remove":
-		if err := need(args[1:], 1, "lab maintainer remove <name>"); err != nil {
-			return err
-		}
-		if err := c.RemoveMaintainer(ctx, args[1]); err != nil {
-			return err
-		}
-		fmt.Printf("removed %s; their token no longer works\n", args[1])
-		return nil
-	case "list":
-		ms, err := c.Maintainers(ctx)
-		if err != nil {
-			return err
-		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-		fmt.Fprintln(w, "MAINTAINER\tADDED\tBY")
-		for _, m := range ms {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", m.Name, m.Added.Format(time.DateOnly), orDash(m.AddedBy, "-"))
-		}
-		return w.Flush()
-	}
-	return errors.New(use)
 }

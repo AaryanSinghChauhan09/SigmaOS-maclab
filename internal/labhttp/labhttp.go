@@ -36,6 +36,10 @@ type Policy struct {
 	CAPEM []byte
 	// AllowPlainHTTP lets http:// URLs reach hosts other than loopback.
 	AllowPlainHTTP bool
+	// UserAgent names the program on every request that names none itself,
+	// such as "lab/0.2.0". Without it Go's own name goes out, which labd
+	// reads as a lab that was not built for Omarchy Mac Lab.
+	UserAgent string
 }
 
 // ErrPlainHTTP is a request refused before it was sent: plain http to a host
@@ -60,7 +64,7 @@ func (p Policy) Transport() (http.RoundTripper, error) {
 	t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
 	t.ForceAttemptHTTP2 = true
 	t.Proxy = nil
-	return &guard{base: t, allowPlain: p.AllowPlainHTTP}, nil
+	return &guard{base: t, allowPlain: p.AllowPlainHTTP, agent: p.UserAgent}, nil
 }
 
 // Client is an http.Client over rt that never follows a redirect. timeout 0
@@ -86,6 +90,7 @@ func refuseRedirect(req *http.Request, via []*http.Request) error {
 type guard struct {
 	base       http.RoundTripper
 	allowPlain bool
+	agent      string
 }
 
 func (g *guard) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -94,6 +99,10 @@ func (g *guard) RoundTrip(r *http.Request) (*http.Response, error) {
 			r.Body.Close()
 		}
 		return nil, err
+	}
+	if g.agent != "" && r.Header.Get("User-Agent") == "" {
+		r = r.Clone(r.Context())
+		r.Header.Set("User-Agent", g.agent)
 	}
 	return g.base.RoundTrip(r)
 }

@@ -1,4 +1,6 @@
-// Package client is the Go client for labd's Maintainer API, used by the lab CLI and MCP server.
+// Package client is the Go client for Omarchy Mac Lab's API, used by the lab
+// CLI and its MCP server. login.go has the one login it keeps and which lab
+// a call goes to.
 package client
 
 import (
@@ -9,13 +11,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
-	"github.com/omacom/omarchy-maclab/internal/labhttp"
 	"github.com/omacom/omarchy-maclab/internal/upload"
 )
 
@@ -35,71 +35,12 @@ type Client struct {
 	// an upload that resumes; nil says nothing.
 	Note func(format string, args ...any) `json:"-"`
 	http *http.Client
+	// release is the Lab release the lab said it runs, on its last answer.
+	release atomic.Value
 	// Tests shorten these: the longest file sent in one request, and the
 	// wait before a retry.
 	partBytes int64
 	pause     func(ctx context.Context, n int) error
-}
-
-func ConfigPath() string {
-	dir, _ := os.UserConfigDir()
-	return filepath.Join(dir, "maclab", "client.json")
-}
-
-// Load reads MACLAB_URL / MACLAB_TOKEN / MACLAB_CA_FILE /
-// MACLAB_ALLOW_PLAIN_HTTP, falling back to the saved config.
-func Load() (*Client, error) {
-	c := &Client{}
-	if b, err := os.ReadFile(ConfigPath()); err == nil {
-		json.Unmarshal(b, c)
-	}
-	if v := os.Getenv("MACLAB_URL"); v != "" {
-		c.URL = v
-	}
-	if v := os.Getenv("MACLAB_TOKEN"); v != "" {
-		c.Token = v
-	}
-	if v := os.Getenv("MACLAB_CA_FILE"); v != "" {
-		c.CAFile = v
-	}
-	if os.Getenv("MACLAB_ALLOW_PLAIN_HTTP") == "1" {
-		c.AllowPlainHTTP = true
-	}
-	if c.URL == "" || c.Token == "" {
-		return nil, fmt.Errorf("not configured: run `lab login <labd-url> <your-maintainer-token>` or set MACLAB_URL and MACLAB_TOKEN")
-	}
-	c.URL = strings.TrimRight(c.URL, "/")
-	if err := c.connect(); err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
-// connect sets up c's HTTP client with labhttp's policy for c.URL.
-func (c *Client) connect() error {
-	if err := labhttp.CheckServer(c.URL, c.AllowPlainHTTP); err != nil {
-		return err
-	}
-	p := labhttp.Policy{AllowPlainHTTP: c.AllowPlainHTTP}
-	if c.CAFile != "" {
-		b, err := labhttp.ReadCAFile(c.CAFile)
-		if err != nil {
-			return err
-		}
-		p.CAPEM = b
-	}
-	hc, err := p.Client(0)
-	if err != nil {
-		return err
-	}
-	c.http = hc
-	return nil
-}
-
-func (c *Client) Save() error {
-	b, _ := json.MarshalIndent(c, "", "  ")
-	os.MkdirAll(filepath.Dir(ConfigPath()), 0o700)
-	return os.WriteFile(ConfigPath(), b, 0o600)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, out any) error {
@@ -189,21 +130,6 @@ func (c *Client) RevokeEnrollTokens(ctx context.Context, name string) (int, erro
 	return out.Revoked, c.do(ctx, "DELETE", "/api/enroll-tokens/"+url.PathEscape(name), nil, &out)
 }
 
-func (c *Client) Maintainers(ctx context.Context) ([]api.Maintainer, error) {
-	var out []api.Maintainer
-	return out, c.do(ctx, "GET", "/api/maintainers", nil, &out)
-}
-
-// AddMaintainer returns the new Maintainer's token, which labd shows only this once.
-func (c *Client) AddMaintainer(ctx context.Context, name string) (*api.NewMaintainer, error) {
-	var out api.NewMaintainer
-	return &out, c.do(ctx, "POST", "/api/maintainers", jsonBody(api.MaintainerRequest{Name: name}), &out)
-}
-
-func (c *Client) RemoveMaintainer(ctx context.Context, name string) error {
-	return c.do(ctx, "DELETE", "/api/maintainers/"+url.PathEscape(name), nil, nil)
-}
-
 func (c *Client) Builders(ctx context.Context) ([]api.BuilderStatus, error) {
 	var out []api.BuilderStatus
 	return out, c.do(ctx, "GET", "/api/builders", nil, &out)
@@ -239,17 +165,6 @@ func (c *Client) EndEnrollment(ctx context.Context, name string) error {
 func (c *Client) Lease(ctx context.Context, name, holder string, ttl time.Duration) (*api.Lease, error) {
 	var out api.Lease
 	return &out, c.do(ctx, "POST", "/api/devices/"+url.PathEscape(name)+"/lease", jsonBody(api.LeaseRequest{Holder: holder, TTLSec: int(ttl.Seconds())}), &out)
-}
-
-// ForgetDevice takes a Mac out of the lab; its jobs stay. force forgets it
-// even while someone other than holder holds a lease on it, or its agent
-// still checks in.
-func (c *Client) ForgetDevice(ctx context.Context, name, holder string, force bool) error {
-	q := url.Values{"holder": {holder}}
-	if force {
-		q.Set("force", "1")
-	}
-	return c.do(ctx, "DELETE", "/api/devices/"+url.PathEscape(name)+"?"+q.Encode(), nil, nil)
 }
 
 // Release ends holder's lease on a Mac.

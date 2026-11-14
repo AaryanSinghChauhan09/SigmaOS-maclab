@@ -322,7 +322,7 @@ is stopped (`systemctl stop lab-agent`).
 make                                 # binaries in bin/
 labd --sign-in <folder>              # <folder>/admins names the Admins by GitHub account id
 labd break-glass --account-id <id> <your-handle>   # on the server: prints a Lab token for you, once
-lab login http://127.0.0.1:7770      # with that token
+lab login http://127.0.0.1:7770      # asks for that token; it is never an argument
 lab enroll m1air --label "MacBook Air M1, left desk"   # prints the one-liner that joins the Mac
 ```
 

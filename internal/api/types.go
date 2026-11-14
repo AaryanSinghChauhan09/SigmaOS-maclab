@@ -1349,24 +1349,6 @@ type GateReport struct {
 	NotCounted []GateRun `json:"not_counted,omitempty"`
 }
 
-// ---- Maintainers: the named people with their own access to labd ----
-
-type Maintainer struct {
-	Name    string    `json:"name"`
-	Added   time.Time `json:"added"`
-	AddedBy string    `json:"added_by,omitempty"` // empty for the first Maintainer
-}
-
-type MaintainerRequest struct {
-	Name string `json:"name"`
-}
-
-// NewMaintainer carries a new Maintainer's token, the only time labd shows it.
-type NewMaintainer struct {
-	Maintainer
-	Token string `json:"token"`
-}
-
 // Builder kinds: the builds a named builder may take.
 const (
 	BuilderKernel  = "kernel"
