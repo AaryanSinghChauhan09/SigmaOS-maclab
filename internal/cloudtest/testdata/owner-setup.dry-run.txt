@@ -3,6 +3,7 @@ Create Token > Custom token. Labels may differ a little from these.
   Zone, for omarchy-mac.org only, Edit on each of:
     Zone Settings, Bot Management, Zone WAF, Cache Rules,
     Dynamic Redirect, DNS, Email Routing Rules; and Zone: Read
+    SSL and Certificates, only for the Alias and its rehearsal (alias.sh)
   Account, Edit on each of:
     Cloudflare Tunnel, Email Routing Addresses; and Notifications: Read
   TTL: an end date a day or two away.
