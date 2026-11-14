@@ -47,6 +47,7 @@ func fakeBuilderLabd(t *testing.T, addCode int, replaced ...bool) (*client.Clien
 		}
 	}))
 	t.Cleanup(labd.Close)
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("MACLAB_URL", labd.URL)
 	t.Setenv("MACLAB_TOKEN", "tok")
@@ -172,6 +173,7 @@ func TestBuildAndPackageShowTheLabsRefusal(t *testing.T) {
 		http.Error(w, closed, 403)
 	}))
 	t.Cleanup(labd.Close)
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("MACLAB_URL", labd.URL)
 	t.Setenv("MACLAB_TOKEN", "tok")

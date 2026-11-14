@@ -41,6 +41,10 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/upload"
 )
 
+// version is the Lab release lab-builder was built as, which it names itself
+// by to labd.
+var version = "dev"
+
 // The limits of a build: 10 of the mini's 18 cores and 16 of its 64 GB. The
 // cores are a setting only so far as the Builder's gate test steps them
 // down, 10, then 8, then 6; the memory is not one.
@@ -123,7 +127,7 @@ func configure(args []string, out io.Writer) (*builder, error) {
 	if b.token, err = builderToken(*tokenFile); err != nil {
 		return nil, err
 	}
-	pol := labhttp.Policy{AllowPlainHTTP: *plain}
+	pol := labhttp.Policy{AllowPlainHTTP: *plain, UserAgent: "lab-builder/" + strings.TrimPrefix(version, "v")}
 	if *caFile != "" {
 		ca, err := labhttp.ReadCAFile(*caFile)
 		if err != nil {

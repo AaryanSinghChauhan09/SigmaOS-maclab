@@ -31,7 +31,7 @@ var reLabAgent = regexp.MustCompile(`^lab/v?([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-
 // labCalls reports whether rt is a route the lab command calls.
 func labCalls(rt route) bool {
 	switch rt.reach {
-	case maintainers, people, macNamed, jobNamed, scoped:
+	case maintainers, teamBuilds, people, macNamed, jobNamed, scoped:
 		return true
 	}
 	return rt.pattern == "GET /api/auth"

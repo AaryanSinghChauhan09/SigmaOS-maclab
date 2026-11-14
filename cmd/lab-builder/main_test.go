@@ -71,6 +71,7 @@ func TestBuilderToken(t *testing.T) {
 // token. The old lab's variable for it (retiredVariable) is ignored, and
 // there is no --token, which ps would show.
 func TestTheTokenComesFromItsFileAlone(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv(retiredVariable, "bldr_from_the_environment_0123456789abcdef")
 	var out bytes.Buffer
 	if b, err := configure([]string{"--server", "http://127.0.0.1:7770"}, &out); err == nil {
@@ -98,6 +99,7 @@ func TestTheTokenComesFromItsFileAlone(t *testing.T) {
 // test steps down to, and nothing else is one. The volumes are 40 GB and
 // 120 GB.
 func TestTheLimitsOfABuild(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	file := tokenFile(t, testToken, 0o600)
 	conf := func(args ...string) (*builder, error) {
 		return configure(append([]string{"--server", "http://127.0.0.1:7770", "--token-file", file}, args...), io.Discard)
@@ -136,6 +138,7 @@ exit 1
 // and says so, and the LaunchDaemon of the mini is what starts it again.
 // The build's VM gets the limits, and the token reaches nothing it runs.
 func TestLabBuilderNeverStartsTheService(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "container"), []byte(fakeContainer), 0o755); err != nil {
 		t.Fatal(err)
@@ -144,6 +147,9 @@ func TestLabBuilderNeverStartsTheService(t *testing.T) {
 	var result api.BuildResult
 	done := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.UserAgent(), "lab-builder/") {
+			t.Errorf("lab-builder named itself %q", r.UserAgent())
+		}
 		if r.Header.Get("Authorization") != "Bearer "+testToken {
 			http.Error(w, "no", 401)
 			return
