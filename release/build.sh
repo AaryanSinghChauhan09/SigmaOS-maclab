@@ -29,8 +29,9 @@
 # omarchy_m_test/vendor/, the on-screen video check under
 # omarchy_m_test/testcard/) and VERSION. The bundle holds bin/ (labd, oobd and
 # lab-builder for the mini, the reset tool, the lab-agent handed to Macs), builder/, deploy/,
-# scripts/mini/, VERSION (the tag) and NOTES (the fixed lines of this
-# number's release notes, from release/notes/X.Y.Z.txt). release/check.sh
+# scripts/mini/, texts/ (the Volunteer's terms and the privacy statement, the
+# files labd serves at /terms and /privacy), VERSION (the tag) and NOTES (the
+# fixed lines of this number's release notes, from release/notes/X.Y.Z.txt). release/check.sh
 # checks a built one. Signing happens separately (release/sign.sh), so this
 # runs anywhere with Go, Python and GNU tar.
 set -euo pipefail
@@ -111,6 +112,9 @@ fi
 printf '%s\n' "${tag:-dev}" > "$server/VERSION"
 cat "$repo/release/notes/${version%%-rc.*}.txt" 2>/dev/null > "$server/NOTES" || true
 install -m 0644 "$repo/LICENSE" "$repo/THIRD_PARTY_NOTICES.md" "$server/"
+# The Volunteer's terms and the privacy statement, as labd carries and serves them.
+install -D -m 0644 "$repo/internal/web/texts/terms.txt" "$server/texts/terms.txt"
+install -D -m 0644 "$repo/internal/web/texts/privacy.txt" "$server/texts/privacy.txt"
 (cd "$repo" && for d in builder deploy scripts/mini; do
   if [[ -d $d ]]; then find "$d" -type f ! -name '*.pyc' ! -path '*/__pycache__/*' ! -name '.DS_Store'; fi
 done | sort | while read -r f; do

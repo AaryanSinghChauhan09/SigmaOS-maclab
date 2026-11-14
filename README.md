@@ -1308,9 +1308,8 @@ counting on it).
 
 ## License
 
-MIT; see [LICENSE](LICENSE). The web UI bundles third-party files under their own
-licenses: xterm.js (MIT), subsets of JetBrains Mono Nerd Font and IBM Plex Sans
-(SIL OFL 1.1), and the Omarchy logo, icon and font (MIT). See
+MIT; see [LICENSE](LICENSE). The interface bundles third-party files under their own
+licenses: JetBrains Mono (SIL OFL 1.1) and the Omarchy logo (MIT). See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). maclab isn't an official Omarchy
 or Asahi Linux project, and it isn't affiliated with Apple.
 

@@ -62,13 +62,22 @@ AUTH=(-H "Authorization: Bearer $TOK")
 "$BIN/labd" --listen="0.0.0.0:$PORT" --data="$WORK/other" --maintainer=ci >/dev/null 2>&1 && fail "labd listened beyond this machine"
 [ "$(c "$LOOP/healthz")" = ok ] || fail "healthz at the loopback port"
 
-# The UI, under the prefix, with its <base> and headers.
+# The interface, under the prefix: its pages, their files and headers.
 page=$(c -D - "${FWD[@]}" "$B/")
-grep -qF "<base href=\"$PREFIX/\">" <<<"$page" || fail "the UI's <base>"
+grep -qF "<a href=\"$PREFIX/terms\">Terms</a>" <<<"$page" || fail "the footer's link to the terms"
+grep -qF 'omarchy-m-testing.org' <<<"$page" || fail "Preview's banner"
 grep -qi '^strict-transport-security: max-age=' <<<"$page" || fail "HSTS"
-grep -qi "^content-security-policy: frame-ancestors 'none'" <<<"$page" || fail "frame-ancestors"
+grep -qi "^content-security-policy: .*frame-ancestors 'none'" <<<"$page" || fail "frame-ancestors"
 grep -qi '^x-content-type-options: nosniff' <<<"$page" || fail "nosniff"
-[ "$(code "${FWD[@]}" "$B/ui/app.js")" = 200 ] || fail "app.js"
+grep -qi '^set-cookie:' <<<"$page" && fail "a signed-out page set a cookie"
+css=$(grep -oE "$PREFIX/assets/app-[0-9a-f]{16}\.css" <<<"$page" | head -n 1)
+[ -n "$css" ] || fail "the page's stylesheet has no fingerprint"
+sheet=$(head_of "${FWD[@]}" -H 'Accept-Encoding: br' "$ROOT$css")
+grep -qi '^cache-control: public, max-age=31536000, immutable$' <<<"$sheet" || fail "the stylesheet is not kept a year"
+grep -qi '^content-encoding: br$' <<<"$sheet" || fail "the stylesheet is not sent as Brotli"
+[ "$(c "${FWD[@]}" "$B/terms" | grep -c 'OMARCHY MAC LAB: LENDING A MAC')" = 1 ] || fail "/terms"
+[ "$(c "${FWD[@]}" "$B/privacy" | grep -c 'privacy@omarchy-mac.org')" = 1 ] || fail "/privacy"
+[ "$(code "${FWD[@]}" "$B/api/themes")" = 404 ] || fail "the old interface's themes"
 grep -qi '^x-robots-tag: noindex' <<<"$page" || fail "noindex in Preview"
 head_of "${FWD[@]}" "$B/healthz" | grep -qi '^cache-control: no-store$' || fail "no-store by default"
 

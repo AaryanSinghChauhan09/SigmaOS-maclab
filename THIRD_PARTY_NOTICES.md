@@ -6,16 +6,12 @@ omarchy-m-testing; both are MIT and their histories are kept in this repository.
 
 ## The lab's interface
 
-The web UI under `internal/web/static` bundles these third-party files, which keep their own licenses.
+The interface under `internal/web/static` bundles these third-party files, which keep their own licenses.
 
 | Files | What | License |
 |---|---|---|
-| `vendor/xterm/` | [xterm.js](https://github.com/xtermjs/xterm.js) and its fit addon | MIT, see `vendor/xterm/LICENSE` |
-| `fonts/labmono-*.woff2` | Subsets of JetBrains Mono Nerd Font ([JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), patched by [Nerd Fonts](https://github.com/ryanoasis/nerd-fonts)) | SIL OFL 1.1, see `fonts/labmono-OFL.txt` |
-| `fonts/labsans.woff2` | A subset of [IBM Plex Sans](https://github.com/IBM/plex). It's renamed "Lab Sans" because "Plex" is a Reserved Font Name | SIL OFL 1.1, see `fonts/labsans-OFL.txt` |
-| `fonts/omarchy.ttf`, `omarchy-logo.svg`, `omarchy-icon.png` | The Omarchy font, logo and icon from [Omarchy](https://github.com/basecamp/omarchy) | MIT, below |
-
-`scripts/fonts.py` rebuilds the font subsets.
+| `JetBrainsMono-*.woff2` | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | SIL OFL 1.1, see `JetBrainsMono-OFL.txt` beside them |
+| `omarchy-logo.svg`, `icon.png`, `icon.svg` | The Omarchy logo from [Omarchy](https://github.com/basecamp/omarchy) | MIT, below |
 
 ## The test tool and the Rails reference
 

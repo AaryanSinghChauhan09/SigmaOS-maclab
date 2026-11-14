@@ -13,9 +13,10 @@
 #   - the server bundle holds labd, oobd and lab-builder for the mini, the
 #     reset tool it was given, byte for byte, the lab-agent handed to Macs
 #     with its own signature and the release key pinned inside it, and the
-#     builder/, deploy/ and scripts/mini/ files, and none of the commands
-#     that are not shipped; a reset tool that is no macOS arm64 program is
-#     refused before anything is built;
+#     builder/, deploy/ and scripts/mini/ files, the two texts of /terms and
+#     /privacy as labd carries them, and none of the commands that are not
+#     shipped; a reset tool that is no macOS arm64 program is refused before
+#     anything is built;
 #   - every file has a signature the release key verifies, a changed file or a
 #     file signed by another key is refused, and a tag that is not a Lab
 #     release's is refused before anything is built.
@@ -166,6 +167,10 @@ bundle_check() { # bundle_check DIR: the unpacked bundle under DIR
   fi
   for f in LICENSE THIRD_PARTY_NOTICES.md; do
     cmp -s "$repo/$f" "$s/$f" || fail "the bundle's $f is missing or different"
+  done
+  for f in terms.txt privacy.txt; do
+    cmp -s "$repo/internal/web/texts/$f" "$s/texts/$f" || fail "the bundle's texts/$f is missing or different"
+    python3 -c 'import sys; sys.exit(open(sys.argv[2], "rb").read() not in open(sys.argv[1], "rb").read())' "$s/bin/labd" "$s/texts/$f" || fail "labd does not carry the shipped texts/$f"
   done
   bundled=0
   while read -r f; do
