@@ -331,7 +331,18 @@ func (s *Server) macRecords(data *macPageData, v *dev, d DeviceView, p Person, a
 // lab writes no such line yet.
 func (s *Server) macRecord(d DeviceView) []recordShownLine { return nil }
 
-// execRecordFor is the Exec record's lines on v that p may read:
-// Maintainers and the Mac's Volunteer all of them, anyone else their own.
-// The lab keeps no Exec record yet.
-func (s *Server) execRecordFor(v *dev, p Person) []recordShownLine { return nil }
+// execRecordFor is the Exec record's lines on v that p may read, newest
+// first: Maintainers and the Mac's Volunteer all of them, anyone else their
+// own (see execRecordOf).
+func (s *Server) execRecordFor(v *dev, p Person) []recordShownLine {
+	events, err := s.execRecordOf(p, v, execRecordShown)
+	if err != nil {
+		s.log.Printf("the Exec record of %s for its page: %v", v.snapshot().Name, err)
+		return nil
+	}
+	var out []recordShownLine
+	for _, e := range events {
+		out = append(out, recordShownLine{whenDay(e.Time), e.Line()})
+	}
+	return out
+}

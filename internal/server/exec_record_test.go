@@ -208,9 +208,38 @@ func TestTheExecRecordIsShownToItsThreeKindsOfPeople(t *testing.T) {
 	sees("someone with no role", other, "m2-max", 403)
 	sees("nobody signed in", s.browser(), "m2-max", 401)
 
+	// The same lines are on Records of the Mac's page, newest first.
+	onPage := func(who string, b *browser, mac string, want ...string) {
+		t.Helper()
+		record := rowText(part(t, b.macPage(mac, "records"), `id="exec-record"`, "</section>"))
+		at := -1
+		for i := len(want) - 1; i >= 0; i-- {
+			next := strings.Index(record, want[i])
+			if next < 0 || next < at {
+				t.Errorf("%s's Exec record on the page of %s lacks %q, or is not newest first: %s", who, mac, want[i], record)
+			}
+			at = next
+		}
+		for _, command := range []string{"graces-own", "kens-own", "ravis-refused", "ken-on-the-air"} {
+			if strings.Contains(record, command) && !strings.Contains(strings.Join(want, "|"), command) {
+				t.Errorf("%s was shown %q on the page of %s: %s", who, command, mac, record)
+			}
+		}
+		if len(want) == 0 && !strings.Contains(record, "No lab exec is recorded") {
+			t.Errorf("%s's empty Exec record on the page of %s: %s", who, mac, record)
+		}
+	}
+	lines := []string{"@grace on m2-max: echo graces-own (exit 0, 0.5 s)", "@ken on m2-max: echo kens-own (exit 0, 0.5 s)", "@ravi on m2-max: echo ravis-refused (refused: lab exec needs your own Lease on m2-max"}
+	onPage("a Maintainer", ravi, "m2-max", lines...)
+	onPage("the Mac's Volunteer", linus, "m2-max", lines...)
+	onPage("the person who ran one", grace, "m2-max", lines[0])
+	onPage("the person who ran another", ken, "m2-max", lines[1])
+	onPage("a member who ran none there", grace, "m1-air")
+
 	// An M team member who is the Mac's Volunteer reads all of it.
 	s.lrLend("m1-air", lrGrace)
 	sees("a member who lends the Mac", grace, "m1-air", 200, "echo ken-on-the-air")
+	onPage("a member who lends the Mac", grace, "m1-air", "@ken on m1-air: echo ken-on-the-air")
 }
 
 func TestAnExecRecordLinePast12MonthsIsDeleted(t *testing.T) {
