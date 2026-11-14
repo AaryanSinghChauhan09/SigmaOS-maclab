@@ -160,7 +160,7 @@ step_site() {
     run "Rails: tests" in_dir site env RAILS_ENV=test REPORT_PARITY_DIR="$parity" PAGE_PARITY_DIR="$pages" bin/rails test
     run "report parity: the port and the site agree" env REPORT_PARITY_VERDICTS="$parity/rails-verdicts.jsonl" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
     run "page parity: the port and the site count alike" env PAGE_PARITY_AGGREGATION="$pages/rails-aggregation.json" go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
-    run "page parity: the port's pages pin what the site's pin" env PAGE_PARITY_DIR="$pages" go test -count=1 -run TestThePagesPinWhatTheOldSitesPin ./internal/server
+    run "page parity: the port's pages pin what the site's pin, and its exports are the site's" env PAGE_PARITY_DIR="$pages" go test -count=1 -run 'TestThePagesPinWhatTheOldSitesPin|TestTheExportsAreTheOldSites' ./internal/server
   else
     skip "Rails reference" "needs Postgres running and Ruby $(tr -d 'ruby-\n' < site/.ruby-version)"
   fi

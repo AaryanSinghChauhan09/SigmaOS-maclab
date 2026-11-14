@@ -203,8 +203,8 @@ jobs:
         env:
           PAGE_PARITY_AGGREGATION: ${{ runner.temp }}/page-parity/rails-aggregation.json
         run: go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
-      - name: The port's pages pin the elements the site's pages pin
+      - name: The port's pages pin the elements the site's pages pin, and its exports are the site's
         working-directory: .
         env:
           PAGE_PARITY_DIR: ${{ runner.temp }}/page-parity
-        run: go test -count=1 -run TestThePagesPinWhatTheOldSitesPin ./internal/server
+        run: go test -count=1 -run 'TestThePagesPinWhatTheOldSitesPin|TestTheExportsAreTheOldSites' ./internal/server
