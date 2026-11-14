@@ -1,0 +1,27 @@
+{{define "head"}}{{template "results_scripts" .}}{{end}}
+
+{{define "main"}}{{with .Data}}<h1>Candidate set {{.Name}}</h1>
+<p class="subtitle">{{.Runs}}, {{.VerifiedRuns}}. Only Verified runs count here; Community runs are listed below.</p>
+<section class="card">
+<h2 class="card-title">result</h2>
+<p class="verdict verdict-{{.Verdict}}" id="verdict" data-verdict="{{.Verdict}}">{{.Words}}</p>
+{{if .Failures}}<ul class="links" id="failures">
+{{range .Failures}}<li class="finding" data-state="{{.State}}">{{template "state_badge" .Badge}} {{.Model}} ({{.Label}}): <a href="{{.FeatureHref}}">{{.FeatureName}}</a>, {{.Summary}}</li>
+{{end}}</ul>
+{{end}}{{if .Partials}}<p class="dim">Partial (some checks or machines disagree):</p>
+<ul class="links" id="partials">
+{{range .Partials}}<li class="finding">{{.Model}} ({{.Label}}): <a href="{{.FeatureHref}}">{{.FeatureName}}</a>, {{.Summary}}</li>
+{{end}}</ul>
+{{end}}</section>
+<section class="card">
+<h2 class="card-title">verified results: model × feature</h2>
+{{if .Tested}}{{template "matrix" .Matrix}}{{template "legend" .Legend}}{{else}}<p class="dim">No Verified run on this candidate set yet.</p>
+{{end}}</section>
+<section class="card">
+<h2 class="card-title">runs</h2>
+{{template "report_list" .Reports}}</section>
+{{if .Matched}}<section class="card" id="matched">
+<h2 class="card-title">runs matched by package</h2>
+<p class="dim">These runs' images don't name a set, but their omarchy package is this set's. They're listed, not counted for the set.</p>
+{{template "report_list" .Matched}}</section>
+{{end}}{{end}}{{end}}

@@ -1,0 +1,38 @@
+{{define "main"}}<h1>Aurora feature support</h1>
+<p class="subtitle">What the Aurora kernel (<a href="https://github.com/omacom/linux">omacom/linux</a>) supports on each Apple Silicon chip generation, from Verified runs on it, next to what the feature catalogue expects.</p>
+{{with .Data}}{{if .Empty}}<section class="card">
+<h2 class="card-title">no verified runs yet</h2>
+<p class="dim">No Verified run on the Aurora kernel has been uploaded yet. Community runs show on the <a href="{{href "/matrix"}}">matrix</a>; this table counts Verified runs only.</p>
+</section>
+{{end}}{{range .Chips}}<section class="card aurora-chip" id="chip-{{.Key}}">
+<h2 class="card-title">{{.Name}}</h2>
+<p class="dim">{{.Line}}</p>
+<div class="matrix-scroll">
+<table class="list aurora-table">
+<thead><tr><th>Feature</th><th>On Aurora</th><th>Expected in Aurora</th><th>Asahi</th><th>Sources</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr class="aurora-row" data-chip="{{.Chip}}" data-feature="{{.Feature}}" data-state="{{.State}}">
+<td><a href="{{.FeatureHref}}">{{.FeatureName}}</a> <span class="layer layer-{{.Layer}}">{{.Layer}}</span></td>
+<td class="verified" title="{{.Title}}">{{template "state_badge" .Badge}}{{if .Tested}} <span class="dim">{{.Machines}}</span>{{end}}</td>
+<td class="{{.Aurora.Class}}">{{.Aurora.Words}}</td>
+<td class="{{.Asahi.Class}}">{{.Asahi.Words}}</td>
+<td class="sources">{{if .Tested}}{{template "run_links" .Runs}} <span class="dim">({{.Versions}})</span>{{else}}<span class="dim">–</span>{{end}}</td>
+</tr>
+{{end}}</tbody>
+</table>
+</div>
+</section>
+{{end}}{{if .Untested}}<section class="card" id="untested-chips">
+<h2 class="card-title">not yet verified</h2>
+<p class="dim">No Verified run on Aurora yet on {{.Untested}}. The <a href="{{href "/features"}}">feature pages</a> show what the catalogue expects there.</p>
+</section>
+{{end}}<section class="card" id="sources">
+<h2 class="card-title">sources</h2>
+<ul class="links">
+<li>On Aurora: Verified runs only (from a Mac signed in as a member of the Omarchy M team) on the <code>{{.Package}}</code> kernel. Each machine counts once, with its latest run that tested the feature; machines that disagree make it partial. Each row links the runs behind it and the Aurora versions they ran.</li>
+<li>Expected in Aurora: <a href="{{.SourceURL}}">{{.SourceTitle}}</a>, feature catalogue v{{.Version}}. {{.Note}}</li>
+<li>Asahi: {{.Credit}}</li>
+<li>As data: <a href="{{href "/api/v1/aurora.json"}}">aurora.json</a> (CC0, apart from the Asahi states' credit).</li>
+</ul>
+</section>
+{{end}}{{end}}

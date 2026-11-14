@@ -145,6 +145,7 @@ type modelPage struct {
 	Configurations                     []configurationView
 	Features                           []modelFeature
 	Legend                             legendView
+	Scores                             []scoreRowView
 	Reports                            []runView
 }
 
@@ -174,7 +175,7 @@ func (s *Server) pModel(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(runs, func(i, j int) bool { return runs[i].CreatedAt.After(runs[j].CreatedAt) })
 	chip := s.catalogue.ChipForSoC(latest.SoC())
 	page := modelPage{Name: latest.ShortModel(), Chip: latest.Chip(), Generation: s.catalogue.ChipName(chip), SoC: latest.SoC(), Board: latest.Board(),
-		Legend: legend(), Reports: s.runList(p, runs, false)}
+		Legend: legend(), Scores: s.boardScores(p, r.PathValue("board")), Reports: s.runList(p, runs, false)}
 	for i, row := range rows {
 		page.Configurations = append(page.Configurations, configurationView{i + 1, row.Configuration.Label()})
 	}

@@ -1,0 +1,41 @@
+{{define "main"}}<h1>Candidate sets</h1>
+<p class="subtitle">Runs on candidate images, grouped by the candidate set they were built from. Only Verified runs count for a set.</p>
+{{with .Data}}<section class="card">
+<h2 class="card-title">candidate sets</h2>
+{{if .Sets}}<table class="list">
+<thead><tr><th>Candidate set</th><th>Latest run</th><th>Runs</th><th>Verified runs</th><th>Models</th><th>Result</th></tr></thead>
+<tbody>
+{{range .Sets}}<tr class="candidate-row" id="candidate-{{.Name}}" data-verdict="{{.Verdict}}">
+<td><a href="{{.Href}}">{{.Name}}</a></td>
+<td class="nowrap">{{.Latest}}</td>
+<td>{{.Runs}}</td>
+<td>{{.Verified}}</td>
+<td>{{.Models}}</td>
+<td><span class="verdict verdict-{{.Verdict}}">{{.Words}}</span></td>
+</tr>
+{{end}}</tbody>
+</table>
+{{else}}<p class="dim">No runs on candidate images yet.</p>
+{{end}}</section>
+<section class="card" id="builds">
+<h2 class="card-title">builds</h2>
+<p class="dim">Every build a run was on: the Omarchy runtime's commit and build stamp, with its kernel and boot package. Its candidate set is the one the image names, or a known set built with exactly its omarchy package (matched: shown, not counted for the set).</p>
+{{if .Builds}}<table class="list">
+<thead><tr><th>Build</th><th>Linux Aurora</th><th>Boot package</th><th>Candidate set</th><th>Latest run</th><th>Runs</th><th>Verified runs</th><th>Models</th><th>Tool versions</th></tr></thead>
+<tbody>
+{{range .Builds}}<tr class="build-row" data-build="{{.BuildID}}" data-set="{{.Set}}" data-set-source="{{.SetSource}}">
+<td><a class="build-id" title="{{.Words}}" href="{{.Href}}">{{.Label}}</a>{{if .Runtime}}<span class="dim"> runtime {{.Runtime}}</span>{{end}}{{if .Built}}<span class="dim"> · built {{.Built}}</span>{{end}}</td>
+<td class="nowrap">{{if .Kernel}}{{.Kernel}}{{else}}–{{end}}</td>
+<td class="nowrap">{{if .Boot}}{{.Boot}}{{else}}–{{end}}</td>
+<td>{{if .Set}}{{if .SetHref}}<a href="{{.SetHref}}">{{.Set}}</a>{{else}}{{.Set}}{{end}}{{if eq .SetSource "packages"}}<span class="dim"> (matched by package)</span>{{end}}{{else}}<span class="dim">unknown</span>{{end}}</td>
+<td class="nowrap">{{.Latest}}</td>
+<td>{{.Runs}}</td>
+<td>{{.Verified}}</td>
+<td>{{.Models}}</td>
+<td class="dim">{{.Tools}}</td>
+</tr>
+{{end}}</tbody>
+</table>
+{{else}}<p class="dim">No runs on an Omarchy build yet.</p>
+{{end}}</section>
+{{end}}{{end}}

@@ -558,14 +558,14 @@ a.badge-regression { text-decoration: none; }
 .benchmark-table .score-head { min-width: 16rem; }
 .score-cell { min-width: 16rem; position: relative; }
 .score-bar {
-  background: linear-gradient(90deg, rgb(158 206 106 / 0.35), rgb(158 206 106 / 0.12));
   border-left: 2px solid var(--green);
-  bottom: 0.3rem;
+  height: calc(100% - 0.6rem);
   left: 0;
   position: absolute;
   top: 0.3rem;
-  width: calc(var(--share) * 0.95);
+  width: 95%;
 }
+.score-bar rect { fill: rgb(158 206 106 / 0.24); }
 .score-value { color: var(--white); position: relative; padding-left: 0.4rem; }
 .score-range { font-size: 0.85em; position: relative; padding-left: 0.4rem; }
 .check .score { color: var(--green); }

@@ -28,7 +28,24 @@
 {{template "legend" .Legend}}<p class="credit dim">Asahi states: <a href="https://asahilinux.org/docs/platform/feature-support/overview/">Asahi Linux feature support</a>, CC BY 3.0.</p>
 </section>
 
-<section class="card">
+{{if .Scores}}<section class="card" id="benchmarks">
+<h2 class="card-title">benchmarks</h2>
+<table class="list benchmark-table">
+<thead><tr><th>Benchmark</th><th>Stack / version</th><th class="score-head">Score</th><th>Machines</th><th>Tool</th></tr></thead>
+<tbody>
+{{range .Scores}}<tr class="score-row" data-benchmark="{{.Benchmark}}" data-stack="{{.Stack}}" data-version="{{.Version}}" data-build="{{.BuildID}}">
+<td><a href="{{.BenchmarkHref}}">{{.BenchmarkName}}</a> <span class="dim">suite {{.Suite}}</span></td>
+<td>{{.Label}}</td>
+<td class="score-cell">{{template "score_bar" .Share}}<a class="score-value" href="{{.ScoreHref}}">{{.Score}}</a> <span class="dim">{{.Unit}}</span></td>
+<td>{{.Machines}}</td>
+<td class="dim nowrap">{{.Tools}}</td>
+</tr>
+{{end}}</tbody>
+</table>
+<p class="dim">Bars are against the best Mac on the same benchmark. <a href="{{href "/benchmarks"}}">Compare every Mac</a>.</p>
+</section>
+
+{{end}}<section class="card">
 <h2 class="card-title">reports</h2>
 {{template "report_list" .Reports}}</section>
 {{end}}{{end}}
