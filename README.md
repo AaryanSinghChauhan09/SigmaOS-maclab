@@ -800,6 +800,42 @@ the formulae's versions, the pins, the tailnet, SSH, Screen Sharing, Wi-Fi,
 Software Update, power, and that no process has a secret in its arguments.
 It exits 1 when anything is not as the set-up leaves it.
 
+### Deploy and the Maintenance run
+
+`sudo scripts/mini/deploy vX.Y.Z[-rc.N]` Deploys one exact version, never
+"latest": it checks the bundle against the pinned release key and unpacks it
+beside the running build; says so in "Agents" and drains jobs (labd starts no
+further job, and the Deploy waits up to `--wait` minutes for those that run);
+stops labd and copies both databases to `/var/lab/before-deploy/<version>`;
+switches and restarts labd, the Out-of-band controller and the Builder, never
+the mini; verifies labd on the mini and through the Front door, and asks labd
+whether the Builder asks it for work and the controller answers; reports in
+"Agents". When the check fails it puts the previous build back by itself. A
+release that cannot be left with its databases as they are carries
+`deploy/no-way-back` (its notes say "No way back."): going back from it also
+restores the copy, and what arrived since is lost. A Deploy calls no
+Homebrew and touches no tool.
+
+`sudo /usr/local/lab/current/scripts/mini/maintenance` is the Maintenance
+run, started by the owner from the house's network or at the mini's screen.
+It says so in "Agents", drains jobs, upgrades the tools on the lab's Homebrew
+list and nothing else (as the account `/opt/homebrew` belongs to), runs the
+set-up (the pins, a new root-owned copy of the tools with the previous one
+kept, each daemon started from the new copy), installs the macOS updates
+Software Update lists (a major macOS only with `--major`), and restarts with
+`fdesetup authrestart`, which asks for the account's name and password at
+the terminal. After the restart the second half runs by itself:
+`scripts/mini/check services`, then `scripts/mini/check tool NAME` for each
+Homebrew tool (the tunnel connected, the node on the tailnet, Litestream
+running with no new error, a `restic` snapshot listed, one line through
+`signal-cli` to "Agents"). A tool that fails after its upgrade is switched
+back to the previous copy's version, checked again, and held there until
+Homebrew has another version. Then a Deploy when a newer Lab release exists
+(or the one named with `--deploy`), `scripts/mini/ports` with no reset, and
+the report in "Agents"; the full report, each version before and after, is
+under `/usr/local/lab/maintenance/`. `--dry-run` says what the first half
+would do.
+
 ### Out-of-band control on the mini
 
 One Out-of-band controller, `oobd`, runs on the mini as a root LaunchDaemon
