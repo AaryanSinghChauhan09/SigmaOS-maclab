@@ -35,6 +35,17 @@ FAKE_GITHUB = os.environ.get("OMARCHY_M_TEST_FAKE_GITHUB")
 SIGNED_GOLDEN = os.path.join(SCHEMA_DIR, "golden", "signed", "m2-max-image2.json")
 
 
+def away_from_home(case: unittest.TestCase) -> None:
+    """HOME and the folders named after it are an empty temporary folder for this test and whatever it starts."""
+    home = tempfile.mkdtemp()
+    case.addCleanup(shutil.rmtree, home)
+    folders = {"HOME": home, "XDG_CONFIG_HOME": f"{home}/.config", "XDG_STATE_HOME": f"{home}/.local/state",
+               "XDG_CACHE_HOME": f"{home}/.cache", "XDG_DATA_HOME": f"{home}/.local/share"}
+    patch = mock.patch.dict(os.environ, folders)
+    patch.start()
+    case.addCleanup(patch.stop)
+
+
 class Mac(RealHost):
     """This machine, with its own state folder; what it shows is kept, and it never waits."""
 
@@ -74,6 +85,7 @@ class PersonAtGitHub(Mac):
 @unittest.skipUnless(shutil.which("ssh-keygen"), "needs ssh-keygen")
 class WireTest(unittest.TestCase):
     def setUp(self):
+        away_from_home(self)
         self.state = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.state)
         self.lab = fake_lab.FakeLab()
@@ -194,6 +206,9 @@ class WireTest(unittest.TestCase):
 @unittest.skipUnless(LABD, "set OMARCHY_M_TEST_LABD to a built labd to run the tool against it")
 class LabdTest(unittest.TestCase):
     """The tool against labd itself, at its loopback port."""
+
+    def setUp(self):
+        away_from_home(self)
 
     def labd(self, *flags: str) -> str:
         work = tempfile.mkdtemp()
