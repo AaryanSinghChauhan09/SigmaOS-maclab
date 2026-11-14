@@ -651,10 +651,10 @@ func TestAccessAndPublishRejectBadInput(t *testing.T) {
 // A Volunteer reading their own Mac's live journal through labd is in its
 // Audit log under their name, not as labd acting on its own.
 func TestAVolunteersOwnLiveJournalReadIsInTheAuditLogUnderTheirName(t *testing.T) {
-	whois := func(_ context.Context, ip string) (*TailnetPeer, error) {
-		return &TailnetPeer{Login: "visitor@github", Node: "laptop"}, nil
+	whois := func(_ context.Context, ip string) (*testPeer, error) {
+		return &testPeer{Login: "visitor@github", Node: "laptop"}, nil
 	}
-	l, _ := windowEndLab(t, labConfig{config: func(c *Config) { c.Tailscale, c.WhoIs = true, whois }})
+	l, _ := windowEndLab(t, labConfig{config: func(c *Config) { c.Person = personAt(whois) }})
 	v := l.s.dev(l.name)
 	v.mu.Lock()
 	v.volunteeredBy = "visitor@github"

@@ -99,43 +99,63 @@ func (c *maintainerConns) end(name string) {
 
 // maintainer admits a request carrying a Maintainer's token and passes on
 // their name (see maintainerName). The request ends when they're removed.
-// A tailnet viewer may only look, and is told so.
+// A person without one may only look, and is told so.
 func (s *Server) maintainer(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		switch a, who, foreign := s.accessHost(r); {
-		case a == adminAccess:
+		switch a, who := s.access(r); a {
+		case adminAccess:
 			s.asMaintainer(w, r, who, h)
-		case a == viewAccess:
+		case viewAccess:
 			httpErr(w, 403, "%s may only look; this needs a Maintainer's token", who)
-		case foreign:
-			foreignHost(w, r)
 		default:
 			httpErr(w, 401, "not a Maintainer's token")
 		}
 	}
 }
 
-// viewer guards read-only endpoints, which a person on the tailnet may use
-// too, and passes on who they are (see callerOf): what they see is their
-// own Macs only (see sees).
+// viewer guards read-only endpoints, which a person labd knows may use too,
+// and passes on who they are (see callerOf): what they see is their scope.
 func (s *Server) viewer(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		switch a, who, foreign := s.accessHost(r); {
-		case a == adminAccess:
+		switch a, who := s.access(r); a {
+		case adminAccess:
 			s.asMaintainer(w, r, who, h)
-		case a == viewAccess:
+		case viewAccess:
 			asPerson(w, r, who, h)
-		case foreign:
-			foreignHost(w, r)
 		default:
 			httpErr(w, 401, "not a Maintainer's token")
 		}
 	}
+}
+
+type access int
+
+const (
+	noAccess access = iota
+	viewAccess
+	adminAccess
+)
+
+// access decides what a request may do. A Maintainer's token gives admin,
+// and who is that Maintainer's name. A person labd knows without one
+// (Config.Person) is a viewer, and who is their login. A Mac, Lab-owned or a
+// Volunteer's, talks to labd with its own device secret.
+func (s *Server) access(r *http.Request) (a access, who string) {
+	if name, err := s.store.maintainerByToken(hashSecret(bearer(r))); err == nil {
+		return adminAccess, name
+	}
+	if s.cfg.Person != nil {
+		if login := s.cfg.Person(r); login != "" {
+			return viewAccess, login
+		}
+	}
+	return noAccess, ""
 }
 
 // asMaintainer serves r for the Maintainer name until it ends or they're
 // removed.
 func (s *Server) asMaintainer(w http.ResponseWriter, r *http.Request, name string, h http.HandlerFunc) {
+	noteCaller(r, "person:"+name)
 	ctx, cancel := context.WithCancel(context.WithValue(r.Context(), maintainerKey{}, name))
 	defer s.conns.add(name, cancel)()
 	h(w, r.WithContext(ctx))

@@ -15,10 +15,8 @@ import (
 	"log"
 	"math/big"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -68,18 +66,11 @@ type Config struct {
 	RebootWarning time.Duration
 	NtfyURL       string
 	NotifyCmd     string
-	// Tailscale lets tailnet peers look at the lab by identity; only a
-	// Maintainer's token changes it.
-	Tailscale bool
-	// WhoIs names the peer behind a tailnet address; tests swap in fakes.
-	WhoIs func(ctx context.Context, ip string) (*TailnetPeer, error)
-	// AllowHosts are names labd answers to besides its own (--allow-host):
-	// access without a token counts only on a request to one of labd's
-	// names (see ownHost).
-	AllowHosts []string
-	// TailnetNames looks up this machine's MagicDNS names, with Tailscale
-	// on; tests swap in fakes, and nil looks up none.
-	TailnetNames func(ctx context.Context) ([]string, error)
+	// Person names the person a request without a Maintainer's token comes
+	// from, by their login, "" for nobody: such a person may look at their
+	// own Macs (see scope.go). labd itself sets none, so nothing gets in
+	// without a token; tests name people with it.
+	Person func(r *http.Request) string
 	// OOBFactory builds a controller for a device; tests swap in fakes.
 	OOBFactory func(*api.Device) (oob.Controller, error)
 	// BuilderToken authenticates builder hosts; empty disables builds.
@@ -104,14 +95,18 @@ type Config struct {
 	// AgentBinary is the linux/arm64 lab-agent that ./volunteer and the join
 	// command download.
 	AgentBinary string
-	// PublicURL is the URL people and Macs reach labd at, its path being
-	// labd's prefix (--public-url, see edge.go). Nil serves at / and takes
-	// each request's own origin.
+	// PublicURL is the Lab address, the URL people and Macs reach labd at,
+	// its path being labd's prefix (--public-url, see edge.go). Nil serves
+	// at / on the loopback port alone and takes each request's own origin.
 	PublicURL *url.URL
-	// TrustedProxies are the reverse proxies in front of labd
-	// (--trusted-proxy, see edge.go). They need PublicURL, and rule out
-	// Tailscale, whose identities are TCP peers.
-	TrustedProxies []netip.Prefix
+	// Alias is the one other host name the tunnel carries (--alias): labd
+	// forwards its page requests to the Lab address and refuses the rest
+	// (see edge.go). It needs PublicURL.
+	Alias string
+	// Preview is the lab answering at the Lab address, closed, before it
+	// opens (--preview): the one switch for everything that changes (see
+	// Server.Preview).
+	Preview bool
 	// Terms is what a Mac's owner accepts before it joins the lab; empty is
 	// DefaultTerms (see terms.go).
 	Terms string
@@ -136,13 +131,7 @@ type Server struct {
 	conns       maintainerConns
 	bconns      maintainerConns // named builders' open requests, by generation
 	serialMu    sync.Mutex
-	whoMu       sync.Mutex
-	whoCache    map[netip.Addr]whoisEntry
-	whoCalls    map[netip.Addr]*whoisCall
-	hosts       []string // its host names and --allow-host's (see ownHost); the MagicDNS ones are tsNames
-	tsMu        sync.Mutex
-	tsAt        time.Time // when tsNames were looked up
-	tsNames     []string  // its MagicDNS names
+	callers     *callerLog
 }
 
 // clock is where labd reads time: Config.Clock, or the wall clock when unset.
@@ -199,29 +188,14 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	if cfg.OfflineAfter == 0 {
 		cfg.OfflineAfter = time.Minute
 	}
-	if len(cfg.TrustedProxies) > 0 && cfg.PublicURL == nil {
-		return nil, fmt.Errorf("--trusted-proxy needs --public-url: labd checks what a proxy forwards against it")
-	}
-	if len(cfg.TrustedProxies) > 0 && cfg.Tailscale {
-		return nil, fmt.Errorf("--trusted-proxy and --tailscale don't go together: behind a proxy every request's tailnet identity would be the proxy's")
-	}
-	if cfg.Tailscale && cfg.WhoIs == nil {
-		if _, err := exec.LookPath(tailscaleCLI()); err != nil {
-			return nil, fmt.Errorf("--tailscale needs the tailscale CLI: %w", err)
+	if cfg.Alias != "" {
+		if cfg.PublicURL == nil {
+			return nil, fmt.Errorf("--alias needs --public-url: the Alias only leads to the Lab address")
 		}
-		cfg.WhoIs = tailscaleWhoIs
-		if cfg.TailnetNames == nil {
-			cfg.TailnetNames = tailscaleNames
+		cfg.Alias = canonHost(cfg.PublicURL.Scheme, cfg.Alias)
+		if cfg.Alias == cfg.PublicURL.Host {
+			return nil, fmt.Errorf("--alias %s is the Lab address itself", cfg.Alias)
 		}
-	}
-	var hosts []string
-	for _, h := range cfg.AllowHosts {
-		hosts = append(hosts, hostName(h))
-	}
-	if cfg.Tailscale {
-		hosts = append(hosts, localNames()...)
-		logger.Printf("without a token, labd answers only to its own names: IP addresses, localhost, %s%s; --allow-host adds one",
-			strings.Join(hosts, ", "), map[bool]string{true: " and its MagicDNS names"}[cfg.Tailscale])
 	}
 	// The LAN defaults are read once, here: labd's goroutines can outlive a
 	// Server, and must not read them while a test sets them for the next one.
@@ -248,6 +222,10 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 			return nil, err
 		}
 	}
+	callers, err := openCallerLog(filepath.Join(cfg.DataDir, "callers"), logger)
+	if err != nil {
+		return nil, err
+	}
 	st, err := openStore(filepath.Join(cfg.DataDir, "labd.db"))
 	if err != nil {
 		return nil, err
@@ -257,7 +235,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		st.db.Close()
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, reports: rep, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, hosts: hosts}
+	s := &Server{cfg: cfg, store: st, reports: rep, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, callers: callers}
 	s.start = s.now()
 	if err := s.firstMaintainer(); err != nil {
 		return nil, err
@@ -318,6 +296,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	go s.buildMonitor()
 	go s.gcLoop()
 	go s.omtScheduler()
+	go s.callerLogLoop()
 	return s, nil
 }
 
@@ -670,21 +649,16 @@ func bearer(r *http.Request) string {
 
 // hAuth tells the UI whether this client needs a token at all, and whether
 // it may only look. Sent with a Maintainer's token, it names its Maintainer.
-// A request to a name labd doesn't know as its own needs a token, and
-// refused says why. Without --tailscale nothing gets in without a token, so
-// there is nothing to ask: labd answers 404, and the UI asks for the token.
+// While labd knows nobody without a token (Config.Person) there is nothing
+// to ask: labd answers 404, and the UI asks for the token.
 func (s *Server) hAuth(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.Tailscale {
+	if s.cfg.Person == nil {
 		http.NotFound(w, r)
 		return
 	}
-	a, who, foreign := s.accessHost(r)
+	a, who := s.access(r)
 	role := map[access]string{viewAccess: "viewer", adminAccess: "admin"}[a]
-	resp := map[string]any{"trusted": a == adminAccess, "token_required": a == noAccess, "role": role, "login": who}
-	if foreign {
-		resp["refused"] = hostRefusal(r.Host)
-	}
-	writeJSON(w, resp)
+	writeJSON(w, map[string]any{"trusted": a == adminAccess, "token_required": a == noAccess, "role": role, "login": who})
 }
 
 type ctxKey struct{}
@@ -697,6 +671,7 @@ func (s *Server) agent(h http.HandlerFunc) http.HandlerFunc {
 			ok := subtle.ConstantTimeCompare([]byte(hash), []byte(v.secretHash)) == 1
 			v.mu.Unlock()
 			if ok {
+				noteCaller(r, "mac:"+v.d.Name)
 				h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, v)))
 				return
 			}
@@ -861,22 +836,20 @@ func tooManyMacs(w http.ResponseWriter, login string, names []string) {
 		"(./volunteer leave on it, then the lab's maintainer runs `lab forget <name>`)", login, len(names), strings.Join(names, ", "))
 }
 
-// hVolunteer gives any person on the tailnet under --tailscale a token to
-// enroll their own Mac: ./volunteer runs lab-agent setup with it. The Mac is
-// named after what it sent, made into a free device name, labelled with the
-// volunteer's tailnet login and marked a volunteer's. Tagged tailnet devices
-// are machines, lab Macs among them, not people, so they never get here (see
-// tokenless), and a person with maxVolunteerMacs Macs in the lab gets no
-// token either. Maintainers may ask too, with their token, outside the
+// hVolunteer gives any person labd knows a token to enroll their own Mac:
+// ./volunteer runs lab-agent setup with it. The Mac is named after what it
+// sent, made into a free device name, labelled with the volunteer's login
+// and marked a volunteer's. A person with maxVolunteerMacs Macs in the lab
+// gets no token. Maintainers may ask too, with their token, outside the
 // limits: they can make any token with POST /api/enroll-tokens anyway.
 func (s *Server) hVolunteer(w http.ResponseWriter, r *http.Request) {
 	a, who := s.access(r)
 	volunteer := ""
 	if a == adminAccess {
-		who = "" // a Maintainer, not a volunteer's tailnet login
+		who = "" // a Maintainer, not a volunteer's login
 	} else {
 		if volunteer = strings.ToLower(who); volunteer == "" {
-			httpErr(w, 403, "labd can't tell who you are on the tailnet")
+			httpErr(w, 403, "labd can't tell who you are")
 			return
 		}
 		s.mu.Lock()

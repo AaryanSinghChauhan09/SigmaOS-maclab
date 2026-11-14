@@ -12,7 +12,7 @@ import (
 )
 
 // Scope is what a request's caller may see and do. A Maintainer sees the
-// whole fleet. A person on the tailnet without a Maintainer's token sees
+// whole fleet. A person labd knows without a Maintainer's token sees
 // only the Macs they volunteered, or a Maintainer linked to their login,
 // while those stay enrolled. A Mac sees only
 // itself, through its own routes (see agent). A Volunteer's Mac must never
@@ -26,7 +26,7 @@ import (
 // caller is who made a request on a route people may reach.
 type caller struct {
 	maintainer string // a Maintainer's name, by their token
-	login      string // a person's tailnet login, without a token
+	login      string // a person's login, without a token
 	mac        string // a Mac's name, by its device secret
 	labd       bool   // labd itself (see labdItself)
 }
@@ -151,7 +151,7 @@ const (
 	builder                  // the builder, by its token
 	invited                  // someone joining with an enrollment token (enr_...), see joinToken
 	maintainers              // a Maintainer's token: the fleet's own, and every change
-	people                   // Maintainers, and any person on the tailnet: ./volunteer
+	people                   // Maintainers, and any person labd knows: ./volunteer
 	macNamed                 // the Mac in {name}: whoever sees it
 	jobNamed                 // the job in {id}: whoever sees its Mac
 	scoped                   // a list or the stream: the handler keeps to what the caller sees
@@ -223,8 +223,9 @@ func (s *Server) jobInScope(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// asPerson serves r for a person's tailnet login.
+// asPerson serves r for a person's login.
 func asPerson(w http.ResponseWriter, r *http.Request, login string, h http.HandlerFunc) {
+	noteCaller(r, "person:"+login)
 	h(w, r.WithContext(context.WithValue(r.Context(), personKey{}, login)))
 }
 

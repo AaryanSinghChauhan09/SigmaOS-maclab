@@ -2,45 +2,69 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// edgeServer is a labd served as https://chonkbase.net/maclab behind a
-// reverse proxy in 10.2.0.0/16.
+// edgeServer is a labd served as https://chonkbase.net/maclab through the
+// tunnel.
 func edgeServer(t *testing.T) http.Handler {
 	t.Helper()
-	pub, err := ParsePublicURL("https://chonkbase.net/maclab")
+	return labServer(t, "https://chonkbase.net/maclab", nil).Handler()
+}
+
+// labServer is a labd whose Lab address is pub.
+func labServer(t *testing.T, pub string, config func(*Config)) *Server {
+	t.Helper()
+	u, err := ParsePublicURL(pub)
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxies, _ := ParseTrustedProxies("10.2.0.0/16")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret",
-		PublicURL: pub, TrustedProxies: proxies}, log.New(io.Discard, "", 0))
+	cfg := Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", PublicURL: u}
+	if config != nil {
+		config(&cfg)
+	}
+	s, err := New(ctx, cfg, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s.Handler()
+	return s
 }
 
 const (
-	viaProxy = "10.2.3.4:5000"   // the ingress controller
-	direct   = "192.0.2.9:40000" // anyone else reaching the pod
+	viaProxy = "@"               // the tunnel's socket, where cloudflared connects
+	direct   = "127.0.0.1:40000" // a caller on the mini, at the loopback port
+	loopback = "127.0.0.1:7770"  // the name such a caller asks for
 )
 
-var fromIngress = map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "chonkbase.net"}
+var fromIngress = map[string]string{"X-Forwarded-Proto": "https"}
 
+// edgeDo asks h as cloudflared does when remote is viaProxy, keeping the
+// Host, and as a caller on the mini otherwise.
 func edgeDo(h http.Handler, method, path, remote string, hdr map[string]string) *httptest.ResponseRecorder {
-	// The proxy talks plain http to labd, keeping the Host.
-	r := httptest.NewRequest(method, "http://chonkbase.net"+path, strings.NewReader(`{}`))
+	host := "chonkbase.net"
+	if remote != viaProxy {
+		host = loopback
+	}
+	return edgeAt(h, method, host, path, remote, hdr)
+}
+
+// edgeAt is edgeDo for a request that names host.
+func edgeAt(h http.Handler, method, host, path, remote string, hdr map[string]string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, "http://"+host+path, strings.NewReader(`{}`))
 	r.RemoteAddr = remote
+	if remote == viaProxy {
+		r = r.WithContext(onTunnel(r.Context()))
+	}
 	for k, v := range hdr {
 		r.Header.Set(k, v)
 	}
@@ -106,31 +130,44 @@ func TestPrefixIsServedExactlyOnce(t *testing.T) {
 	}
 }
 
-// Forwarded scheme and host count only from the trusted proxies, and must
-// name the public URL; anyone else's are ignored.
-func TestForwardedOriginIsCheckedAndOnlyFromTrustedProxies(t *testing.T) {
+// labd answers to its Lab address on the tunnel's socket and to this
+// machine's own names on the loopback port; any other name is refused, and
+// what a caller on the mini forwards is not believed.
+func TestAThirdHostNameIsRefused(t *testing.T) {
 	h := edgeServer(t)
 	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
 	for _, c := range []struct {
-		name, remote string
-		hdr          map[string]string
-		want         int
+		name, host, remote string
+		hdr                map[string]string
+		want               int
 	}{
-		{"the public URL", viaProxy, tok, 200},
-		{"its default port named", viaProxy, with(tok, "X-Forwarded-Host", "chonkbase.net:443"), 200},
-		{"the host in another case", viaProxy, with(tok, "X-Forwarded-Host", "ChonkBase.NET"), 200},
-		{"plain http forwarded", viaProxy, with(tok, "X-Forwarded-Proto", "http"), 421},
-		{"no scheme forwarded", viaProxy, map[string]string{"X-Forwarded-Host": "chonkbase.net", "Authorization": "Bearer adm_secret"}, 421},
-		{"another host forwarded", viaProxy, with(tok, "X-Forwarded-Host", "evil.example"), 421},
-		{"another port forwarded", viaProxy, with(tok, "X-Forwarded-Host", "chonkbase.net:8443"), 421},
-		{"not from the proxy: headers ignored", direct, with(tok, "X-Forwarded-Host", "evil.example", "X-Forwarded-Proto", "gopher"), 200},
+		{"the Lab address", "chonkbase.net", viaProxy, tok, 200},
+		{"its default port named", "chonkbase.net:443", viaProxy, tok, 200},
+		{"the host in another case", "ChonkBase.NET", viaProxy, tok, 200},
+		{"no scheme forwarded", "chonkbase.net", viaProxy, map[string]string{"Authorization": "Bearer adm_secret"}, 200},
+		{"plain http forwarded", "chonkbase.net", viaProxy, with(tok, "X-Forwarded-Proto", "http"), 421},
+		{"a third name", "evil.example", viaProxy, tok, 421},
+		{"a third name, the Lab address forwarded", "evil.example", viaProxy, with(tok, "X-Forwarded-Host", "chonkbase.net"), 421},
+		{"another port", "chonkbase.net:8443", viaProxy, tok, 421},
+		{"a subdomain", "www.chonkbase.net", viaProxy, tok, 421},
+		{"this machine's own name on the socket", loopback, viaProxy, tok, 421},
+		{"the loopback port", loopback, direct, tok, 200},
+		{"the loopback port by name", "localhost:7770", direct, tok, 200},
+		{"the loopback port over IPv6", "[::1]:7770", direct, tok, 200},
+		{"the loopback port: what is forwarded is ignored", loopback, direct, with(tok, "X-Forwarded-Host", "evil.example", "X-Forwarded-Proto", "gopher"), 200},
+		{"the Lab address on the loopback port", "chonkbase.net", direct, tok, 421},
+		{"a third name on the loopback port", "evil.example", direct, tok, 421},
+		{"a LAN address on the loopback port", "192.168.1.20:7770", direct, tok, 421},
 	} {
-		w := edgeDo(h, "GET", "/maclab/api/devices", c.remote, c.hdr)
+		w := edgeAt(h, "GET", c.host, "/maclab/api/devices", c.remote, c.hdr)
 		if w.Code != c.want {
 			t.Errorf("%s: %d, want %d: %s", c.name, w.Code, c.want, w.Body)
 		}
 		if w.Code == 421 && !strings.Contains(w.Header().Get("Content-Security-Policy"), "sandbox") {
 			t.Errorf("%s: the refusal isn't sandboxed", c.name)
+		}
+		if w.Code == 421 && !strings.Contains(w.Body.String(), "https://chonkbase.net/maclab") {
+			t.Errorf("%s: the refusal doesn't name the Lab address: %s", c.name, w.Body)
 		}
 	}
 }
@@ -153,9 +190,10 @@ func TestBrowserOriginMustMatchSchemeHostAndPort(t *testing.T) {
 		{"another site", viaProxy, with(tok, "Origin", "https://evil.example"), true},
 		{"a sandboxed frame", viaProxy, with(tok, "Origin", "null"), true},
 		{"a sibling site, no Origin", viaProxy, with(tok, "Sec-Fetch-Site", "same-site"), true},
-		// Not through the proxy, labd was reached at http://chonkbase.net:
+		// At the loopback port labd was reached at http://127.0.0.1:7770:
 		// the https page is another origin, forwarded headers or not.
-		{"an https page, reaching the pod directly", direct, with(tok, "Origin", "https://chonkbase.net"), true},
+		{"an https page, at the loopback port", direct, with(tok, "Origin", "https://chonkbase.net"), true},
+		{"a page at the loopback port", direct, with(tok, "Origin", "http://127.0.0.1:7770"), false},
 	} {
 		w := edgeDo(h, "POST", "/maclab/api/jobs", c.remote, c.hdr)
 		if refused := w.Code == 403 && strings.Contains(w.Body.String(), "refused: a"); refused != c.refused {
@@ -199,7 +237,7 @@ func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
 	}
 }
 
-func TestPublicURLAndTrustedProxiesRefuseWhatTheyCantMean(t *testing.T) {
+func TestPublicURLAndAliasRefuseWhatTheyCantMean(t *testing.T) {
 	for _, bad := range []string{"ftp://lab", "https://", "lab.example.com/maclab", "https://u:p@lab/maclab", "https://lab/maclab?x=1",
 		"https://lab/maclab#x", "https://lab/a/../b", "https://lab/a b", "https://lab/%2e%2e", "https://lab/.hidden"} {
 		if _, err := ParsePublicURL(bad); err == nil {
@@ -210,55 +248,22 @@ func TestPublicURLAndTrustedProxiesRefuseWhatTheyCantMean(t *testing.T) {
 	if err != nil || u.String() != "https://chonkbase.net/maclab" {
 		t.Errorf("a public URL: %v %v", u, err)
 	}
-	if _, err := ParseTrustedProxies("10.2.0.0/16, 127.0.0.1"); err != nil {
-		t.Error(err)
+	for _, bad := range []string{"https://maclab.omarchy.org", "maclab.omarchy.org/x", "a b", "maclab.omarchy.org:8443", ""} {
+		if a, err := ParseAlias(bad); err == nil {
+			t.Errorf("--alias %q was taken as %q", bad, a)
+		}
 	}
-	if _, err := ParseTrustedProxies("ingress-nginx"); err == nil {
-		t.Error("a name was taken as a proxy")
+	if a, err := ParseAlias("MacLab.Omarchy.ORG."); err != nil || a != "maclab.omarchy.org" {
+		t.Errorf("an Alias: %q %v", a, err)
 	}
-	proxies := []netip.Prefix{netip.MustParsePrefix("10.2.0.0/16")}
-	pub, _ := ParsePublicURL("https://chonkbase.net/maclab")
+	pub, _ := ParsePublicURL("https://lab.omarchy-mac.org")
 	for name, cfg := range map[string]Config{
-		"a proxy without a public URL": {TrustedProxies: proxies},
-		"a proxy with Tailscale":       {TrustedProxies: proxies, PublicURL: pub, Tailscale: true, WhoIs: func(context.Context, string) (*TailnetPeer, error) { return nil, nil }},
+		"an Alias without a Lab address":   {Alias: "maclab.omarchy.org"},
+		"an Alias that is the Lab address": {Alias: "lab.omarchy-mac.org", PublicURL: pub},
 	} {
 		cfg.DataDir, cfg.FirstMaintainer, cfg.FirstMaintainerToken = t.TempDir(), "ada", "adm_secret"
 		if _, err := New(context.Background(), cfg, log.New(io.Discard, "", 0)); err == nil {
 			t.Errorf("%s: labd started", name)
-		}
-	}
-}
-
-// A relayed request's TCP peer is the relay: with --tailscale on, no request
-// carrying forwarding headers is judged by the relay's tailnet identity.
-func TestForwardedRequestsNeverGetTailnetIdentity(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", Tailscale: true,
-		WhoIs: func(context.Context, string) (*TailnetPeer, error) {
-			return &TailnetPeer{Login: "proxy@github", Node: "proxy"}, nil
-		}},
-		log.New(io.Discard, "", 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := s.Handler()
-	get := func(hdr ...string) int {
-		r := httptest.NewRequest("GET", labdAt+"/api/devices", nil)
-		r.RemoteAddr = "100.64.0.2:40000"
-		for i := 0; i+1 < len(hdr); i += 2 {
-			r.Header.Set(hdr[i], hdr[i+1])
-		}
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		return w.Code
-	}
-	if c := get(); c != 200 {
-		t.Fatalf("a tailnet person directly: %d", c)
-	}
-	for _, hd := range []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded", "X-Real-Ip"} {
-		if c := get(hd, "203.0.113.7"); c != 401 {
-			t.Errorf("relayed with %s: %d, want 401", hd, c)
 		}
 	}
 }
@@ -289,5 +294,190 @@ func TestRedirectsStayUnderThePrefix(t *testing.T) {
 	}
 	if w := edgeDo(h, "GET", "/maclab/ui", viaProxy, tok); w.Header().Get("Location") != "/maclab/ui/" {
 		t.Errorf("GET /maclab/ui: %d %q, want a redirect to /maclab/ui/", w.Code, w.Header().Get("Location"))
+	}
+}
+
+const (
+	labAddress = "https://lab.omarchy-mac.org"
+	labHost    = "lab.omarchy-mac.org"
+	aliasHost  = "maclab.omarchy.org"
+)
+
+// aliasServer is a labd at the Lab address with its Alias.
+func aliasServer(t *testing.T, config func(*Config)) *Server {
+	t.Helper()
+	return labServer(t, labAddress, func(c *Config) {
+		c.Alias = aliasHost
+		if config != nil {
+			config(c)
+		}
+	})
+}
+
+// On the Alias a page request is forwarded for good to the same path and
+// query at the Lab address, and anything under /api/ is refused in one plain
+// line naming the Lab address. Neither sets a cookie, reads a credential or
+// reaches a route.
+func TestTheAliasForwardsPagesAndRefusesTheAPI(t *testing.T) {
+	s := aliasServer(t, func(c *Config) { c.Preview = true })
+	h := s.Handler()
+	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	for _, c := range []struct{ method, target, want string }{
+		{"GET", "/", labAddress + "/"},
+		{"GET", "/install", labAddress + "/install"},
+		{"GET", "/install/lab?v=0.2.0&x=a%20b", labAddress + "/install/lab?v=0.2.0&x=a%20b"},
+		{"GET", "/reports/r%2F1?page=2", labAddress + "/reports/r%2F1?page=2"},
+		{"HEAD", "/models", labAddress + "/models"},
+		{"POST", "/sign-in", labAddress + "/sign-in"},
+		{"GET", "//evil.example/x", labAddress + "//evil.example/x"},
+		{"GET", "/healthz", labAddress + "/healthz"},
+		{"GET", "/apiary", labAddress + "/apiary"},
+	} {
+		w := edgeAt(h, c.method, aliasHost, c.target, viaProxy, tok)
+		if w.Code != http.StatusPermanentRedirect || w.Header().Get("Location") != c.want {
+			t.Errorf("%s %s on the Alias: %d to %q, want 308 to %q", c.method, c.target, w.Code, w.Header().Get("Location"), c.want)
+		}
+		if len(w.Header().Values("Set-Cookie")) != 0 {
+			t.Errorf("%s %s on the Alias set a cookie", c.method, c.target)
+		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("%s %s on the Alias: Cache-Control %q, and a forward is never cached", c.method, c.target, cc)
+		}
+	}
+	for _, c := range []struct{ method, target string }{
+		{"GET", "/api/devices"},
+		{"POST", "/api/agent/checkin"},
+		{"POST", "/api/agent/enroll"},
+		{"GET", "/api/nothing/here?x=1"},
+		{"GET", "/api/"},
+	} {
+		w := edgeAt(h, c.method, aliasHost, c.target, viaProxy, tok)
+		body := w.Body.String()
+		if w.Code != http.StatusMisdirectedRequest || w.Header().Get("Location") != "" {
+			t.Errorf("%s %s on the Alias: %d %s", c.method, c.target, w.Code, body)
+		}
+		if strings.Count(body, "\n") != 1 || !strings.Contains(body, labAddress) || strings.Contains(body, aliasHost) ||
+			!strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain") {
+			t.Errorf("%s %s on the Alias: want one plain line naming the Lab address, got %q (%s)", c.method, c.target, body, w.Header().Get("Content-Type"))
+		}
+		if len(w.Header().Values("Set-Cookie")) != 0 {
+			t.Errorf("%s %s on the Alias set a cookie", c.method, c.target)
+		}
+	}
+	// Plain http at the edge still leads to the Lab address.
+	if w := edgeAt(h, "GET", aliasHost, "/install", viaProxy, map[string]string{"X-Forwarded-Proto": "http"}); w.Code != http.StatusPermanentRedirect || w.Header().Get("Location") != labAddress+"/install" {
+		t.Errorf("plain http on the Alias: %d to %q", w.Code, w.Header().Get("Location"))
+	}
+	// The same requests at the Lab address reach labd.
+	if w := edgeAt(h, "GET", labHost, "/api/devices", viaProxy, tok); w.Code != 200 {
+		t.Errorf("the API at the Lab address: %d %s", w.Code, w.Body)
+	}
+	// The Alias is a name of the tunnel's only: at the loopback port it is a third name.
+	if w := edgeAt(h, "GET", aliasHost, "/", direct, nil); w.Code != http.StatusMisdirectedRequest {
+		t.Errorf("the Alias at the loopback port: %d", w.Code)
+	}
+}
+
+// Every link labd builds names the Lab address, whichever listener the
+// request came in on.
+func TestEveryLinkNamesTheLabAddress(t *testing.T) {
+	agentBin := filepath.Join(t.TempDir(), "lab-agent-linux-arm64")
+	if err := os.WriteFile(agentBin, []byte("\x7fELF lab-agent for the test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := aliasServer(t, func(c *Config) { c.AgentBinary = agentBin })
+	h := s.Handler()
+	for _, c := range []struct{ name, host, remote string }{
+		{"through the tunnel", labHost, viaProxy},
+		{"at the loopback port", loopback, direct},
+	} {
+		r := httptest.NewRequest("POST", "http://"+c.host+"/api/enroll-tokens", strings.NewReader(`{"name":"m1-pro"}`))
+		r.Header.Set("Authorization", "Bearer adm_secret")
+		if r.RemoteAddr = c.remote; c.remote == viaProxy {
+			r = r.WithContext(onTunnel(r.Context()))
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		var resp struct {
+			JoinCommand string `json:"join_command"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != 200 {
+			t.Fatalf("%s: an invite: %d %s", c.name, w.Code, w.Body)
+		}
+		if !strings.Contains(resp.JoinCommand, "U='"+labAddress+"'") || strings.Contains(resp.JoinCommand, "127.0.0.1") || strings.Contains(resp.JoinCommand, aliasHost) {
+			t.Errorf("%s: the join line doesn't name the Lab address alone:\n%s", c.name, resp.JoinCommand)
+		}
+	}
+	r := httptest.NewRequest("GET", "http://"+loopback+"/", nil)
+	if got := s.publicBase(r); got != labAddress {
+		t.Errorf("labd's own address, asked at the loopback port: %q", got)
+	}
+	if got := s.labName(r); got != labHost {
+		t.Errorf("labd's own name, asked at the loopback port: %q", got)
+	}
+}
+
+// 0-RTT data can be replayed: the edge marks a request that came in it, and
+// labd answers 425 to any such request under /api/.
+func TestEarlyDataUnderTheAPIGets425(t *testing.T) {
+	h := aliasServer(t, nil).Handler()
+	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	early := with(tok, "Early-Data", "1")
+	for _, c := range []struct {
+		name, method, target string
+		hdr                  map[string]string
+		want                 int
+	}{
+		{"an early API read", "GET", "/api/devices", early, http.StatusTooEarly},
+		{"an early API write", "POST", "/api/jobs", early, http.StatusTooEarly},
+		{"an early check-in", "POST", "/api/agent/checkin", early, http.StatusTooEarly},
+		{"the same read, not early", "GET", "/api/devices", tok, 200},
+		{"an early page", "GET", "/healthz", early, 200},
+		{"a path that only starts like the API", "GET", "/apiary", early, 404},
+	} {
+		if w := edgeAt(h, c.method, labHost, c.target, viaProxy, c.hdr); w.Code != c.want {
+			t.Errorf("%s: %d, want %d: %s", c.name, w.Code, c.want, w.Body)
+		}
+	}
+}
+
+// A response whose handler states no cache policy says no-store; one that
+// states its own keeps it.
+func TestTheDefaultCachePolicyIsNoStore(t *testing.T) {
+	h := aliasServer(t, nil).Handler()
+	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	for _, target := range []string{"/healthz", "/api/devices", "/api/devices/nope", "/api/nothing", "/nothing", "/api/maintainers"} {
+		w := edgeAt(h, "GET", labHost, target, viaProxy, tok)
+		if cc := w.Header().Values("Cache-Control"); len(cc) != 1 || cc[0] != "no-store" {
+			t.Errorf("GET %s (%d): Cache-Control %q, want no-store", target, w.Code, cc)
+		}
+	}
+	if w := edgeAt(h, "GET", labHost, "/api/devices", viaProxy, nil); w.Code != 401 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("a refusal: %d, Cache-Control %q", w.Code, w.Header().Get("Cache-Control"))
+	}
+	if w := edgeAt(h, "GET", "evil.example", "/", viaProxy, nil); w.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("a third name's refusal: Cache-Control %q", w.Header().Get("Cache-Control"))
+	}
+	w := edgeAt(h, "GET", labHost, "/ui/app.js", viaProxy, fromIngress)
+	if cc := w.Header().Values("Cache-Control"); w.Code != 200 || len(cc) != 1 || cc[0] == "no-store" {
+		t.Errorf("a file whose handler states its own policy: %d, Cache-Control %q", w.Code, cc)
+	}
+}
+
+// With Preview on, pages tell crawlers not to index them; with it off they
+// don't.
+func TestPreviewPagesCarryNoindex(t *testing.T) {
+	for _, preview := range []bool{true, false} {
+		s := aliasServer(t, func(c *Config) { c.Preview = preview })
+		if s.Preview() != preview {
+			t.Errorf("Preview() is %v with the switch at %v", s.Preview(), preview)
+		}
+		h := s.Handler()
+		for _, target := range []string{"/", "/ui/app.js", "/healthz", "/nothing"} {
+			w := edgeAt(h, "GET", labHost, target, viaProxy, fromIngress)
+			if got := w.Header().Get("X-Robots-Tag") == "noindex"; got != preview {
+				t.Errorf("Preview %v: GET %s (%d): X-Robots-Tag %q", preview, target, w.Code, w.Header().Get("X-Robots-Tag"))
+			}
+		}
 	}
 }

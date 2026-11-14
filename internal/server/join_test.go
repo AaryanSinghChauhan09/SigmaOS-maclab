@@ -36,12 +36,11 @@ func newJoinLab(t *testing.T) *joinLab {
 	agentBin := filepath.Join(t.TempDir(), "lab-agent-linux-arm64")
 	os.WriteFile(agentBin, []byte("\x7fELF lab-agent for the test"), 0o755)
 	pub, _ := ParsePublicURL("https://chonkbase.net/maclab")
-	proxies, _ := ParseTrustedProxies("10.2.0.0/16")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	j := &joinLab{t: t, logs: &strings.Builder{}}
 	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret",
-		PublicURL: pub, TrustedProxies: proxies, AgentBinary: agentBin}, log.New(lockedWriter{j}, "", 0))
+		PublicURL: pub, AgentBinary: agentBin}, log.New(lockedWriter{j}, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +59,8 @@ func (w lockedWriter) Write(b []byte) (int, error) {
 func (j *joinLab) do(method, path, bearer, body string) (int, string) {
 	r := httptest.NewRequest(method, "http://chonkbase.net/maclab"+path, strings.NewReader(body))
 	r.RemoteAddr = viaProxy
+	r = r.WithContext(onTunnel(r.Context()))
 	r.Header.Set("X-Forwarded-Proto", "https")
-	r.Header.Set("X-Forwarded-Host", "chonkbase.net")
 	if bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+bearer)
 	}
@@ -379,7 +378,7 @@ func TestASlowEnrollmentBodyIsCutOff(t *testing.T) {
 	}
 	defer c.Close()
 	start := time.Now()
-	fmt.Fprintf(c, "POST /maclab/api/agent/enroll HTTP/1.1\r\nHost: chonkbase.net\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{")
+	fmt.Fprintf(c, "POST /maclab/api/agent/enroll HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{", srv.Listener.Addr())
 	c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	b, _ := io.ReadAll(c)
 	if took := time.Since(start); took > 5*time.Second {

@@ -1,13 +1,13 @@
 package server
 
 import (
-	"bytes"
-	"crypto/tls"
-	"crypto/x509"
-	"log"
+	"context"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +53,8 @@ func TestAMacOverHTTPSUnderAPrefixRunsAJob(t *testing.T) {
 	}
 }
 
-func TestListenConfigServesPlainHTTPOnlyOnLoopbackUnlessTold(t *testing.T) {
+// labd listens on this machine only: a loopback port, and a Unix socket.
+func TestListenConfigTakesLoopbackOnly(t *testing.T) {
 	for _, c := range []struct {
 		lc ListenConfig
 		ok bool
@@ -61,91 +62,199 @@ func TestListenConfigServesPlainHTTPOnlyOnLoopbackUnlessTold(t *testing.T) {
 		{ListenConfig{Addr: "127.0.0.1:7770"}, true},
 		{ListenConfig{Addr: "[::1]:7770"}, true},
 		{ListenConfig{Addr: "localhost:7770"}, true},
+		{ListenConfig{Addr: "127.0.0.1:7770", Socket: "/var/run/labd/labd.sock"}, true},
 		{ListenConfig{Addr: "0.0.0.0:7770"}, false},
 		{ListenConfig{Addr: ":7770"}, false},
 		{ListenConfig{Addr: "10.1.1.55:7770"}, false},
+		{ListenConfig{Addr: "192.168.1.20:7770"}, false},
 		{ListenConfig{Addr: "100.64.0.1:7770"}, false},
 		{ListenConfig{Addr: "labd.example.com:7770"}, false},
-		{ListenConfig{Addr: "0.0.0.0:7770", AllowPlainHTTP: true}, true},
-		{ListenConfig{Addr: "0.0.0.0:443", CertFile: "c", KeyFile: "k"}, true},
-		{ListenConfig{Addr: "127.0.0.1:443", CertFile: "c"}, false},
+		{ListenConfig{Addr: "7770"}, false},
+		{ListenConfig{}, false},
+		{ListenConfig{Addr: "127.0.0.1:7770", Socket: "labd.sock"}, false},
 	} {
 		if err := c.lc.Check(); (err == nil) != c.ok {
 			t.Errorf("%+v: %v", c.lc, err)
 		}
 	}
-	hs, err := ListenConfig{Addr: "127.0.0.1:0"}.Server(http.NotFoundHandler(), nil)
+	hs, err := ListenConfig{Addr: "127.0.0.1:0"}.Server(http.NotFoundHandler())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Headers have a deadline; nothing else does, so long polls, streams,
-	// exec and downloads run as long as they need.
+	// exec and downloads run as long as they need. An idle connection is
+	// kept 2 minutes, longer than cloudflared keeps one in its pool (90 s).
 	if hs.ReadHeaderTimeout != 10*time.Second || hs.IdleTimeout != 2*time.Minute || hs.MaxHeaderBytes != 64<<10 || hs.ReadTimeout != 0 || hs.WriteTimeout != 0 || hs.TLSConfig != nil {
 		t.Errorf("server limits: %+v", hs)
 	}
+	if _, err := (ListenConfig{Addr: "0.0.0.0:0"}).Listen(); err == nil {
+		t.Error("labd listened beyond this machine")
+	}
 }
 
-// TLS from files: TLS 1.2 at least, and a certificate renewed in place is
-// served without a restart; a broken one keeps the one labd had.
-func TestTLSListenerReloadsItsCertificate(t *testing.T) {
-	old := certCheck
-	certCheck = 0
-	defer func() { certCheck = old }()
-	ca := testpki.NewCA(t)
-	dir := t.TempDir()
-	first := ca.Leaf("127.0.0.1")
-	certFile, keyFile := first.Files(t, dir)
-	var logs bytes.Buffer
-	hs, err := ListenConfig{Addr: "127.0.0.1:0", CertFile: certFile, KeyFile: keyFile}.Server(http.NotFoundHandler(), log.New(&logs, "", 0))
+// shortDir is a temporary directory with a short path: a Unix socket's path
+// holds about a hundred bytes.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "labd")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hs.TLSConfig.MinVersion != tls.VersionTLS12 {
-		t.Errorf("min TLS version %x", hs.TLSConfig.MinVersion)
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+// listening is a labd at its Lab address, serving on both listeners.
+type listening struct {
+	s        *Server
+	loopback string       // http://127.0.0.1:<port>
+	socket   string       // the socket's path
+	tunnel   *http.Client // dials the socket, as cloudflared does
+}
+
+func listenLab(t *testing.T) *listening {
+	t.Helper()
+	s := aliasServer(t, nil)
+	lc := ListenConfig{Addr: "127.0.0.1:0", Socket: filepath.Join(shortDir(t), "labd.sock")}
+	hs, err := lc.Server(s.Handler())
 	if err != nil {
 		t.Fatal(err)
 	}
-	go Serve(hs, ln)
-	defer hs.Close()
-	served := func() *x509.Certificate {
-		t.Helper()
-		pool := x509.NewCertPool()
-		pool.AppendCertsFromPEM(ca.PEM)
-		c, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{RootCAs: pool})
-		if err != nil {
-			t.Fatal(err)
+	lns, err := lc.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lns) != 2 {
+		t.Fatalf("%d listeners, want the loopback port and the socket", len(lns))
+	}
+	done := make(chan error, 1)
+	go func() { done <- Serve(hs, lns...) }()
+	t.Cleanup(func() {
+		hs.Close()
+		if err := <-done; err != http.ErrServerClosed {
+			t.Errorf("Serve: %v", err)
 		}
-		defer c.Close()
-		return c.ConnectionState().PeerCertificates[0]
+	})
+	return &listening{s: s, loopback: "http://" + lns[0].Addr().String(), socket: lc.Socket,
+		tunnel: &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", lc.Socket)
+		}}}}
+}
+
+// get asks for target with hdr (key, value, ...) and returns the status.
+func (l *listening) get(t *testing.T, c *http.Client, target string, hdr ...string) int {
+	t.Helper()
+	req, err := http.NewRequest("GET", target, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := served(); got.SerialNumber.Cmp(first.Cert.Leaf.SerialNumber) != 0 {
-		t.Fatalf("serving %v, want the first certificate", got.SerialNumber)
+	for i := 0; i+1 < len(hdr); i += 2 {
+		req.Header.Set(hdr[i], hdr[i+1])
 	}
-	second := ca.Leaf("127.0.0.1")
-	time.Sleep(10 * time.Millisecond) // a later modification time
-	second.Files(t, dir)
-	if got := served(); got.SerialNumber.Cmp(second.Cert.Leaf.SerialNumber) != 0 {
-		t.Fatalf("serving %v after the renewal, want the second certificate", got.SerialNumber)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	os.WriteFile(certFile, []byte("not a certificate"), 0o600)
-	if got := served(); got.SerialNumber.Cmp(second.Cert.Leaf.SerialNumber) != 0 {
-		t.Fatalf("a broken certificate file replaced the good one")
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// The socket is for the account labd runs as, and nobody else; the loopback
+// port is on loopback. A socket left by a labd that died is replaced, and
+// nothing that isn't a socket is.
+func TestTheSocketIsItsOwnersAndThePortIsLoopback(t *testing.T) {
+	l := listenLab(t)
+	st, err := os.Stat(l.socket)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(logs.String(), "still serving") {
-		t.Errorf("labd didn't say it kept the old certificate: %q", logs.String())
+	if st.Mode()&os.ModeSocket == 0 || st.Mode().Perm() != 0o600 {
+		t.Errorf("the socket's mode: %v, want a socket at 0600", st.Mode())
 	}
-	// An old protocol version is refused.
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(ca.PEM)
-	// A client that really offers TLS 1.0 and 1.1 (Go's own floor is 1.2) is
-	// refused by labd.
-	c, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS11})
-	if err == nil {
-		c.Close()
-		t.Error("TLS 1.1 was accepted")
-	} else if !strings.Contains(err.Error(), "protocol version") {
-		t.Errorf("TLS 1.1 refused, but not by labd's version floor: %v", err)
+	host, _, _ := net.SplitHostPort(strings.TrimPrefix(l.loopback, "http://"))
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		t.Errorf("the port is at %s, not loopback", host)
+	}
+	if code := l.get(t, l.tunnel, "http://"+labHost+"/healthz"); code != 200 {
+		t.Errorf("through the socket: %d", code)
+	}
+	if code := l.get(t, http.DefaultClient, l.loopback+"/healthz"); code != 200 {
+		t.Errorf("at the loopback port: %d", code)
+	}
+
+	dir := shortDir(t)
+	stale := filepath.Join(dir, "labd.sock")
+	old, err := net.Listen("unix", stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.(*net.UnixListener).SetUnlinkOnClose(false)
+	old.Close()
+	lns, err := ListenConfig{Addr: "127.0.0.1:0", Socket: stale}.Listen()
+	if err != nil {
+		t.Fatalf("a socket left behind stopped labd: %v", err)
+	}
+	for _, ln := range lns {
+		ln.Close()
+	}
+	file := filepath.Join(dir, "notes")
+	os.WriteFile(file, []byte("keep"), 0o600)
+	if _, err := (ListenConfig{Addr: "127.0.0.1:0", Socket: file}).Listen(); err == nil {
+		t.Error("labd listened where a file was")
+	}
+	if b, _ := os.ReadFile(file); string(b) != "keep" {
+		t.Error("labd replaced a file that was no socket")
+	}
+}
+
+// The caller's address is CF-Connecting-IP on the tunnel's socket, and the
+// ray id is the edge's. A caller on the mini can forge both headers at the
+// loopback port: there the logged address is the connection's own and no ray
+// id is taken.
+func TestAForgedCallerAddressIsBelievedOnlyOnTheSocket(t *testing.T) {
+	l := listenLab(t)
+	forged := []string{"CF-Connecting-IP", "203.0.113.7", "CF-Ray", "8f1e2d3c4b5a6978-BNE", "X-Forwarded-For", "203.0.113.7", "X-Real-IP", "203.0.113.7"}
+	if code := l.get(t, http.DefaultClient, l.loopback+"/healthz", forged...); code != 200 {
+		t.Fatalf("at the loopback port: %d", code)
+	}
+	if code := l.get(t, l.tunnel, "http://"+labHost+"/healthz", forged...); code != 200 {
+		t.Fatalf("through the socket: %d", code)
+	}
+	if code := l.get(t, l.tunnel, "http://"+labHost+"/healthz", "CF-Connecting-IP", "2001:db8::7"); code != 200 {
+		t.Fatalf("through the socket over IPv6: %d", code)
+	}
+	if code := l.get(t, l.tunnel, "http://"+labHost+"/healthz", "CF-Connecting-IP", "not an address\"}", "CF-Ray", "x y"); code != 200 {
+		t.Fatalf("through the socket with a broken header: %d", code)
+	}
+	lines := l.s.callers.linesForTest(t)
+	if len(lines) != 4 {
+		t.Fatalf("%d lines in the caller log, want 4: %+v", len(lines), lines)
+	}
+	if lines[0].Addr != "127.0.0.1" || lines[0].Ray != "" {
+		t.Errorf("at the loopback port the forged headers were believed: %+v", lines[0])
+	}
+	if lines[1].Addr != "203.0.113.7" || lines[1].Ray != "8f1e2d3c4b5a6978-BNE" {
+		t.Errorf("through the socket the edge's headers were not believed: %+v", lines[1])
+	}
+	if lines[2].Addr != "2001:db8::7" {
+		t.Errorf("through the socket over IPv6: %+v", lines[2])
+	}
+	if lines[3].Addr != "" || lines[3].Ray != "" {
+		t.Errorf("a broken header was logged as an address or ray id: %+v", lines[3])
+	}
+	// What a handler asks is the same address.
+	for _, c := range []struct {
+		tunnel bool
+		want   string
+	}{{true, "203.0.113.7"}, {false, "192.0.2.1"}} {
+		r := httptest.NewRequest("GET", "http://"+labHost+"/", nil)
+		r.Header.Set("CF-Connecting-IP", "203.0.113.7")
+		if c.tunnel {
+			r = r.WithContext(onTunnel(r.Context()))
+		}
+		if got := callerAddr(r); got != c.want {
+			t.Errorf("callerAddr (tunnel %v): %q, want %q", c.tunnel, got, c.want)
+		}
 	}
 }

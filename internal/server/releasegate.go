@@ -591,7 +591,7 @@ func (s *Server) hGate(w http.ResponseWriter, r *http.Request) {
 		o.omt[d.Name] = s.omtWanted(d, api.JobSpec{})
 	}
 	rep := rollUp(k, devs, jobs, required, o)
-	rep.Labd, rep.Generated = r.Host, time.Now().UTC()
+	rep.Labd, rep.Generated = s.labName(r), time.Now().UTC()
 	writeJSON(w, rep)
 }
 

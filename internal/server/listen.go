@@ -1,138 +1,145 @@
 package server
 
-// How labd listens: TLS itself, or plain http on loopback behind a reverse
-// proxy, or plain http elsewhere only when told so.
+// How labd listens: on this machine only, never the LAN or the tailnet.
+//
+//   - A Unix socket only the account labd runs as can open. cloudflared
+//     dials it, so it is the tunnel's: the only place CF-Connecting-IP and
+//     what the edge forwards are believed (see edge.go).
+//   - A loopback port for callers on the same machine (the Builder, the
+//     Out-of-band controller's client side, break-glass), which believes none
+//     of that: any local process could forge it.
 
 import (
-	"crypto/tls"
+	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
-	"sync"
+	"path/filepath"
+	"syscall"
 	"time"
 )
 
-// ListenConfig is how labd serves.
+// ListenConfig is where labd serves.
 type ListenConfig struct {
+	// Addr is the loopback port, host:port.
 	Addr string
-	// CertFile and KeyFile serve TLS; both or neither. labd reads them again
-	// when they change, so a renewed certificate needs no restart.
-	CertFile, KeyFile string
-	// AllowPlainHTTP serves plain http on an address other than loopback:
-	// tokens and device secrets then cross that network in the clear.
-	AllowPlainHTTP bool
+	// Socket is the path of the tunnel's Unix socket; empty serves none.
+	Socket string
 }
 
 // Check is why labd must not serve as lc says, or nil.
 func (lc ListenConfig) Check() error {
-	if (lc.CertFile == "") != (lc.KeyFile == "") {
-		return errors.New("--tls-cert and --tls-key go together")
-	}
-	if lc.CertFile != "" || lc.AllowPlainHTTP {
-		return nil
-	}
 	host, _, err := net.SplitHostPort(lc.Addr)
 	if err != nil {
 		return fmt.Errorf("--listen %q: %v", lc.Addr, err)
 	}
-	if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
-		return nil
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("--listen %s is beyond this machine: labd listens on loopback and on the tunnel's socket (--socket), never on the LAN or the tailnet", lc.Addr)
 	}
-	return fmt.Errorf("--listen %s would serve plain http beyond this machine, where tokens and device secrets cross the network in the clear: "+
-		"give --tls-cert and --tls-key, or listen on loopback behind an https reverse proxy, or pass --allow-plain-http on purpose", lc.Addr)
+	if lc.Socket != "" && !filepath.IsAbs(lc.Socket) {
+		return fmt.Errorf("--socket %q: give the socket's full path", lc.Socket)
+	}
+	return nil
 }
 
 // Server limits. A request's headers must arrive within headerTimeout, and an
-// idle keep-alive connection closes after idleTimeout. There is no overall
-// read or write timeout: long polls, the event stream, the console, an exec
-// of up to an hour and downloads of large artifacts all run longer.
+// idle keep-alive connection closes after idleTimeout, which stays above the
+// 90 s cloudflared keeps a connection in its pool. There is no overall read
+// or write timeout: long polls, the event stream, the console, an exec of up
+// to an hour and downloads of large artifacts all run longer.
 const (
 	headerTimeout = 10 * time.Second
 	idleTimeout   = 2 * time.Minute
 	maxHeaderSize = 64 << 10
 )
 
-// Server is an http.Server for h as lc says.
-func (lc ListenConfig) Server(h http.Handler, logger *log.Logger) (*http.Server, error) {
+// Server is an http.Server for h as lc says. It knows which requests came
+// through the tunnel's socket.
+func (lc ListenConfig) Server(h http.Handler) (*http.Server, error) {
 	if err := lc.Check(); err != nil {
 		return nil, err
 	}
-	hs := &http.Server{Addr: lc.Addr, Handler: h, ReadHeaderTimeout: headerTimeout, IdleTimeout: idleTimeout, MaxHeaderBytes: maxHeaderSize}
-	if lc.CertFile != "" {
-		cr := &certReloader{certFile: lc.CertFile, keyFile: lc.KeyFile, log: logger}
-		if err := cr.load(); err != nil {
+	return &http.Server{Handler: h, ReadHeaderTimeout: headerTimeout, IdleTimeout: idleTimeout, MaxHeaderBytes: maxHeaderSize,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if _, ok := c.(*net.UnixConn); ok {
+				return onTunnel(ctx)
+			}
+			return ctx
+		}}, nil
+}
+
+// Listen opens lc's listeners: the loopback port first, then the socket if
+// lc names one. The socket is made for its owner alone (0600); one left by a
+// labd that died is replaced, and anything else at its path stops labd.
+func (lc ListenConfig) Listen() ([]net.Listener, error) {
+	if err := lc.Check(); err != nil {
+		return nil, err
+	}
+	tcp, err := net.Listen("tcp", lc.Addr)
+	if err != nil {
+		return nil, err
+	}
+	if lc.Socket == "" {
+		return []net.Listener{tcp}, nil
+	}
+	unix, err := listenSocket(lc.Socket)
+	if err != nil {
+		tcp.Close()
+		return nil, err
+	}
+	return []net.Listener{tcp, unix}, nil
+}
+
+func listenSocket(path string) (net.Listener, error) {
+	switch st, err := os.Lstat(path); {
+	case err == nil && st.Mode()&os.ModeSocket == 0:
+		return nil, fmt.Errorf("--socket %s: something that is not a socket is there", path)
+	case err == nil:
+		if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
+			c.Close()
+			return nil, fmt.Errorf("--socket %s: another labd is serving on it", path)
+		}
+		if err := os.Remove(path); err != nil {
 			return nil, err
 		}
-		hs.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: cr.get}
+	case !errors.Is(err, os.ErrNotExist):
+		return nil, err
 	}
-	return hs, nil
-}
-
-// Serve serves hs on ln, with TLS when hs has a TLS config.
-func Serve(hs *http.Server, ln net.Listener) error {
-	if hs.TLSConfig != nil {
-		return hs.ServeTLS(ln, "", "")
-	}
-	return hs.Serve(ln)
-}
-
-// certReloader hands out the certificate in its files, reading them again
-// when either changes, at most every certCheck. A pair that doesn't load
-// keeps the one labd has.
-type certReloader struct {
-	certFile, keyFile string
-	log               *log.Logger
-
-	mu      sync.Mutex
-	cert    *tls.Certificate
-	stamp   string
-	checked time.Time
-}
-
-// certCheck is how often labd looks at the certificate files; tests shorten it.
-var certCheck = 5 * time.Second
-
-func (c *certReloader) stampNow() string {
-	var s string
-	for _, f := range []string{c.certFile, c.keyFile} {
-		if st, err := os.Stat(f); err == nil {
-			s += fmt.Sprintf("%d:%d;", st.Size(), st.ModTime().UnixNano())
-		}
-	}
-	return s
-}
-
-func (c *certReloader) load() error {
-	// The files' stamp is taken before they are read: a renewal landing
-	// while they are read changes it, so the next look reads them again.
-	stamp := c.stampNow()
-	cert, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
+	// The socket is born closed to everyone else: a chmod after the bind
+	// would leave a moment when it is not.
+	old := syscall.Umask(0o177)
+	ln, err := net.Listen("unix", path)
+	syscall.Umask(old)
 	if err != nil {
-		return fmt.Errorf("TLS certificate: %w", err)
+		return nil, err
 	}
-	c.cert, c.stamp, c.checked = &cert, stamp, time.Now()
-	return nil
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
 }
 
-func (c *certReloader) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if time.Since(c.checked) >= certCheck {
-		c.checked = time.Now()
-		if c.stampNow() != c.stamp {
-			old := c.cert
-			if err := c.load(); err != nil {
-				c.cert = old
-				if c.log != nil {
-					c.log.Printf("%v; still serving the certificate labd had", err)
-				}
-			} else if c.log != nil {
-				c.log.Printf("TLS certificate %s reloaded", c.certFile)
-			}
-		}
+// Serve serves hs on every listener and returns when one of them stops.
+func Serve(hs *http.Server, lns ...net.Listener) error {
+	errs := make(chan error, len(lns))
+	for _, ln := range lns {
+		go func() { errs <- hs.Serve(ln) }()
 	}
-	return c.cert, nil
+	return <-errs
+}
+
+type tunnelKey struct{}
+
+// onTunnel marks a connection's context as the tunnel's socket's.
+func onTunnel(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tunnelKey{}, true)
+}
+
+// viaTunnel reports whether r came in on the tunnel's socket.
+func viaTunnel(r *http.Request) bool {
+	ok, _ := r.Context().Value(tunnelKey{}).(bool)
+	return ok
 }

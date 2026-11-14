@@ -97,8 +97,10 @@ func (s *Server) builderAuth(h http.HandlerFunc) http.HandlerFunc {
 		}
 		ctx, cancel := context.WithCancel(context.WithValue(r.Context(), builderCredKey{}, c))
 		if c.shared() {
+			noteCaller(r, "builder")
 			defer cancel()
 		} else {
+			noteCaller(r, "builder:"+c.name)
 			defer s.bconns.add(c.gen, cancel)()
 			// Removed between the lookup and registering this request.
 			if !s.store.builderGenCurrent(c.gen) {

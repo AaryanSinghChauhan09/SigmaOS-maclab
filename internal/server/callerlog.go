@@ -1,0 +1,283 @@
+package server
+
+// The caller log holds one line for every request labd answers: when, the
+// caller's address, the person or Mac it came from, the edge's ray id, and
+// what was asked and answered. It never holds a query string, where a
+// report's deletion link carries its secret, nor a credential. Lines are
+// kept callerLogKeep, then deleted.
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log"
+	"net/http"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	callerLogKeep = 30 * 24 * time.Hour
+	callerLogDay  = "2006-01-02"
+)
+
+// callerLine is one request in the caller log.
+type callerLine struct {
+	Time   time.Time `json:"time"`
+	Addr   string    `json:"addr"`
+	Who    string    `json:"who,omitempty"` // mac:<name>, person:<name> or builder[:<name>]
+	Ray    string    `json:"ray,omitempty"`
+	Method string    `json:"method"`
+	Path   string    `json:"path"`
+	Status int       `json:"status"`
+	Millis int64     `json:"ms"`
+	Agent  string    `json:"agent,omitempty"` // the caller's User-Agent
+}
+
+// callerLog writes the lines to one file for each UTC day under dir.
+type callerLog struct {
+	dir string
+	log *log.Logger
+
+	mu  sync.Mutex
+	day string
+	f   *os.File
+}
+
+func openCallerLog(dir string, logger *log.Logger) (*callerLog, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, err
+	}
+	return &callerLog{dir: dir, log: logger}, nil
+}
+
+func (l *callerLog) closeLocked() {
+	if l.f != nil {
+		l.f.Close()
+	}
+	l.f, l.day = nil, ""
+}
+
+func (l *callerLog) write(line callerLine) {
+	line.Time = line.Time.UTC()
+	b, err := json.Marshal(line)
+	if err != nil {
+		return
+	}
+	b = append(b, '\n')
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if day := line.Time.Format(callerLogDay); day != l.day {
+		l.closeLocked()
+		f, err := os.OpenFile(filepath.Join(l.dir, day+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			l.log.Printf("caller log: %v", err)
+			return
+		}
+		l.f, l.day = f, day
+	}
+	if _, err := l.f.Write(b); err != nil {
+		l.log.Printf("caller log: %v", err)
+		l.closeLocked()
+	}
+}
+
+// prune deletes every line older than callerLogKeep at now: a day's file
+// when all of it is, and the older lines of the one day that straddles.
+func (l *callerLog) prune(now time.Time) {
+	cutoff := now.UTC().Add(-callerLogKeep)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entries, err := os.ReadDir(l.dir)
+	if err != nil {
+		l.log.Printf("caller log: %v", err)
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		day, err := time.Parse(callerLogDay, strings.TrimSuffix(name, ".log"))
+		if err != nil || !strings.HasSuffix(name, ".log") || !day.Before(cutoff) {
+			continue
+		}
+		if name == l.day+".log" {
+			l.closeLocked()
+		}
+		file := filepath.Join(l.dir, name)
+		if !day.Add(24 * time.Hour).After(cutoff) {
+			err = os.Remove(file)
+		} else {
+			err = dropOlderLines(file, cutoff)
+		}
+		if err != nil {
+			l.log.Printf("caller log: %v", err)
+		}
+	}
+}
+
+// dropOlderLines rewrites file without the lines from before cutoff. A line
+// that can't be read as one has no time to keep it by, and goes too.
+func dropOlderLines(file string, cutoff time.Time) error {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	var kept bytes.Buffer
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(nil, 1<<20)
+	for sc.Scan() {
+		var line struct {
+			Time time.Time `json:"time"`
+		}
+		if json.Unmarshal(sc.Bytes(), &line) == nil && !line.Time.Before(cutoff) {
+			kept.Write(sc.Bytes())
+			kept.WriteByte('\n')
+		}
+	}
+	if kept.Len() == 0 {
+		return os.Remove(file)
+	}
+	if kept.Len() == len(data) {
+		return nil
+	}
+	tmp := file + ".tmp"
+	if err := os.WriteFile(tmp, kept.Bytes(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, file)
+}
+
+// callerLogLoop prunes the caller log at start and every hour.
+func (s *Server) callerLogLoop() {
+	s.callers.prune(s.now())
+	t := s.clock().NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			s.callers.mu.Lock()
+			s.callers.closeLocked()
+			s.callers.mu.Unlock()
+			return
+		case <-t.C():
+			s.callers.prune(s.now())
+		}
+	}
+}
+
+// call is what labd knows of a request's caller while it serves it.
+type call struct {
+	addr, ray string
+	who       string
+}
+
+type callKey struct{}
+
+// noteCaller records who r came from, for the caller log: "mac:<name>",
+// "person:<name>" or "builder:<name>".
+func noteCaller(r *http.Request, who string) {
+	if c, ok := r.Context().Value(callKey{}).(*call); ok {
+		c.who = who
+	}
+}
+
+// callerAddr is the address r's caller is at: what the edge names in
+// CF-Connecting-IP on the tunnel's socket, the only place that header is
+// believed, and the connection's own address anywhere else. It is "" when
+// the edge named none, or the caller dialled the socket from this machine.
+func callerAddr(r *http.Request) string {
+	if c, ok := r.Context().Value(callKey{}).(*call); ok {
+		return c.addr
+	}
+	if viaTunnel(r) {
+		if a, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("CF-Connecting-IP"))); err == nil {
+			return a.Unmap().WithZone("").String()
+		}
+		return ""
+	}
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		return ap.Addr().Unmap().WithZone("").String()
+	}
+	return ""
+}
+
+var reRay = regexp.MustCompile(`^[0-9A-Za-z-]{1,64}$`)
+
+// rayID is the edge's id for r, believed on the tunnel's socket only.
+func rayID(r *http.Request) string {
+	if ray := r.Header.Get("CF-Ray"); viaTunnel(r) && reRay.MatchString(ray) {
+		return ray
+	}
+	return ""
+}
+
+// answer is the writer a handler gets: it remembers the status for the
+// caller log.
+type answer struct {
+	http.ResponseWriter
+	status int
+}
+
+func (a *answer) WriteHeader(code int) {
+	if a.status == 0 {
+		a.status = code
+	}
+	a.ResponseWriter.WriteHeader(code)
+}
+
+func (a *answer) Write(b []byte) (int, error) {
+	if a.status == 0 {
+		a.status = http.StatusOK
+	}
+	return a.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the writer below.
+func (a *answer) Unwrap() http.ResponseWriter { return a.ResponseWriter }
+
+// Flush flushes, for the handlers that ask the writer itself.
+func (a *answer) Flush() {
+	if f, ok := a.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// ReadFrom keeps the writer's own way of sending a file.
+func (a *answer) ReadFrom(src io.Reader) (int64, error) {
+	if a.status == 0 {
+		a.status = http.StatusOK
+	}
+	return io.Copy(a.ResponseWriter, src)
+}
+
+// logged serves r through h and writes its line when h returns: a stream's
+// line is written when the stream ends.
+func (s *Server) logged(w http.ResponseWriter, r *http.Request, h func(http.ResponseWriter, *http.Request)) {
+	start := s.now()
+	c := &call{addr: callerAddr(r), ray: rayID(r)}
+	a := &answer{ResponseWriter: w}
+	defer func() {
+		if a.status == 0 {
+			a.status = http.StatusOK
+		}
+		s.callers.write(callerLine{Time: start, Addr: c.addr, Who: c.who, Ray: c.ray, Method: clip(r.Method, 16), Path: clip(r.URL.Path, 512),
+			Status: a.status, Millis: s.since(start).Milliseconds(), Agent: clip(r.UserAgent(), 200)})
+	}()
+	h(a, r.WithContext(context.WithValue(r.Context(), callKey{}, c)))
+}
+
+func clip(s string, n int) string {
+	if len(s) > n {
+		return strings.ToValidUTF8(s[:n], "")
+	}
+	return s
+}

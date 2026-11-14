@@ -19,23 +19,23 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
-// volunteerLab is a labd under --tailscale whose tailnet has a tagged lab Mac
+// volunteerLab is a labd that knows people by their address, with a tagged lab Mac
 // at 100.64.0.3 and a person at every other 100.64.x.y, user-x-y@github.
 func volunteerLab(t *testing.T) (*Server, func(method, path, remote, token, body string) *httptest.ResponseRecorder) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	whois := func(ctx context.Context, ip string) (*TailnetPeer, error) {
+	whois := func(ctx context.Context, ip string) (*testPeer, error) {
 		if ip == "100.64.0.3" {
-			return &TailnetPeer{Login: "tagged-devices", Node: "maclab-m1air", Tags: []string{"tag:maclab"}}, nil
+			return &testPeer{Login: "tagged-devices", Node: "maclab-m1air", Tags: []string{"tag:maclab"}}, nil
 		}
 		var a, b int
 		if _, err := fmt.Sscanf(ip, "100.64.%d.%d", &a, &b); err != nil {
 			return nil, fmt.Errorf("no match for IP")
 		}
-		return &TailnetPeer{Login: fmt.Sprintf("User-%d-%d@github", a, b), Node: "omarchy"}, nil
+		return &testPeer{Login: fmt.Sprintf("User-%d-%d@github", a, b), Node: "omarchy"}, nil
 	}
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", Tailscale: true, WhoIs: whois},
+	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", Person: personAt(whois)},
 		log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)

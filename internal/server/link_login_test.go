@@ -204,7 +204,7 @@ func TestMaintainerLinksVolunteerLogin(t *testing.T) {
 	}
 }
 
-// linkLab is a labd under --tailscale with one Maintainer, ada, and two
+// linkLab is a labd that knows people by their address, with one Maintainer, ada, and two
 // people on the tailnet: visitor@github and other@github.
 type linkLab struct {
 	t      *testing.T
@@ -223,17 +223,17 @@ func newLinkLab(t *testing.T, dir string) *linkLab {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	peers := map[string]*TailnetPeer{
+	peers := map[string]*testPeer{
 		"100.64.0.2": {Login: "Visitor@github", Node: "laptop"},
 		"100.64.0.4": {Login: "other@github", Node: "phone"},
 	}
-	whois := func(_ context.Context, ip string) (*TailnetPeer, error) {
+	whois := func(_ context.Context, ip string) (*testPeer, error) {
 		if p := peers[ip]; p != nil {
 			return p, nil
 		}
 		return nil, fmt.Errorf("no match for IP")
 	}
-	s, err := New(ctx, Config{DataDir: dir, FirstMaintainer: "ada", FirstMaintainerToken: adminTok, Tailscale: true, WhoIs: whois},
+	s, err := New(ctx, Config{DataDir: dir, FirstMaintainer: "ada", FirstMaintainerToken: adminTok, Person: personAt(whois)},
 		log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)

@@ -111,18 +111,18 @@ func TestRoutesDeclareReach(t *testing.T) {
 func TestPersonSeesOnlyTheirOwnMacs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	peers := map[string]*TailnetPeer{
+	peers := map[string]*testPeer{
 		"100.64.0.2": {Login: "Visitor@github", Node: "laptop"},
 		"100.64.0.3": {Login: "tagged-devices", Node: "lab", Tags: []string{"tag:maclab"}},
 		"100.64.0.4": {Login: "other@github", Node: "phone"},
 	}
-	whois := func(_ context.Context, ip string) (*TailnetPeer, error) {
+	whois := func(_ context.Context, ip string) (*testPeer, error) {
 		if p := peers[ip]; p != nil {
 			return p, nil
 		}
 		return nil, fmt.Errorf("no match for IP")
 	}
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", Tailscale: true, WhoIs: whois},
+	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", Person: personAt(whois)},
 		log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)

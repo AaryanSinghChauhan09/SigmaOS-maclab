@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,12 +20,11 @@ import (
 
 func main() {
 	home, _ := os.UserHomeDir()
-	listen := flag.String("listen", envOr("MACLAB_LISTEN", "127.0.0.1:7770"), "address to serve on (the default is this machine only, e.g. behind a reverse proxy); any other address needs --tls-cert/--tls-key or --allow-plain-http")
-	tlsCert := flag.String("tls-cert", "", "serve https with this PEM certificate (chain); re-read when it changes")
-	tlsKey := flag.String("tls-key", "", "the PEM private key for --tls-cert")
-	plainHTTP := flag.Bool("allow-plain-http", false, "serve plain http on an address other than loopback, e.g. a LAN or tailnet address or a pod behind its ingress: tokens and device secrets cross that network in the clear")
-	publicURL := flag.String("public-url", "", "the URL people and Macs reach labd at, e.g. https://chonkbase.net/maclab: its path is the prefix labd serves under (a reverse proxy passes the path on unchanged)")
-	trustedProxy := flag.String("trusted-proxy", "", "CIDRs of the reverse proxies in front of labd, comma separated: only they may forward X-Forwarded-Proto/Host, which must match --public-url (never with --tailscale)")
+	listen := flag.String("listen", envOr("MACLAB_LISTEN", "127.0.0.1:7770"), "the loopback port, for callers on this machine (the Builder, the Out-of-band controller's client side, break-glass): it believes nothing a caller forwards, and labd listens on no other network address")
+	socket := flag.String("socket", "", "the tunnel's Unix socket, which cloudflared dials: made for the account labd runs as alone, and the only place the edge's CF-Connecting-IP and forwarded headers are believed (needs --public-url)")
+	publicURL := flag.String("public-url", "", "the Lab address people and Macs reach labd at, e.g. https://lab.omarchy-mac.org: every link labd builds names it, and through the tunnel labd answers to no other name but --alias")
+	alias := flag.String("alias", "", "the Alias, e.g. maclab.omarchy.org: the one other name the tunnel carries. A page request on it gets a 308 to the same path at the Lab address; anything under /api/ is refused")
+	preview := flag.Bool("preview", false, "the lab is in Preview: answering at the Lab address, closed, before it opens. Every answer tells crawlers not to index it")
 	termsFile := flag.String("terms-file", "", "participation terms a Mac's owner accepts before it joins (default: labd's built-in terms)")
 	data := flag.String("data", filepath.Join(home, ".local/share/maclab"), "data directory")
 	ntfy := flag.String("ntfy", os.Getenv("MACLAB_NTFY"), "ntfy topic URL for notifications, e.g. https://ntfy.sh/<secret-topic>")
@@ -38,16 +36,6 @@ func main() {
 	stageTimeout := flag.Duration("stage-timeout", 45*time.Minute, "time a Mac gets for each attempt to stage a kernel, download included")
 	watchdogOpenTimeout := flag.Duration("watchdog-open-timeout", 0, "watchdog.open_timeout on every Lab boot: how long the kernel feeds the hardware watchdog before systemd must open it; an early hang resets about 30s after it (0 is half the job's boot timeout, at least 120s)")
 	artifactGB := flag.Int64("artifact-budget-gb", 20, "cap on the kernel artifact store; unreferenced artifacts go first")
-	tailscale := flag.Bool("tailscale", false, "let tailnet peers look at the lab by their Tailscale identity; changes still need a Maintainer's token")
-	var allowHosts []string
-	flag.Func("allow-host", "another name browsers reach labd by, e.g. labd.lan (repeatable). Access without a token (--tailscale) counts only "+
-		"on requests to labd's own names: IP addresses, localhost, this machine's host name (short, fully qualified and .local) "+
-		"and, with --tailscale, its MagicDNS name; any other name gets 403, so another site can't point its own name at labd (DNS rebinding)",
-		func(v string) error {
-			h, err := server.ParseAllowHost(v)
-			allowHosts = append(allowHosts, h...)
-			return err
-		})
 	maintainer := flag.String("maintainer", os.Getenv("USER"), "the first Maintainer's name, used once: on a fresh labd, or on the first start after upgrading from the single admin token")
 	omt := flag.Bool("omt", true, "run omarchy-m-test (github.com/maralcbr/omarchy-m-testing) in every job on Macs with a desktop user, and compare it with the known-good kernel")
 	omtSite := flag.String("omt-site", "https://omarchy-m-testing.org", "where omarchy-m-test reports are published (lab publish, --publish); empty never publishes")
@@ -63,9 +51,15 @@ func main() {
 		}
 		pub = u
 	}
-	proxies, err := server.ParseTrustedProxies(*trustedProxy)
-	if err != nil {
-		log.Fatal(err)
+	if *alias != "" {
+		a, err := server.ParseAlias(*alias)
+		if err != nil {
+			log.Fatal(err)
+		}
+		*alias = a
+	}
+	if *socket != "" && pub == nil {
+		log.Fatal("--socket needs --public-url: through the tunnel labd answers to its Lab address")
 	}
 	var terms string
 	if *termsFile != "" {
@@ -75,7 +69,7 @@ func main() {
 		}
 		terms = string(b)
 	}
-	lc := server.ListenConfig{Addr: *listen, CertFile: *tlsCert, KeyFile: *tlsKey, AllowPlainHTTP: *plainHTTP}
+	lc := server.ListenConfig{Addr: *listen, Socket: *socket}
 	if err := lc.Check(); err != nil {
 		log.Fatal(err)
 	}
@@ -101,13 +95,10 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if *tailscale {
-		log.Printf("tailnet peers may look without a token; changes need a Maintainer's token")
-	}
 	// ./volunteer downloads the lab-agent built alongside labd.
 	exe, _ := os.Executable()
 	s, err := server.New(ctx, server.Config{DataDir: *data, FirstMaintainer: *maintainer, FirstMaintainerToken: tok,
-		Tailscale: *tailscale, AllowHosts: allowHosts, PublicURL: pub, TrustedProxies: proxies, Terms: terms,
+		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms,
 		OMT: *omt, OMTSite: *omtSite, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
 		BootTimeout: *bootTimeout, OfflineAfter: *offlineAfter, AliveWindow: *aliveWindow, QuietGrace: *quietGrace, StageTimeout: *stageTimeout, WatchdogOpenTimeout: *watchdogOpenTimeout, RebootWarning: *rebootWarning, NtfyURL: *ntfy, NotifyCmd: *notifyCmd,
 		BuilderToken: strings.TrimSpace(string(btok)), ArtifactBudget: *artifactGB << 30,
@@ -115,11 +106,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	hs, err := lc.Server(s.Handler(), log.Default())
+	hs, err := lc.Server(s.Handler())
 	if err != nil {
 		log.Fatal(err)
 	}
-	ln, err := net.Listen("tcp", *listen)
+	lns, err := lc.Listen()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -129,13 +120,19 @@ func main() {
 		defer cancel()
 		hs.Shutdown(sctx)
 	}()
-	scheme := map[bool]string{true: "https", false: "http"}[*tlsCert != ""]
-	if pub != nil {
-		log.Printf("labd listening on %s (%s), served as %s, data in %s", *listen, scheme, pub, *data)
-	} else {
-		log.Printf("labd listening on %s (%s), data in %s", *listen, scheme, *data)
+	where := "http://" + lns[0].Addr().String()
+	if *socket != "" {
+		where += " and the tunnel's socket " + *socket
 	}
-	if err := server.Serve(hs, ln); err != http.ErrServerClosed {
+	switch {
+	case pub != nil && *preview:
+		log.Printf("labd listening on %s, served as %s, in Preview, data in %s", where, pub, *data)
+	case pub != nil:
+		log.Printf("labd listening on %s, served as %s, data in %s", where, pub, *data)
+	default:
+		log.Printf("labd listening on %s, data in %s", where, *data)
+	}
+	if err := server.Serve(hs, lns...); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }
