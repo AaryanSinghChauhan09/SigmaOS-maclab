@@ -279,13 +279,15 @@ def non_interactive(argv: Sequence[str]) -> list[str]:
 # A shimmed program: the real one (found on the PATH the script started with), under its own time limit.
 # timeout(1) runs it in a process group of its own and kills all of it. It runs in the background so the
 # shim can still say it timed out when the script's own `timeout 10 ...` stops the shim first (TERM);
-# stdin is handed on explicitly (a background job's would be /dev/null). If the script is killed outright,
-# timeout still ends its program within the limit.
+# stdin is handed on explicitly (a background job's would be /dev/null). The trap is set before the program
+# starts, and the program does not get the marker's descriptor: a shim stopped before it could stop its
+# program (killed outright, say) leaves the script's output closed while timeout ends the program within
+# the limit.
 _SHIM = """#!/bin/sh
+trap 'kill -TERM $! 2>/dev/null; echo "{marker} {name} -" 2>/dev/null >&{fd}; exit 124' TERM INT
 exec 7<&0
-PATH=$OMARCHY_M_TEST_PATH timeout -k 2 {seconds} {command} "$@" <&7 7<&- &
+PATH=$OMARCHY_M_TEST_PATH timeout -k 2 {seconds} {command} "$@" <&7 7<&- {fd}>&- &
 child=$!
-trap 'kill -TERM "$child" 2>/dev/null; echo "{marker} {name} -" 2>/dev/null >&{fd}; exit 124' TERM INT
 wait "$child"
 status=$?
 if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then

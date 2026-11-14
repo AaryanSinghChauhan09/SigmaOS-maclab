@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import copy
 import os
+import select
 import shutil
+import signal
 import stat
+import subprocess
 import tempfile
 import time
 import types
@@ -106,6 +109,37 @@ class BundledScriptTimeoutTest(_Scratch):
         dsp = next(result for result in results if result["id"] == "audio.speaker-dsp")
         self.assertEqual(dsp["status"], "skip")
         self.assertTrue(dsp["evidence"][0].startswith("skip: pactl timed out ("), dsp["evidence"])
+
+    def test_a_shim_stopped_before_it_could_stop_its_program_leaves_the_scripts_output_closed(self):
+        # Under load the script's own `timeout 1` can stop the shim before its trap is set: the
+        # program it started lives on to the shim's limit and must not hold the script's output.
+        started = os.path.join(self.dir, "started")
+        self.executable("pactl", f"#!/bin/sh\necho $$ > '{started}'\nexec sleep 30\n")
+        shim = os.path.join(self.dir, "shim")
+        with open(shim, "w", encoding="utf-8") as f:
+            f.write(host_module._shim("pactl", 20, "pactl"))
+        os.chmod(shim, 0o755)
+        env = {**os.environ, "OMARCHY_M_TEST_PATH": self.dir + os.pathsep + os.environ.get("PATH", "")}
+        proc = subprocess.Popen(["sh", "-c", f'exec "$0" info {host_module.SHIM_FD}>&1 >/dev/null 2>&1', shim],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(self._kill_from, started)
+        deadline = time.monotonic() + 30
+        while not os.path.exists(started) and proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(os.path.exists(started), "the shim never started its program")
+        proc.kill()
+        proc.wait()
+        readable, _, _ = select.select([proc.stdout], [], [], 5)
+        self.assertTrue(readable and proc.stdout.read() == b"", "the shim's program still holds the script's output")
+
+    @staticmethod
+    def _kill_from(pid_file: str) -> None:
+        try:
+            with open(pid_file, encoding="utf-8") as f:
+                os.kill(int(f.read()), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
 
     def test_sudo_is_always_non_interactive_and_a_hung_program_under_it_keeps_its_limit(self):
         # A stand-in sudo that runs its command (after -n) and says it was given -n.
