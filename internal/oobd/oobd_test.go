@@ -121,6 +121,15 @@ func newRig(t *testing.T) *rig {
 	return r
 }
 
+// holdTool makes every tool run wait for the test to let it go, and lets all
+// of them go when the test ends, however it ends.
+func (r *rig) holdTool() {
+	hold := make(chan struct{})
+	r.tool.hold = hold
+	r.tool.started = make(chan toolRun, 8)
+	r.t.Cleanup(func() { close(hold) })
+}
+
 func (r *rig) do(method, path, token, body string) (int, string) {
 	r.t.Helper()
 	req, err := http.NewRequest(method, r.srv.URL+path, strings.NewReader(body))
@@ -199,8 +208,7 @@ func TestARIDOutsideTheListIsRefusedBeforeTheTool(t *testing.T) {
 
 func TestTwoResetsAskedTogetherRunOneAfterTheOther(t *testing.T) {
 	r := newRig(t)
-	r.tool.hold = make(chan struct{})
-	r.tool.started = make(chan toolRun, 2)
+	r.holdTool()
 
 	codes := make(chan int, 2)
 	for _, rid := range []int{0, 2} {
@@ -236,8 +244,7 @@ func TestTwoResetsAskedTogetherRunOneAfterTheOther(t *testing.T) {
 
 func TestAProbeWaitsForAResetToo(t *testing.T) {
 	r := newRig(t)
-	r.tool.hold = make(chan struct{})
-	r.tool.started = make(chan toolRun, 2)
+	r.holdTool()
 	done := make(chan int, 2)
 	go func() { code, _ := r.do("POST", "/v1/ports/2/reset", testToken, ""); done <- code }()
 	<-r.tool.started
@@ -263,8 +270,7 @@ func TestAProbeWaitsForAResetToo(t *testing.T) {
 
 func TestAResetNobodyWaitsForIsNotSent(t *testing.T) {
 	r := newRig(t)
-	r.tool.hold = make(chan struct{})
-	r.tool.started = make(chan toolRun, 2)
+	r.holdTool()
 	first := make(chan int, 1)
 	go func() { code, _ := r.do("POST", "/v1/ports/2/reset", testToken, ""); first <- code }()
 	<-r.tool.started
