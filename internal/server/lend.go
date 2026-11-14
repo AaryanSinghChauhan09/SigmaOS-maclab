@@ -224,9 +224,9 @@ const (
 	// dropUnusedOf drops a person's unused Join commands, and dropOrphans
 	// what was kept of tokens that are gone: used up, revoked or dropped.
 	dropUnusedOf = `DELETE FROM tokens WHERE activated_by = '' AND token_hash IN (SELECT token_hash FROM join_commands WHERE volunteer_id = ?)`
-	// madeBy are the unused Join commands an account made: all of them, or
-	// with the last argument 1 only those for Lab-owned Macs.
-	madeBy = ` FROM tokens t JOIN join_commands j ON j.token_hash = t.token_hash
+	// unusedMadeBy are the unused Join commands an account made: all of
+	// them, or with the last argument 1 only those for Lab-owned Macs.
+	unusedMadeBy = ` FROM tokens t JOIN join_commands j ON j.token_hash = t.token_hash
 		WHERE j.made_by = ? AND t.activated_by = '' AND (? = 0 OR j.volunteer_id = 0)`
 	dropOrphans = `DELETE FROM join_commands WHERE token_hash NOT IN (SELECT token_hash FROM tokens)`
 )
@@ -318,7 +318,7 @@ func (st *store) cancelJoinCommandsMadeBy(accountID int64, labOwned bool, now ti
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT `+joinCommandColumns+madeBy+` AND t.expires >= ? ORDER BY t.name`, accountID, labOwned, now.Unix())
+	rows, err := tx.Query(`SELECT `+joinCommandColumns+unusedMadeBy+` AND t.expires >= ? ORDER BY t.name`, accountID, labOwned, now.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +334,7 @@ func (st *store) cancelJoinCommandsMadeBy(accountID int64, labOwned bool, now ti
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(`DELETE FROM tokens WHERE token_hash IN (SELECT t.token_hash`+madeBy+`)`, accountID, labOwned); err != nil {
+	if _, err := tx.Exec(`DELETE FROM tokens WHERE token_hash IN (SELECT t.token_hash`+unusedMadeBy+`)`, accountID, labOwned); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(dropOrphans); err != nil {

@@ -1463,6 +1463,10 @@ up to 31, unique in the lab, and is never changed.
 Nobody enrolls a Mac in another person's name. `lab enroll <name>` makes the
 same kind of Join command for a Lab-owned Mac only.
 
+An unused Join command stops with the access of whoever made it: "End all
+access" and a Block cancel every one the person made, and the loss of the
+Maintainer role those for Lab-owned Macs.
+
 ## Phones
 
 Open `http://<labd-host>:7770` and enter your Maintainer token; the UI keeps
