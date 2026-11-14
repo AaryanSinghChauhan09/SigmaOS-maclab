@@ -303,20 +303,23 @@ is stopped (`systemctl stop lab-agent`).
 
 ```sh
 make                                 # binaries in bin/
-labd --maintainer <you>              # first start: you become the first Maintainer (default $USER)
-lab login http://127.0.0.1:7770 "$(cat ~/.local/share/maclab/admin.token)"
+labd --sign-in <folder>              # <folder>/admins names the Admins by GitHub account id
+labd break-glass --account-id <id> <your-handle>   # on the server: prints a Lab token for you, once
+lab login http://127.0.0.1:7770      # with that token
 lab enroll m1air --label "MacBook Air M1, left desk"   # prints the one-liner that joins the Mac
 ```
 
 To serve the lab over the internet, with no Tailscale, see
 [HTTPS without Tailscale](#https-without-tailscale).
 
-Each Maintainer has their own labd token. `lab maintainer add <name>` prints
-a new one once (labd keeps only its hash); `lab maintainer list` and
-`lab maintainer remove <name>` do the rest, and removing someone revokes their
-token at once. Jobs and Promotions record the Maintainer whose token asked.
-Upgrading from a labd with a single admin token keeps that token, in the same
-`admin.token` file, as the first Maintainer's (`--maintainer`, default `$USER`).
+A person signs in with GitHub and makes their own Lab tokens on their own
+page, up to 10: each is shown once (labd keeps only its hash), lasts 30 days,
+90 days or 1 year unused, or never expires, and does what its person may do
+at that moment. Jobs and Promotions record the person whose token asked.
+There is no admin token: an `admin.token` file left by an older labd is
+ignored, and so are the Maintainer tokens (`mnt_...`) an older labd made.
+`labd break-glass`, run on the server as the account labd runs as, mints a
+Lab token for a named person when nothing else gets in.
 
 labd listens on `127.0.0.1:7770` unless told otherwise. Plain http on any other
 address, such as `--listen <tailnet-ip>:7770` for Macs over Tailscale, needs

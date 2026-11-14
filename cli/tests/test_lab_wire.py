@@ -188,7 +188,7 @@ class LabdTest(unittest.TestCase):
         log = open(os.path.join(work, "labd.log"), "w", encoding="utf-8")
         self.addCleanup(log.close)
         process = subprocess.Popen([LABD, f"--listen=127.0.0.1:{port}", f"--data={work}/data", f"--machine-id-key={key}",
-                                    "--maintainer=ci", "--omt-site=", *flags], stdout=log, stderr=subprocess.STDOUT)
+                                    "--omt-site=", *flags], stdout=log, stderr=subprocess.STDOUT)
         self.addCleanup(process.wait)
         self.addCleanup(process.terminate)
         url = f"http://127.0.0.1:{port}"

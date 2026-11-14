@@ -35,8 +35,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Account 1 is the Admin the configuration names; nobody signs in here.
+mkdir "$WORK/sign-in"
+echo 1 >"$WORK/sign-in/admins"
 "$BIN/labd" --listen="127.0.0.1:$PORT" --socket="$SOCK" --data="$WORK/data" --public-url="$PUB" \
-	--alias="$ALIAS" --preview --maintainer=ci --omt-site= >"$LOG" 2>&1 &
+	--alias="$ALIAS" --preview --sign-in="$WORK/sign-in" --omt-site= >"$LOG" 2>&1 &
 PID=$!
 
 c() { curl -sS --max-time 20 "$@"; }
@@ -53,13 +56,15 @@ for _ in $(seq 60); do
 done
 [ "$(c "${FWD[@]}" "$B/healthz")" = ok ] || fail "healthz"
 
-TOK=$(cat "$WORK/data/admin.token")
+# No admin token on disk: the server's own command mints a Lab token.
+[ ! -e "$WORK/data/admin.token" ] || fail "labd made an admin.token"
+TOK=$("$BIN/labd" break-glass --data="$WORK/data" --account-id=1 ci 2>/dev/null) || fail "labd break-glass"
 mask "$TOK"
 AUTH=(-H "Authorization: Bearer $TOK")
 
 # labd listens on this machine only: a socket for its own account, and loopback.
 [ "$(python3 -c 'import os, stat, sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))' "$SOCK")" = 0o600 ] || fail "the socket's mode"
-"$BIN/labd" --listen="0.0.0.0:$PORT" --data="$WORK/other" --maintainer=ci >/dev/null 2>&1 && fail "labd listened beyond this machine"
+"$BIN/labd" --listen="0.0.0.0:$PORT" --data="$WORK/other" >/dev/null 2>&1 && fail "labd listened beyond this machine"
 [ "$(c "$LOOP/healthz")" = ok ] || fail "healthz at the loopback port"
 
 # The interface, under the prefix: its pages, their files and headers.
@@ -108,7 +113,7 @@ grep -qi '^set-cookie' <<<"$fwd" && fail "the Alias set a cookie"
 # tunnel never takes a stand-in for GitHub.
 [ "$(code "${FWD[@]}" "$B/sign-in")" = 404 ] || fail "sign-in without an OAuth app"
 head_of "${FWD[@]}" "$B/sign-in" | grep -qi '^set-cookie' && fail "a signed-out answer set a cookie"
-"$BIN/labd" --listen="127.0.0.1:$PORT" --socket="$WORK/other.sock" --public-url="$PUB" --data="$WORK/other" --maintainer=ci \
+"$BIN/labd" --listen="127.0.0.1:$PORT" --socket="$WORK/other.sock" --public-url="$PUB" --data="$WORK/other" \
 	--sign-in="$WORK" --github-url=http://127.0.0.1:1 >/dev/null 2>&1 && fail "labd took a stand-in for GitHub behind the tunnel"
 
 # In Preview the lab takes no reports, and says which site is the live one.
@@ -147,11 +152,11 @@ CALLERS=$(cat "$WORK"/data/callers/*.log)
 grep -qF '"addr":"203.0.113.7","ray":"8f1e2d3c4b5a6978-BNE"' <<<"$CALLERS" || fail "the caller's address through the tunnel"
 grep -qF '198.51.100.66' <<<"$CALLERS" && fail "a forged address at the loopback port was believed"
 grep -qF '"who":"person:ci"' <<<"$CALLERS" || fail "the caller log names no person"
-grep -qF "$TOK" <<<"$CALLERS" && fail "the caller log holds the Maintainer token"
+grep -qF "$TOK" <<<"$CALLERS" && fail "the caller log holds the Lab token"
 grep -qF "$ENR" <<<"$CALLERS" && fail "the caller log holds the enrollment token"
 
 # labd's log holds neither token.
-grep -qF "$TOK" "$LOG" && fail "labd logged the Maintainer token"
+grep -qF "$TOK" "$LOG" && fail "labd logged the Lab token"
 grep -qF "$ENR" "$LOG" && fail "labd logged the enrollment token"
 kill -0 "$PID" 2>/dev/null || fail "labd stopped"
 echo "labd smoke at $PUB: PASS"
