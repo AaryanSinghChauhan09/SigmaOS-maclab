@@ -649,5 +649,5 @@ func (s *Server) hExclude(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.log.Printf("job %s: no longer set aside in lab gate", id)
 	}
-	writeJSON(w, j)
+	writeJSON(w, s.withReport(j))
 }

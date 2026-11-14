@@ -134,6 +134,8 @@ func (s *Server) hStream(w http.ResponseWriter, r *http.Request) {
 // viewLocked is view for callers already holding v.mu.
 func (v *dev) viewLocked() DeviceView {
 	d := v.d
+	// labd's own record of which reports are the Mac's: shown to nobody.
+	d.MachineID = ""
 	d.Lease = v.liveLeaseLocked()
 	if c, _ := v.configurationLocked(); c != (api.Configuration{}) {
 		d.Configuration = &c

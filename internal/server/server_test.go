@@ -46,6 +46,14 @@ type lab struct {
 	agent  *agent.Config // the simulated Mac's enrolled lab-agent
 	logs   *logBuf
 	hc     *http.Client // the harness's client for labd; nil is apiClient
+	// changeReport edits the next reports the simulated Mac signs (labConfig.reports).
+	changeReport atomic.Pointer[func(map[string]any)]
+}
+
+func (l *lab) reportChange(body map[string]any) {
+	if change := l.changeReport.Load(); change != nil {
+		(*change)(body)
+	}
 }
 
 // client is the harness's HTTP client for labd: apiClient, or one trusting
@@ -108,6 +116,10 @@ type labConfig struct {
 	wrap func(http.Handler) http.Handler
 	// config adjusts labd's Config before it starts.
 	config func(*Config)
+	// reports has the lab take reports and publish by itself, and the
+	// simulated Mac's omarchy-m-test leave reports its Machine key signed
+	// (publish_run_test.go).
+	reports bool
 	// tls serves labd over https with a certificate from this CA, which the
 	// simulated Mac and the harness trust; prefix serves it under that path
 	// of its public URL. Either sets --public-url.
@@ -158,6 +170,10 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 		if cfg.PublicURL, err = ParsePublicURL(scheme + "://" + ln.Addr().String() + c.prefix); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if c.reports {
+		cfg.OMT, cfg.OMTPublish, cfg.MachineIDKey = true, true, testMachineIDKey()
+		sim.OMTReport = func(kernel string) []byte { return labReport(t, name, kernel, l.reportChange) }
 	}
 	if c.config != nil {
 		c.config(&cfg)
@@ -1060,33 +1076,16 @@ func TestRealSleepNote(t *testing.T) {
 
 func TestOmarchyMTest(t *testing.T) {
 	l := newLab(t, true)
-	var posts []string
-	var mu sync.Mutex
-	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		posts = append(posts, string(b))
-		n := len(posts)
-		mu.Unlock()
-		w.WriteHeader(201)
-		fmt.Fprintf(w, `{"id":"r%d","report_url":"https://site/reports/r%d","deletion_url":"https://site/del/r%d?token=x","tester":false}`, n, n, n)
-	}))
-	defer site.Close()
-	l.s.cfg.OMT, l.s.cfg.OMTSite, l.s.cfg.OMTPublish = true, site.URL, true
+	l.s.cfg.OMT = true
 	l.waitDevice(func(d api.Device) bool { return d.Facts.AgentVersion != "" })
 
-	// The baseline runs it on the known-good kernel, keeps it as the reference and publishes it.
+	// The baseline runs it on the known-good kernel and keeps it as the
+	// reference. What the lab then publishes is publish_run_test.go's.
 	l.baseline()
 	jobs, _ := l.s.store.jobs("sim-mac", 1, false)
 	base := jobs[0]
-	if o := base.Result.OMT; o == nil || !o.KnownGood || o.Pass != 3 || o.Fail != 1 || o.Skip != 1 || o.Published != "https://site/reports/r1" {
+	if o := base.Result.OMT; o == nil || !o.KnownGood || o.Pass != 3 || o.Fail != 1 || o.Skip != 1 || o.Published != "" || o.Reference != "became the reference" {
 		t.Fatalf("baseline omt %+v", base.Result.OMT)
-	}
-	if len(posts) != 1 || !strings.Contains(posts[0], `"kernel":"`+agent.SimKnownGood+`"`) {
-		t.Fatalf("site got %d posts: %v", len(posts), posts)
-	}
-	if _, err := os.Stat(filepath.Join(l.s.jobDir(base.ID), "omt-published.json")); err != nil {
-		t.Fatal("the deletion link was not kept with the job")
 	}
 
 	// A good lab kernel: same results, nothing regressed, not published.
@@ -1112,17 +1111,13 @@ func TestOmarchyMTest(t *testing.T) {
 	j2 = l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-tb2 behavior=omt-no-fingerprint"), OMTAllow: []string{"hardware.drivers:apple,other"}})
 	l.expect(j2, api.OutcomeTestsFailed)
 
-	// And it can't be published: the site would file it under the packaged kernel.
-	if r, body := l.get("POST", "/api/jobs/"+j.ID+"/publish"); r.StatusCode != 409 || !strings.Contains(body, "lab kernel") {
-		t.Fatalf("publish of a lab kernel run: %s %s", r.Status, body)
-	}
-	if len(posts) != 1 {
-		t.Fatalf("site got %d posts, want 1", len(posts))
+	// And it can't be published: it would be filed under the packaged kernel.
+	if r, body := l.get("POST", "/api/jobs/"+j.ID+"/publish"); r.StatusCode != 409 || !strings.Contains(body, "only a Known-good run is published") {
+		t.Fatalf("publish of a test-kernel run: %s %s", r.Status, body)
 	}
 
 	// A known-good run whose job fails keeps the old reference; a clean one replaces it.
 	ref, _ := os.ReadFile(l.s.omtBaselinePath("sim-mac"))
-	l.s.cfg.OMTPublish = false
 	j = l.run(api.JobSpec{Tests: []api.TestSpec{{Name: "check-that-will-fail", Builtin: "x"}}})
 	l.expect(j, api.OutcomeTestsFailed)
 	if now, _ := os.ReadFile(l.s.omtBaselinePath("sim-mac")); !bytes.Equal(ref, now) || !strings.HasPrefix(j.Result.OMT.Reference, "kept") {
@@ -1786,14 +1781,7 @@ func TestOmarchyMTestRenamed(t *testing.T) {
 }
 
 func TestBaselinePublishesWhenKnownGoodChanges(t *testing.T) {
-	l := newLab(t, true)
-	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(201)
-		fmt.Fprint(w, `{"report_url":"https://site/r/1","deletion_url":"https://site/d/1"}`)
-	}))
-	defer site.Close()
-	l.s.cfg.OMT, l.s.cfg.OMTSite, l.s.cfg.OMTPublish = true, site.URL, true
-	l.waitDevice(func(d api.Device) bool { return d.Facts.AgentVersion != "" })
+	l := publishingLab(t, labConfig{oob: true})
 	l.baseline()
 	// The Mac's kernel was upgraded outside the lab; the next baseline re-records it.
 	v := l.s.dev("sim-mac")
@@ -1802,7 +1790,7 @@ func TestBaselinePublishesWhenKnownGoodChanges(t *testing.T) {
 	v.mu.Unlock()
 	j := l.run(api.JobSpec{Baseline: true})
 	l.expect(j, api.OutcomePass)
-	if o := j.Result.OMT; o == nil || o.Published != "https://site/r/1" {
+	if o := j.Result.OMT; o == nil || o.ReportID == "" || l.s.reportState(j) != api.ReportPublished {
 		t.Fatalf("baseline after a kernel change was not published: %+v", j.Result.OMT)
 	}
 }

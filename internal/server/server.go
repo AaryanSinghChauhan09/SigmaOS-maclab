@@ -87,9 +87,9 @@ type Config struct {
 	Transfers Transfers
 	// OMT runs omarchy-m-test in every job on Macs with a desktop user.
 	OMT bool
-	// OMTSite is where omarchy-m-test reports are published; empty never publishes.
-	OMTSite string
-	// OMTPublish publishes known-good runs (baselines and scheduled runs) by itself.
+	// OMTPublish has the lab publish by itself the runs that became a Mac's
+	// Reference: each baseline, and a scheduled refresh once a week. Without
+	// it a report is published only by hand.
 	OMTPublish bool
 	// OMTEvery re-runs omarchy-m-test on each idle Mac's known-good kernel this often; 0 never.
 	OMTEvery time.Duration
@@ -545,6 +545,10 @@ func (s *Server) updateJob(j *api.Job, f func(*api.Job)) {
 	defer jobMu.Unlock()
 	j.GateExclusion = s.store.gateExclusion(j.ID)
 	f(j)
+	if j.Result.OMT != nil {
+		// said when a job is read (withReport), never kept
+		j.Result.OMT.ReportState = ""
+	}
 	j.Updated = s.now()
 	if err := s.store.saveJob(j); err != nil {
 		s.log.Printf("save job %s: %v", j.ID, err)
@@ -665,7 +669,7 @@ func (s *Server) routes() []route {
 		{"GET /api/jobs/{id}/wait", jobNamed, s.hWait},
 		{"POST /api/jobs/{id}/cancel", team, s.hCancel},
 		{"POST /api/jobs/{id}/retry", team, s.hRetry},
-		{"POST /api/jobs/{id}/publish", maintainers, s.hPublish},
+		{"POST /api/jobs/{id}/publish", team, s.hPublish},
 		{"POST /api/jobs/{id}/exclude", maintainers, s.hExclude},
 		{"DELETE /api/jobs/{id}/exclude", maintainers, s.hExclude},
 		{"GET /api/jobs/{id}/files/{name...}", jobNamed, s.hJobFile},
@@ -1835,6 +1839,9 @@ func (s *Server) hJobs(w http.ResponseWriter, r *http.Request) {
 	if jobs == nil {
 		jobs = []*api.Job{}
 	}
+	for _, j := range jobs {
+		s.withReport(j)
+	}
 	writeJSON(w, jobs)
 }
 
@@ -1844,7 +1851,7 @@ func (s *Server) hJob(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, "no job %s", r.PathValue("id"))
 		return
 	}
-	writeJSON(w, j)
+	writeJSON(w, s.withReport(j))
 }
 
 // hWait holds until the job is done, the job has more events than the
@@ -1869,7 +1876,7 @@ func (s *Server) hWait(w http.ResponseWriter, r *http.Request) {
 		}
 		left := deadline.Sub(s.now())
 		if j.State == api.JobDone || (seen >= 0 && len(j.Events) > seen) || left <= 0 {
-			writeJSON(w, j)
+			writeJSON(w, s.withReport(j))
 			return
 		}
 		select {
@@ -1880,18 +1887,24 @@ func (s *Server) hWait(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// hPublish uploads a finished job's omarchy-m-test report to omarchy-m-testing.org.
+// hPublish publishes a finished job's omarchy-m-test report by hand: a
+// Maintainer any job's, an M team member their own job's.
 func (s *Server) hPublish(w http.ResponseWriter, r *http.Request) {
 	j, err := s.store.job(r.PathValue("id"))
 	if err != nil {
 		httpErr(w, 404, "no job %s", r.PathValue("id"))
 		return
 	}
+	p := leaser(r)
+	if err := mayPublish(p, j); err != nil {
+		httpErr(w, statusOf(err), "%v", err)
+		return
+	}
 	if j.State != api.JobDone {
 		httpErr(w, 409, "job %s is still %s", j.ID, j.State)
 		return
 	}
-	url, err := s.omtPublish(r.Context(), j)
+	url, err := s.omtPublish(j, p)
 	if err != nil {
 		httpErr(w, 409, "not published: %v", err)
 		return
@@ -1932,6 +1945,11 @@ func (s *Server) hJobFile(w http.ResponseWriter, r *http.Request) {
 	name, ok := cleanName(r.PathValue("name"))
 	if !ok || strings.ContainsAny(r.PathValue("id"), "/.") {
 		httpErr(w, 400, "bad name")
+		return
+	}
+	if name == oldSiteLinks {
+		// a deletion link is its report's credential
+		http.NotFound(w, r)
 		return
 	}
 	http.ServeFile(w, r, filepath.Join(s.jobDir(r.PathValue("id")), name))

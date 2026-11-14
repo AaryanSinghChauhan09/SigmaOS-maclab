@@ -117,6 +117,8 @@ func (s *Server) hReportDelete(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.pageFailed(w, err)
 	default:
+		// The link is the credential: whoever sent it is not asked who they are.
+		s.reportDeleted(report, "whoever holds its deletion link", 0)
 		s.render(w, r, "reports/deleted", web.Page{Title: "Report deleted", Nav: "reports", Public: true})
 	}
 }

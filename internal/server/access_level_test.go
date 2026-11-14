@@ -578,46 +578,46 @@ func TestStatusShowsTheLatestAuditEntries(t *testing.T) {
 }
 
 func TestPublishingIsOffOnAVolunteerMacUntilPublishOn(t *testing.T) {
-	var mu sync.Mutex
-	var posts int
-	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		posts++
-		n := posts
-		mu.Unlock()
-		w.WriteHeader(201)
-		fmt.Fprintf(w, `{"id":"r%d","report_url":"https://site/reports/r%d","deletion_url":"https://site/del/r%d?token=x"}`, n, n, n)
-	}))
-	defer site.Close()
-	published := func() int { mu.Lock(); defer mu.Unlock(); return posts }
-	l, _ := windowEndLab(t, labConfig{config: func(c *Config) { c.OMT, c.OMTSite, c.OMTPublish = true, site.URL, true }})
+	l, _ := publishingWindowLab(t)
+	published := func() int {
+		t.Helper()
+		every, err := l.s.reports.Every(l.s.catalogue)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(every.Runs())
+	}
 	if n := published(); n != 0 {
-		t.Fatalf("the Volunteer Mac's baseline was published without their consent: %d posts", n)
+		t.Fatalf("the Volunteer Mac's baseline was published without their consent: %d reports", n)
 	}
 	// Neither a job asking for it nor a Maintainer by hand publishes it.
 	j := l.jobAPI(l.submitJob(api.JobSpec{Baseline: true, Publish: true}), 90*time.Second)
 	l.expect(j, api.OutcomePass)
+	if o := j.Result.OMT; o == nil || o.Pass == 0 || o.ReportState != api.ReportNotPublished || !strings.Contains(o.PublishNote, "publishing is off on "+l.name) {
+		t.Fatalf("with publishing off the run is not readable as an unpublished one: %+v", o)
+	}
 	if r, body := l.post("/api/jobs/"+j.ID+"/publish", nil); r.StatusCode == 200 {
 		t.Fatalf("a Maintainer published a report of a Volunteer's Mac with publishing off: %s", body)
 	}
 	if n := published(); n != 0 {
-		t.Fatalf("published with publishing off: %d posts", n)
+		t.Fatalf("published with publishing off: %d reports", n)
 	}
 
 	l.mustVolunteer("publish", "on")
 	time.Sleep(time.Second) // check-ins carry it to labd
 	j = l.jobAPI(l.submitJob(api.JobSpec{Baseline: true}), 90*time.Second)
 	l.expect(j, api.OutcomePass)
-	if n := published(); n != 1 || j.Result.OMT == nil || j.Result.OMT.Published == "" {
-		t.Fatalf("publish on did not publish the next baseline: %d posts, omt %+v", n, j.Result.OMT)
+	if n := published(); n != 1 || j.Result.OMT == nil || j.Result.OMT.ReportID == "" || j.Result.OMT.ReportState != api.ReportPublished {
+		t.Fatalf("publish on did not publish the next baseline: %d reports, omt %+v", n, j.Result.OMT)
 	}
+	link := "/reports/" + j.Result.OMT.ReportID + "/deletion?token="
 	var out string
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
-		if out = l.mustVolunteer("publish", "on"); strings.Contains(out, "https://site/del/r1?token=x") {
+		if out = l.mustVolunteer("publish", "on"); strings.Contains(out, link) {
 			break
 		}
 	}
-	if !strings.Contains(out, "https://site/del/r1?token=x") {
+	if !strings.Contains(out, link) {
 		t.Fatalf("publish on does not show the deletion link:\n%s", out)
 	}
 
@@ -625,7 +625,14 @@ func TestPublishingIsOffOnAVolunteerMacUntilPublishOn(t *testing.T) {
 	time.Sleep(time.Second)
 	l.expect(l.jobAPI(l.submitJob(api.JobSpec{Baseline: true}), 90*time.Second), api.OutcomePass)
 	if n := published(); n != 1 {
-		t.Fatalf("published after publish off: %d posts", n)
+		t.Fatalf("published after publish off: %d reports", n)
+	}
+	// Turning it off leaves the Published report up, and its link listed.
+	if r, _ := l.get("GET", "/reports/"+j.Result.OMT.ReportID); r.StatusCode != 200 {
+		t.Fatalf("the published report after publish off: %s", r.Status)
+	}
+	if out := l.mustVolunteer("publish", "on"); !strings.Contains(out, link) {
+		t.Fatalf("publish on no longer shows the deletion link:\n%s", out)
 	}
 }
 

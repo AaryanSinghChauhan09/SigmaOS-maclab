@@ -52,9 +52,8 @@ func main() {
 	flag.Var(&sourceHosts, "source-host", "a host a build's public source may come from beside github.com, such as git.kernel.org (repeatable)")
 	partsAtOnce := flag.Int("parts-at-once", 1, "how many parts of an upload labd tells a client to send at the same time: 1 or 4")
 	omt := flag.Bool("omt", true, "run omarchy-m-test (github.com/maralcbr/omarchy-m-testing) in every job on Macs with a desktop user, and compare it with the known-good kernel")
-	omtSite := flag.String("omt-site", "https://omarchy-m-testing.org", "where omarchy-m-test reports are published (lab publish, --publish); empty never publishes")
-	omtPublish := flag.Bool("omt-publish", false, "publish known-good omarchy-m-test runs (baselines and --omt-every runs) by themselves")
-	omtEvery := flag.Duration("omt-every", 0, "re-run omarchy-m-test on each idle Mac's known-good kernel this often, e.g. 24h (reboots the Mac); 0 never")
+	omtPublish := flag.Bool("omt-publish", true, "publish by itself the Known-good runs that became a Mac's Reference: each baseline, and a scheduled refresh once a week. Off, a report is published only by hand (lab publish, --publish)")
+	omtEvery := flag.Duration("omt-every", 7*24*time.Hour, "refresh each idle Mac's Reference this often: omarchy-m-test on its known-good kernel (reboots the Mac); 0 never")
 	oobd := flag.String("oobd", "http://127.0.0.1:7780", "the Out-of-band controller's address, on this machine")
 	oobdTokenFile := flag.String("oobd-token-file", "", "labd's copy of the Out-of-band controller's token: a file only the account labd runs as reads. With none, no Mac gets a Hard reset")
 	signalSocket := flag.String("signal-socket", "", "signal-cli's daemon socket on this machine, the lab's Signal sender. With none, every line for the two groups is recorded and none is posted")
@@ -145,7 +144,7 @@ func main() {
 	exe, _ := os.Executable()
 	s, err := server.New(ctx, server.Config{DataDir: *data,
 		PublicURL: pub, Alias: *alias, Preview: *preview, Release: version, GitHub: app, Admins: admins, OOB: controller, MachineIDKey: idKey, Signal: sender, SignalDir: *signalDir, Watch: watch,
-		OMT: *omt, OMTSite: *omtSite, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
+		OMT: *omt, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
 		BootTimeout: *bootTimeout, OfflineAfter: *offlineAfter, AliveWindow: *aliveWindow, QuietGrace: *quietGrace, StageTimeout: *stageTimeout, WatchdogOpenTimeout: *watchdogOpenTimeout, RebootWarning: *rebootWarning, NtfyURL: *ntfy, NotifyCmd: *notifyCmd,
 		SourceHosts: hosts, ArtifactBudget: *artifactGB << 30, Transfers: server.Transfers{AtOnce: *partsAtOnce},
 		ReleaseKey:  releaseKey,

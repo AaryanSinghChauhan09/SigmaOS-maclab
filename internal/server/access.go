@@ -200,8 +200,8 @@ func (s *Server) hAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, es)
 }
 
-// hAgentPublished lists a Volunteer's Mac's published omarchy-m-test reports
-// with their deletion links, for `lab-agent publish on`.
+// hAgentPublished lists the reports the lab published from a Volunteer's
+// Mac's jobs with their deletion links, for `lab-agent publish on`.
 func (s *Server) hAgentPublished(w http.ResponseWriter, r *http.Request) {
 	v := agentDev(r)
 	jobs, err := s.store.jobs(v.snapshot().Name, 1000, false)
@@ -209,18 +209,5 @@ func (s *Server) hAgentPublished(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, "%v", err)
 		return
 	}
-	out := []api.Published{}
-	for i := len(jobs) - 1; i >= 0; i-- { // oldest first
-		j := jobs[i]
-		if j.Result.OMT == nil || j.Result.OMT.Published == "" {
-			continue
-		}
-		var reply struct {
-			DeletionURL string `json:"deletion_url"`
-		}
-		b, _ := os.ReadFile(filepath.Join(s.jobDir(j.ID), "omt-published.json"))
-		json.Unmarshal(b, &reply)
-		out = append(out, api.Published{Job: j.ID, ReportURL: j.Result.OMT.Published, DeletionURL: reply.DeletionURL})
-	}
-	writeJSON(w, out)
+	writeJSON(w, s.publishedOf(v.snapshot().ID, jobs, s.publicBase(r)))
 }

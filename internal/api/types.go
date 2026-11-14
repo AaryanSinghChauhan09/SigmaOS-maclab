@@ -193,6 +193,13 @@ type Device struct {
 	// latest check-in carried them. Only the Volunteer changes them, on the Mac.
 	AccessLevel string `json:"access_level,omitempty"`
 	Publish     bool   `json:"publish,omitempty"`
+	// MachineID tells the Mac's reports from another's: of its Machine key,
+	// recorded when the lab publishes a job's report. labd keeps it and
+	// shows it to nobody.
+	MachineID string `json:"machine_id,omitempty"`
+	// RefreshPublished is when the lab queued the last scheduled refresh it
+	// published by itself: it publishes one a week.
+	RefreshPublished time.Time `json:"refresh_published,omitzero"`
 	// TermsSHA256 is the participation terms the Mac's owner accepted when it
 	// joined, and TermsAccepted when; empty for a Mac that joined before
 	// labd had terms.
@@ -394,8 +401,8 @@ func (e AuditEntry) Line(loc *time.Location) string {
 	return fmt.Sprintf("%s  %s%s %s", e.Time.In(loc).Format("2006-01-02 15:04:05"), who, job, what)
 }
 
-// Published is an omarchy-m-test report of a Volunteer's Mac on
-// omarchy-m-testing.org, with the link that takes it down again.
+// Published is an omarchy-m-test report of a Volunteer's Mac that the lab
+// published, with the link that takes it down again.
 type Published struct {
 	Job         string `json:"job"`
 	ReportURL   string `json:"report_url"`
@@ -801,9 +808,10 @@ type JobSpec struct {
 	Crash               string     `json:"crash,omitempty"` // crash test mode, see CrashArgs
 	Baseline            bool       `json:"baseline,omitempty"`
 	Holder              string     `json:"holder,omitempty"`
-	// Publish uploads the job's omarchy-m-test report to omarchy-m-testing.org.
-	// Only a run on the Mac's known-good (packaged) kernel is ever published:
-	// the site names a report's build from pacman, which doesn't know lab kernels.
+	// Publish has the lab publish the job's omarchy-m-test report, asked for
+	// by whoever submitted the job. Only a Known-good run on a packaged
+	// kernel is ever published: a report's build is named from pacman, which
+	// doesn't know lab kernels.
 	Publish bool `json:"publish,omitempty"`
 	// OMTAllow names omarchy-m-test checks this kernel is expected to fail
 	// (it lacks a feature on purpose): they're listed, not counted as regressions.
@@ -1030,9 +1038,34 @@ type OMTResult struct {
 	Allowed     []OMTCheck `json:"allowed,omitempty"`      // regressed, but the job said this kernel is expected to (omt_allow)
 	ComparedTo  string     `json:"compared_to,omitempty"`  // the baseline job, or why there was no comparison
 	BaselineJob string     `json:"baseline_job,omitempty"` // the known-good run it was compared with; "" for none, and then Regressions says nothing
-	Published   string     `json:"published,omitempty"`    // the report's page on omarchy-m-testing.org
-	PublishNote string     `json:"publish_note,omitempty"` // why it wasn't published, or the site's error
+	Published   string     `json:"published,omitempty"`    // the published report's page
+	PublishNote string     `json:"publish_note,omitempty"` // why it wasn't published
 	Reference   string     `json:"reference,omitempty"`    // a known-good run: whether it became the reference, or why not
+	// ReportID is the id of the report the lab published from this run.
+	ReportID string `json:"report_id,omitempty"`
+	// ReportState is what became of the run's report, in one of the four
+	// Report* words. labd says it each time the job is read; it is not kept.
+	ReportState string `json:"report_state,omitempty"`
+	// ReportDeleted is who deleted the published report and when. The lab
+	// never publishes the job again by itself.
+	ReportDeleted *ReportDeleted `json:"report_deleted,omitempty"`
+}
+
+// What became of a job's omarchy-m-test report.
+const (
+	ReportNotPublished = "not published"
+	ReportPublished    = "published"
+	ReportHidden       = "hidden"
+	ReportIsDeleted    = "deleted"
+)
+
+// ReportDeleted is who deleted a job's published report, in words ("@ravi",
+// "whoever holds its deletion link"), with their account when the lab knows
+// it, and when.
+type ReportDeleted struct {
+	By        string    `json:"by"`
+	AccountID int64     `json:"account_id,omitempty"`
+	Time      time.Time `json:"time"`
 }
 
 type OMTCheck struct {

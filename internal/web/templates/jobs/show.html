@@ -40,6 +40,8 @@
 {{if .Changed}}<ul class="record">
 {{range .Changed}}<li><span class="{{.Class}}">{{.Tag}}</span> <b>{{.ID}}</b>{{if .Evidence}} · {{.Evidence}}{{end}}</li>
 {{end}}</ul>
+{{end}}<p id="report">Report: <span class="badge {{.ReportClass}}">{{.Report}}</span>{{if .ReportHref}} <a href="{{.ReportHref}}">the report</a>{{end}}{{if .Deleted}} {{.Deleted}}{{end}}{{if .Note}} <span class="dim">{{.Note}}</span>{{end}}</p>
+{{if .CanPublish}}<p><form class="inline" method="post" action="{{href (print "/jobs/" $.Data.ID "/publish")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Publish</button></form> <span class="dim">Puts this run's report on the public pages, as asked by you. Only a Known-good run on a packaged kernel is published.</span></p>
 {{end}}</section>
 {{end}}{{if or .Recovery .KernelEvents .NewErrors}}<section class="card">
 <h2 class="card-title">what the kernel did</h2>

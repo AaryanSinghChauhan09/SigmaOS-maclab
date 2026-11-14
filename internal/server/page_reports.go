@@ -39,6 +39,30 @@ type maintainerRow struct {
 	runView
 	Short, Uploader string
 	Hidden          bool
+	Arrived         arrivedView
+}
+
+// arrivedView is how a report arrived: by its Mac's own tool, or by the lab
+// from a job's run, with who asked for it to be published. Maintainers
+// alone are told.
+type arrivedView struct {
+	Job, JobHref string
+	// Asked is who asked, "" when the lab published the report by itself.
+	Asked string
+}
+
+func (s *Server) arrived(report *reports.Report) arrivedView {
+	if !report.ByLab() {
+		return arrivedView{}
+	}
+	v := arrivedView{Job: report.LabJob, JobHref: s.href("/jobs/" + report.LabJob)}
+	switch {
+	case report.AskedHandle != "":
+		v.Asked = "@" + report.AskedHandle
+	case report.AskedAccountID != 0:
+		v.Asked = "a person whose name is not kept"
+	}
+	return v
 }
 
 // maintains reports whether r comes from a Maintainer, who hides, shows and
@@ -67,7 +91,7 @@ func (s *Server) everyReport(w http.ResponseWriter) *everyReport {
 	for i := len(runs) - 1; i >= 0; i-- {
 		run := runs[i]
 		list.Rows = append(list.Rows, maintainerRow{runView: s.runList(every, []*reports.Run{run}, false)[0],
-			Short: run.PublicID[:min(8, len(run.PublicID))], Uploader: uploader(run.Report), Hidden: run.Hidden})
+			Short: run.PublicID[:min(8, len(run.PublicID))], Uploader: uploader(run.Report), Hidden: run.Hidden, Arrived: s.arrived(run.Report)})
 	}
 	return list
 }
@@ -121,7 +145,11 @@ func (s *Server) pDeleteReport(w http.ResponseWriter, r *http.Request) {
 	if report == nil || !s.sure(w, r, "Delete this report and its evidence for good", "/reports#admin-report-"+report.PublicID) {
 		return
 	}
-	s.reportChanged(w, r, report, true, s.reports.Delete(report.PublicID), "deleted the report %s", "/reports#all-reports")
+	err := s.reports.Delete(report.PublicID)
+	if p := PersonOf(r); err == nil && p != nil {
+		s.reportDeleted(report, "@"+p.Handle, p.AccountID)
+	}
+	s.reportChanged(w, r, report, true, err, "deleted the report %s", "/reports#all-reports")
 }
 
 // reportAt is the report an action's address names, Hidden or not; nil when
@@ -193,10 +221,13 @@ type reportPage struct {
 	Uploaded                                string
 	Counts                                  reports.Counts
 	Unattended                              bool
-	Packages                                []reportPackage
-	Sections                                []*reportSection
-	Inventory                               *inventoryView
-	ModelHref                               string
+	// ByLab is whether the lab published the report from a job's run. The
+	// page says so and names nobody.
+	ByLab     bool
+	Packages  []reportPackage
+	Sections  []*reportSection
+	Inventory *inventoryView
+	ModelHref string
 	// For a Maintainer alone: whether the report is Hidden, and who its Mac
 	// was signed in as ("" for anyone else).
 	Hidden   bool
@@ -267,7 +298,7 @@ func (s *Server) reportPage(r *http.Request, p *reports.Published, run *reports.
 		Stack: run.StackWords() + " " + run.OmarchyVersion(), CandidateSet: run.CandidateSet(), Build: s.buildLong(p, run),
 		Distro: text("system", "distro"), BootLoader: text("system", "boot_loader"), Encryption: text("system", "encryption"),
 		ToolName: text("tool", "name"), ToolVersion: text("tool", "version"), CatalogueVersion: text("catalogue_version"),
-		Uploaded: uploadedAtRun(run), Counts: run.ResultCounts(false), Unattended: run.Unattended(), ModelHref: s.href("/models/" + run.Board()),
+		Uploaded: uploadedAtRun(run), Counts: run.ResultCounts(false), Unattended: run.Unattended(), ByLab: run.ByLab(), ModelHref: s.href("/models/" + run.Board()),
 	}
 	if page.CandidateSet != "" {
 		page.CandidateHref = s.href("/candidates/" + page.CandidateSet)

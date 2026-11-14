@@ -314,7 +314,7 @@ func TestMesaStagedJobLifecycleIsExplicitlySimulatedPrivateAndNonPromoting(t *te
 	if e != nil || string(after) != string(before) {
 		t.Fatal("Mesa job rewrote installed-desktop reference", e)
 	}
-	if _, e = l.s.publishOMT(context.Background(), j); e == nil || !strings.Contains(e.Error(), "never published") {
+	if _, e = l.s.publishOMT(j, Person{}); e == nil || !strings.Contains(e.Error(), "never published") {
 		t.Fatal("Mesa report publication admitted", e)
 	}
 }

@@ -3,25 +3,23 @@ package server
 // omarchy-m-test (github.com/maralcbr/omarchy-m-testing) checks every hardware
 // feature of a Mac under Omarchy and writes a signed report. The lab runs it
 // in the desktop session after a boot, compares the report with the same
-// Mac's report on its known-good kernel, and can publish known-good reports
-// to omarchy-m-testing.org.
+// Mac's report on its known-good kernel, and can publish the report of a
+// Known-good run.
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/reports"
 )
 
 // omtPackagingChecks look for the running kernel among the installed packages
@@ -455,40 +453,72 @@ func omtNodes(base *omtBaseline, status map[string]string, rep omtReport) (regre
 	return regressed, fixed
 }
 
-// publishOMT uploads a job's report to omarchy-m-testing.org, the way
-// `omarchy-m-test` itself does after its upload prompt. Only a run on the
-// Mac's known-good kernel qualifies: the site names a report's build from the
-// installed packages, and a lab kernel isn't one, so it would be filed under
-// the wrong kernel.
-func (s *Server) publishOMT(ctx context.Context, j *api.Job) (string, error) {
+// The lab publishing a job's report. It goes in by the way every report
+// does, handed over inside labd (reports.Uploads.ReceiveFromLab): the same
+// schema, signature, check ids and evidence, and the Mac's own ten an hour.
+// The one signature on it is the one the Mac's Machine key made; the lab
+// adds none, and records only how the report arrived.
+
+// refreshPublishedEvery is how often the lab publishes a Mac's scheduled
+// refresh by itself.
+const refreshPublishedEvery = 7 * 24 * time.Hour
+
+// publishing has one report published at a time: two asks for one job
+// publish it once.
+var publishing sync.Mutex
+
+// publishOMT publishes a job's report, asked for by a person or, for the
+// zero Person, by the lab itself. Only a Known-good run on a packaged kernel
+// qualifies: a report's build is named from the installed packages, and a
+// lab kernel isn't one, so it would be filed under the wrong kernel.
+func (s *Server) publishOMT(j *api.Job, by Person) (string, error) {
 	res := j.Result.OMT
 	switch {
+	case s.Preview():
+		return "", errors.New("Omarchy Mac Lab is not open yet and publishes no report")
 	case j.Spec.Mesa != nil:
 		return "", errors.New("staged Mesa diagnostics are private and never published")
-	case s.cfg.OMTSite == "":
-		return "", errors.New("publishing is off (labd --omt-site)")
 	case res == nil:
 		return "", errors.New("this job has no omarchy-m-test report")
-	case res.Published != "":
+	case j.Spec.InstalledManifest != "":
+		return "", errors.New("an Installed run is never published")
+	}
+	switch s.reportState(j) {
+	case api.ReportPublished:
 		return res.Published, nil
-	case !res.KnownGood:
-		return "", fmt.Errorf("ran on lab kernel %s, which the installed packages don't describe; only known-good runs are published", res.Kernel)
+	case api.ReportHidden:
+		return "", errors.New("its report is Hidden: a Maintainer shows it again on Reports")
+	case api.ReportIsDeleted:
+		return "", fmt.Errorf("its report was deleted%s, and a deleted report is not published again", deletedBy(res.ReportDeleted))
 	}
-	if v := s.dev(j.Spec.Device); v != nil {
-		if d := v.snapshot(); d.IsVolunteer() && !d.Publish {
-			return "", fmt.Errorf("publishing is off on %s, a Volunteer's Mac: only its Volunteer turns it on (sudo lab-agent publish on)", d.Name)
-		}
+	if !res.KnownGood {
+		return "", fmt.Errorf("ran on test kernel %s, which the installed packages don't describe; only a Known-good run is published", res.Kernel)
 	}
-	// A baseline makes the kernel it booted the known-good one, but only once it
-	// finishes, after this upload; until then compare with what it booted.
+	if s.uploads == nil {
+		return "", errors.New("this lab takes no reports: it was given no machine-id key")
+	}
+	// The Mac is asked as it is at this moment: still the enrollment that ran
+	// the job, its Volunteer's switch, its known-good kernel.
+	v := s.dev(j.Spec.Device)
+	if v == nil {
+		return "", fmt.Errorf("%s was forgotten (lab forget), so there is no known-good kernel to check the report against", j.Spec.Device)
+	}
+	d := v.snapshot()
+	switch {
+	case d.ID != j.DeviceID && j.DeviceID != "":
+		return "", fmt.Errorf("%s has joined again since job %s ran: the report of an earlier enrollment stays private", d.Name, j.ID)
+	case d.State == api.StateLeft:
+		return "", fmt.Errorf("%s has left the lab: its unpublished reports stay private", d.Name)
+	case d.IsVolunteer() && !d.Publish:
+		return "", fmt.Errorf("publishing is off on %s, a Volunteer's Mac: only its Volunteer turns it on (sudo lab-agent publish on)", d.Name)
+	}
+	// A baseline makes the kernel it booted the known-good one only if it
+	// passes; one that did not is compared with what it booted.
 	if j.Spec.Baseline {
 		if res.Kernel != j.Result.BootKernel {
 			return "", fmt.Errorf("report names kernel %s but the baseline booted %s", res.Kernel, j.Result.BootKernel)
 		}
-	} else if v := s.dev(j.Spec.Device); v == nil {
-		// lab forget dropped the Mac, and its known-good kernel with it
-		return "", fmt.Errorf("%s was forgotten (lab forget), so there is no known-good kernel to check the report against", j.Spec.Device)
-	} else if kg := v.snapshot().KnownGood; kg != "" && res.Kernel != kg {
+	} else if kg := d.KnownGood; kg != "" && res.Kernel != kg {
 		return "", fmt.Errorf("report names kernel %s but the known-good kernel is %s", res.Kernel, kg)
 	}
 	body, err := os.ReadFile(filepath.Join(s.jobDir(j.ID), res.Report))
@@ -498,60 +528,293 @@ func (s *Server) publishOMT(ctx context.Context, j *api.Job) (string, error) {
 	if err := packagedOMTReport(body, res.Kernel); err != nil {
 		return "", fmt.Errorf("report remains private: %w", err)
 	}
-	site := strings.TrimRight(s.cfg.OMTSite, "/")
-	req, _ := http.NewRequestWithContext(ctx, "POST", site+"/api/v1/reports", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "maclab (github.com/omacom/omarchy-maclab)")
-	resp, err := (&http.Client{Timeout: time.Minute}).Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	var reply struct {
-		ReportURL   string   `json:"report_url"`
-		DeletionURL string   `json:"deletion_url"`
-		Error       string   `json:"error"`
-		Details     []string `json:"details"`
-	}
-	json.Unmarshal(out, &reply)
-	if resp.StatusCode != http.StatusCreated {
-		msg := reply.Error
-		if msg == "" {
-			msg = strings.TrimSpace(string(out))
+	site := s.labAddress()
+	stored, refusal, err := s.uploads.ReceiveFromLab(body, site+"/install", reports.Lab{Job: j.ID, Handle: by.Handle, AccountID: by.AccountID})
+	switch {
+	case refusal != nil && refusal.Held != "":
+		return "", fmt.Errorf("%s: %s/reports/%s", refusal.Error, site, refusal.Held)
+	case refusal != nil:
+		if err != nil {
+			s.log.Printf("publishing the report of job %s: %v", j.ID, err)
 		}
-		if len(reply.Details) > 0 {
-			msg += " (" + strings.Join(reply.Details, "; ") + ")"
+		msg := refusal.Error
+		if len(refusal.Details) > 0 {
+			msg += " (" + strings.Join(refusal.Details, "; ") + ")"
 		}
-		return "", fmt.Errorf("%s: %s", resp.Status, msg)
+		return "", errors.New(msg)
 	}
-	// The deletion link takes the report down again; it stays with the job, not in the API.
-	os.WriteFile(filepath.Join(s.jobDir(j.ID), "omt-published.json"), out, 0o600)
-	return reply.ReportURL, nil
+	v.mu.Lock()
+	if v.d.ID == j.DeviceID && v.d.MachineID != stored.MachineID {
+		v.d.MachineID = stored.MachineID
+		v.saveLocked()
+	}
+	v.mu.Unlock()
+	if d.IsVolunteer() {
+		// The deletion link takes the report down again: `lab-agent publish
+		// on` lists it at the Mac. It is kept beside the jobs, not in one.
+		s.keepDeletionLink(j.ID, stored)
+	}
+	res.ReportID = stored.PublicID
+	return site + "/reports/" + stored.PublicID, nil
 }
 
-// omtPublish publishes a job's report and records the outcome on the job.
-func (s *Server) omtPublish(ctx context.Context, j *api.Job) (string, error) {
-	url, err := s.publishOMT(ctx, j)
-	s.updateJob(j, func(j *api.Job) {
-		if j.Result.OMT == nil {
-			return
+func deletedBy(d *api.ReportDeleted) string {
+	if d == nil {
+		return ""
+	}
+	return fmt.Sprintf(" by %s on %s", d.By, d.Time.UTC().Format("2006-01-02"))
+}
+
+// omtPublish publishes a job's report and records the outcome on the job. A
+// finished job is read again first, so that of two asks at once the second
+// finds what the first did; a job still running is its runner's copy, the
+// one the runner saves.
+func (s *Server) omtPublish(j *api.Job, by Person) (string, error) {
+	publishing.Lock()
+	defer publishing.Unlock()
+	if j.State == api.JobDone {
+		if fresh, err := s.store.job(j.ID); err == nil {
+			j = fresh
 		}
-		if err != nil {
-			j.Result.OMT.PublishNote = err.Error()
-		} else {
-			j.Result.OMT.Published, j.Result.OMT.PublishNote = url, ""
+	}
+	was := ""
+	if j.Result.OMT != nil {
+		was = j.Result.OMT.ReportID
+	}
+	url, err := s.publishOMT(j, by)
+	id := ""
+	if j.Result.OMT != nil {
+		id = j.Result.OMT.ReportID
+	}
+	s.updateJob(j, func(j *api.Job) {
+		o := j.Result.OMT
+		switch {
+		case o == nil || was != "":
+			// nothing to say, or the report it has is the answer
+		case err != nil:
+			o.PublishNote = err.Error()
+		default:
+			o.Published, o.ReportID, o.PublishNote = url, id, ""
 		}
 	})
 	return url, err
 }
 
+// mayPublish is why p may not publish j's report by hand, or nil: a
+// Maintainer any job's, an M team member their own job's.
+func mayPublish(p Person, j *api.Job) error {
+	switch {
+	case p.Blocked || !p.OnMTeam():
+		return refuse(403, "publishing a job's report is for Maintainers, and for an M team member's own job")
+	case p.isMaintainer():
+		return nil
+	case j.AccountID == 0 || j.AccountID != p.AccountID:
+		return refuse(403, "an M team member publishes only their own job's report: job %s is %s. Ask a Maintainer", j.ID, orStr(prefixed("@", j.Maintainer), "the lab's own"))
+	}
+	return nil
+}
+
+// isRefresh reports whether labd's scheduler queued j: the refresh of a
+// Mac's Reference.
+func isRefresh(j *api.Job) bool {
+	return j.AccountID == 0 && j.Maintainer == "" && j.Spec.Holder == omtHolder && !j.Spec.Baseline
+}
+
+// publishRun publishes the run's report once the job is over. By hand: the
+// job asked for it (run --publish), and whoever submitted it is still a
+// Maintainer or on the M team. By itself the lab publishes only a run that
+// became the Mac's Reference: each baseline, and one refresh a week.
+func (r *jobRun) publishRun(becameReference bool) {
+	s, j := r.s, r.j
+	if j.Result.OMT == nil || r.ir != nil {
+		return
+	}
+	not := func(why string) {
+		r.ev("omarchy-m-test report not published: %s", why)
+		s.updateJob(j, func(j *api.Job) {
+			if j.Result.OMT != nil && j.Result.OMT.ReportID == "" {
+				j.Result.OMT.PublishNote = why
+			}
+		})
+	}
+	var by Person
+	refresh := false
+	switch {
+	case j.Spec.Publish && j.AccountID != 0:
+		p, err := s.person(j.AccountID)
+		if err == nil {
+			err = mayPublish(p, j)
+		}
+		if err != nil {
+			not(err.Error())
+			return
+		}
+		by = p
+	case !s.cfg.OMTPublish:
+		if j.Spec.Publish {
+			not("this lab publishes no report by itself (labd --omt-publish)")
+		}
+		return
+	case !j.Spec.Baseline && !isRefresh(j):
+		if j.Spec.Publish {
+			not("by itself the lab publishes only a baseline or a scheduled refresh")
+		}
+		return
+	case !becameReference:
+		not("by itself the lab publishes only a run that became the Mac's Reference")
+		return
+	case isRefresh(j):
+		refresh = true
+		if v := s.dev(j.Spec.Device); v != nil {
+			if last := v.snapshot().RefreshPublished; !last.IsZero() && j.Created.Sub(last) < refreshPublishedEvery {
+				not(fmt.Sprintf("by itself the lab publishes one refresh a week, and it published the one queued on %s", last.UTC().Format("2006-01-02")))
+				return
+			}
+		}
+	}
+	url, err := s.omtPublish(j, by)
+	if err != nil {
+		r.ev("omarchy-m-test report not published: %v", err)
+		return
+	}
+	r.ev("omarchy-m-test report published: %s", url)
+	if v := s.dev(j.Spec.Device); refresh && v != nil {
+		v.mu.Lock()
+		v.d.RefreshPublished = j.Created
+		v.saveLocked()
+		v.mu.Unlock()
+	}
+}
+
+// reportID is the id of the report j's run was published as, "" for none. A
+// job the old lab published names only the report's page, which ends in it.
+func reportID(o *api.OMTResult) string {
+	if o.ReportID != "" || o.Published == "" {
+		return o.ReportID
+	}
+	return o.Published[strings.LastIndex(o.Published, "/")+1:]
+}
+
+// reportState is what became of j's omarchy-m-test report, in one of four
+// words; "" for a job that has no report.
+func (s *Server) reportState(j *api.Job) string {
+	o := j.Result.OMT
+	if o == nil {
+		return ""
+	}
+	id := reportID(o)
+	switch {
+	case o.ReportDeleted != nil:
+		return api.ReportIsDeleted
+	case id == "":
+		return api.ReportNotPublished
+	}
+	report, err := s.reports.Report(id)
+	switch {
+	case errors.Is(err, reports.ErrNoReport):
+		return api.ReportIsDeleted
+	case err != nil:
+		s.log.Printf("the report of job %s: %v", j.ID, err)
+		return api.ReportPublished
+	case report.Hidden:
+		return api.ReportHidden
+	}
+	return api.ReportPublished
+}
+
+// withReport says on j what became of its report, for whoever reads the job.
+func (s *Server) withReport(j *api.Job) *api.Job {
+	if j != nil && j.Result.OMT != nil {
+		j.Result.OMT.ReportState = s.reportState(j)
+	}
+	return j
+}
+
+// reportDeleted records on the job a deleted report was published from who
+// deleted it, in words, and when. The link that deleted it is kept no more.
+func (s *Server) reportDeleted(report *reports.Report, by string, accountID int64) {
+	if !report.ByLab() {
+		return
+	}
+	j, err := s.store.job(report.LabJob)
+	if err != nil || j.Result.OMT == nil || j.Result.OMT.ReportID != report.PublicID {
+		return
+	}
+	s.updateJob(j, func(j *api.Job) {
+		j.Result.OMT.ReportDeleted = &api.ReportDeleted{By: by, AccountID: accountID, Time: s.now()}
+	})
+	os.Remove(s.deletionLinkPath(j.ID))
+}
+
+// keptLink is the deletion link of a Volunteer's Mac's published report.
+type keptLink struct {
+	ReportID      string `json:"report_id"`
+	DeletionToken string `json:"deletion_token"`
+}
+
+func (s *Server) deletionLinkPath(job string) string {
+	return filepath.Join(s.cfg.DataDir, "published", job+".json")
+}
+
+func (s *Server) keepDeletionLink(job string, stored *reports.Stored) {
+	text, _ := json.Marshal(keptLink{ReportID: stored.PublicID, DeletionToken: stored.DeletionToken})
+	path := s.deletionLinkPath(job)
+	err := os.MkdirAll(filepath.Dir(path), 0o700)
+	if err == nil {
+		err = os.WriteFile(path, text, 0o600)
+	}
+	if err != nil {
+		s.log.Printf("keeping the deletion link of job %s: %v", job, err)
+	}
+}
+
+// publishedOf lists what the lab published from the jobs of a Mac's
+// enrollment and has not been deleted, oldest first, each with its deletion
+// link: at site. jobs are the jobs under the Mac's name, newest first.
+func (s *Server) publishedOf(enrollment string, jobs []*api.Job, site string) []api.Published {
+	out := []api.Published{}
+	for i := len(jobs) - 1; i >= 0; i-- {
+		j := jobs[i]
+		o := j.Result.OMT
+		// A name may have been another Volunteer's Mac before.
+		if j.DeviceID != enrollment || o == nil || o.Published == "" || s.reportState(j) == api.ReportIsDeleted {
+			continue
+		}
+		p := api.Published{Job: j.ID, ReportURL: o.Published}
+		var kept keptLink
+		if text, err := os.ReadFile(s.deletionLinkPath(j.ID)); err == nil && json.Unmarshal(text, &kept) == nil && kept.ReportID == o.ReportID {
+			p.ReportURL = site + "/reports/" + kept.ReportID
+			p.DeletionURL = p.ReportURL + "/deletion?token=" + kept.DeletionToken
+		} else if text, err := os.ReadFile(filepath.Join(s.jobDir(j.ID), oldSiteLinks)); err == nil {
+			// a job the old lab published on the old site
+			var reply struct {
+				DeletionURL string `json:"deletion_url"`
+			}
+			json.Unmarshal(text, &reply)
+			p.DeletionURL = reply.DeletionURL
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// oldSiteLinks is the file in a job's folder where the old lab kept what the
+// old site answered an upload with, the deletion link among it. It is the
+// one file of a job nobody is sent.
+const oldSiteLinks = "omt-published.json"
+
 // omtHolder holds the jobs omtScheduler queues.
 const omtHolder = "maclab-omt"
 
+// omtRefresh is the job omtScheduler queues on a Mac.
+func omtRefresh(device string) api.JobSpec {
+	return api.JobSpec{Device: device, Holder: omtHolder}
+}
+
 // omtScheduler re-runs omarchy-m-test on each Mac's known-good kernel once
-// every OMTEvery, publishing the result if that's on: the reference that lab
-// kernels are compared with stays fresh, and so does the site.
+// every OMTEvery: the Reference that lab kernels are compared with stays
+// fresh. The run that becomes the Reference is the refresh the lab publishes
+// by itself, once a week (publishRun).
 func (s *Server) omtScheduler() {
 	if s.cfg.OMTEvery <= 0 {
 		return
@@ -572,7 +835,7 @@ func (s *Server) omtScheduler() {
 			if s.leased(v) {
 				continue
 			}
-			spec := api.JobSpec{Device: d.Name, Holder: omtHolder, Publish: s.cfg.OMTPublish}
+			spec := omtRefresh(d.Name)
 			length := (&jobRun{s: s, v: v, j: &api.Job{Spec: spec}, boot: s.cfg.BootTimeout}).expectedLength()
 			v.mu.Lock()
 			held := v.windowHoldLocked(length) != ""
@@ -613,8 +876,9 @@ func versionAtLeast(have, want string) bool {
 }
 
 // promoteOMT makes a known-good run the reference once the whole job passed:
-// a failed test, an unhealthy boot or a failed restore keeps the old one.
-func (r *jobRun) promoteOMT(outcome string) {
+// a failed test, an unhealthy boot or a failed restore keeps the old one. It
+// reports whether the run became the reference.
+func (r *jobRun) promoteOMT(outcome string) bool {
 	j := r.j
 	if outcome != api.OutcomePass {
 		r.ev("omarchy-m-test reference kept: the job ended %s", outcome)
@@ -623,11 +887,11 @@ func (r *jobRun) promoteOMT(outcome string) {
 				j.Result.OMT.Reference = "kept the previous reference: the job ended " + outcome
 			}
 		})
-		return
+		return false
 	}
 	if err := writeFileAtomic(r.s.omtBaselinePath(j.Spec.Device), r.omtRef); err != nil {
 		r.ev("omarchy-m-test reference: %v", err)
-		return
+		return false
 	}
 	r.ev("omarchy-m-test reference is now this run")
 	r.s.updateJob(j, func(j *api.Job) {
@@ -635,6 +899,7 @@ func (r *jobRun) promoteOMT(outcome string) {
 			j.Result.OMT.Reference = "became the reference"
 		}
 	})
+	return true
 }
 
 // writeFileAtomic replaces path with data, never leaving a partial file, and

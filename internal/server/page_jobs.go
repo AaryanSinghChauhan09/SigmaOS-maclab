@@ -22,6 +22,7 @@ func init() {
 	addPage("GET /jobs/{id}", web.SignedIn, (*Server).pJob)
 	addPage("POST /jobs/{id}/cancel", web.MTeamUp, (*Server).pJobCancel)
 	addPage("POST /jobs/{id}/retry", web.MTeamUp, (*Server).pJobRetry)
+	addPage("POST /jobs/{id}/publish", web.MTeamUp, (*Server).pJobPublish)
 }
 
 // jobsShown is how many jobs Jobs lists, newest first.
@@ -208,6 +209,18 @@ type jobOMT struct {
 	Pass, Fail, Skip int
 	ComparedTo       string
 	Changed          []jobCheck
+	// Report is what became of the run's report, in one of four words;
+	// ReportHref its page while whoever reads the job can open it.
+	Report, ReportClass, ReportHref string
+	// Deleted is who deleted the report and when; Note why it was not
+	// published.
+	Deleted, Note string
+	// CanPublish is whether the person may publish the report by hand now.
+	CanPublish bool
+}
+
+var reportClasses = map[string]string{
+	api.ReportNotPublished: "job-dim", api.ReportPublished: "job-ok", api.ReportHidden: "job-warn", api.ReportIsDeleted: "job-bad",
 }
 
 type jobCheck struct{ Tag, Class, ID, Evidence string }
@@ -302,6 +315,23 @@ func (s *Server) renderJob(w http.ResponseWriter, r *http.Request, j *api.Job, p
 				omt.Changed = append(omt.Changed, jobCheck{group.tag, group.class, c.ID, c.Evidence})
 			}
 		}
+		omt.Report = s.reportState(j)
+		omt.ReportClass = reportClasses[omt.Report]
+		switch omt.Report {
+		case api.ReportPublished:
+			omt.ReportHref = s.href("/reports/" + reportID(o))
+		case api.ReportHidden:
+			if p.isMaintainer() {
+				omt.ReportHref = s.href("/reports/" + reportID(o))
+			}
+		case api.ReportIsDeleted:
+			if d := o.ReportDeleted; d != nil {
+				omt.Deleted = "by " + d.By + ", " + whenDay(d.Time)
+			}
+		case api.ReportNotPublished:
+			omt.Note = o.PublishNote
+			omt.CanPublish = done && o.KnownGood && spec.InstalledManifest == "" && spec.Mesa == nil && !s.Preview() && mayPublish(p, j) == nil
+		}
 		data.OMT = omt
 	}
 	for _, e := range j.Events {
@@ -346,6 +376,31 @@ func (s *Server) pJobRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.toJob(w, again.ID)
+}
+
+// pJobPublish publishes a job's report by hand: `lab publish` on the site.
+func (s *Server) pJobPublish(w http.ResponseWriter, r *http.Request) {
+	j, p := s.jobOr404(w, r)
+	if j == nil {
+		return
+	}
+	err := mayPublish(p, j)
+	if err == nil && j.State != api.JobDone {
+		err = refuse(409, "job %s is still %s", j.ID, j.State)
+	}
+	if err == nil {
+		if _, perr := s.omtPublish(j, p); perr != nil {
+			err = refuse(409, "Not published: %v", perr)
+		}
+	}
+	if err != nil {
+		if fresh, ferr := s.store.job(j.ID); ferr == nil {
+			j = fresh
+		}
+		s.renderJob(w, r, j, p, err)
+		return
+	}
+	s.toJob(w, j.ID)
 }
 
 // toJob sends the browser to a job's page.

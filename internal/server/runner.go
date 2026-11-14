@@ -336,9 +336,8 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		v.mu.Unlock()
 		summary += fmt.Sprintf(". %s is in the pool (known-good kernel %s)", j.Spec.Device, v.snapshot().Kernel)
 	}
-	if r.omtRef != nil {
-		r.promoteOMT(outcome)
-	}
+	becameReference := r.omtRef != nil && r.promoteOMT(outcome)
+	r.publishRun(becameReference)
 	if r.noAppleWDT {
 		summary += "; " + noAppleWDTNote
 	}
@@ -675,14 +674,6 @@ func (r *jobRun) execute(ctx context.Context) (string, string) {
 		}
 	}
 	nTests := len(tests)
-	if omt := r.currentOMT(); omt != nil && (j.Spec.Publish || (r.s.cfg.OMTPublish && j.Spec.Baseline)) {
-		if url, err := r.s.omtPublish(ctx, j); err != nil {
-			r.ev("omarchy-m-test report not published: %v", err)
-		} else {
-			r.ev("omarchy-m-test report published: %s", url)
-		}
-	}
-
 	r.capture("after-tests")
 	r.state(api.JobCollecting)
 	// From the Lab boot labd judged: the boot after it would read as the test

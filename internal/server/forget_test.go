@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/omacom/omarchy-maclab/internal/agent"
@@ -189,15 +188,9 @@ func TestSubmitToForgottenMac(t *testing.T) {
 // A forgotten Mac's jobs stay, its known-good kernel doesn't: `lab publish`
 // of one of its omarchy-m-test reports is refused, not a crashed handler.
 func TestPublishForgottenMacsReport(t *testing.T) {
-	var posts atomic.Int32
-	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		posts.Add(1)
-		w.WriteHeader(http.StatusCreated)
-	}))
-	defer site.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := newWith(harnessMaintainer, harnessToken, ctx, Config{DataDir: t.TempDir(), OMTSite: site.URL}, log.New(io.Discard, "", 0))
+	s, err := newWith(harnessMaintainer, harnessToken, ctx, Config{DataDir: t.TempDir(), MachineIDKey: testMachineIDKey()}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,8 +222,8 @@ func TestPublishForgottenMacsReport(t *testing.T) {
 	if code, body := admin("POST", "/api/jobs/j-omt/publish"); code != http.StatusConflict || !strings.Contains(body, "m1air was forgotten") {
 		t.Fatalf("publish: %d %s", code, body)
 	}
-	if posts.Load() != 0 {
-		t.Error("the report was uploaded")
+	if every, err := s.reports.Every(s.catalogue); err != nil || len(every.Runs()) != 0 {
+		t.Errorf("the report was published: %v", err)
 	}
 	if j, _ := s.store.job("j-omt"); j.Result.OMT.PublishNote == "" {
 		t.Error("the job doesn't say why it wasn't published")
