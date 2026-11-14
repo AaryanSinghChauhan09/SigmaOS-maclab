@@ -178,9 +178,11 @@ func TestTheBuildWatchGivesTheCoresEmptiesTheCacheAndWatchesEachBuild(t *testing
 	until(t, "the first page times", said("page-times"))
 	m.set("ps", building("b1115-000001-abcd", "8", 7000000, 1500000))
 	time.Sleep(600 * time.Millisecond)
-	// One look that finds no VM ends no build.
+	// One look that finds no VM ends no build: the most memory comes after it.
 	m.set("ps.once", idle)
-	time.Sleep(600 * time.Millisecond)
+	until(t, "the look that finds no VM", func() bool { return !exists(filepath.Join(filepath.Dir(m.root), "state", "machine", "ps.once")) })
+	m.set("ps", building("b1115-000001-abcd", "8", 9000000, 500000))
+	time.Sleep(1000 * time.Millisecond)
 	m.set("ps", building("b1115-000001-abcd", "8", 2000000))
 	time.Sleep(600 * time.Millisecond)
 	m.set("ps", building("b1115-000002-abcd", "8", 3000000))
@@ -226,7 +228,7 @@ func TestTheBuildWatchGivesTheCoresEmptiesTheCacheAndWatchesEachBuild(t *testing
 	wantGate := []string{
 		"@gate ready cpus=8",
 		"@gate build 1 begin id=b1115-000001-abcd cpus=8 memory=16G",
-		"@gate build 1 end id=b1115-000001-abcd seconds=N vm_peak_kb=8500000 machine_peak_kb=20971520 probes=N",
+		"@gate build 1 end id=b1115-000001-abcd seconds=N vm_peak_kb=9500000 machine_peak_kb=20971520 probes=N",
 		"@gate build 2 begin id=b1115-000002-abcd cpus=8 memory=16G",
 		"@gate build 2 end id=b1115-000002-abcd seconds=N vm_peak_kb=3000000 machine_peak_kb=20971520 probes=N",
 		"@gate volume maclab-cache used_kb=" + used + " size_kb=41943040",

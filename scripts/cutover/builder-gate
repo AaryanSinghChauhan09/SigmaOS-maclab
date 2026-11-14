@@ -116,7 +116,7 @@ esac
 if [[ $MODE == dry ]]; then
   cat <<PLAN
 $ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, at $cores cores a build it would:
-  1. ssh -t MINI sudo $MINI_SCRIPTS/build-watch --cpus $cores --cold --builds 3 --every $EVERY: the Builder at $cores cores, the kernel cache volume emptied, the mini watching
+  1. ssh -t MINI sudo $MINI_SCRIPTS/build-watch --cpus $cores --cold --builds 3 --every $EVERY: the Builder at $cores cores, the kernel cache volume emptied, the mini watching. It first looks for the Builder's scratch folder and its two images, and reads the volumes and labd's page times once
   2. lab build URL --device $MAC --force (the cold kernel build), with lab upload FILE (${SIZE:-$GIB} bytes) in flight while labd's page times are read
   3. lab build URL --device $MAC --force again (the warm rebuild)
   4. lab package DIR --force (the package build), with lab upload FILE in flight likewise
