@@ -182,6 +182,7 @@ func Setup(ctx context.Context, o SetupOptions) error {
 	if o.Token != "" {
 		facts := l.Facts()
 		facts.AgentVersion = Version
+		facts.LabRelease = LabRelease
 		key, err := activationKey(l.WorkDir, o.Token)
 		if err != nil {
 			return err

@@ -81,7 +81,11 @@ const usage = `lab: run kernels and tests on Omarchy Macs
   lab audit <device>                  labd's copy of a Volunteer's Mac's Audit log: every Maintainer action on it
   lab upload <file>
   lab mcp                             MCP server on stdio, for AI agents
+  lab version                         the Lab release this lab came from
 `
+
+// The tag of the Lab release this build came from, stamped in by the Makefile.
+var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -102,6 +106,8 @@ func main() {
 		err = serveMCP(ctx)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
+	case "version":
+		fmt.Println(version)
 	default:
 		var c *client.Client
 		if c, err = client.Load(); err == nil {

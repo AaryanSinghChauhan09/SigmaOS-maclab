@@ -200,6 +200,7 @@ type Facts struct {
 	PanicTimeout  int      `json:"panic_timeout"`
 	GUIUser       string   `json:"gui_user,omitempty"`
 	AgentVersion  string   `json:"agent_version"`
+	LabRelease    string   `json:"lab_release,omitempty"` // the tag of the Lab release the agent came from
 	MesaStaged    bool     `json:"mesa_staged,omitempty"`
 	MesaOfficial  bool     `json:"mesa_official,omitempty"`
 	PreflightOK   bool     `json:"preflight_ok"`

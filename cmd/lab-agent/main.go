@@ -57,7 +57,7 @@ const usage = `lab-agent: the Mac side of the test lab
   lab-agent lab-boot-deadlines    reboot a Lab boot that misses its deadline (started early in boot by
                                   maclab-lab-boot-deadlines.service)
   lab-agent sim --server .. --token ..   a simulated Mac, to try the lab without hardware
-  lab-agent version
+  lab-agent version               its own number, the Lab release it came from and the release key it trusts
 `
 
 func main() {
@@ -208,6 +208,10 @@ func main() {
 			ServerCA: string(caPEM), AllowPlainHTTP: plain}, sim, nil).Run(ctx)
 	case "version":
 		fmt.Println(agent.Version)
+		fmt.Println("Lab release", agent.LabRelease)
+		if agent.ReleaseKey != "" {
+			fmt.Println("Release key", agent.ReleaseKey)
+		}
 	default:
 		if agent.IsVolunteerCommand(os.Args[1]) {
 			var cfg *agent.Config

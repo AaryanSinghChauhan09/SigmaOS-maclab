@@ -490,6 +490,7 @@ func (a *Agent) poll(ctx context.Context) error {
 	if refreshFacts {
 		f := a.sys.Facts()
 		f.AgentVersion = Version
+		f.LabRelease = LabRelease
 		_, f.MesaStaged = a.sys.(interface {
 			StageMesa(context.Context, string, api.MesaStageArgs, Fetcher) (api.MesaStageResult, error)
 		})
