@@ -12,7 +12,7 @@ func when(t time.Time) string { return t.In(brisbane).Format("Mon 15:04 MST") }
 // change of who someone is, each new Lab token and each cut a Maintainer
 // makes, and the lab's operations alerts. The people lines carry the
 // handle; the line for a forgetting carries only who carried it out.
-type agentsLines struct{ l *lines }
+type agentsLines struct{ l *groupLines }
 
 func (a agentsLines) MTeamMarked(by, handle string) {
 	a.l.post(lineAgents, by+" marked "+handle+" as M team.")

@@ -161,7 +161,7 @@ type Server struct {
 	site        *web.Site
 	// lines is the record of what the two Signal groups are told; labGroup
 	// and agents hold a function for each event (lines_lab.go, lines_agents.go).
-	lines    *lines
+	lines    *groupLines
 	labGroup labGroupLines
 	agents   agentsLines
 }
@@ -279,7 +279,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, callers: callers}
 	s.start = s.now()
-	s.lines = newLines(st, s.clock(), logger, cfg.Signal, cfg.SignalDir)
+	s.lines = newGroupLines(st, s.clock(), logger, cfg.Signal, cfg.SignalDir)
 	s.labGroup = labGroupLines{l: s.lines, link: s.pageAddress}
 	s.agents = agentsLines{s.lines}
 	if rules != nil {

@@ -17,7 +17,7 @@ import (
 // Renewals and extensions of a Lease are not posted, nor is a refused
 // enrollment token, nor a window opening or closing on schedule.
 type labGroupLines struct {
-	l *lines
+	l *groupLines
 	// link is the address of a page of the lab, "" when labd has no Lab address.
 	link func(path string) string
 }

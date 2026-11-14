@@ -44,7 +44,7 @@ const (
 
 var lineRetry = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute}
 
-type lines struct {
+type groupLines struct {
 	st     *store
 	clock  agent.Clock
 	log    *log.Logger
@@ -53,8 +53,8 @@ type lines struct {
 	wake   chan struct{}
 }
 
-func newLines(st *store, clock agent.Clock, logger *log.Logger, sender Sender, dir string) *lines {
-	return &lines{st: st, clock: clock, log: logger, sender: sender, dir: dir, wake: make(chan struct{}, 1)}
+func newGroupLines(st *store, clock agent.Clock, logger *log.Logger, sender Sender, dir string) *groupLines {
+	return &groupLines{st: st, clock: clock, log: logger, sender: sender, dir: dir, wake: make(chan struct{}, 1)}
 }
 
 // groupID is the id the owner gave labd for the group, "" for none.
@@ -73,13 +73,13 @@ func groupID(dir string, g lineGroup) string {
 }
 
 // post records one line for the group and leaves the sending to run.
-func (l *lines) post(g lineGroup, text string) {
+func (l *groupLines) post(g lineGroup, text string) {
 	l.record(g, oneLine(text))
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-func (l *lines) record(g lineGroup, text string) {
+func (l *groupLines) record(g lineGroup, text string) {
 	state := "not-posted"
 	if l.sender != nil && groupID(l.dir, g) != "" {
 		state = "waiting"
@@ -95,7 +95,7 @@ func (l *lines) record(g lineGroup, text string) {
 }
 
 // markOnce notes value under key and says whether that changed anything.
-func (l *lines) markOnce(key, value string) bool {
+func (l *groupLines) markOnce(key, value string) bool {
 	res, err := l.st.db.Exec(`INSERT INTO line_marks (key, value, at) VALUES (?, ?, ?)
 		ON CONFLICT (key) DO UPDATE SET value = excluded.value, at = excluded.at WHERE value != excluded.value`, key, value, l.clock.Now().UnixMicro())
 	if err != nil {
@@ -107,7 +107,7 @@ func (l *lines) markOnce(key, value string) bool {
 }
 
 // unmark drops the note under key and says whether there was one.
-func (l *lines) unmark(key string) bool {
+func (l *groupLines) unmark(key string) bool {
 	res, err := l.st.db.Exec(`DELETE FROM line_marks WHERE key = ?`, key)
 	if err != nil {
 		l.log.Printf("line mark %s: %v", key, err)
@@ -117,14 +117,14 @@ func (l *lines) unmark(key string) bool {
 	return n > 0
 }
 
-func (l *lines) settle(id int64, state, why string) {
+func (l *groupLines) settle(id int64, state, why string) {
 	if _, err := l.st.db.Exec(`UPDATE lines SET state = ?, error = ?, settled = ? WHERE id = ?`, state, why, l.clock.Now().UnixMicro(), id); err != nil {
 		l.log.Printf("line %d: %v", id, err)
 	}
 }
 
 // run sends the waiting lines, oldest first, until ctx ends.
-func (l *lines) run(ctx context.Context) {
+func (l *groupLines) run(ctx context.Context) {
 	if _, err := l.st.db.Exec(`UPDATE lines SET state = 'failed', error = 'labd stopped while handing it to signal-cli: it may have gone, and is not sent again', settled = ? WHERE state = 'sending'`, l.clock.Now().UnixMicro()); err != nil && ctx.Err() == nil {
 		l.log.Printf("lines: %v", err)
 	}
@@ -147,7 +147,7 @@ func (l *lines) run(ctx context.Context) {
 
 // sendNext sends the oldest waiting line. It returns how long to wait before
 // trying that line again, and whether there was a line at all.
-func (l *lines) sendNext(ctx context.Context) (wait time.Duration, more bool) {
+func (l *groupLines) sendNext(ctx context.Context) (wait time.Duration, more bool) {
 	var (
 		id       int64
 		at       int64

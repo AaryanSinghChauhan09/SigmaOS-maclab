@@ -73,7 +73,7 @@ func signalDir(t *testing.T) string {
 
 type linesHarness struct {
 	t     *testing.T
-	l     *lines
+	l     *groupLines
 	st    *store
 	clock *agent.FakeClock
 	logs  *logBuf
@@ -89,7 +89,7 @@ func newLinesAt(t *testing.T, data string, sender Sender, dir string) *linesHarn
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &linesHarness{t: t, st: st, clock: agent.NewFakeClock(time.Date(2026, 11, 14, 3, 0, 0, 0, time.UTC)), logs: &logBuf{}, stop: cancel}
-	h.l = newLines(st, h.clock, log.New(h.logs, "", 0), sender, dir)
+	h.l = newGroupLines(st, h.clock, log.New(h.logs, "", 0), sender, dir)
 	done := make(chan struct{})
 	go func() { h.l.run(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done; st.db.Close() })
