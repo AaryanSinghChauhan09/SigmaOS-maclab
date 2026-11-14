@@ -20,8 +20,31 @@ deployed() {
   [[ -x $LABD && -f $LABD_PLIST ]] || fail "no Lab release is Deployed here ($LABD): Deploy one first (scripts/mini/deploy)"
 }
 
-# in_preview: labd's LaunchDaemon file starts it closed, with --preview.
-in_preview() { grep -q '<string>--preview</string>' "$LABD_PLIST" 2>/dev/null; }
+# lab_stage: preview, "live <time>", open (a labd started without
+# --preview) or unknown. The lab is in Preview while labd's LaunchDaemon
+# file starts it with --preview and its data directory holds no opening:
+# once the lab has opened (scripts/cutover/open) the file still says
+# --preview and labd does not obey it. A labd that cannot say counts as
+# unknown, never as Preview.
+lab_stage() {
+  local is
+  grep -q '<string>--preview</string>' "$LABD_PLIST" 2>/dev/null || { echo open; return 0; }
+  is="$(as_lab "$LABD" stage --data "$LAB_DATA" 2>/dev/null)" || is=""
+  case "$is" in
+    "not opened") echo preview ;;
+    "live "*) echo "$is" ;;
+    *) echo unknown ;;
+  esac
+}
+
+# in_preview: the lab is closed still. A dry run by an account that cannot
+# read the lab's data goes by the LaunchDaemon file alone: it changes
+# nothing.
+in_preview() {
+  local is
+  is="$(lab_stage)"
+  [[ $is == preview ]] || { [[ $is == unknown ]] && (( ${DRY:-0} )) && [[ "$(id -u)" != 0 && -z $SYSROOT ]]; }
+}
 
 labd_answers() {
   local n

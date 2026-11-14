@@ -16,6 +16,7 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -122,16 +123,25 @@ func (s *Server) opsOpen(w http.ResponseWriter, r *http.Request) {
 }
 
 // StageOf reads a data directory's stage without a labd: "live <time>" or
-// "not opened". It changes nothing; a labd may be running on the directory.
+// "not opened". A labd may be running on the directory, and nothing in it
+// is touched, not even SQLite's own files beside labd.db: it reads a copy.
+// The log is copied before the database, so that an opening already
+// written is in one of the two whatever labd does meanwhile.
 func StageOf(dataDir string) (string, error) {
-	path, err := filepath.Abs(filepath.Join(dataDir, "labd.db"))
+	if _, err := os.Stat(filepath.Join(dataDir, "labd.db")); os.IsNotExist(err) {
+		return "not opened", nil
+	}
+	dir, err := os.MkdirTemp("", "lab-stage")
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return "not opened", nil
+	defer os.RemoveAll(dir)
+	for _, name := range []string{"labd.db-wal", "labd.db"} {
+		if err := copyFile(filepath.Join(dataDir, name), filepath.Join(dir, name)); err != nil && !(name != "labd.db" && errors.Is(err, fs.ErrNotExist)) {
+			return "", err
+		}
 	}
-	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?mode=ro&_pragma=busy_timeout(5000)&_query_only=1")
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: filepath.Join(dir, "labd.db")}).String()+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return "", err
 	}

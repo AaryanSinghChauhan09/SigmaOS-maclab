@@ -3,7 +3,8 @@
 # step 11; spec section 5). With sudo, in this order:
 #
 #   sudo rehearsal-import key [--dry-run]
-#   sudo rehearsal-import run [--dry-run] --public-key FILE [--dump FILE]
+#   sudo rehearsal-import run [--dry-run] --public-key FILE [--dump FILE | --dumped FILE]
+#   sudo rehearsal-import dump [--dry-run] --dump FILE
 #
 # key  asks for the machine-id key at a prompt that does not show it: the
 #      128 hex digits derived inside Railway from the old site's
@@ -24,7 +25,12 @@
 #         prompt, deletes its report. Upload one throwaway report to the
 #         old site before the dump and keep its deletion link for this.
 #      It stops at the first step that fails, and ends with the lines for
-#      docs/acceptance/: counts only, no report and no key.
+#      docs/acceptance/: counts only, no report and no key. A run that
+#      passed leaves its day in /var/lab/import/imported, which the opening
+#      (scripts/cutover/open) reads. With --dumped FILE the dump must be
+#      there: the old site is never read.
+# dump only step 1, into FILE, which must not be there yet: the final dump
+#      of the day (the Cutover's step 21), after the old site is stopped.
 #
 #   --dry-run  say what would be asked and done, and change nothing
 #
@@ -37,17 +43,19 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/cutover/mini.sh
 . "$here/mini.sh"
 
-usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 step="${1:-}"
 [[ $# -gt 0 ]] && shift
 public=""
 dump=""
+dumped=0
 while (( $# )); do
   case "$1" in
     --dry-run) DRY=1 ;;
     --public-key) [[ $# -ge 2 ]] || usage; public="$2"; shift ;;
     --dump) [[ $# -ge 2 ]] || usage; dump="$2"; shift ;;
+    --dumped) [[ $# -ge 2 ]] || usage; dump="$2" dumped=1; shift ;;
     *) echo "$ME: an argument it does not take. Nothing was done." >&2; usage ;;
   esac
   shift
@@ -59,7 +67,10 @@ before="$folder/reports-before"
 checks() {
   (( DRY )) || need_root
   deployed
-  in_preview || fail "the lab is open: labd's LaunchDaemon file starts it without --preview. Its reports are its own now, and this is for a lab in Preview"
+  in_preview || case "$(lab_stage)" in
+    unknown) fail "labd could not say whether the lab has opened ($LABD stage --data $LAB_DATA): nothing is emptied on a guess. Nothing was changed" ;;
+    *) fail "the lab is open ($(lab_stage)). Its reports are its own now, and this is for a lab in Preview" ;;
+  esac
   no_planted_link
 }
 
@@ -114,6 +125,9 @@ run() {
     [[ $dump == /* ]] || fail "--dump is a whole path"
   else
     dump="$folder/old-site-$(date +%Y%m%d-%H%M%S).dump"
+  fi
+  if (( dumped )) && ! (( DRY )); then
+    as_lab test -r "$dump" || fail "no dump at $dump that $LAB_OWNER can read: the day's final dump comes first (sudo $0 dump --dump $dump). Nothing was changed"
   fi
   if (( DRY )); then
     if [[ "$(id -u)" == 0 || -n $SYSROOT ]]; then
@@ -170,10 +184,29 @@ run() {
   grep -v '^  ' "$out" | sed -e "s|$dump|the dump|g"
   echo "reports listed with a reason and carried all the same: $listed"
   echo "----"
+  TZ=Australia/Brisbane date +%Y-%m-%d | lab_file "$folder/imported" 600
+}
+
+# only_dump: the day's final dump and nothing else.
+only_dump() {
+  [[ -n $dump && $dump == /* ]] || usage
+  checks
+  if (( DRY )); then
+    say "would have labd import dump ask for the address of the old site's Postgres and write $dump, which must not be there yet"
+    return 0
+  fi
+  no_link "$folder"
+  lab_folder "$folder" 700
+  ! as_lab test -e "$dump" || fail "$dump is there already: a dump is never written over. Name another file, or remove that one if it is from a rehearsal"
+  as_lab test -d "$(dirname "$dump")" || fail "no folder for $dump that $LAB_OWNER can write in: name a file in $folder"
+  say "reading the old site's Postgres into $dump"
+  as_lab "$LABD" import dump --to "$dump" || fail "no dump was written, and nothing of the lab was changed"
+  say "the dump is $dump: the import reads it with --dumped $dump"
 }
 
 case "$step" in
   key) key ;;
   run) run ;;
+  dump) only_dump ;;
   *) usage ;;
 esac
