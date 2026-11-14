@@ -14,24 +14,28 @@
 # has.
 #
 #   --tool FILE  the reset tool (default: the Deployed build's)
+#   --seen       only what the mini sees on each port, one line a port, for
+#                a script to read; needs no root and runs no tool
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/lib.sh
 . "$here/lib.sh"
 
-usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 tool="$RESET_TOOL"
+only_seen=0
 while (( $# )); do
   case "$1" in
     --tool) [[ $# -ge 2 ]] || usage; tool="$2"; shift ;;
+    --seen) only_seen=1 ;;
     *) usage ;;
   esac
   shift
 done
-need_root
-[[ -x $tool ]] || fail "no reset tool at $tool: a Deploy brings it (bin/$RESET_TOOL_NAME of the server bundle)"
+(( only_seen )) || need_root
+(( only_seen )) || [[ -x $tool ]] || fail "no reset tool at $tool: a Deploy brings it (bin/$RESET_TOOL_NAME of the server bundle)"
 
 RIDS=(0 1 2)
 FAILED=0
@@ -69,6 +73,20 @@ seen() {
     END { flush() }
   ' <<<"$registry"
 }
+
+if (( only_seen )); then
+  for rid in 1 0 2; do
+    IFS='|' read -r name active plugs uuid _ product <<<"$(seen "$rid")"
+    [[ -n $name ]] || fail "this machine has no port controller with RID $rid"
+    case "$rid" in 1) port=left ;; 0) port=middle ;; *) port=right ;; esac
+    if [[ $active == Yes ]]; then
+      echo "rid=$rid port=$port connected=yes product=${product:-none} plugs=$plugs connection=${uuid:-none}"
+    else
+      echo "rid=$rid port=$port connected=no product=none plugs=$plugs connection=none"
+    fi
+  done
+  exit 0
+fi
 
 # absent: a RID no port controller of this machine has.
 absent() {
