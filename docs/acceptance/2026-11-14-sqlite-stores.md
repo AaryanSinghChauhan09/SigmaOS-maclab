@@ -36,7 +36,7 @@ About 3.5 ms a commit with `fullfsync`, 0.07 ms without: some 280 commits a seco
 
 On Linux the pragma reads back 1 and does nothing more; there `fsync` already reaches the drive.
 
-**A test binary leaves it off.** The server's tests step a clock by two seconds every 20 ms and take a slow write for a lost Mac: with `fullfsync`, 3 of 42 runs of the needs-hands tests failed when 14 ran at once, none of 42 without. So `sqlitedb.Open` sets it only outside `go test` (`testing.Testing()`), and the tests of `internal/sqlitedb` ask for it by name. A program built with `go build` from the same source reads back `journal_mode wal`, `synchronous 2`, `fullfsync 1`.
+**A test binary leaves it off.** The server's tests step a clock by two seconds every 20 ms, and a step of the job that takes longer than that in real time looks to labd like a Mac that stopped answering. With 14 copies of the three needs-hands tests running at once, the job failed that way in 3 of 42 runs with `fullfsync`, in 2 of 154 without, and in 0 of 112 with the store as it was before. So `sqlitedb.Open` sets it only outside `go test` (`testing.Testing()`), and the tests of `internal/sqlitedb` ask for it by name. A program built with `go build` from the same source reads back `journal_mode wal`, `synchronous 2`, `fullfsync 1`.
 
 ## What was not checked
 
