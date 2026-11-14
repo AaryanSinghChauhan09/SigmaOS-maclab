@@ -116,12 +116,45 @@ func ParsePayload(b []byte) (map[string]string, error) {
 		}
 		sha, path, ok := strings.Cut(line, " ")
 		path = strings.TrimLeft(strings.TrimSpace(path), "*")
-		if !ok || len(sha) != 64 || path == "" {
+		if !ok || !reSHA256.MatchString(sha) || !below(path) {
 			return nil, fmt.Errorf("bad payload line %q", line)
 		}
 		out[path] = strings.ToLower(sha)
 	}
 	return out, sc.Err()
+}
+
+var (
+	reSHA256   = regexp.MustCompile(`^[0-9A-Fa-f]{64}\z`)
+	reFileName = regexp.MustCompile(`^[A-Za-z0-9._-]+\z`)
+)
+
+// below is whether a slash-separated path stays under the folder it is
+// relative to: not absolute, and no empty, "." or ".." part.
+func below(path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, part := range strings.Split(path, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// PayloadName checks kernel.payload_manifest, the place of the payload list
+// under the Release's expected/ folder: plain file names with "/" between
+// them, so it can name nothing outside that folder, nor the manifest.
+func PayloadName(name string) error {
+	ok := len(name) <= 200 && below(name) && !strings.EqualFold(name, "manifest.json")
+	for _, part := range strings.Split(name, "/") {
+		ok = ok && reFileName.MatchString(part)
+	}
+	if !ok {
+		return fmt.Errorf("kernel.payload_manifest %q is not a file name under the Release's expected/ folder (letters, digits, '.', '_', '-', with '/' between names)", name)
+	}
+	return nil
 }
 
 // Validate checks a manifest is complete and self-consistent against its payload list.
@@ -139,6 +172,9 @@ func (m *Manifest) Validate(payload []byte) error {
 		return fmt.Errorf("dtbs_sha256 %q does not match the dtbs list (%s)", m.DTBsSHA256, DTBsDigest(m.DTBs))
 	case len(m.Macs) == 0:
 		return fmt.Errorf("no macs")
+	}
+	if err := PayloadName(m.Kernel.PayloadManifest); err != nil {
+		return err
 	}
 	for _, a := range m.Artifacts {
 		if a.Name == "" || len(a.SHA256) != 64 || a.Version == "" || len(a.MtreeSHA256) != 64 {

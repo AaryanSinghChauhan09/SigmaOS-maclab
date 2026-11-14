@@ -262,3 +262,40 @@ func TestFreezeEntryChecksPin(t *testing.T) {
 		}
 	}
 }
+
+func TestThePayloadListStaysInTheReleasesFolder(t *testing.T) {
+	m, _, _, _ := fixture(t)
+	payload := []byte(vml + "  vmlinuz\n" + dtb1 + "  dtbs/t-a.dtb\n" + dtb2 + "  dtbs/t-b.dtb\n" + mtr + "  modules.dep\n")
+	for _, name := range []string{"", ".", "..", "../x", "../../../log/backup.ok", "payload/../../x", "payload/..", "payload/./x",
+		"/var/lab/log/backup.ok", "payload//x", "payload/", "pay load/x", `payload\x`, "payload/x\n", "manifest.json", "Manifest.JSON", "~/x", strings.Repeat("a", 300)} {
+		m.Kernel.PayloadManifest = name
+		if err := m.Validate(payload); err == nil || !strings.Contains(err.Error(), "kernel.payload_manifest") {
+			t.Errorf("payload_manifest %q passed: %v", name, err)
+		}
+	}
+	for _, name := range []string{"payload/linux-aurora.files.sha256", "k.sha256", "payload/x_1-2.sha256"} {
+		m.Kernel.PayloadManifest = name
+		if err := m.Validate(payload); err != nil {
+			t.Errorf("payload_manifest %q refused: %v", name, err)
+		}
+	}
+}
+
+func TestAPayloadLineIsADigestAndAPathBelowTheKernelsFolder(t *testing.T) {
+	for _, line := range []string{
+		strings.Repeat("z", 64) + "  vmlinuz",
+		vml + "  /etc/passwd",
+		vml + "  ../vmlinuz",
+		vml + "  kernel/../../x",
+		vml + "  ",
+		vml,
+	} {
+		if got, err := ParsePayload([]byte(line + "\n")); err == nil {
+			t.Errorf("payload line %q passed: %v", line, got)
+		}
+	}
+	got, err := ParsePayload([]byte(strings.ToUpper(strings.Repeat("ab", 32)) + "  kernel/drivers/a b.ko.zst\n\n" + vml + " *vmlinuz\n"))
+	if err != nil || len(got) != 2 || got["vmlinuz"] != vml || got["kernel/drivers/a b.ko.zst"] != strings.Repeat("ab", 32) {
+		t.Fatalf("a good payload list: %v %v", got, err)
+	}
+}
