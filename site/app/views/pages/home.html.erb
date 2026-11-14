@@ -1,0 +1,36 @@
+<% content_for :title, "Omarchy on Apple Silicon" %>
+<% content_for :head do %><%= javascript_include_tag "model_results", defer: true %><% end %>
+<section class="hero">
+  <%= image_tag "omarchy-logo.svg", alt: "Omarchy", class: "hero-logo", width: 96, height: 96 %>
+  <div>
+    <h1>omarchy-m-testing</h1>
+    <p class="tagline">What works on each Apple Silicon Mac under Omarchy, tested on real machines.</p>
+  </div>
+</section>
+
+<%= render "shared/install" %>
+
+<%= card "compatibility matrix" do %>
+  <% if @matrix.empty? %>
+    <p class="dim">No reports yet. Run <code>omarchy-m-test</code> on your Mac to add the first.</p>
+  <% else %>
+    <p class="matrix-note">Latest results by model. Expand a row to see its builds, or <%= link_to "filter and compare results", matrix_path %>.</p>
+    <%= render "shared/matrix", rows: @matrix.rows, features: @matrix.features, history: @history %>
+  <% end %>
+  <%= render "shared/legend" %>
+<% end %>
+
+<div class="grid">
+  <%= card "explore" do %>
+    <ul class="links">
+      <li><a href="<%= models_path %>">Models</a>: every Mac with reports, what its chip is expected to do.</li>
+      <li><a href="<%= features_path %>">Features</a>: every feature in the catalogue, per chip and per Mac.</li>
+      <li><a href="<%= gaps_path %>">Kernel gaps</a>: what Asahi has that Aurora lacks, and hardware nobody drives yet.</li>
+      <li><a href="<%= reports_path %>">Reports</a>: every run, as the terminal showed it.</li>
+      <li><a href="<%= data_path %>">Data</a>: all of it as JSON and CSV, CC0.</li>
+    </ul>
+  <% end %>
+  <%= card "privacy" do %>
+    <p>Reports never carry serial numbers, MAC addresses, hostnames, user names, Wi-Fi network names, IP addresses or disk identifiers. Every upload comes with a deletion link that removes it for good.</p>
+  <% end %>
+</div>

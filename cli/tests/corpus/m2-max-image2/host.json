@@ -1,0 +1,917 @@
+{
+  "description": "MacBook Pro 16-inch M2 Max (j416c, t6021), Aurora kernel, converged image-2 install: raw host answers for record mode",
+  "source": "Real evidence from the M2 Max, 2026-09-13 to 2026-09-26: diagnostics/m2-usbc-20260913 (kernel log, device tree), outputs/m2-image2-acceptance/41-deferred-evidence.txt (offline first-boot failure), operations/asahi-brcmfmac-6ghz-73/logs/boot-1-failure.log (5 GHz first join), operations/logind-usb-connector/issue.md (lid close with a USB-C monitor attached). The inventory answers come from the booted kernel's own package, linux-aurora 7.1.12.aurora2-2 and its headers (device tree, module aliases, build config), and the kernel log's failed AVD probe. The live audio, display and keyboard-light answers come from outputs/m2-image2-acceptance/ (37-audio-state.txt, 37-mic-capture.txt, 37-speakersafetyd-unit.txt, 39-display-check-session.txt, owner-look-listen.sh), with the panel backlight level and the volume reconstructed and noted. The M2 has since been reinstalled with converged image 4, so image 2's own answers (mac-check, encryption, the backlight level, the volume) can no longer be captured and stay reconstructed; tests/corpus/m2-max-converged is its real run. The camera, function-key and ports answers are stand-ins, noted on each entry (checks added after image 2's runs).",
+  "pseudonymized": "Committed evidence is pseudonymized: every Wi-Fi network name, MAC address, IP address, UUID, boot id and account name in it was swapped for a fake of the same shape, and the camera module's serial (in the ISP's log lines), before commit, so the corpus exercises the scrubber on real log formats without publishing the real values. 'forbidden' lists the identifiers (decoys and lab hostnames) that must never survive into a recording or report.",
+  "forbidden": [
+    "omarchy-m2-max",
+    "kestrel",
+    "Bellbird7C21-56",
+    "Bellbird7C21",
+    "/home/kestrel",
+    "4F4D-5801",
+    "f3f9c677-2a72-552b-4f98-974165e366e7",
+    "1ecca69d-65b5-2499-d795-7b1dbf2397e3",
+    "1a:07:05:06:76:70:89:10:49:1c:a8:51:06:49",
+    "10.33.202.75",
+    "10.155.4.108",
+    "a7eae2c603ca2b6a0ff4aa6723fab870",
+    "506dba8cd9bc8f82ff1dbbf1ea3c482d",
+    "19cb5303-6637-3988-ecd0-1235a3c55b23",
+    "f0:c0:7b:98:e6:d4",
+    "fe80::4b9d:64a3:afd:ba19",
+    "77cb54c5-d17d-7fcc-397b-6d108f09e4e4",
+    "77:ef:01:3f:c2:88",
+    "10.118.110.232",
+    "10.159.16.3",
+    "fe80::c712:bd3:b033:120c",
+    "10.139.113.3",
+    "CC2411719QXRWTVDC",
+    "31313432 51393137"
+  ],
+  "commands": [
+    {
+      "argv": [
+        "uname",
+        "-m"
+      ],
+      "returncode": 0,
+      "stdout": "aarch64\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "uname",
+        "-r"
+      ],
+      "returncode": 0,
+      "stdout": "7.1.12-2-2-ARCH\n",
+      "stderr": "",
+      "note": "release from the kernel log's 'Linux version' line"
+    },
+    {
+      "argv": [
+        "nmcli",
+        "--get-values",
+        "NAME,TYPE",
+        "connection",
+        "show"
+      ],
+      "returncode": 0,
+      "stdout": "Bellbird7C21-56:802-11-wireless\nBellbird7C21:802-11-wireless\n",
+      "stderr": "",
+      "note": "the two saved connections the Wi-Fi journal activates"
+    },
+    {
+      "argv": [
+        "journalctl",
+        "--dmesg",
+        "--boot=0",
+        "--no-pager"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "kernel.log"
+      },
+      "stderr": "",
+      "note": "journalctl -k of the 2026-09-13 boot (kernel-after-alias.log), default short format"
+    },
+    {
+      "argv": [
+        "dtc",
+        "-I",
+        "fs",
+        "-O",
+        "dts",
+        "/proc/device-tree"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "devicetree.dts"
+      },
+      "stderr": "",
+      "note": "j416c device tree decompiled from the Aurora kernel package's DTB (j416c-before.dts); m1n1 fills per-unit values such as MAC addresses at boot"
+    },
+    {
+      "argv": [
+        "journalctl",
+        "--unit=omarchy-provision-hardware.service",
+        "--output=short-iso",
+        "--no-pager"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "first-boot.log"
+      },
+      "stderr": "",
+      "note": "journal lines quoted in 41-deferred-evidence.txt: the offline first-boot failure (vulkan.sh, target not found) and the rerun that completed"
+    },
+    {
+      "argv": [
+        "journalctl",
+        "--boot=0",
+        "--unit=NetworkManager.service",
+        "--unit=iwd.service",
+        "--output=short-precise",
+        "--no-pager"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "wifi.log"
+      },
+      "stderr": "",
+      "note": "boot-1-failure.log: the first join that got no lease and the second attempt that did"
+    },
+    {
+      "argv": [
+        "journalctl",
+        "--boot=0",
+        "--unit=systemd-logind.service",
+        "--no-pager"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "lid.log"
+      },
+      "stderr": "",
+      "note": "lid close suspending with a USB-C monitor attached, as quoted in the logind issue draft (timestamps and host trimmed there)"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Q",
+        "omarchy",
+        "omarchy-dev",
+        "omarchy-settings",
+        "omarchy-settings-dev",
+        "omarchy-mac",
+        "omarchy-mac-boot",
+        "omarchy-mac-keyring",
+        "linux-aurora",
+        "linux-asahi",
+        "m1n1",
+        "m1n1-aurora",
+        "uboot-asahi",
+        "limine",
+        "mesa",
+        "vulkan-asahi",
+        "asahi-audio",
+        "speakersafetyd",
+        "alsa-ucm-conf-asahi"
+      ],
+      "returncode": 1,
+      "stdout": "omarchy 4.0.0.alpha.quattro.r1790350165.g99ace4070354-1.361571887310001\nomarchy-settings 4.0.0.alpha.quattro.r1790350165.g99ace4070354-1.361571887310001\nomarchy-mac 0.1.0-5.361571887310001\nomarchy-mac-boot 20260925-3\nlinux-aurora 7.1.12.aurora2-2\nm1n1-aurora 1.6.1.aurora1-3\nuboot-asahi 2026.07.asahi2-4\nlimine 12.9.0-1\nmesa 1:26.2.3-1\nvulkan-asahi 1:26.2.3-1\nasahi-audio 4.1-1\nspeakersafetyd 2.0.1-1\nalsa-ucm-conf-asahi 10-1\n",
+      "stderr": "error: package 'omarchy-dev' was not found\nerror: package 'omarchy-settings-dev' was not found\nerror: package 'omarchy-mac-keyring' was not found\nerror: package 'linux-asahi' was not found\nerror: package 'm1n1' was not found\n",
+      "note": "image 2's package set (outputs/image2/PROVENANCE) with vulkan-asahi as the manual rerun of the first-boot setup installed it (41-deferred-evidence.txt); linux-aurora as the running kernel of the 2026-09-13 kernel log"
+    },
+    {
+      "argv": [
+        "findmnt",
+        "--noheadings",
+        "--output",
+        "SOURCE",
+        "/"
+      ],
+      "returncode": 0,
+      "stdout": "/dev/mapper/root[/@]\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: image 2 was installed with encryption on (m2-image2-test/OWNER-STEPS.md: LUKS2, btrfs @ subvolume)"
+    },
+    {
+      "argv": [
+        "lsblk",
+        "--noheadings",
+        "--inverse",
+        "--raw",
+        "--output",
+        "TYPE,FSTYPE",
+        "/dev/mapper/root"
+      ],
+      "returncode": 0,
+      "stdout": "crypt btrfs\npart crypto_LUKS\ndisk \n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: the LUKS2 root that note describes"
+    },
+    {
+      "argv": [
+        "bundled:mac-check"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "mac-check.txt"
+      },
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: mac-check's lines built from image 2's evidence: package versions (PROVENANCE), ESP file hashes (IMAGE), Limine, displays (39-display-check-session.txt), sound cards, default sink and Wi-Fi as in omarchy-mac's own M2 Max fixture (tools/hardware/test/mac-check-test.sh); the v0.1 dogfood run records the real output"
+    },
+    {
+      "argv": [
+        "bundled:apple-audio-check",
+        "--no-sound"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "audio-check.txt"
+      },
+      "stderr": "",
+      "note": "37-audio-check-nosound.txt, the same checks on image 2 (2026-09-26 09:43), in the vendored script's format; 'speaker amps unlocked' failed there because that script grepped speakersafetyd's journal, and is shown passing as the vendored script's kernel-log check would"
+    },
+    {
+      "argv": [
+        "bundled:apple-display-check",
+        "--read-only"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "display-check.txt"
+      },
+      "stderr": "",
+      "note": "39-display-check-session.txt (image 2, 2026-09-26 09:45) with the brightness steps --read-only skips removed"
+    },
+    {
+      "argv": [
+        "vulkaninfo",
+        "--summary"
+      ],
+      "returncode": 127,
+      "stdout": "",
+      "stderr": "vulkaninfo: command not found\n",
+      "note": "vulkan-tools isn't in image 2's package set (PROVENANCE)"
+    },
+    {
+      "argv": [
+        "eglinfo",
+        "-B"
+      ],
+      "returncode": 127,
+      "stdout": "",
+      "stderr": "eglinfo: command not found\n",
+      "note": "mesa-utils isn't in image 2's package set (PROVENANCE)"
+    },
+    {
+      "argv": [
+        "grep",
+        "-r",
+        "-a",
+        "-H",
+        "",
+        "--include=compatible",
+        "--include=status",
+        "/sys/firmware/devicetree/base"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "devicetree-properties.txt"
+      },
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: the compatible and status properties of every node in linux-aurora 7.1.12.aurora2-2 (dtbs/t6021-j416c.dtb, the DTB devicetree.dts was decompiled from), the device tree the booted kernel package ships (m1n1 adjusts some nodes at boot, so a few statuses may differ on the Mac)"
+    },
+    {
+      "argv": [
+        "grep",
+        "-r",
+        "-H",
+        "-E",
+        "^(OF_FULLNAME|DRIVER)=",
+        "--include=uevent",
+        "/sys/devices"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "uevents.txt"
+      },
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: a device for every enabled node a driver in linux-aurora 7.1.12.aurora2-2 matches (its modules.alias and modules.builtin.modinfo) or that sits on a bus, with that driver bound (but simple-pm-bus only where simple-bus or simple-mfd is the first compatible, as its probe requires), except the AVD the kernel log shows failing its probe (firmware apple/avd-fw-v3-t1.bin missing); paths approximate. Nodes the kernel core sets up early (AIC, timer, fixed clocks, OPP tables) get none"
+    },
+    {
+      "argv": [
+        "zcat",
+        "/proc/config.gz"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "kernel-config.txt"
+      },
+      "stderr": "",
+      "note": "linux-aurora-headers 7.1.12.aurora2-2's build/.config: the exact build options of the booted kernel, which /proc/config.gz holds"
+    },
+    {
+      "argv": [
+        "brightnessctl",
+        "--list",
+        "--machine-readable"
+      ],
+      "returncode": 0,
+      "stdout": "apple-panel-bl,backlight,250,50%,500\nkbd_backlight,leds,0,0%,255\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: the panel's level and range; the keyboard light at 0/255 is 39-display-check-session.txt's 'keys 0/255'"
+    },
+    {
+      "argv": [
+        "brightnessctl",
+        "--machine-readable",
+        "--device=apple-panel-bl",
+        "set",
+        "175"
+      ],
+      "returncode": 0,
+      "stdout": "apple-panel-bl,backlight,175,35%,500\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: brightnessctl's machine-readable line after a set"
+    },
+    {
+      "argv": [
+        "brightnessctl",
+        "--machine-readable",
+        "--device=apple-panel-bl",
+        "set",
+        "112"
+      ],
+      "returncode": 0,
+      "stdout": "apple-panel-bl,backlight,112,22%,500\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: brightnessctl's machine-readable line after a set"
+    },
+    {
+      "argv": [
+        "brightnessctl",
+        "--machine-readable",
+        "--device=apple-panel-bl",
+        "set",
+        "62"
+      ],
+      "returncode": 0,
+      "stdout": "apple-panel-bl,backlight,62,12%,500\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: brightnessctl's machine-readable line after a set"
+    },
+    {
+      "argv": [
+        "brightnessctl",
+        "--machine-readable",
+        "--device=apple-panel-bl",
+        "set",
+        "250"
+      ],
+      "returncode": 0,
+      "stdout": "apple-panel-bl,backlight,250,50%,500\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: brightnessctl's machine-readable line after a set"
+    },
+    {
+      "argv": [
+        "sleep",
+        "1"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "pactl",
+        "get-default-source"
+      ],
+      "returncode": 0,
+      "stdout": "omarchy_asahi_mic.monitor\n",
+      "stderr": "",
+      "note": "37-audio-state.txt: 'default source: omarchy_asahi_mic.monitor'"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "timeout 3 parec --raw --format=s16le --channels=1 --rate=48000 --device=\"$2\" | python3 -c \"$1\"",
+        "sh",
+        "import array, math, sys\ndata = sys.stdin.buffer.read()\nsamples = array.array('h', data[: len(data) // 2 * 2])\nif sys.byteorder == 'big':\n    samples.byteswap()\npeak = max(map(abs, samples), default=0)\nrms = math.sqrt(sum(v * v for v in samples) / len(samples)) if samples else 0.0\nprint(f'samples {len(samples)} peak {peak} rms {rms:.1f}')\n",
+        "omarchy_asahi_mic.monitor"
+      ],
+      "returncode": 0,
+      "stdout": "samples 144000 peak 178 rms 39.4\n",
+      "stderr": "",
+      "note": "37-mic-capture.txt: omarchy_asahi_mic.monitor peak 178 rms 39.4 (that capture's own sample count differed: 2 channels)"
+    },
+    {
+      "argv": [
+        "systemctl",
+        "is-active",
+        "speakersafetyd"
+      ],
+      "returncode": 0,
+      "stdout": "active\n",
+      "stderr": "",
+      "note": "37-speakersafetyd-unit.txt: active (running) since 08:49:17"
+    },
+    {
+      "argv": [
+        "pactl",
+        "get-default-sink"
+      ],
+      "returncode": 0,
+      "stdout": "audio_effect.j416-convolver\n",
+      "stderr": "",
+      "note": "37-audio-state.txt: 'default sink: audio_effect.j416-convolver'"
+    },
+    {
+      "argv": [
+        "wpctl",
+        "inspect",
+        "@DEFAULT_AUDIO_SINK@"
+      ],
+      "returncode": 0,
+      "stdout": "id 1154, type PipeWire:Interface:Node\n    node.name = \"audio_effect.j416-convolver\"\n",
+      "stderr": "",
+      "note": "the convolver sink's node id from 37-audio-state.txt's sink list (1154); the rest of wpctl's properties trimmed"
+    },
+    {
+      "argv": [
+        "wpctl",
+        "get-volume",
+        "1154"
+      ],
+      "returncode": 0,
+      "stdout": "Volume: 0.40\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: the volume before the tone (owner-look-listen.sh logged it to its own run log, not kept)"
+    },
+    {
+      "argv": [
+        "wpctl",
+        "set-volume",
+        "1154",
+        "0.30"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "wpctl",
+        "set-volume",
+        "1154",
+        "0.40"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "python3 -c \"$1\" | pacat --raw --format=s16le --channels=2 --rate=48000 --device=\"$2\"",
+        "sh",
+        "import math, struct, sys\nrate = 48000\nn = 2 * rate\nfade = rate // 20\ndef level(i):\n    return min(1.0, i / fade, (n - i) / fade)\nwave = (int(8000 * level(i) * math.sin(2 * math.pi * 440 * i / rate)) for i in range(n))\nsys.stdout.buffer.write(b''.join(struct.pack('<hh', v, v) for v in wave))\n",
+        "audio_effect.j416-convolver"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "note": "owner-look-listen.sh played its tone the same way (python3 | pacat) on 2026-09-26"
+    },
+    {
+      "argv": [
+        "brightnessctl",
+        "--machine-readable",
+        "--device=kbd_backlight",
+        "info"
+      ],
+      "returncode": 0,
+      "stdout": "kbd_backlight,leds,0,0%,255\n",
+      "stderr": "",
+      "note": "39-display-check-session.txt: 'keys 0/255' (a recording keeps one answer per command, so the covered reading replays the uncovered one)"
+    },
+    {
+      "argv": [
+        "loginctl",
+        "show-session",
+        "auto",
+        "--property=Remote",
+        "--property=Seat",
+        "--property=Active"
+      ],
+      "returncode": 0,
+      "stdout": "Remote=yes\nSeat=\nActive=yes\n",
+      "stderr": "",
+      "note": "the M2's corpus runs are over SSH on the Thunderbolt lab link: logind's answer for an SSH session (no seat), so the Wi-Fi first-join check is skipped"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "timeout 5 bluetoothctl devices Paired 2>/dev/null | grep -c \"^Device \""
+      ],
+      "returncode": 1,
+      "stdout": "0\n",
+      "stderr": "",
+      "note": "stand-in: the paired-device count wasn't captured (grep -c prints 0 and exits 1 with none); the v0.1 dogfood run records it"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Q",
+        "vkmark",
+        "ffmpeg"
+      ],
+      "returncode": 1,
+      "stdout": "ffmpeg 2:9.0.2-1\n",
+      "stderr": "error: package 'vkmark' was not found\n",
+      "note": "stand-in: this run had no benchmark section (omarchy-m-test 0.1.3); what pacman answers on a Mac without vkmark and with ffmpeg (mpv needs it), with Arch Linux ARM extra's vkmark 2025.01 and its assimp dependency, so the benchmarks are offered and, with no answer, declined"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Sp",
+        "--needed",
+        "--print-format",
+        "%n",
+        "vkmark"
+      ],
+      "returncode": 0,
+      "stdout": "assimp\nvkmark\n",
+      "stderr": "",
+      "note": "stand-in: this run had no benchmark section (omarchy-m-test 0.1.3); what pacman answers on a Mac without vkmark and with ffmpeg (mpv needs it), with Arch Linux ARM extra's vkmark 2025.01 and its assimp dependency, so the benchmarks are offered and, with no answer, declined"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Q",
+        "assimp",
+        "vkmark"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "error: package 'assimp' was not found\nerror: package 'vkmark' was not found\n",
+      "note": "stand-in: this run had no benchmark section (omarchy-m-test 0.1.3); what pacman answers on a Mac without vkmark and with ffmpeg (mpv needs it), with Arch Linux ARM extra's vkmark 2025.01 and its assimp dependency, so the benchmarks are offered and, with no answer, declined"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "for d in /sys/class/video4linux/video*; do [ -e \"$d\" ] || continue; drv=$(readlink \"$d/device/driver\"); echo \"${d##*/} ${drv##*/}\"; done"
+      ],
+      "returncode": 0,
+      "stdout": "video0 apple-isp\n",
+      "stderr": "",
+      "note": "stand-in: the camera's video devices weren't captured; kernel.log has apple-isp probing and loading its firmware. The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "timeout",
+        "20",
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-f",
+        "v4l2",
+        "-i",
+        "/dev/video0",
+        "-frames:v",
+        "30",
+        "-f",
+        "null",
+        "-"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "Input #0, video4linux2,v4l2, from '/dev/video0':\n  Duration: N/A, start: 0.000000, bitrate: 746496 kb/s\n  Stream #0:0: Video: rawvideo (NV12 / 0x3231564E), nv12, 1920x1080, 746496 kb/s, 30 fps, 30 tbr, 1000k tbn\nStream mapping:\n  Stream #0:0 -> #0:0 (rawvideo (native) -> wrapped_avframe (native))\nOutput #0, null, to 'pipe:':\n  Stream #0:0: Video: wrapped_avframe, nv12(progressive), 1920x1080, q=2-31, 200 kb/s, 30 fps, 30 tbn\n[out#0/null @ 0xaaaacafe0000] video:13KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nframe=   30 fps= 29 q=-0.0 Lsize=N/A time=00:00:01.00 bitrate=N/A speed=0.98x\n",
+      "note": "stand-in: no frame capture was recorded; the stream is the ISP's 1920x1080 mode from kernel.log's CISP_CMD_CH_CAMERA_CONFIG_GET list (0x780 x 0x438). The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "for p in /sys/class/typec/port*; do\n  n=${p##*/port}\n  case $n in ''|*[!0-9]*) continue;; esac\n  if [ -e \"/sys/class/typec/port$n-partner\" ]; then partner=yes; else partner=no; fi\n  data=$(sed -n 's/.*\\[\\(.*\\)\\].*/\\1/p' \"$p/data_role\" 2>/dev/null)\n  power=$(sed -n 's/.*\\[\\(.*\\)\\].*/\\1/p' \"$p/power_role\" 2>/dev/null)\n  echo \"typec $n partner=$partner data=$data power=$power\"\ndone\nfor d in /sys/bus/usb/devices/*; do\n  [ -r \"$d/speed\" ] || continue\n  case ${d##*/} in *:*) continue;; usb*) kind=root;; *) kind=device;; esac\n  class=$(cat \"$d/bDeviceClass\" 2>/dev/null)\n  if [ \"$class\" = 00 ]; then class=$(cat \"$d\"/*:*/bInterfaceClass 2>/dev/null | head -n 1); fi\n  echo \"usb $kind speed=$(cat \"$d/speed\") class=$class\"\ndone"
+      ],
+      "returncode": 0,
+      "stdout": "typec 0 partner=yes data=host power=source\ntypec 1 partner=yes data=host power=source\ntypec 2 partner=no data=device power=sink\nusb root speed=480 class=09\nusb root speed=10000 class=09\nusb root speed=480 class=09\nusb root speed=10000 class=09\nusb root speed=480 class=09\nusb root speed=10000 class=09\n",
+      "stderr": "",
+      "note": "stand-in reconstructed from the M2's evidence: three USB-C ports (usb-pd@38, @3b, @3f in kernel.log), one holding the Thunderbolt lab link the corpus runs go over and one the 3440x1440 display mac-check lists as USB-2; the roles and root hub speeds are reconstructed. The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "if [ ! -d /sys/bus/thunderbolt/devices ]; then echo nobus; exit 0; fi\nfor d in /sys/bus/thunderbolt/devices/*; do\n  [ -r \"$d/uevent\" ] || continue\n  line=\"thunderbolt ${d##*/} $(sed -n 's/^DEVTYPE=//p' \"$d/uevent\")\"\n  for f in generation rx_speed rx_lanes authorized; do\n    if [ -r \"$d/$f\" ]; then line=\"$line $f=$(tr -d ' \\n' < \"$d/$f\")\"; fi\n  done\n  echo \"$line\"\ndone"
+      ],
+      "returncode": 0,
+      "stdout": "thunderbolt 0-0 thunderbolt_device generation=4 rx_speed=10.0Gb/s rx_lanes=2 authorized=1\nthunderbolt 0-0:1.1 thunderbolt_retimer\nthunderbolt 0-1 thunderbolt_xdomain rx_speed=10.0Gb/s rx_lanes=2\nthunderbolt 1-0 thunderbolt_device generation=4 rx_speed=10.0Gb/s rx_lanes=1 authorized=1\nthunderbolt 2-0 thunderbolt_device generation=4 rx_speed=10.0Gb/s rx_lanes=1 authorized=1\nthunderbolt domain0 thunderbolt_domain\nthunderbolt domain1 thunderbolt_domain\nthunderbolt domain2 thunderbolt_domain\n",
+      "stderr": "",
+      "note": "stand-in reconstructed from kernel.log: thunderbolt-apple-acio brings up three domains, domain 0 linked to another Mac (the lab link: 'new host found', USB4 Gen2 on two lanes) through a retimer; speeds and lanes are reconstructed. The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "for c in /sys/class/drm/card*-*; do\n  [ -r \"$c/status\" ] || continue\n  echo \"connector ${c##*/} $(cat \"$c/status\") $(cat \"$c/enabled\" 2>/dev/null) $(head -n 1 \"$c/modes\" 2>/dev/null)\"\ndone"
+      ],
+      "returncode": 0,
+      "stdout": "connector card1-eDP-1 connected enabled 3456x2234\nconnector card2-HDMI-A-1 disconnected disabled \nconnector card2-USB-1 disconnected disabled \nconnector card2-USB-2 connected enabled 3440x1440\nconnector card2-USB-3 disconnected disabled \n",
+      "stderr": "",
+      "note": "stand-in reconstructed from mac-check.txt ('USB-2 3440x1440@60', 'eDP-1 3456x2234@120') and the DRM connector the display uses (card2-USB-2); the other connectors and card numbers are reconstructed. The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "out=$(hyprctl devices -j 2>/dev/null) || { echo unavailable; exit 0; }\nprintf '%s\\n' \"$out\" | grep -oE '\"name\": *\"apple-(spi|mtp|internal)-[^\"]*\"' | sed -E 's/^\"name\": *\"(.*)\"$/\\1/' | sort -u"
+      ],
+      "returncode": 0,
+      "stdout": "unavailable\n",
+      "stderr": "",
+      "note": "stand-in: the corpus runs are over SSH, where hyprctl can't reach Hyprland (as the converged M1's real run shows), so the script prints 'unavailable'"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "swipe=$(hyprctl getoption gestures:workspace_swipe 2>/dev/null | sed -n 's/^int: *//p')\n[ -n \"$swipe\" ] && echo \"swipe-live $swipe\"\nfield() { printf '%s\\n' \"$1\" | sed -nE \"s/.*$2=\\\"?([A-Za-z0-9_-]+)\\\"?([,;}].*)?$/\\1/p\"; }\nn=0\nfor f in \"$HOME\"/.local/share/omarchy/default/hypr/*.lua \"$HOME\"/.local/share/omarchy/default/hypr/*.conf \\\n         \"$HOME\"/.config/hypr/*.lua \"$HOME\"/.config/hypr/*.conf; do\n  [ -r \"$f\" ] || continue\n  n=$((n + 1))\n  { sed -e 's/--.*$//' -e 's/#.*$//' \"$f\" | tr -d ' \\t' | tr '\\n' ';'; echo; } |\n    sed -e 's/^/;/' -e 's/hl\\./\\nhl./g' -e 's/;gesture=/\\ngesture=/g' -e 's/;workspace_swipe=/\\nworkspace_swipe=/g' |\n    while IFS= read -r c; do\n      case $c in\n        'hl.gesture({'*)\n          c=${c%%\\}*}\n          [ \"$(field \"$c\" fingers)\" = 3 ] || continue\n          action=$(printf '%s\\n' \"$c\" | sed -nE 's/.*action=\"([a-z]+)\"([,;].*)?$/\\1/p')\n          case $action in workspace|unset) ;; *) action=other;; esac\n          echo \"gesture 3 $(field \"$c\" direction) $action\";;\n        'gesture=3,'*)\n          c=${c#gesture=}; c=${c%%;*}\n          old=$IFS; IFS=,; set -- $c; IFS=$old\n          dir=$2; shift 2; action=other\n          for a in \"$@\"; do case $a in *:*) ;; workspace|unset) action=$a; break;; *) break;; esac; done\n          echo \"gesture 3 $dir $action\";;\n        'workspace_swipe='*)\n          case ${c#workspace_swipe=} in true*|1*|yes*|on*) echo \"workspace-swipe 1\";; *) echo \"workspace-swipe 0\";; esac;;\n      esac\n    done\ndone\necho \"files $n\"\n"
+      ],
+      "returncode": 0,
+      "stdout": "files 2\n",
+      "stderr": "",
+      "note": "stand-in: Omarchy's default hypr/input.lua and the user's untouched config/hypr/input.lua (the three-finger workspace swipe commented out), as the script prints them; hyprctl can't reach Hyprland over SSH"
+    },
+    {
+      "argv": [
+        "omarchy-battery-charge-limit"
+      ],
+      "returncode": 0,
+      "stdout": "Charge limit: 100% (restart charging at 100%)\n",
+      "stderr": "",
+      "note": "62-battery-before.txt (omarchy-mac 62, image 2, 2026-09-26)"
+    },
+    {
+      "argv": [
+        "sudo",
+        "-n",
+        "true"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "sudo: a password is required\n",
+      "note": "stand-in: the corpus run is over SSH, where sudo has no cached credentials, so the charge limit isn't changed"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Q",
+        "mesa-utils"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "error: package 'mesa-utils' was not found\n",
+      "note": "as the M2 Max answered on 2026-09-27: mesa-utils alone, nothing installed it needs upgraded"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Sp",
+        "--needed",
+        "--print-format",
+        "%n",
+        "mesa-utils"
+      ],
+      "returncode": 0,
+      "stdout": "mesa-utils\n",
+      "stderr": "",
+      "note": "as the M2 Max answered on 2026-09-27: mesa-utils alone, nothing installed it needs upgraded"
+    },
+    {
+      "argv": [
+        "read:touch-id"
+      ],
+      "returncode": 0,
+      "stdout": "{\"apple\": true, \"diag\": {}, \"firmware\": {}, \"sep\": null}",
+      "stderr": "",
+      "note": "SEP diagnostics were not captured in this historical run; explicitly unavailable, never a reconstructed readiness pass."
+    },
+    {
+      "argv": [
+        "hyprctl",
+        "-j",
+        "monitors",
+        "all"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "",
+      "note": "stand-in: this corpus predates the native-mode probe and has no Hyprland monitor JSON for it. Leave the session unavailable instead of inventing a native-mode pass; the next dogfood run records it."
+    },
+    {
+      "argv": [
+        "sudo",
+        "-n",
+        "cat",
+        "/sys/kernel/debug/devices_deferred"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "sudo: a password is required\n",
+      "note": "devices_deferred was not read in this historical run; answered as unavailable, never a reconstructed reason."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "thermal"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "Temperatures and fans were not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "sensors"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "Motion, lid-angle and light sensors were not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "storage"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "SSD health was not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "capacity"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "SSD capacity was not read in this historical run; the report leaves it out rather than guessing."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "gpu-spec"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "The Vulkan and GL spec checks were not read in this historical run; explicitly unavailable, never a reconstructed result."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "clocks"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "The CPU frequency steps were not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "engines"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "The Neural Engine and the video encoder were not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    }
+  ],
+  "files": {
+    "/proc/device-tree/model": {
+      "text": "Apple MacBook Pro (16-inch, M2 Max, 2023)\u0000"
+    },
+    "/proc/device-tree/compatible": {
+      "text": "apple,j416c\u0000apple,t6021\u0000apple,arm-platform\u0000"
+    },
+    "/proc/sys/kernel/hostname": {
+      "text": "omarchy-m2-max\n"
+    },
+    "/etc/os-release": {
+      "text": "NAME=\"Omarchy\"\nPRETTY_NAME=\"Omarchy\"\nID=omarchy\nID_LIKE=arch\nBUILD_ID=\"4.0.0.alpha.quattro.r1790350165.g99ace4070354\"\nVERSION_ID=\"4.0.0.alpha.quattro.r1790350165.g99ace4070354\"\nANSI_COLOR=\"38;2;158;206;106\"\nHOME_URL=\"https://omarchy.org/\"\n",
+      "note": "omarchy-settings' os-release override (its PKGBUILD) at image 2's version"
+    },
+    "/var/lib/omarchy/image/target": null,
+    "/var/lib/omarchy/factory-sealed": null,
+    "/sys/class/power_supply/macsmc-battery/type": {
+      "text": "Battery\n"
+    },
+    "/sys/class/power_supply/macsmc-battery/status": {
+      "text": "Full\n",
+      "note": "62-battery-before.txt"
+    },
+    "/sys/class/power_supply/macsmc-battery/capacity": {
+      "text": "100\n",
+      "note": "62-battery-before.txt"
+    },
+    "/sys/class/power_supply/macsmc-battery/charge_control_end_threshold": {
+      "text": "100\n",
+      "note": "62-battery-before.txt"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/scaling_driver": {
+      "text": "apple-cpufreq\n",
+      "note": "confirmed on the M2 on 2026-09-27 (tests/corpus/m2-max-converged: the same CPU clusters, apple-cpufreq on each)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/related_cpus": {
+      "text": "0 1 2 3\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_min_freq": {
+      "text": "912000\n",
+      "note": "the M2 Max's real range, read by its converged-image run on 2026-09-27 (tests/corpus/m2-max-converged; the top performance state sits behind boost)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq": {
+      "text": "2424000\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/scaling_governor": {
+      "text": "schedutil\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy4/scaling_driver": {
+      "text": "apple-cpufreq\n",
+      "note": "confirmed on the M2 on 2026-09-27 (tests/corpus/m2-max-converged: the same CPU clusters, apple-cpufreq on each)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy4/related_cpus": {
+      "text": "4 5 6 7\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy4/cpuinfo_min_freq": {
+      "text": "702000\n",
+      "note": "the M2 Max's real range, read by its converged-image run on 2026-09-27 (tests/corpus/m2-max-converged; the top performance state sits behind boost)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy4/cpuinfo_max_freq": {
+      "text": "3264000\n",
+      "note": "the M2 Max's real range, read by its converged-image run on 2026-09-27 (tests/corpus/m2-max-converged; the top performance state sits behind boost)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy4/scaling_governor": {
+      "text": "schedutil\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy8/scaling_driver": {
+      "text": "apple-cpufreq\n",
+      "note": "confirmed on the M2 on 2026-09-27 (tests/corpus/m2-max-converged: the same CPU clusters, apple-cpufreq on each)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy8/related_cpus": {
+      "text": "8 9 10 11\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy8/cpuinfo_min_freq": {
+      "text": "702000\n",
+      "note": "the M2 Max's real range, read by its converged-image run on 2026-09-27 (tests/corpus/m2-max-converged; the top performance state sits behind boost)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy8/cpuinfo_max_freq": {
+      "text": "3264000\n",
+      "note": "the M2 Max's real range, read by its converged-image run on 2026-09-27 (tests/corpus/m2-max-converged; the top performance state sits behind boost)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy8/scaling_governor": {
+      "text": "schedutil\n"
+    },
+    "/var/lib/omarchy/image/target.booted": {
+      "text": "format=1\nplatform=apple-silicon\n",
+      "note": "41-deferred-evidence.txt: the first boot retired the target record to target.booted (32 bytes); its content is the manifest image 2's inspection found (outputs/image2/INSPECTION), which names no candidate set"
+    },
+    "/sys/bus/iio/devices/iio:device0/in_illuminance_input": {
+      "text": "733\n",
+      "note": "39-display-check-session.txt: 'lux 733'"
+    },
+    "/sys/module/hid_apple/parameters/fnmode": null,
+    "/sys/class/power_supply/macsmc-battery/charge_control_start_threshold": {
+      "text": "100\n",
+      "note": "62-battery-before.txt (omarchy-mac 62, image 2, 2026-09-26)"
+    },
+    "/etc/udev/macsmc-battery.conf": null,
+    "/usr/lib/udev/rules.d/94-omarchy-mac-battery-charge-limit.rules": {
+      "text": "# Reapply the charge limit saved by omarchy-battery-charge-limit when the Apple SMC battery appears.\nACTION==\"add\", SUBSYSTEM==\"power_supply\", KERNEL==\"macsmc-battery\", RUN+=\"/usr/lib/omarchy-mac/battery-charge-limit-restore\"\n",
+      "note": "62-battery-before.txt (omarchy-mac 62, image 2, 2026-09-26)"
+    },
+    "/usr/lib/omarchy-mac/battery-charge-limit-restore": {
+      "text": "#!/bin/bash\n# udev runs this as the SMC battery appears, so a saved charge limit survives\n# reboots. It never fails the event: anything unexpected leaves the SMC alone.\nset -euo pipefail\n\nsaved_file=\"/etc/udev/macsmc-battery.conf\"\nend_file=\"/sys/class/power_supply/macsmc-battery/charge_control_end_threshold\"\n\n[[ $(omarchy-hw-platform 2>/dev/null) == \"apple-silicon\" ]] || exit 0\n[[ -r $saved_file && -w $end_file ]] || exit 0\n\nlimit=\"\"\nwhile IFS= read -r line || [[ -n $line ]]; do\n  if [[ $line == CHARGE_CONTROL_END_THRESHOLD=* ]]; then\n    limit=${line#*=}\n  fi\ndone <\"$saved_file\"\n\nif [[ $limit == \"80\" || $limit == \"100\" ]]; then\n  printf '%s\\n' \"$limit\" >\"$end_file\" || true\nfi\n",
+      "note": "omarchy-mac 62's lib/battery-charge-limit-restore, which the rule runs (62-battery-restore-sim.txt ran it on image 2)"
+    }
+  },
+  "dirs": {
+    "/home": [
+      "kestrel"
+    ],
+    "/sys/bus/platform/drivers/asahi": [
+      "406400000.gpu",
+      "bind",
+      "module",
+      "uevent",
+      "unbind"
+    ],
+    "/usr/share/vulkan/icd.d": [
+      "asahi_icd.aarch64.json"
+    ],
+    "/sys/class/power_supply": [
+      "macsmc-battery"
+    ],
+    "/sys/devices/system/cpu/cpufreq": [
+      "policy0",
+      "policy4",
+      "policy8"
+    ],
+    "/sys/bus/iio/devices": [
+      "iio:device0"
+    ]
+  },
+  "dirs_note": "Directories: the asahi GPU device name is the kernel log's (406400000.gpu); the Vulkan ICD is vulkan-asahi's; power_supply lists only the battery 62-battery-before.txt read; the cpufreq policies and ranges were reconstructed; the M2's converged run (tests/corpus/m2-max-converged, 2026-09-27) confirms the GPU at 406400000 and the three policies, and gave the real ranges. The ambient light sensor's iio device number is reconstructed (the display check globbed iio:device*)."
+}

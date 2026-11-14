@@ -1,0 +1,7 @@
+<ul class="legend" aria-label="Colour code">
+  <% %w[works partial regression fails missing unknown not-tested].each do |state| %>
+    <li><span class="swatch cell-<%= state %>"><%= ResultState.glyph(state) %></span> <%= ResultState.words(state) %></li>
+  <% end %>
+  <li><span class="swatch cell-unconfirmed cell-hint-works"><%= ResultState.glyph("works") %></span> outlined: unconfirmed</li>
+</ul>
+<p class="legend-note">Solid once <%= MatrixCell::AGREEMENT %> machines agree or a tester confirms. Hover a square for details.</p>

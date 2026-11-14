@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omarchy-m-testing.org/schema/report-v1.schema.json",
+  "title": "omarchy-m-test report, schema version 1",
+  "description": "The report the omarchy-m-test CLI produces and the site's /api/v1 upload accepts. Shared by cli/ and site/; golden reports in schema/golden/ must validate against it. Only allowlisted, privacy-safe fields are permitted, so every object rejects unknown properties.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tool", "consent_version", "catalogue_version", "machine", "system", "checks"],
+  "properties": {
+    "schema_version": {
+      "description": "Report schema version. Bumped on any incompatible change.",
+      "const": 1
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "omarchy-m-test" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([.+-][0-9A-Za-z.+-]+)?$" }
+      }
+    },
+    "consent_version": {
+      "description": "Version of the disclaimer the user accepted.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "catalogue_version": {
+      "description": "Version of the feature catalogue (catalogue/catalogue.json) the results were classified with.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "machine": {
+      "description": "What the Mac is. Model and chip come from the device tree, never from serial numbers or other per-unit identifiers.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "board", "soc", "chip", "arch", "kernel"],
+      "properties": {
+        "model": { "description": "Device-tree model string, e.g. \"Apple MacBook Pro (16-inch, M2 Max, 2023)\".", "type": "string", "pattern": "^Apple ", "maxLength": 120 },
+        "board": { "description": "Board id from the device-tree compatible list, e.g. \"j416c\".", "type": "string", "pattern": "^j[0-9]{3}[a-z]{0,2}$" },
+        "soc": { "description": "SoC id from the device-tree compatible list, e.g. \"t6021\".", "type": "string", "pattern": "^t[0-9]{4}$" },
+        "chip": { "description": "Marketing chip name for the SoC, e.g. \"M2 Max\" or \"A18 Pro\"; \"unknown\" when the SoC isn't known yet.", "type": "string", "pattern": "^((M|A)[0-9]+( Pro| Max| Ultra)?|unknown)$" },
+        "arch": { "const": "aarch64" },
+        "kernel": { "description": "Kernel release (uname -r).", "type": "string", "minLength": 1, "maxLength": 100 },
+        "storage": { "description": "The SSD's capacity as Apple sells it, rounded from its largest namespace: storage performance differs by capacity. Absent when it couldn't be read.", "enum": ["256GB", "512GB", "1TB", "2TB", "4TB", "8TB"] }
+      }
+    },
+    "system": {
+      "description": "What the Mac runs: package names and versions, the os-release ID and the kinds of block devices under the root filesystem; never device names, UUIDs or key slots.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stack", "distro", "boot_loader", "encryption", "packages"],
+      "properties": {
+        "stack": { "description": "converged (the omarchy-mac or omarchy package), mx-mac (the fork's omarchy-dev without omarchy-mac), legacy-omarchy-mac (no Omarchy package, but omarchy-mac-keyring or a checkout), or reference for another distro.", "enum": ["converged", "mx-mac", "legacy-omarchy-mac", "reference"] },
+        "distro": { "description": "os-release ID, e.g. \"omarchy\" or \"fedora\"; \"unknown\" without one.", "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,39}$" },
+        "boot_loader": { "enum": ["limine", "grub", "unknown"] },
+        "encryption": { "description": "Whether the root filesystem is on an encrypted volume.", "enum": ["on", "off", "unknown"] },
+        "candidate_set": { "description": "The candidate set a candidate image was built from: the candidate_set of the image's target record (image/target or, after first boot, image/target.booted), else of the factory seal. Absent without a target record.", "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+        "image": {
+          "description": "The image's own build record: these keys of its target record (/var/lib/omarchy/image/target, or image/target.booted after the first boot), as the image builder writes them. Absent without a target record; older images have only format and platform.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "format": { "description": "The record's format version.", "type": "string", "pattern": "^[0-9]{1,4}$" },
+            "platform": { "description": "The platform the image was built for, e.g. apple-silicon.", "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$" },
+            "candidate_set": { "description": "The candidate set the image was built from.", "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+            "candidate_source_commit": { "description": "The omarchy-mac commit the candidate set was built from.", "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+            "builder_commit": { "description": "The image builder's commit.", "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+            "builder_tree_clean": { "description": "Whether the builder's tree was clean.", "type": "string", "pattern": "^(true|false|yes|no)$" },
+            "image_profile": { "description": "lab, test or release.", "type": "string", "pattern": "^[a-z]{1,20}$" },
+            "package_set_sha256": { "description": "The digest of the image's installed package set, as its release's IMAGE and PROVENANCE give it; with built, it names the release asset.", "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "built": { "description": "When the image was built, UTC.", "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+          }
+        },
+        "packages": {
+          "description": "Installed versions of the stack, boot and hardware packages omarchy-m-test asks pacman about.",
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "version"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9+_.@-]{0,63}$" },
+              "version": { "type": "string", "pattern": "^[0-9A-Za-z.:+~_-]{1,100}$" }
+            }
+          }
+        }
+      }
+    },
+    "unattended": {
+      "description": "Present (true) when nobody was at the Mac for the run (omarchy-m-test --unattended): only the automatic checks ran, every human check is skipped with that reason, and nothing disruptive was done. Absent when someone was there to be asked.",
+      "const": true
+    },
+    "inventory": {
+      "description": "The hardware inventory: for each kind of device-tree node the Mac has, its status and whether a driver claimed it; the enabled nodes no driver claimed, explained against the catalogue; and the running kernel's build options compared with Asahi's. Only node types (the first compatible string), statuses, driver-bound states, counts and build-option names and values: never a property value or a node's path. Absent when the Hardware section wasn't run.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "description": "Hardware nodes grouped by type, status and driver state.",
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["compatible", "status", "driver", "count"],
+            "properties": {
+              "compatible": { "description": "The node's first compatible string, e.g. \"apple,t6020-avd\".", "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9,._+-]{0,79}$" },
+              "status": { "enum": ["okay", "disabled", "reserved", "fail", "other"] },
+              "driver": { "description": "bound: a driver claimed the node's device; unbound: it has a device no driver claimed; none: no device of its own (disabled, set up early by the kernel core, or handled by its parent's driver).", "enum": ["bound", "unbound", "none"] },
+              "count": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "unclaimed": {
+          "description": "Enabled nodes with a device no driver claimed, by type. outcome is unknown-hardware when the catalogue's hardware map doesn't know the node; otherwise the node counts as its feature failing, classified like a check.",
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["compatible", "count", "outcome"],
+            "properties": {
+              "compatible": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9,._+-]{0,79}$" },
+              "count": { "type": "integer", "minimum": 1 },
+              "outcome": { "enum": ["fails", "not-in-aurora", "not-in-asahi", "not-in-omarchy", "not-applicable", "unknown-hardware"] },
+              "feature": { "description": "Catalogue feature id, when the catalogue knows the hardware.", "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 80 },
+              "layer": { "enum": ["asahi", "aurora", "omarchy"] },
+              "deferred": { "description": "Why the kernel says the device is still waiting for its driver (debugfs devices_deferred; needs root), with node paths cut to the node's name.", "type": "string", "maxLength": 160 }
+            }
+          }
+        },
+        "kernel_config": {
+          "description": "The running kernel's build options (/proc/config.gz) against Asahi's reference configuration. Only options set to y, m, n (not set) or a number are compared; toolchain-derived options are left out.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reference", "differences", "omitted"],
+          "properties": {
+            "reference": { "description": "Which Asahi configuration, e.g. \"linux-asahi 7.1.13.asahi3-2 (asahi-alarm/PKGBUILDs@d585b07)\".", "type": "string", "pattern": "^[A-Za-z0-9 ._/@()+-]{1,120}$" },
+            "differences": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["option", "asahi", "kernel"],
+                "properties": {
+                  "option": { "type": "string", "pattern": "^CONFIG_[A-Za-z0-9_]{1,100}$" },
+                  "asahi": { "type": "string", "pattern": "^([ymn]|-?[0-9]{1,12}|0x[0-9A-Fa-f]{1,12})$" },
+                  "kernel": { "type": "string", "pattern": "^([ymn]|-?[0-9]{1,12}|0x[0-9A-Fa-f]{1,12})$" }
+                }
+              }
+            },
+            "omitted": { "description": "Differences beyond the 200 listed.", "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "status", "evidence", "classification"],
+        "properties": {
+          "id": { "description": "Check id. The known ids are the catalogue's checks; the site rejects ids it doesn't know.", "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z0-9-]+)+$", "maxLength": 80 },
+          "kind": { "enum": ["automatic", "human"] },
+          "status": { "enum": ["pass", "fail", "skip"] },
+          "evidence": {
+            "description": "Short, scrubbed evidence lines.",
+            "type": "array",
+            "maxItems": 50,
+            "items": { "type": "string", "maxLength": 500 }
+          },
+          "answered_by_default": {
+            "description": "A human check answered yes by a bare Enter (the prompt's default) rather than a typed y: it passes, but the site shows it as unconfirmed and never counts it towards a feature's state. Absent when the answer was typed, and on automatic checks.",
+            "const": true
+          },
+          "score": {
+            "description": "A benchmark's measurement (benchmark.* checks that passed): the value in its unit (points for glmark2 and vkmark, frames per second for decode, megabytes per second for storage, runs per second for the Neural Engine), the tool and version that measured it, and the benchmark suite: the version of omarchy-m-test's fixed scenes, clip and settings. Only scores of the same check, suite and unit are compared. Absent on every other check.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "unit", "tool", "suite"],
+            "properties": {
+              "value": { "description": "A whole number: reports carry no floating-point numbers (the signature's canonical form).", "type": "integer", "minimum": 0, "maximum": 1000000000 },
+              "unit": { "enum": ["points", "fps", "MBps", "ops"] },
+              "tool": { "description": "e.g. \"glmark2 2023.01\" or \"ffmpeg n8.0.1\".", "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._+~:()-]{0,79}$" },
+              "suite": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "classification": {
+            "description": "The result explained against the feature catalogue: Aurora's expected state first, then Asahi's.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["outcome", "feature", "layer", "expected"],
+            "properties": {
+              "outcome": { "enum": ["works", "fails", "not-in-aurora", "not-in-asahi", "not-in-omarchy", "not-applicable", "unknown-hardware", "not-tested"] },
+              "feature": { "description": "Catalogue feature id.", "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 80 },
+              "layer": { "enum": ["asahi", "aurora", "omarchy"] },
+              "expected": {
+                "description": "Each layer's expected state for this Mac, from the catalogue. Empty when the catalogue doesn't cover the chip.",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "asahi": { "enum": ["upstream", "linux-asahi", "yes", "wip", "tba", "no", "out-of-tree", "see-notes", "absent"] },
+                  "aurora": { "enum": ["supported", "asahi", "unsupported", "unknown", "absent"] },
+                  "omarchy": { "enum": ["supported", "unsupported", "absent"] }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "signature": {
+      "description": "The machine key's signature, which the site requires. The CLI creates an ed25519 key on the Mac's first run and signs every report with it (ssh-keygen -Y sign, namespace omarchy-m-test-report) over the report's canonical form: the report without this member, as JSON with keys sorted, no whitespace and non-ASCII characters as UTF-8. The site verifies it and groups reports by a keyed digest of the public key; neither the key nor the signature is shown or exported.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public_key", "signature"],
+      "properties": {
+        "public_key": { "description": "The OpenSSH public key, without a comment.", "type": "string", "pattern": "^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$" },
+        "signature": { "description": "The armored SSH signature, as ssh-keygen -Y sign prints it.", "type": "string", "pattern": "^-----BEGIN SSH SIGNATURE-----\\n[A-Za-z0-9+/=\\n]+\\n-----END SSH SIGNATURE-----$", "maxLength": 1000 }
+      }
+    }
+  }
+}

@@ -1,0 +1,57 @@
+<% content_for :title, "Models" %>
+<h1>Models</h1>
+<p class="subtitle">Every Apple Silicon Mac, how far Omarchy has brought it up, and which still need testing.</p>
+
+<%= card "bring-up", id: "lineup" do %>
+  <p class="dim"><%= pluralize(@lineup.boards.size - @lineup.untested_boards.size, "board") %> of <%= @lineup.boards.size %> tested. Untested: <%= @lineup.untested_boards.map { |board| board.board.upcase }.join(", ").presence || "none" %>.</p>
+  <div class="matrix-scroll">
+    <table class="list lineup-table">
+      <thead><tr><th>Mac</th><th>GPU</th><th>Native display</th><th>Testing</th></tr></thead>
+      <tbody>
+        <% @lineup.rows.each do |row| %>
+          <tr class="lineup-row" data-chip="<%= row.chip %>" data-boards="<%= row.boards.map(&:board).join(" ") %>" data-tested="<%= row.tested? %>">
+            <td><strong><%= row.name %></strong> <span class="dim">(<%= row.boards.map { |board| board.board.upcase }.join("/") %>)</span><br><span class="dim"><%= Catalogue.chip_name(row.chip) %></span></td>
+            <% MacLineup::AREAS.each_key do |area| %>
+              <%= render "lineup_status", row:, area:, status: row.status(area) %>
+            <% end %>
+            <td class="lineup-testing">
+              <% row.boards.each do |board| %>
+                <div data-board="<%= board.board %>">
+                  <% if board.tested? %>
+                    <a href="<%= model_path(board.board) %>"><%= board.board.upcase %></a>:
+                    <%= pluralize(board.reports.size, "run") %><%= ", #{board.tester_runs} tester" if board.tester_runs.positive? %>,
+                    <span class="dim">last <%= board.last_tested_at.utc.to_date %></span>
+                  <% else %>
+                    <%= board.board.upcase %>: <%= state_badge("not-tested", label: "needs testing") %>
+                  <% end %>
+                </div>
+              <% end %>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+  <p class="legend-note">GPU and native display: what uploaded runs on that Mac found, each machine's latest run. Tester runs count on their own; community runs are unconfirmed until <%= MatrixCell::AGREEMENT %> machines agree. A Mac nobody has tested shows what the feature catalogue expects from Asahi and Aurora.</p>
+<% end %>
+
+<%= card "macs with reports" do %>
+  <% if @models.empty? %>
+    <p class="dim">No reports yet.</p>
+  <% else %>
+    <table class="list">
+      <thead><tr><th>Mac</th><th>Chip</th><th>Board</th><th>Stacks / versions</th><th>Reports</th></tr></thead>
+      <tbody>
+        <% @models.each do |board, rows| %>
+          <tr class="model-row" id="model-<%= board %>">
+            <td><a href="<%= model_path(board) %>"><%= rows.first.model_name %></a></td>
+            <td><%= rows.first.chip %></td>
+            <td class="dim"><%= board %> · <%= rows.first.soc %></td>
+            <td><%= rows.map { |row| row.configuration.label }.join(", ") %></td>
+            <td><%= rows.sum { |row| row.reports.size } %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+<% end %>

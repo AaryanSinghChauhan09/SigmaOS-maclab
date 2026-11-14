@@ -1,0 +1,705 @@
+{
+  "description": "MacBook Pro 14-inch M1 Pro (j314s, t6000) on mx-mac: raw host answers for record mode",
+  "source": "Real evidence from the M1 Pro, 2026-09-12: reviews/pr-9835/m1-hardware.log and m1-validation.md (uname, model, PCI, Hyprland input devices, Wi-Fi address). No kernel log or device-tree dump of the M1 exists yet; the v0.1 dogfood run records them. The package, encryption, first-boot, mac-check, GPU, battery and CPU answers were never captured on the M1: they are reconstructed from what is known of the install (mx-mac, GRUB, linux-asahi) and noted as such. The inventory answers come from the booted kernel's own package, linux-asahi 7.1.13.asahi1-1 and its headers (device tree, module aliases, build config). The M1 has since moved to the converged image, so its mx-mac answers (packages, encryption, mac-check, GPU tools, speaker services) can no longer be captured and stay reconstructed; tests/corpus/m1-pro-converged is its real run. The camera, function-key and ports answers are stand-ins, noted on each entry, until the next dogfood run records them.",
+  "pseudonymized": "Committed evidence is pseudonymized: every Wi-Fi network name, MAC address, IP address, UUID, boot id and account name in it was swapped for a fake of the same shape before commit, so the corpus exercises the scrubber on real log formats without publishing the real values. 'forbidden' lists the identifiers (decoys and lab hostnames) that must never survive into a recording or report.",
+  "forbidden": [
+    "omarchy-m1-pro",
+    "kestrel",
+    "fe80::4bd6:ad26:defe:d029",
+    "10.52.165.194"
+  ],
+  "commands": [
+    {
+      "argv": [
+        "uname",
+        "-m"
+      ],
+      "returncode": 0,
+      "stdout": "aarch64\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "uname",
+        "-r"
+      ],
+      "returncode": 0,
+      "stdout": "7.1.13-1-1-ARCH\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "nmcli",
+        "--get-values",
+        "NAME,TYPE",
+        "connection",
+        "show"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "not captured in the seed evidence\n",
+      "note": "stand-in: the evidence doesn't list the saved connections"
+    },
+    {
+      "argv": [
+        "uname",
+        "-a"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "uname-a.txt"
+      },
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "lspci",
+        "-nn"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "lspci.txt"
+      },
+      "stderr": "",
+      "note": "network controllers only, as the evidence kept them"
+    },
+    {
+      "argv": [
+        "hyprctl",
+        "devices",
+        "-j"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "hyprctl-devices.json"
+      },
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "ip",
+        "-brief",
+        "address"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "ip-address.txt"
+      },
+      "stderr": "",
+      "note": "the Wi-Fi line only, as the evidence kept it"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Q",
+        "omarchy",
+        "omarchy-dev",
+        "omarchy-settings",
+        "omarchy-settings-dev",
+        "omarchy-mac",
+        "omarchy-mac-boot",
+        "omarchy-mac-keyring",
+        "linux-aurora",
+        "linux-asahi",
+        "m1n1",
+        "m1n1-aurora",
+        "uboot-asahi",
+        "limine",
+        "mesa",
+        "vulkan-asahi",
+        "asahi-audio",
+        "speakersafetyd",
+        "alsa-ucm-conf-asahi"
+      ],
+      "returncode": 1,
+      "stdout": "omarchy-dev 4.0.2.r6879.gaae2586-1\nomarchy-settings-dev 4.0.2.r6879.gaae2586-1\nlinux-asahi 7.1.13.asahi1-1\nm1n1 1.5.2-1\nuboot-asahi 2025.10.asahi1-1\nmesa 1:26.1.4-1\nvulkan-asahi 1:26.1.4-1\nasahi-audio 4.1-1\nspeakersafetyd 2.0.1-1\nalsa-ucm-conf-asahi 10-1\n",
+      "stderr": "error: package 'omarchy' was not found\nerror: package 'omarchy-settings' was not found\nerror: package 'omarchy-mac' was not found\nerror: package 'omarchy-mac-boot' was not found\nerror: package 'omarchy-mac-keyring' was not found\nerror: package 'linux-aurora' was not found\nerror: package 'm1n1-aurora' was not found\nerror: package 'limine' was not found\n",
+      "note": "omarchy-dev 4.0.2.r6879.gaae2586-1 and the linux-asahi kernel (/boot/initramfs-linux-asahi.img) are from m1-hardware.log and m1-package-preflight.md; reconstructed, not captured on the M1 on 2026-09-12: the other versions"
+    },
+    {
+      "argv": [
+        "findmnt",
+        "--noheadings",
+        "--output",
+        "SOURCE",
+        "/"
+      ],
+      "returncode": 0,
+      "stdout": "/dev/nvme0n1p5[/@]\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the M1 on 2026-09-12: an unencrypted btrfs root"
+    },
+    {
+      "argv": [
+        "lsblk",
+        "--noheadings",
+        "--inverse",
+        "--raw",
+        "--output",
+        "TYPE,FSTYPE",
+        "/dev/nvme0n1p5"
+      ],
+      "returncode": 0,
+      "stdout": "part btrfs\ndisk \n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the M1 on 2026-09-12: an unencrypted btrfs root"
+    },
+    {
+      "argv": [
+        "journalctl",
+        "--unit=omarchy-provision-hardware.service",
+        "--output=short-iso",
+        "--no-pager"
+      ],
+      "returncode": 0,
+      "stdout": "-- No entries --\n",
+      "stderr": "",
+      "note": "mx-mac has no deferred first-boot hardware setup"
+    },
+    {
+      "argv": [
+        "bundled:mac-check"
+      ],
+      "returncode": 1,
+      "stdout": {
+        "corpus": "mac-check.txt"
+      },
+      "stderr": "",
+      "note": "reconstructed, not captured on the M1 on 2026-09-12: what mac-check prints on mx-mac with GRUB and linux-asahi: no omarchy-vendor-firmware.service, NetworkManager's default Wi-Fi backend; placeholder boot-file hashes; the v0.1 dogfood run records the real output"
+    },
+    {
+      "argv": [
+        "vulkaninfo",
+        "--summary"
+      ],
+      "returncode": 127,
+      "stdout": "",
+      "stderr": "vulkaninfo: command not found\n",
+      "note": "reconstructed, not captured on the M1 on 2026-09-12: vulkan-tools not installed"
+    },
+    {
+      "argv": [
+        "eglinfo",
+        "-B"
+      ],
+      "returncode": 127,
+      "stdout": "",
+      "stderr": "eglinfo: command not found\n",
+      "note": "reconstructed, not captured on the M1 on 2026-09-12: mesa-utils not installed"
+    },
+    {
+      "argv": [
+        "grep",
+        "-r",
+        "-a",
+        "-H",
+        "",
+        "--include=compatible",
+        "--include=status",
+        "/sys/firmware/devicetree/base"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "devicetree-properties.txt"
+      },
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: the compatible and status properties of every node in linux-asahi 7.1.13.asahi1-1 (dtbs/t6000-j314s.dtb), the device tree the booted kernel package ships (m1n1 adjusts some nodes at boot, so a few statuses may differ on the Mac)"
+    },
+    {
+      "argv": [
+        "grep",
+        "-r",
+        "-H",
+        "-E",
+        "^(OF_FULLNAME|DRIVER)=",
+        "--include=uevent",
+        "/sys/devices"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "uevents.txt"
+      },
+      "stderr": "",
+      "note": "reconstructed, not captured on the Mac: a device for every enabled node a driver in linux-asahi 7.1.13.asahi1-1 matches (its modules.alias and modules.builtin.modinfo) or that sits on a bus, with that driver bound (but simple-pm-bus only where simple-bus or simple-mfd is the first compatible, as its probe requires) (no kernel log of the M1 exists to show a failed probe); paths approximate. Nodes the kernel core sets up early (AIC, timer, fixed clocks, OPP tables) get none"
+    },
+    {
+      "argv": [
+        "zcat",
+        "/proc/config.gz"
+      ],
+      "returncode": 0,
+      "stdout": {
+        "corpus": "kernel-config.txt"
+      },
+      "stderr": "",
+      "note": "linux-asahi-headers 7.1.13.asahi1-1's build/.config: the exact build options of the booted kernel, which /proc/config.gz holds"
+    },
+    {
+      "argv": [
+        "journalctl",
+        "--dmesg",
+        "--boot=0",
+        "--no-pager"
+      ],
+      "returncode": 0,
+      "stdout": "-- No entries --\n",
+      "stderr": "",
+      "note": "stand-in: no kernel log of the M1 was ever saved, so the firmware and probe-error checks are not tested until the v0.1 dogfood run records one"
+    },
+    {
+      "argv": [
+        "brightnessctl",
+        "--list",
+        "--machine-readable"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "not captured in the seed evidence\n",
+      "note": "stand-in: the M1 evidence doesn't include this; the v0.1 dogfood run records it"
+    },
+    {
+      "argv": [
+        "pactl",
+        "get-default-source"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "not captured in the seed evidence\n",
+      "note": "stand-in: the M1 evidence doesn't include this; the v0.1 dogfood run records it"
+    },
+    {
+      "argv": [
+        "systemctl",
+        "is-active",
+        "speakersafetyd"
+      ],
+      "returncode": 0,
+      "stdout": "active\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the M1 on 2026-09-12: as mac-check's 'speakersafetyd is active' line"
+    },
+    {
+      "argv": [
+        "sudo",
+        "-n",
+        "journalctl",
+        "--dmesg",
+        "--boot=0",
+        "--no-pager"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "sudo: a password is required\n",
+      "note": "stand-in: no kernel log of the M1 was ever saved, so speaker protection can't be confirmed and the tone isn't played"
+    },
+    {
+      "argv": [
+        "pactl",
+        "get-default-sink"
+      ],
+      "returncode": 0,
+      "stdout": "audio_effect.j314-convolver\n",
+      "stderr": "",
+      "note": "reconstructed, not captured on the M1 on 2026-09-12: as mac-check's default-sink line"
+    },
+    {
+      "argv": [
+        "loginctl",
+        "show-session",
+        "auto",
+        "--property=Remote",
+        "--property=Seat",
+        "--property=Active"
+      ],
+      "returncode": 0,
+      "stdout": "Remote=yes\nSeat=\nActive=yes\n",
+      "stderr": "",
+      "note": "stand-in: the M1 evidence was taken over SSH: logind's answer for an SSH session (no seat), so the Wi-Fi first-join check is skipped"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "timeout 5 bluetoothctl devices Paired 2>/dev/null | grep -c \"^Device \""
+      ],
+      "returncode": 1,
+      "stdout": "0\n",
+      "stderr": "",
+      "note": "stand-in: the paired-device count wasn't captured (grep -c prints 0 and exits 1 with none); the v0.1 dogfood run records it"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Q",
+        "vkmark",
+        "ffmpeg"
+      ],
+      "returncode": 1,
+      "stdout": "ffmpeg 2:9.0.2-1\n",
+      "stderr": "error: package 'vkmark' was not found\n",
+      "note": "stand-in: this run had no benchmark section (omarchy-m-test 0.1.3); what pacman answers on a Mac without vkmark and with ffmpeg (mpv needs it), with Arch Linux ARM extra's vkmark 2025.01 and its assimp dependency, so the benchmarks are offered and, with no answer, declined"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Sp",
+        "--needed",
+        "--print-format",
+        "%n",
+        "vkmark"
+      ],
+      "returncode": 0,
+      "stdout": "assimp\nvkmark\n",
+      "stderr": "",
+      "note": "stand-in: this run had no benchmark section (omarchy-m-test 0.1.3); what pacman answers on a Mac without vkmark and with ffmpeg (mpv needs it), with Arch Linux ARM extra's vkmark 2025.01 and its assimp dependency, so the benchmarks are offered and, with no answer, declined"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Q",
+        "assimp",
+        "vkmark"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "error: package 'assimp' was not found\nerror: package 'vkmark' was not found\n",
+      "note": "stand-in: this run had no benchmark section (omarchy-m-test 0.1.3); what pacman answers on a Mac without vkmark and with ffmpeg (mpv needs it), with Arch Linux ARM extra's vkmark 2025.01 and its assimp dependency, so the benchmarks are offered and, with no answer, declined"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "for d in /sys/class/video4linux/video*; do [ -e \"$d\" ] || continue; drv=$(readlink \"$d/device/driver\"); echo \"${d##*/} ${drv##*/}\"; done"
+      ],
+      "returncode": 0,
+      "stdout": "video0 apple-isp\n",
+      "stderr": "",
+      "note": "stand-in: the camera's video devices weren't captured; kernel.log has apple-isp probing and loading its firmware. The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "timeout",
+        "20",
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-f",
+        "v4l2",
+        "-i",
+        "/dev/video0",
+        "-frames:v",
+        "30",
+        "-f",
+        "null",
+        "-"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "Input #0, video4linux2,v4l2, from '/dev/video0':\n  Duration: N/A, start: 0.000000, bitrate: 746496 kb/s\n  Stream #0:0: Video: rawvideo (NV12 / 0x3231564E), nv12, 1920x1080, 746496 kb/s, 30 fps, 30 tbr, 1000k tbn\nStream mapping:\n  Stream #0:0 -> #0:0 (rawvideo (native) -> wrapped_avframe (native))\nOutput #0, null, to 'pipe:':\n  Stream #0:0: Video: wrapped_avframe, nv12(progressive), 1920x1080, q=2-31, 200 kb/s, 30 fps, 30 tbn\n[out#0/null @ 0xaaaacafe0000] video:13KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nframe=   30 fps= 29 q=-0.0 Lsize=N/A time=00:00:01.00 bitrate=N/A speed=0.98x\n",
+      "note": "stand-in: no frame capture was recorded; the stream is the ISP's 1920x1080 mode from kernel.log's CISP_CMD_CH_CAMERA_CONFIG_GET list (0x780 x 0x438). The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "for p in /sys/class/typec/port*; do\n  n=${p##*/port}\n  case $n in ''|*[!0-9]*) continue;; esac\n  if [ -e \"/sys/class/typec/port$n-partner\" ]; then partner=yes; else partner=no; fi\n  data=$(sed -n 's/.*\\[\\(.*\\)\\].*/\\1/p' \"$p/data_role\" 2>/dev/null)\n  power=$(sed -n 's/.*\\[\\(.*\\)\\].*/\\1/p' \"$p/power_role\" 2>/dev/null)\n  echo \"typec $n partner=$partner data=$data power=$power\"\ndone\nfor d in /sys/bus/usb/devices/*; do\n  [ -r \"$d/speed\" ] || continue\n  case ${d##*/} in *:*) continue;; usb*) kind=root;; *) kind=device;; esac\n  class=$(cat \"$d/bDeviceClass\" 2>/dev/null)\n  if [ \"$class\" = 00 ]; then class=$(cat \"$d\"/*:*/bInterfaceClass 2>/dev/null | head -n 1); fi\n  echo \"usb $kind speed=$(cat \"$d/speed\") class=$class\"\ndone"
+      ],
+      "returncode": 0,
+      "stdout": "typec 0 partner=no data=device power=sink\ntypec 1 partner=no data=device power=sink\ntypec 2 partner=no data=device power=sink\nusb root speed=480 class=09\nusb root speed=10000 class=09\nusb root speed=480 class=09\nusb root speed=10000 class=09\nusb root speed=480 class=09\nusb root speed=10000 class=09\n",
+      "stderr": "",
+      "note": "stand-in: nothing plugged into the three USB-C ports; the port count, roles and root hub speeds are reconstructed. The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "if [ ! -d /sys/bus/thunderbolt/devices ]; then echo nobus; exit 0; fi\nfor d in /sys/bus/thunderbolt/devices/*; do\n  [ -r \"$d/uevent\" ] || continue\n  line=\"thunderbolt ${d##*/} $(sed -n 's/^DEVTYPE=//p' \"$d/uevent\")\"\n  for f in generation rx_speed rx_lanes authorized; do\n    if [ -r \"$d/$f\" ]; then line=\"$line $f=$(tr -d ' \\n' < \"$d/$f\")\"; fi\n  done\n  echo \"$line\"\ndone"
+      ],
+      "returncode": 0,
+      "stdout": "thunderbolt 0-0 thunderbolt_device generation=4 rx_speed=10.0Gb/s rx_lanes=1 authorized=1\nthunderbolt 1-0 thunderbolt_device generation=4 rx_speed=10.0Gb/s rx_lanes=1 authorized=1\nthunderbolt 2-0 thunderbolt_device generation=4 rx_speed=10.0Gb/s rx_lanes=1 authorized=1\nthunderbolt domain0 thunderbolt_domain\nthunderbolt domain1 thunderbolt_domain\nthunderbolt domain2 thunderbolt_domain\n",
+      "stderr": "",
+      "note": "stand-in reconstructed from kernel.log (thunderbolt-apple-acio on three ports, no link); speeds are reconstructed. The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "for c in /sys/class/drm/card*-*; do\n  [ -r \"$c/status\" ] || continue\n  echo \"connector ${c##*/} $(cat \"$c/status\") $(cat \"$c/enabled\" 2>/dev/null) $(head -n 1 \"$c/modes\" 2>/dev/null)\"\ndone"
+      ],
+      "returncode": 0,
+      "stdout": "connector card1-eDP-1 connected enabled 3024x1964\nconnector card2-HDMI-A-1 disconnected disabled \nconnector card2-USB-1 disconnected disabled \nconnector card2-USB-2 disconnected disabled \nconnector card2-USB-3 disconnected disabled \n",
+      "stderr": "",
+      "note": "stand-in reconstructed from mac-check.txt ('1 active: eDP-1 3024x1964@120', no external display); the other connectors are reconstructed. The next dogfood run records it"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "out=$(hyprctl devices -j 2>/dev/null) || { echo unavailable; exit 0; }\nprintf '%s\\n' \"$out\" | grep -oE '\"name\": *\"apple-(spi|mtp|internal)-[^\"]*\"' | sed -E 's/^\"name\": *\"(.*)\"$/\\1/' | sort -u"
+      ],
+      "returncode": 0,
+      "stdout": "apple-spi-keyboard\napple-spi-trackpad\n",
+      "stderr": "",
+      "note": "derived from hyprctl-devices.json (m1-hardware.log): the built-in names the script keeps from it"
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "swipe=$(hyprctl getoption gestures:workspace_swipe 2>/dev/null | sed -n 's/^int: *//p')\n[ -n \"$swipe\" ] && echo \"swipe-live $swipe\"\nfield() { printf '%s\\n' \"$1\" | sed -nE \"s/.*$2=\\\"?([A-Za-z0-9_-]+)\\\"?([,;}].*)?$/\\1/p\"; }\nn=0\nfor f in \"$HOME\"/.local/share/omarchy/default/hypr/*.lua \"$HOME\"/.local/share/omarchy/default/hypr/*.conf \\\n         \"$HOME\"/.config/hypr/*.lua \"$HOME\"/.config/hypr/*.conf; do\n  [ -r \"$f\" ] || continue\n  n=$((n + 1))\n  { sed -e 's/--.*$//' -e 's/#.*$//' \"$f\" | tr -d ' \\t' | tr '\\n' ';'; echo; } |\n    sed -e 's/^/;/' -e 's/hl\\./\\nhl./g' -e 's/;gesture=/\\ngesture=/g' -e 's/;workspace_swipe=/\\nworkspace_swipe=/g' |\n    while IFS= read -r c; do\n      case $c in\n        'hl.gesture({'*)\n          c=${c%%\\}*}\n          [ \"$(field \"$c\" fingers)\" = 3 ] || continue\n          action=$(printf '%s\\n' \"$c\" | sed -nE 's/.*action=\"([a-z]+)\"([,;].*)?$/\\1/p')\n          case $action in workspace|unset) ;; *) action=other;; esac\n          echo \"gesture 3 $(field \"$c\" direction) $action\";;\n        'gesture=3,'*)\n          c=${c#gesture=}; c=${c%%;*}\n          old=$IFS; IFS=,; set -- $c; IFS=$old\n          dir=$2; shift 2; action=other\n          for a in \"$@\"; do case $a in *:*) ;; workspace|unset) action=$a; break;; *) break;; esac; done\n          echo \"gesture 3 $dir $action\";;\n        'workspace_swipe='*)\n          case ${c#workspace_swipe=} in true*|1*|yes*|on*) echo \"workspace-swipe 1\";; *) echo \"workspace-swipe 0\";; esac;;\n      esac\n    done\ndone\necho \"files $n\"\n"
+      ],
+      "returncode": 0,
+      "stdout": "files 2\n",
+      "stderr": "",
+      "note": "stand-in: Omarchy's default hypr/input.lua and the user's untouched config/hypr/input.lua (the three-finger workspace swipe commented out), as the script prints them; hyprctl can't reach Hyprland over SSH"
+    },
+    {
+      "argv": [
+        "omarchy-battery-charge-limit"
+      ],
+      "returncode": 127,
+      "stdout": "",
+      "stderr": "omarchy-battery-charge-limit: command not found\n",
+      "note": "mx-mac predates omarchy-mac's charge limit command (omarchy-mac 62)"
+    },
+    {
+      "argv": [
+        "sudo",
+        "-n",
+        "true"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "sudo: a password is required\n",
+      "note": "stand-in: the M1 evidence was taken over SSH, where sudo has no cached credentials"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Q",
+        "mesa-utils"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "error: package 'mesa-utils' was not found\n",
+      "note": "as the M2 Max answered on 2026-09-27: mesa-utils alone, nothing installed it needs upgraded"
+    },
+    {
+      "argv": [
+        "pacman",
+        "-Sp",
+        "--needed",
+        "--print-format",
+        "%n",
+        "mesa-utils"
+      ],
+      "returncode": 0,
+      "stdout": "mesa-utils\n",
+      "stderr": "",
+      "note": "as the M2 Max answered on 2026-09-27: mesa-utils alone, nothing installed it needs upgraded"
+    },
+    {
+      "argv": [
+        "read:touch-id"
+      ],
+      "returncode": 0,
+      "stdout": "{\"apple\": true, \"diag\": {}, \"firmware\": {}, \"sep\": null}",
+      "stderr": "",
+      "note": "SEP diagnostics were not captured in this historical run; explicitly unavailable, never a reconstructed readiness pass."
+    },
+    {
+      "argv": [
+        "sudo",
+        "-n",
+        "cat",
+        "/sys/kernel/debug/devices_deferred"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "sudo: a password is required\n",
+      "note": "devices_deferred was not read in this historical run; answered as unavailable, never a reconstructed reason."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "thermal"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "Temperatures and fans were not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "sensors"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "Motion, lid-angle and light sensors were not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "storage"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "SSD health was not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "capacity"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "SSD capacity was not read in this historical run; the report leaves it out rather than guessing."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "gpu-spec"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "The Vulkan and GL spec checks were not read in this historical run; explicitly unavailable, never a reconstructed result."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "clocks"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "The CPU frequency steps were not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    },
+    {
+      "argv": [
+        "read:hardware",
+        "engines"
+      ],
+      "returncode": 0,
+      "stdout": "{\"observed\": false}",
+      "stderr": "",
+      "note": "The Neural Engine and the video encoder were not read in this historical run; explicitly unavailable, never a reconstructed reading."
+    }
+  ],
+  "files": {
+    "/proc/device-tree/model": {
+      "text": "Apple MacBook Pro (14-inch, M1 Pro, 2021)\u0000"
+    },
+    "/proc/device-tree/compatible": {
+      "text": "apple,j314s\u0000apple,t6000\u0000apple,arm-platform\u0000"
+    },
+    "/proc/sys/kernel/hostname": {
+      "text": "omarchy-m1-pro\n"
+    },
+    "/etc/os-release": {
+      "text": "NAME=\"Omarchy\"\nPRETTY_NAME=\"Omarchy\"\nID=omarchy\nID_LIKE=arch\nBUILD_ID=\"4.0.2.r6879.gaae2586\"\nVERSION_ID=\"4.0.2.r6879.gaae2586\"\nHOME_URL=\"https://omarchy.org/\"\n",
+      "note": "omarchy-settings-dev's os-release override (its PKGBUILD in reviews/pr-9835)"
+    },
+    "/var/lib/omarchy/image/target": null,
+    "/var/lib/omarchy/image/target.booted": null,
+    "/sys/class/power_supply/macsmc-battery/type": {
+      "text": "Battery\n"
+    },
+    "/sys/class/power_supply/macsmc-battery/status": {
+      "text": "Charging\n",
+      "note": "reconstructed, not captured on the M1 on 2026-09-12: battery state"
+    },
+    "/sys/class/power_supply/macsmc-battery/capacity": {
+      "text": "87\n"
+    },
+    "/sys/class/power_supply/macsmc-battery/charge_control_end_threshold": {
+      "text": "100\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/scaling_driver": {
+      "text": "apple-cpufreq\n",
+      "note": "confirmed on the M1 on 2026-09-27 (tests/corpus/m1-pro-converged: the same CPU clusters, apple-cpufreq on each)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/related_cpus": {
+      "text": "0 1\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_min_freq": {
+      "text": "600000\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq": {
+      "text": "2064000\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy0/scaling_governor": {
+      "text": "schedutil\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy2/scaling_driver": {
+      "text": "apple-cpufreq\n",
+      "note": "confirmed on the M1 on 2026-09-27 (tests/corpus/m1-pro-converged: the same CPU clusters, apple-cpufreq on each)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy2/related_cpus": {
+      "text": "2 3 4 5\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy2/cpuinfo_min_freq": {
+      "text": "600000\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy2/cpuinfo_max_freq": {
+      "text": "3228000\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy2/scaling_governor": {
+      "text": "schedutil\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy6/scaling_driver": {
+      "text": "apple-cpufreq\n",
+      "note": "confirmed on the M1 on 2026-09-27 (tests/corpus/m1-pro-converged: the same CPU clusters, apple-cpufreq on each)"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy6/related_cpus": {
+      "text": "6 7 8 9\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy6/cpuinfo_min_freq": {
+      "text": "600000\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy6/cpuinfo_max_freq": {
+      "text": "3228000\n"
+    },
+    "/sys/devices/system/cpu/cpufreq/policy6/scaling_governor": {
+      "text": "schedutil\n"
+    },
+    "/sys/module/hid_apple/parameters/fnmode": null,
+    "/sys/class/power_supply/macsmc-battery/charge_control_start_threshold": {
+      "text": "100\n",
+      "note": "reconstructed, not captured on the M1 on 2026-09-12: the start threshold the driver derives from the recorded 100% limit"
+    },
+    "/etc/udev/macsmc-battery.conf": null,
+    "/usr/lib/udev/rules.d/94-omarchy-mac-battery-charge-limit.rules": null,
+    "/usr/lib/omarchy-mac/battery-charge-limit-restore": null,
+    "/usr/lib/systemd/system/omarchy-provision-hardware.service.d/20-mac-first-boot.conf": null
+  },
+  "dirs": {
+    "/home": [
+      "kestrel"
+    ],
+    "/sys/bus/platform/drivers/asahi": [
+      "406400000.gpu",
+      "bind",
+      "module",
+      "uevent",
+      "unbind"
+    ],
+    "/usr/share/vulkan/icd.d": [
+      "asahi_icd.aarch64.json"
+    ],
+    "/sys/class/power_supply": [
+      "macsmc-battery"
+    ],
+    "/sys/devices/system/cpu/cpufreq": [
+      "policy0",
+      "policy2",
+      "policy6"
+    ],
+    "/sys/bus/iio/devices": null
+  },
+  "dirs_note": "Directories other than /home are reconstructed; the M1's converged run (tests/corpus/m1-pro-converged, 2026-09-27) confirms the GPU at 406400000 and the three cpufreq policies. /sys/bus/iio/devices is a stand-in (recorded as absent): the M1 evidence doesn't include the ambient light sensor."
+}

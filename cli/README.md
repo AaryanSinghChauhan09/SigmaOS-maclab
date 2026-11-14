@@ -1,0 +1,242 @@
+# cli
+
+The `omarchy-m-test` command. Python 3 standard library only.
+
+    bin/omarchy-m-test [--dry-run] [--output FILE] [--site URL] [--catalogue FILE] [--record FILE] [--skip SECTION] [--unattended]
+    bin/omarchy-m-test --explain REPORT [--catalogue FILE]
+    bin/omarchy-m-test --sign-in | --sign-out | --status [--site URL]
+
+It refuses non-Apple machines, shows the disclaimer (Enter accepts), runs the checks, writes the report, shows it and asks before uploading it to the site (`--site http://localhost:3000` for a local site).
+
+## Automatic checks
+
+A run checks the boot chain and encryption, packages and first-boot hardware setup, GPU driver and Vulkan/OpenGL, displays, audio routing and speaker protection, Wi-Fi and Bluetooth, snapshots, the battery, its charge limit and idle power, and CPU frequency scaling and its steps against macOS's, plus the look-and-listen checks below (`ORDER` in `omarchy_m_test/checks.py`; every id is in the catalogue's `checks`).
+
+Most come from omarchy-mac's own check scripts, wrapped rather than duplicated (`omarchy_m_test/scripts.py`): `mac-check` on every stack, and `apple-audio-check.sh --no-sound` and `apple-display-check.sh --read-only` on the converged image they were written for. Their PASS/FAIL/SKIP lines become results with the lines as evidence. mac-check runs its root-only checks through `sudo -n`, so without passwordless sudo they are skipped, never failed. The CLI only ever asks for a password (sudo, once at the terminal) to install temporary test packages, which the disclaimer covers (below), and for the charge limit. The rest (`omarchy_m_test/hardware.py`) read sysfs, the journal and pacman.
+
+The scripts are vendored, unmodified, in `omarchy_m_test/vendor/omarchy-mac/` (commit and hashes in `ORIGIN`), and a release ships them. No stack installs them: `mac-check` lives in omarchy-mac's `tools/hardware/` and the others in `test/manual/`, so there is no installed copy to call, and a pinned copy keeps the parsed lines stable between releases. Once the tool ships inside the omarchy-mac package (after quattro-upstream lands), the package can carry the scripts and `bundled.py` point at them.
+
+## Look and listen
+
+### External native modes (automatic)
+
+`display.external-native-mode` joins connected external DRM connectors to
+`hyprctl -j monitors all` by output name. It decodes the first detailed
+timing of the EDID base block in Python (header, checksum and preferred
+timing flag checked). No extra package is needed. It compares physical
+resolution, ignoring scale and applying the same transform to current and
+preferred pixels. Refresh rates are reported but not compared: a different
+refresh may be intentional or a link limit. When a resolution is below its
+own EDID preference, it waits two seconds and reads the connectors, session,
+rules and EDID again before failing. Two monitors sharing a mode is fine
+when each is at its own preferred resolution.
+
+There is no prompt or mode change. The internal panel is excluded; USB-C,
+DisplayPort and HDMI are included. Missing external displays, unavailable
+Hyprland state, unreadable or invalid EDIDs (including a missing first
+preferred detailed timing), intentional disables and mirroring are skipped.
+An explicit monitor mode also skips that output. The check reads static
+hyprlang rules, `monitorv2` blocks and Omarchy's Lua `hl.monitor` tables
+without executing them, following static `source` and `require` references
+the way Omarchy's bootstrap resolves modules (`~/.local/state`, `~/.config`,
+`$OMARCHY_PATH`, each module once), and `source` paths the way Hyprland
+resolves them. Omarchy's bootstrap and its `require_optional.module` and
+`require_all.files` helpers are read for what they do, only while they are
+Omarchy's current versions; hyprlang is read line by line. Named and `desc:`
+rules win over the fallback; the last matching rule wins, and mirroring
+comes only from the rules that win. Only fully literal rules count: a
+computed output or mode (a concatenation, a variable, a call), a rule inside
+a block, an unresolvable load, or a conditional load of a file that sets
+monitor rules leaves intent unknown and skips, never fails. A conditional
+load of a file with no monitor rules doesn't matter. Unreadable
+configuration also skips: the host reads only regular files, at most 16 MiB
+within five seconds each, so a `source` naming a FIFO or device can't hold
+the run. A command the configuration runs that names a monitor-changing
+tool (`hyprctl keyword monitor`, `kanshi`, `wlr-randr`...) also leaves intent
+unknown. Live overrides not saved to these files, and commands built at
+runtime, cannot be identified. A
+mode larger than the EDID preference is skipped rather than called a
+downgrade. Any confirmed downgrade fails the check; otherwise an untested
+output leaves the aggregate skipped.
+
+Evidence also records each connector's CRTC from readable debugfs state,
+falling back to `drm_info` when available, and up to ten apple-dcp kernel
+findings from this boot: fixed categories (`atomic-check-failed`,
+`mode-set-failed`, `mode-set-timeout`, `mode-parse-failed`,
+`mode-not-found`, `swap-failed`, `link-failed`, `edid-failed`,
+`power-timeout`, `mode-failed`) with validated numbers only (errno, status,
+port, mode), never message text. The optional commands have three-second
+limits; diagnostics never decide pass/fail. EDID identity fields and
+monitor descriptions are not put in the evidence.
+
+Recordings keep allowlisted projections only: an anonymous EDID timing
+block; from `hyprctl -j monitors` the output names, current and available
+modes, transform, scale, the disabled/DPMS/mirror flags and ids (never
+make, model, description or serial); numeric connector and CRTC ids from
+debugfs state and `drm_info`; and the canonical apple-dcp findings, also
+in place of those lines in any other recorded kernel log. Monitor
+configuration is inspected inside the host boundary; recordings receive
+only per-output policy flags, without the user's config text. When the
+settle re-read sees a different answer, record mode keeps each answer in
+order, so a run that passed after settling replays as a pass.
+
+This catches boot-time display routing regressions without depending on a
+particular Mac model or fixed CRTC numbers. A monitorless lab run skips.
+Reproducing the dual-output case needs an M2 Pro/Max Mac with two displays
+or working EDID emulators on separate USB-C ports, attached before boot,
+with different preferred resolutions and a shared fallback mode.
+
+### Human checks
+
+The Display, Audio, Network, Input, Camera and Ports sections end with checks the human sees, hears or does (`omarchy_m_test/display.py`, `audio.py`, `network.py`, `inputs.py`, `camera.py`, `ports.py`), answered yes, no or skip; in the Sleep section the human closes and opens the lid and the tool watches:
+
+- **Display.** Is the bar clear of the camera notch (only asked on Macs with one), did the built-in screen step its brightness three times and go back (brightnessctl; put back before the question, and by a restorer if the run stops), is the cursor visible everywhere?
+- **Audio.** The built-in microphone is measured for 3 s (peak and RMS computed on the Mac; the sound is never kept). A 2 s tone plays only once speaker protection is confirmed active: speakersafetyd running, "Speaker volumes unlocked" in this boot's kernel log, and asahi-audio's DSP filter sink (`audio_effect.<board>-convolver`) as the default output. Otherwise nothing plays and the check is skipped with the reason. The volume is set to 30%, never more, and put back. Then the human plugs headphones in and says whether the Mac switched to them.
+- **Network.** The human pairs a Bluetooth device (headphones, a mouse, a keyboard) and says whether it paired and works; the number of paired devices before and after is counted on the Mac, never their names or addresses. Then the first Wi-Fi join after the driver starts (omarchy-mac issue 73: on the M2 Max the first join could report connected in 0.23 s and get no DHCP lease, on the network's 6 GHz radio): the Broadcom driver is reloaded (`modprobe -r brcmfmac_wcc brcmfmac`, `modprobe brcmfmac`, through sudo) and a few lines of shell on the Mac time the rejoin for 45 s (NetworkManager's DHCP timeout): when it associated, when the first IPv4 address arrived, the band and how many joins it took. It passes when the first association carries an address. It only runs at the Mac's own seat (never over SSH, so never over an SSH session on this Wi-Fi), on a 5 GHz network NetworkManager has activated on a saved connection that connects automatically (the rejoin path), and after the human agrees. The driver and the original connection are put back when the section ends, also after Ctrl-C.
+- **Sleep** (`omarchy_m_test/sleep.py`; at the Mac only, never over SSH or without a local seat). The tool never suspends the Mac itself (the guard refuses every way to): the human closes the lid, only after answering y, and opens it again. While they do, a few lines of shell on the Mac poll logind's `LidClosed` and Hyprland's monitors every 0.5 s (connector names and on/off only), and afterwards the system log since the step began is reduced on the Mac to event words and times (logind's lid lines, the kernel's `PM: suspend entry`/`exit`, failed suspends, Thunderbolt link errors); no host name or message text leaves the Mac. First suspend and resume with no external display: it passes when the kernel went to sleep after the lid closed (how soon, the mode, how long asleep). Then clamshell with an external display on: it passes when the Mac stayed awake, the built-in screen was off and the external one on while closed, and the built-in screen came back on opening; logind's `Docked` and `HandleLidSwitchDocked` are in the evidence. The recorded failure is the M2 Max's: with a USB-C display (DRM connector type `USB`, which logind doesn't count as external) Hyprland moved to the display but logind suspended anyway (omarchy-mac issue 77). After the first wake-up, Wi-Fi (an IPv4 address again) and Thunderbolt (its networking interfaces up, as many Thunderbolt/USB4 devices as before) are polled every second for 30 s; skipped when nothing of the kind was up before. The run sleeps with the Mac and carries on; if it's stopped while the lid is closed, the step is in the checkpoint and the next run judges it from the system log (and fails it if the Mac had to be started again).
+- **Input.** With the ambient light sensor and the keyboard light present, the human covers the camera and notch and says whether the keyboard light came on; the sensor and the keys are read before and while covered. Then the human presses the brightness and volume keys on the built-in keyboard, and tries the trackpad's click, two-finger click and scroll, and the three-finger swipe when the Hyprland config turns it on (tapping, tap-to-click included, isn't a feature and is never asked); Hyprland's device list names the built-in keyboard and trackpad it sees (their driver names only, never a plugged-in or paired device's) and hid_apple's fnmode says what the top row sends first. Macs without them (Mac mini, Mac Studio) don't ask.
+- **Touch ID.** `sep.attach` checks cached SEP endpoint attachment and reports firmware provenance. `touch-id.ready` checks cached enclave and sensor readiness; `touch-id.unlock` asks a person at the active local seat whether an existing normal fingerprint unlock worked this boot. Unattended and SSH runs collect diagnostics and skip the human check.
+- **Camera.** The ISP's V4L2 device (driver apple-isp) must be there, and ffmpeg must read 30 frames from it into its null muxer (no frame is kept; the resolution and pixel format are the evidence). At the Mac, mpv shows the camera live for 10 s and the human says whether the picture was right; over SSH or without a desktop that question is skipped. Macs without a built-in camera skip the section's checks.
+- **Ports.** At the Mac, the human first plugs in what they'd like checked (a stick or hub, a Thunderbolt or USB4 dock, a display over USB-C). Small scripts on the Mac then list the USB-C ports (tipd's `/sys/class/typec`: what's plugged in, data and power roles), USB controllers and devices (speed and class), the Thunderbolt/USB4 domains and links (generation, speed, lanes, authorized) and the DRM connectors on USB-C (connector type USB: `card2-USB-2` is Hyprland's `USB-2`; connected, in use, preferred mode). They print no device name, vendor string or serial. With something plugged in, the human says whether it all works; with a display on USB-C, whether its picture is right.
+- **Power.** The battery's charge limit (macsmc-battery's `charge_control_end_threshold`) is set to 80% and read back (charging restarts at 75%), then cleared to 100%, through sysfs and then through omarchy-mac's `omarchy battery charge limit`, which also saves 80 in `/etc/udev/macsmc-battery.conf` for its udev rule to restore at boot (the rule and helper must be installed). It needs sudo; a restorer registered first puts the original limit and the saved file back (asahi-scripts' path unit rewrites that file on every change, so the file is restored 2 s after the limit). Idle power is 30 s of `power_now` (or `current_now` x `voltage_now`) on battery: at the Mac the human is asked to unplug the charger; over SSH on AC it's skipped. Optionally, at the Mac, the human closes the lid for ten minutes on battery: the drain over the time the system log says it slept, in % per hour and watts, fails above 8% an hour. The battery's serial number, manufacture date, model name and cycle count are never read, and the scrubber removes them from `POWER_SUPPLY_*` uevent text.
+
+Touch ID's observational question never initiates an authentication attempt. Omarchy-layer questions (the notch bar, the keyboard light, the clamshell) aren't asked on reference runs. Output and input names are kept only when they are the Mac's own.
+
+The report's `system` block records the stack (`converged` for the omarchy-mac or omarchy package, `mx-mac` for the fork's `omarchy-dev`, `legacy-omarchy-mac` for a checkout, or `reference` for another distro, where Omarchy-layer results are skipped), the os-release ID, the boot loader, whether the root filesystem is encrypted, and the versions of the stack, boot and hardware packages. On a candidate image, whose target record (`/var/lib/omarchy/image/target`, retired to `target.booted` by the first boot) is present, it also records the candidate set: the record's `candidate_set`, else the factory seal's (`/var/lib/omarchy/factory-sealed`, on the root after a factory reset). It also records the target record's own build record as `system.image`: only the image builder's nine keys (`format`, `platform`, `candidate_set`, `candidate_source_commit`, `builder_commit`, `builder_tree_clean`, `image_profile`, `package_set_sha256`, `built`; `system.IMAGE_KEYS`), each only when its value has that key's shape; other keys are ignored, and an older image has only `format` and `platform`.
+
+The run names its build before the checks and again with the report: the Omarchy runtime's commit and the build stamp its packages carry (`f60e1ba.2026092602`, from `omarchy 4.0.0.alpha.quattro.r1790450903.gf60e1ba4c476-1.2026092602`), with the `linux-aurora` and `omarchy-mac-boot` versions (`system.build_words`; the site derives the same). An image that names its candidate set is labelled by the set first, with the runtime build, when the image was built and its package set digest (together naming its release asset) after it. A failure the catalogue expects on this Mac shows as `GAP` (not yet supported by Asahi, Aurora or Omarchy) or `N/A` (no such hardware) rather than `FAIL`; the report keeps its `fail` status and the outcome.
+
+Every result is explained against the feature catalogue (`../catalogue/catalogue.json`; a release ships it as `omarchy_m_test/catalogue.json`): works, not yet supported by Aurora, not yet supported by Asahi, unknown hardware and so on. The report records the catalogue version. `--catalogue FILE` runs with a draft catalogue; `--explain REPORT` re-explains a saved report against the current catalogue without running anything.
+
+Before each run it looks up the latest release's version (`releases/latest/download/VERSION` on GitHub, 5 s timeout) and says so when a newer one exists, with the command to upgrade. Offline or any odd answer: it says nothing and carries on.
+
+## SEP and Touch ID diagnostics
+
+The Touch ID section (`omarchy_m_test/touchid.py`) discovers the SEP platform device by its `apple,sep` compatible and reads Aurora's passive `diag/` ABI 1 under `/sys/bus/platform/devices/<device>/`. The interface reports the hardware-selected profile, boot path, protocol, write mode, endpoint attachment/count, keystore and identity-keybag state, sensor state and Touch ID readiness. Reads use cached driver state and send no enclave requests. Endpoint attachment passes only with a bound driver, an attached state and a positive endpoint count. Fingerprint readiness passes only when attachment, keystore, keybag, sensor, biometric device and write mode are all ready. Read-only installations and missing identity keybags skip first: an intentionally unprovisioned install can legitimately report `touchid=failed`. Otherwise `touchid=failed` is a final activation or biometric-device-publication failure for this boot and fails even when other fields look healthy or incomplete. Other explicit initialization failures fail before an unbound sensor can cause a skip. Unbound sensor, incomplete or unknown state, unsupported ABI and unavailable interfaces otherwise skip with the reason. Setup skip reasons take precedence over a not-ready flag. `not-ready` means activation succeeded and the sensor is offline; a later sensor bring-up can recover it, so the flag alone never fails. An M2 keybag failure includes firmware provenance and, when known to predate the kernel team's tested 26.6.x baseline, a compatibility hint; the hint does not change the result. Pending initialization gets one two-second settle and re-read. `keybag=present` means an identity keybag exists, not that activation loaded it; a load failure changes it to failed. Warm-boot attachment silence becomes failed in the kernel after about three seconds; cold-boot attachment can remain pending and skip. The sensor may remain unbound and Touch ID unknown until its first normal use this boot; the suite does not activate it. A confirmed human unlock result gets another passive snapshot so that lazy activation can be reflected in the final report. Macs without a built-in Touch ID sensor skip the Touch ID checks.
+
+The passive ABI 1 interface ships in `linux-aurora 7.1.12.aurora2-11.25` (tag `sep-7.1.12.aurora2-11.25`). Older kernels without `diag/` retain fallback evidence and skip unconfirmed readiness.
+
+Firmware properties come from `/proc/device-tree/chosen/`: `asahi,system-fw-version` is labelled **system firmware (sepOS proxy)**, with `asahi,iboot1-version` as system build provenance. `asahi,os-fw-version` and `asahi,iboot2-version` describe the Linux stub; `asahi,m1n1-stage2-version` identifies the boot loader build. Neither the stub nor the driver profile/protocol establishes the running sepOS version. The actual enclave build is unavailable today. Firmware metadata alone never passes the SEP attachment check.
+
+Older kernels retain passive evidence without inventing readiness: driver binding, `/dev/sep-bio` presence, `xart_writes` and `provision_keybag` flags, package versions, service states, sensor node and the fixed calibration file's size. Services are queried without starting them; inactive fprintd can be normal because it starts on demand. Package versions are provenance, not proof that a private libfprint override is in use. Optional commands get three seconds each. Up to 20 unique SEP kernel event categories and numeric errors are retained from the last 2,000 journal lines, with a dmesg fallback when the journal is unavailable. No raw SEP messages, identities, UUIDs, enrolled finger names, keybag files or calibration contents enter the snapshot or recording. The recorder's extra kernel-log captures sanitize SEP messages too.
+
+The functional check is a **human observation of an existing normal unlock this boot**, not enrollment or a verification command initiated by the suite. A fingerprint match writes enclave anti-replay state, so automatic diagnostics never run `fprintd-verify`, list enrollments, load/reload the driver, provision a keybag, change write settings or alter authentication configuration. A human pass still follows the suite's normal confirmation rules; Enter alone is unconfirmed. Readiness and saved enrollment records are not proof of a live fingerprint match. On kernels without the passive interface the report keeps the unlock observation separate from unconfirmed readiness. Historical fixtures explicitly say the new evidence was not captured; they never reconstruct a SEP or Touch ID pass.
+
+## Hardware inventory and gap map
+
+The Hardware section (`omarchy_m_test/inventory.py`) maps the Mac's hardware on every run, read-only:
+
+- **Nodes.** Every device-tree node's `compatible` and `status` properties and nothing else (`grep` over `/sys/firmware/devicetree/base`), and which node each device came from and whether a driver is bound to it (the `OF_FULLNAME` and `DRIVER` lines of the uevents under `/sys/devices`). A node is `bound`, `unbound` (it has a device no driver claimed) or `none` (no device of its own: disabled, set up early by the kernel core, or handled by its parent's driver). `/cpus`, `/chosen` and `/reserved-memory` are left out: the kernel core handles them without drivers.
+- **Unclaimed hardware.** An enabled node whose device no driver claimed is explained against the catalogue's `hardware` map (compatible pattern to feature): that feature failing, or **unknown hardware** when the catalogue doesn't know it. Bus and register containers (`simple-bus`, `simple-mfd`, `syscon`, such as the power manager) usually have no driver of their own and are never unclaimed.
+- **Why a driver is waiting.** With root available without a password (`sudo -n`), debugfs's `devices_deferred` says what each unbound device is waiting for. An unclaimed node's evidence and its `deferred` field in the `inventory` block carry the reason, with node paths cut to the node's own name. Without root the evidence says it wasn't read.
+- **Firmware and probe errors.** This boot's firmware-load failures and driver probe errors (`probe with driver ... failed`, `deferred probe pending`) from `journalctl --dmesg`, kept as scrubbed evidence without the journal's line prefix.
+- **Build options.** `/proc/config.gz` compared with Asahi's pinned reference configuration (`../catalogue/asahi-kernel/`; a release ships it as `omarchy_m_test/asahi-kernel/`). Options set to `y`, `m`, not set or a number are compared; strings and toolchain-derived options are not. Every difference is reported; none is judged.
+
+Its four results are `hardware.drivers`, `hardware.firmware`, `hardware.probe-errors` and `hardware.kernel-config`. The report's `inventory` block holds only node types (the first compatible string), statuses, driver-bound states and counts, the unclaimed nodes with their classification, and the build-option differences: never a property value or a node's path. Skipping the section leaves the block out.
+
+## GPU spec checks
+
+The Graphics section also spot-checks the drivers against the specs they claim (`omarchy_m_test/gpu_spec.py`), which doesn't replace the Khronos conformance suites. `graphics.vulkan-spec` reads `vulkaninfo --json`: the conformance version the driver reports, and the features the spec's Feature Requirements chapter makes mandatory for the API version the device claims; a mandatory feature missing fails. `graphics.gl-spec` runs a small bundled probe (`omarchy_m_test/gl_spec/`, through EGL with no surface, in its own process, drawing nothing) and compares the limits GL 4.6 core and compatibility and GLES 3.2 contexts report with their state tables' minimums; a limit under its minimum fails, another version isn't checked, and a software rasteriser skips. Both tables and the probe come from [aurora-diag](https://github.com/aurora-silicon/aurora-diag) (MIT; `gl_spec/LICENSE-aurora-diag`).
+
+## macOS reference numbers
+
+`catalogue/macos-reference/<board>.json` holds what macOS measures on that Mac: the CPU's frequency steps, H.264 and HEVC decode, idle power, the Neural Engine result where there is one, and storage keyed by capacity, with the macOS version and the conditions they were taken under. `scripts/macos-reference` writes one, run on macOS with the Python standard library; it prints what it will save, never uploads anything, and a maintainer reviews the file before committing it. A release ships them as `omarchy_m_test/macos-reference/`, and CI checks every committed file (`macos_reference.problems`).
+
+A compared check gets a `vs macOS:` evidence line, a description and never a verdict. `cpu.dvfs-ladder` (the CPU section) reads each cluster's advertised steps from cpufreq and passes once they can be read, whether or not they match macOS's; with no reference for the board it skips. Storage compares only at the same capacity.
+
+## Thermal
+
+The Thermal section (`omarchy_m_test/thermal.py`) asks whether Linux can see the Mac's temperatures and fans, read-only: `thermal.sensors` (hwmon temperature channels, thermal zones with trip points and governors, cooling devices) fails when no die or SMC temperature can be read, and `thermal.fans` (the speed, target and limits of the SMC's fans, not a USB controller's) fails on a Mac the catalogue's `boards` say has fans and shows none, and skips on a fanless one. Readings are evidence and never decide a result. Only allowlisted, validated facts cross the host boundary (`Host.hardware_snapshot`, `omarchy_m_test/hwread.py`, recorded as `["read:hardware", "thermal"]`); a run recorded before an area existed answers `{"observed": false}` and its checks skip.
+
+## Sensors
+
+The Sensors section (`omarchy_m_test/sensors.py`) reads the motion, lid-angle and light sensors at rest, with nothing for the human to do. `sensors.motion` wants gravity from the accelerometer (9.8 m/s² ±15%) and near stillness from the gyroscope; `sensors.lid-angle` wants a reading within 0-360° and, when the Sleep section watched the lid close in this run, a reading that fell with it; `sensors.light` wants ambient light (colour temperature when exposed). Anything missing says why, and fails only on a Mac the catalogue's `boards` say has it: desktop Macs skip motion and lid angle, and Macs with no built-in screen skip light. Readings are otherwise evidence. The channels come from IIO through `Host.hardware_snapshot("sensors")`.
+
+## Storage
+
+The Storage section (`omarchy_m_test/storage.py`) reports the Mac's own SSD. `storage.health` gives the model, firmware and SMART health log (spare, percentage used, data read and written in TB, power cycles, power-on hours, unsafe shutdowns, media errors, critical warnings, temperature); it fails on media errors or a critical warning, and skips with the reason when the log can't be read (it needs root without a password, and smartmontools, installed for the section with consent). `benchmark.storage` runs fio (a temporary package): 1 GiB sequential write and read, then 4K random reads at queue depths 1 and 32, with direct I/O, on one file in a new private directory (`mktemp -d`) under `$XDG_CACHE_HOME/omarchy-m-test/`, so nothing already there, a symlink or a block device included, can be what fio opens. A restorer that removes it is registered before the file is made, and it skips under 4 GiB free. The score is the sequential read in MB/s; the evidence says whether the root filesystem is encrypted and what filesystem it is.
+
+Every report records the SSD's capacity as `machine.storage`, the tier Apple sells it as (`256GB` to `8TB`) rounded from its largest namespace, whichever sections ran. The serial, EUI-64, NGUID, namespace ids and exact capacity never cross the host boundary (`hwread.py`).
+
+## On-screen video check
+
+The Video section (`omarchy_m_test/video.py`, with `omarchy_m_test/testcard/`) checks that hardware-decoded video shows correctly on the built-in screen. For H.264 and then HEVC, `testcard/video-card.sh` makes the test card with ffmpeg (six solid colour bars: red, green, yellow, blue, magenta, cyan; 1920x1080, BT.709), plays it paused and full screen on the built-in screen (the `eDP` output in `hyprctl monitors`) with mpv, and `testcard/testcard.lua` screenshots that screen with grim once it shows. Then:
+
+- **Colours.** The screenshot is decoded with the standard library (`omarchy_m_test/png.py`) and sampled in the middle of each bar: each bar's median colour must be within 64 levels of the card's on every channel. Green, blocky or garbled frames fail, such as the M2 Max's zero-copy decode through gpu-next.
+- **Hardware decode and mode.** mpv's log says whether hardware decode was used (`Using hardware decoding (vaapi-copy)`), with which video output and GPU context; the evidence records that mode. Software decode fails the check.
+
+mpv runs with the machine's own configuration (`/etc/mpv/mpv.conf`, then the user's `mpv.conf`), so the mode checked is the one videos play in; when that configuration leaves hardware decode off, `--hwdec=auto-safe` is added. It checks one paused frame: nothing about tearing, frame pacing or VRR. It needs the desktop at the Mac (a Wayland session, a local seat, not over SSH), Hyprland and a built-in screen, and mpv, grim and ffmpeg (installed for the run with consent when missing); otherwise both checks are skipped with the reason. The test cards, screenshots and logs sit in a private `/tmp/omarchy-m-test-video.*` directory that is removed when the section ends; none of it is uploaded. Record mode (`--record`) keeps the screenshots as taken, unscrubbed: if the card never showed, that is a picture of the built-in screen, so look at a recording's screenshots before sharing it.
+
+## Benchmarks
+
+The Benchmarks section (`omarchy_m_test/benchmarks.py`) runs about a minute of short benchmarks for comparing Macs, nothing drawn on screen: `benchmark.opengl` (glmark2-wayland `--off-screen` at 1920x1080, 8 scenes of 3 s, through the desktop's Wayland compositor: `WAYLAND_DISPLAY`, or over SSH the user's own `wayland-N` socket in `XDG_RUNTIME_DIR`), `benchmark.vulkan` (vkmark `--winsys headless`, 7 scenes of 3 s) and `benchmark.h264-decode` / `benchmark.hevc-decode` (ffmpeg `-benchmark` decoding a generated 5 s 1080p clip four times with VA-API hardware decode; software decode of the same clip is measured for the evidence). A benchmark that ran on the Apple GPU (or hardware decode) passes with its score in the check: `score` holds a whole-number `value`, its `unit` (`points`, `fps`), the `tool` and version and the `suite` (bump `SUITE` whenever the scenes, clip or settings change: the site compares only scores of one check, suite and unit). Software rendering (llvmpipe, lavapipe) or a run with no score fails; no Wayland session (OpenGL only), no VA-API or a clip ffmpeg can't encode is skipped with the reason. glmark2, vkmark and ffmpeg are installed for the run with consent when missing, from the repositories as they are synced (never `-Sy`/`-Syu`: a tool that would need newer installed packages is skipped, "update the system first"), and removed when the section ends; the clips sit in a private `/tmp/omarchy-m-test-bench.*` directory that is removed too.
+
+The section also reports the Neural Engine and the hardware encoder (`omarchy_m_test/engines.py`). `engines.ane` reads the ANE's status (driver, generation, firmware and where that comes from, power state, wedged and error counters) and never starts a workload. `benchmark.ane` runs `omarchy-ane-smoke` only if it's already installed, and never installs it. `benchmark.h264-encode` runs ffmpeg's V4L2 H.264 encoder when the kernel exposes an encoder device, and skips with the reason otherwise.
+
+## The run: sections, resume, restore
+
+A run is a list of sections (`omarchy_m_test/sections.py`: boot, hardware, graphics, video, display, audio, network, sleep, input, touch-id, camera, ports, power, cpu, thermal, sensors, storage, benchmarks), listed up front after the disclaimer. mac-check feeds several of them and runs once, for the first one that isn't skipped. Any can be skipped: untick it in the picker at a terminal, or `--skip NAME` (repeatable, or comma-separated) anywhere. A skipped section's checks are reported as skipped.
+
+Nothing a check runs can hang the run (`omarchy_m_test/host.py`). Every command has a hard time limit (60 s; 15 s for PipeWire, PulseAudio, D-Bus and similar IPC tools; the bundled audio and display checks 90 s in all, mac-check 300 s), reads nothing from stdin, runs in its own process group (killed whole at its limit; a child that opens the terminal to ask for a password is stopped, never shown), sees `PAGER=cat` and `SYSTEMD_PAGER=cat`, and runs `sudo` only with `-n`. Inside the bundled scripts each IPC tool gets its own limit through a PATH shim, so one wedged `pactl` skips only its own check. A timeout is recorded as a skip ("timed out after N s"), never a failure: in a section, a command that times out ends it and its remaining checks are skipped.
+
+After each section the run's state is checkpointed to `$XDG_STATE_HOME/omarchy-m-test/checkpoint.json` (`~/.local/state/...`). A run interrupted by Ctrl-C, a closed terminal or a crash offers to resume on the next start with the same tool, catalogue, Mac and kernel: finished sections aren't run again. A section can also checkpoint its own steps (`Context.progress`), so a resumed run carries on from the step it stopped in (the Sleep section's lid steps). Evidence is scrubbed before it is checkpointed, and the file is only the user's (0600, in a 0700 directory). The checkpoint is removed once the report is written, or when the disclaimer is declined. Record mode never checkpoints.
+
+A check that changes the machine does it through the restorer registry (`omarchy_m_test/session.py`: `Context.change(description, change, restore)`), which records the undo command before making the change. Restorers run newest first when the section ends, on an error and on Ctrl-C, SIGTERM or SIGHUP; they are also kept in the checkpoint, so a run killed outright has them run by the next run before anything else. A restorer that fails is reported with the command to run by hand.
+
+## Interactive checks and safety
+
+The framework the interactive sections build on:
+
+- **Defaults**: every question shows `[Y/n]` and Enter is yes. Before an action (reload the Wi-Fi driver, close the lid, upload) Enter goes ahead; end of input never does.
+- **Human checks** (`omarchy_m_test/human.py`): `human.check(ctx, id, question, evidence)` asks yes, no or skip with an optional note on one line, `[Y/n/s]` (`n the left speaker crackles`), at a terminal too, so a bare Enter can be told from a typed y. Yes passes, no fails, skip or no answer is skipped, never a failure. A bare Enter is yes, but the result carries `answered_by_default: true`: the site shows it as "works (unconfirmed)" and never counts it in the matrix or for testers. `human.check_each` asks one check as several questions (the trackpad, one gesture at a time) and `human.not_backed` notes an answer the Mac's readings contradict, leaving the status alone. The result has kind `human`; its evidence holds the question, the answer and the note, scrubbed like any evidence. List the id in the catalogue's checks and in the section's `human_checks`.
+- **Unattended runs** (`--unattended`, `omarchy_m_test/presence.py`): for a Mac nobody is at (a lab or fleet Mac over SSH). Only the automatic checks run: every human check is skipped with the reason, the checks that act before they ask (the speaker tone, the brightness steps, the keyboard light, the camera window) don't act, nothing asks to plug a device in, the disruptive sections are skipped, and there's no tester sign-in offer. The disclaimer and the upload are still asked, but never a password: without cached sudo a temporary package is skipped, and a restore sudo refuses is reported. The report carries `"unattended": true`, and the site shows the run as unattended.
+- **Hardware the Mac doesn't have**: where the catalogue marks a feature `absent` for the board (the MacBook Neo's Thunderbolt and notch), its human questions and plug-in prompts aren't asked, and its checks, failed or skipped, are classified `not-applicable` (N/A), never a gap.
+- **SSH and the local seat** (`omarchy_m_test/presence.py`): a section with `disruptive=True` (it could cut the connection or the session) is skipped with the reason, in the section list and in the report, when the run is over SSH (`SSH_CONNECTION`/`SSH_CLIENT`/`SSH_TTY`, or logind says the session is remote) or the session has no seat or isn't active on it (`loginctl show-session`).
+- **Restorers for volume and Wi-Fi** (`omarchy_m_test/changes.py`): `set_volume(ctx, level)` caps at 30%, unmutes, and puts the default sink's volume and mute back; `drop_wifi(ctx)` soft-blocks Wi-Fi with rfkill only when it's connected (a known network it rejoins by itself) and never over SSH or without a seat, whatever the section says, and unblocks it after; `reload_wifi_driver(ctx, link)` reloads brcmfmac under the same rules plus a NetworkManager rejoin path (`wifi_link`), and registers restorers that load the driver and bring the original connection back up.
+- **Temporary packages** (`omarchy_m_test/packages.py`): `packages.temporary(ctx, names, purpose)` leaves installed packages alone, works out exactly what installing the rest brings in (`pacman -Sp --needed`, never `-Sy`), refuses kernel, firmware and boot packages and anything that would upgrade an installed package, shows the list and installs it without asking again (the disclaimer covers temporary test packages). It uses sudo's cached credentials or `sudo -v` at the terminal, registers `sudo -n pacman -R` for exactly that list, installs with `--asdeps`, then narrows the restorer to what pacman actually installed.
+- **Never** (`omarchy_m_test/safety.py`): every run goes through a guarded host that refuses to reboot or power off, to put the Mac to sleep (only the human does, by closing the lid when asked), to touch disk encryption, boot files, the boot loader or disks, to upgrade the system, or to install or remove kernel, firmware and boot packages, whatever a check asks (exit 126, and the reason). The Seam A tests assert it, and that whole runs never send such a command.
+
+## The look
+
+At a terminal the run looks like Omarchy's installer (`omarchy_m_test/theme.py`, `ui.py`): the screen cleared, the installed `logo.txt` (`$OMARCHY_PATH`, `/usr/share/omarchy` or `~/.local/share/omarchy`) centred in the current theme's green, section titles in plain bold text in the theme's accent over a thin rule (the terminal's own font, never a FIGlet one), everything wrapped to one text column under the logo with hanging indents, the theme's colours from `~/.local/state/omarchy/current/theme/colors.toml` (resolved by `omarchy-theme-color`; older installs: `~/.config/omarchy/current/theme/`), gum prompts with the installer's styling unless the user sets their own `GUM_*`, and during a section a live feed of the last lines of what it runs, in grey, prefixed `  → `, over where the run is: a bar across every section of the run, weighted by how many checks each reports, and `Section 4/13 · Audio`, also shown as each section starts (plain ASCII off a terminal). Without Omarchy's files (another Asahi distro) it uses Tokyo Night and a plain title. Off a terminal (a pipe, the tests unless they give one) the output is plain text with no escape sequences.
+
+## The host boundary
+
+Every interaction with the machine, the human and the network goes through a `Host` (`omarchy_m_test/host.py`): run a command, read a file, list a directory, read an environment variable, prompt, show, run an interactive command (gum) on the terminal, ask for the terminal's size, write and remove files, post the report, post a form (GitHub's device flow), wait, GET the latest version. `scripts/check_boundary.py` fails CI if any other module does I/O or imports outside the standard library.
+
+Tests replace the real host with a `RecordedHost` (`omarchy_m_test/recording.py`) that replays a recording from `tests/recordings/` and scripted answers. Anything the CLI asks for that isn't recorded raises `RecordingMiss`.
+
+## Privacy
+
+Every report passes `omarchy_m_test/privacy.py` before it is written, shown or uploaded: only the allowlisted fields (the same tree as `schema/report-v1.schema.json`) reach it, and every evidence line is scrubbed of MAC and IP addresses, Wi-Fi network names, home paths, hostnames, usernames, e-mail addresses, serial numbers, UUIDs and long hex identifiers. Saved NetworkManager connection names are learned and removed wherever they appear, except those NetworkManager keeps for virtual interfaces (`docker0`, `tailscale0`, `lo`), which are just interface names. Evidence is text only and at most 64 KiB per report; the site refuses reports that break either rule.
+
+## Machine key
+
+On its first run the CLI creates an ed25519 key for this Mac at `$XDG_STATE_HOME/omarchy-m-test/machine-key` (`~/.local/state/...`; 0600, in a 0700 directory) with `ssh-keygen`, asking nothing, and reuses it on every later run. Every report carries its public key and a signature (`ssh-keygen -Y sign`, namespace `omarchy-m-test-report`) over its canonical form: the report without `signature`, as JSON with keys sorted, no whitespace and non-ASCII as UTF-8 (`omarchy_m_test/signing.py`). The private key never leaves the Mac, and record mode never records the key. The site refuses unsigned or tampered reports, groups reports by a keyed digest of the public key and never shows or exports the key. Without `ssh-keygen` the report is written unsigned and the run says the site won't take it.
+
+## Tester sign-in
+
+    bin/omarchy-m-test --sign-in [--site URL]
+    bin/omarchy-m-test --status [--site URL]
+    bin/omarchy-m-test --sign-out [--site URL]
+
+Once per Mac, a tester signs in with GitHub's device flow (`omarchy_m_test/tester.py`): the CLI asks GitHub for a short code with only the `omarchy-m-testing` OAuth app's client ID (no secret ships in the tool), shows it with github.com/login/device, and polls at GitHub's interval (slower on `slow_down`) until the code is entered, cancelled or expires. It then sends the site the token in a small document signed by the machine key under the namespace `omarchy-m-test-tester` (so it can't pass for a report). The site checks the token with GitHub, binds the GitHub handle to the machine key and revokes the token; the CLI never writes the token anywhere. From then on nothing changes in a run: the site counts every report that machine signs as a tester run while the handle is on its tester allowlist, and says so after the upload. It runs no checks. A handle that isn't on the allowlist is still bound, and the CLI says to ask the maintainer to add it.
+
+The Mac stays signed in across runs: the CLI remembers the handle (never a token) in `$XDG_STATE_HOME/omarchy-m-test/tester.json` (0600). A run (not `--dry-run` or `--record`) on a Mac with no such record first asks the site whether its key is signed in already (a Mac signed in with an older CLI; when the site can't be asked, the offer waits for a later run), and otherwise asks once, after the disclaimer and before the sections: `Sign in with GitHub so your runs count as a tester? [Y/n]`. Over SSH too: the device flow only shows the code and URL, to open on any device. On yes the code waits at most 5 minutes, with a countdown, and any key skips it; a skip, a timeout or a failure carries on as a community run with a one-line note. Any answer is remembered, so the offer never comes back; `--sign-in` works any time.
+
+`--status` says whom the Mac is signed in as and whether that handle is a tester (`Signed in as @handle (tester: yes)`, or `Not signed in.`), as the site knows it. `--sign-out` unbinds the machine key from its handle on the site and forgets the local record: later runs are community runs (runs already uploaded keep theirs), and the next run offers the sign-in again. Both send `POST /api/v1/tester_requests` a small document signed by the machine key under `omarchy-m-test-tester` (`{"request_version": 1, "request": "status" | "sign-out", "requested_at": <unix seconds>}`, which the site refuses when dated more than a day from its clock). The status names the sign-in (`sign_in`), and `--sign-out` asks for the status first and names that sign-in in its request, so a copy of a sign-out can't end a later sign-in. Neither runs checks.
+
+## Recording a Mac
+
+    bin/omarchy-m-test --dry-run --record my-mac.json
+
+Record mode runs as usual and also saves what the Mac answered at the host boundary: every command, file and directory the CLI read, plus the sources later checks need (`RECORDED_SOURCES` in `recording.py`: kernel log, device tree, first-boot, Wi-Fi and lid journals, uname, PCI devices, addresses; the built-in keyboard and trackpad only by driver name, never raw `hyprctl devices`). The recording is scrubbed before it is saved. Prompts, answers, uploads and the machine key are not recorded. Check a new recording by eye before committing it, then add it to `tests/recordings/`.
+
+`tests/corpus/` holds the real M1 and M2 evidence the seeded recordings came from, pseudonymized (every identifier swapped for a same-shape decoy) because this repository is public. `m1-pro-converged`, `m2-max-converged` and `m1-pro-converged-fresh` are whole real runs (0.1.2 and, on a freshly installed lab image, 0.1.6 on the M1 Pro, 0.1.3 on the M2 Max; `--dry-run --record` over SSH, 2026-09-27): the recording it saved with each placeholder swapped back for a decoy, so reseeding gives exactly what each Mac saved, and their `env` makes the replay an SSH run. In the older `m2-max-image2` and `m1-pro-mx-mac` the inventory answers (device-tree properties, bound drivers, `/proc/config.gz`) weren't captured either: they are reconstructed from each Mac's booted kernel package (its DTB, module aliases and headers' build config) and, for the M2, its kernel log's failed probe; the M1 has no kernel log at all. Answers never captured on a Mac (most of the M1's, and the M2's mac-check output) are reconstructed from what is known of the install and say so in their `note`; the v0.1 dogfood run replaces them. `scripts/reseed_recordings.py` reruns record mode over the corpus and rewrites `tests/recordings/` and the golden reports.
+
+## Test (Seam A)
+
+    python3 scripts/check_boundary.py
+    python3 -m unittest discover -s tests -t .
+
+The corpus tests run the whole CLI in record mode against the real evidence and fail if any identifier listed in a corpus machine's `forbidden`, or any MAC, IP, UUID, long hex id or home path, reaches a recording or a report. Reports produced here must equal the golden reports in `../schema/golden/`, which the site's Seam B tests post to the API.

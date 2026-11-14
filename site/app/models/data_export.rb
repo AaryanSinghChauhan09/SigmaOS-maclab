@@ -1,0 +1,76 @@
+# Everything public, for download: visible reports as JSON (each report exactly
+# as uploaded, with the build the site derives from it beside it), and as CSV
+# one row per report or one row per check result.
+# Published under CC0. Deleted and hidden reports are never included, nor is
+# the machine grouping key.
+module DataExport
+  LICENSE = { id: "CC0-1.0", url: "https://creativecommons.org/publicdomain/zero/1.0/" }.freeze
+  ASAHI_NOTE = "Expected Asahi states come from the Asahi Linux feature-support tables, CC BY 3.0; see the catalogue's sources."
+
+  REPORT_COLUMNS = %w[
+    id url uploaded_at model board soc chip kernel stack omarchy_version distro boot_loader encryption candidate_set
+    tool_version schema_version catalogue_version checks pass fail skip
+    build build_words build_commit build_stamp linux_aurora omarchy_mac_boot build_candidate_set build_candidate_set_source
+    image_profile image_built expected_gaps
+  ].freeze
+
+  CHECK_COLUMNS = %w[
+    report_id uploaded_at model board soc chip kernel stack omarchy_version
+    check_id kind status outcome feature layer expected_asahi expected_aurora expected_omarchy
+    score score_unit score_tool score_suite answered_by_default build
+  ].freeze
+
+  # The visible reports, oldest first, that the filter's run filters pass (ReportFilter).
+  def self.reports(filter = ReportFilter.new) = filter.runs(Report.visible.order(:created_at, :id).to_a)
+
+  # filters: the filter's parameters, when any (each report's body stays exactly as uploaded).
+  def self.json(url_for, filter = ReportFilter.new)
+    {
+      license: LICENSE,
+      note: ASAHI_NOTE,
+      generated_at: Time.current.utc.iso8601,
+      catalogue_version: Catalogue.version,
+      filters: filter.values.presence,
+      reports: reports(filter).map do |report|
+        { id: report.public_id, url: url_for.call(report), uploaded_at: report.created_at.utc.iso8601, build: report.build&.as_json,
+          report: report.body }.compact
+      end
+    }.compact
+  end
+
+  # With confirmed only, the check counts leave out the answers given by a bare Enter.
+  def self.reports_csv(url_for, filter = ReportFilter.new)
+    csv(REPORT_COLUMNS, reports(filter).map do |report|
+      checks = filter.confirmed? ? report.counted_checks : report.checks
+      statuses = checks.map { |check| check["status"] }.tally
+      build = report.build
+      [ report.public_id, url_for.call(report), report.created_at.utc.iso8601, report.model_name, report.board, report.soc, report.chip,
+        report.kernel, report.stack, report.omarchy_version, report.system["distro"], report.system["boot_loader"],
+        report.system["encryption"], report.candidate_set, report.tool_version, report.schema_version, report.body["catalogue_version"],
+        checks.size, statuses.fetch("pass", 0), statuses.fetch("fail", 0), statuses.fetch("skip", 0),
+        build&.id, build&.words, build&.commit, build&.stamp, build&.kernel, build&.boot, build&.set, build&.set_source,
+        build&.image&.dig("image_profile"), build&.image&.dig("built"), report.result_counts(confirmed: filter.confirmed?)["gap"] ]
+    end)
+  end
+
+  # The filter's result filters pick the check rows too (ReportFilter#checks).
+  def self.checks_csv(filter = ReportFilter.new)
+    csv(CHECK_COLUMNS, reports(filter).flat_map do |report|
+      filter.checks(report).map do |check|
+        classification = check["classification"]
+        [ report.public_id, report.created_at.utc.iso8601, report.model_name, report.board, report.soc, report.chip, report.kernel,
+          report.stack, report.omarchy_version, check["id"], check["kind"], check["status"], classification["outcome"],
+          classification["feature"], classification["layer"], *Catalogue::LAYERS.map { |layer| classification.dig("expected", layer) },
+          *%w[value unit tool suite].map { |field| check.dig("score", field) }, Report.answered_by_default?(check), report.build&.id ]
+      end
+    end)
+  end
+
+  # RFC 4180: every field quoted, quotes doubled, CRLF line ends. Uploaded
+  # text starting like a formula gets a leading ' so spreadsheets show it as text.
+  def self.csv(header, rows)
+    [ header, *rows ].map { |row| row.map { |field| %("#{defuse(field.to_s).gsub('"', '""')}") }.join(",") + "\r\n" }.join
+  end
+
+  def self.defuse(text) = text.match?(/\A[=+\-@\t\r]/) ? "'#{text}" : text
+end

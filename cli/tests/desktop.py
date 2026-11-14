@@ -1,0 +1,178 @@
+"""Test helpers: a recorded Mac with (or without) an Omarchy desktop around it, and test sections.
+
+The recordings in tests/recordings/ were made off a terminal, so they hold no
+theme, logo or checkpoint. These helpers add what a run at a terminal reads,
+as a recording would hold it.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+from typing import Any
+
+from omarchy_m_test.host import CommandResult, Terminal
+from omarchy_m_test.recording import EOF, RecordedHost
+from omarchy_m_test.sections import APPLE
+from omarchy_m_test.session import Context, Section
+
+RECORDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
+HOME = "/home/tester"
+CHECKPOINT = f"{HOME}/.local/state/omarchy-m-test/checkpoint.json"
+TESTER_LINK = f"{HOME}/.local/state/omarchy-m-test/tester.json"
+# This Mac already answered the start-of-run sign-in offer (no): runs aren't offered it again (tests/test_tester.py covers it).
+DECLINED = {"text": '{"declined": true, "link_version": 1}\n'}
+THEME = f"{HOME}/.local/state/omarchy/current/theme"
+OLD_THEME = f"{HOME}/.config/omarchy/current/theme"
+TITLES = "\n".join(section.title for section in APPLE) + "\n"
+# The recorded runs are over SSH: the picker doesn't offer the disruptive sections (Sleep).
+OFFERED_OVER_SSH = [section.title for section in APPLE if not section.disruptive]
+LOGO_PATHS = ("/usr/share/omarchy/logo.txt", f"{HOME}/.local/share/omarchy/logo.txt")
+TERMINAL = Terminal(120, 40)
+
+# The recorded M2's human checks (notch bar, brightness steps, cursor, speaker
+# tone, headphone jack, Bluetooth pairing, keyboard light, function keys,
+# the trackpad's click, two-finger click and two-finger scroll (the three-finger
+# swipe is off in Omarchy's config, so not asked; taps never are), USB-C devices,
+# USB-C display): 13 questions, left unanswered as in its golden
+# report, then the Power section's sudo password prompt for the charge limit (the recorded
+# runs have no cached sudo; only at a terminal), unanswered and so skipped. Temporary test
+# packages (mesa-utils for the OpenGL check, vkmark for the benchmarks) are installed without
+# a question: off a terminal without cached sudo they're skipped at once; at a terminal sudo
+# asks for the password (sudo -v) for each, unanswered. A run that needs no answer after them
+# ends its answers with ENDED instead.
+OPENGL_OFFER: list = []
+SUDO_PROMPT = [EOF]
+BENCHMARK_OFFER: list = []
+UNANSWERED = [EOF] * 13
+UNANSWERED_AT_A_TERMINAL = SUDO_PROMPT + [EOF] * 13 + SUDO_PROMPT + SUDO_PROMPT
+# How many human checks each corpus machine's run asks (the mx-mac M1's stand-ins skip three without asking;
+# the converged M1 and M2 ran over SSH, where brightness can't be set, so that one isn't asked; the M1s have
+# nothing plugged into their USB-C ports, so the two ports questions aren't asked).
+HUMAN_QUESTIONS = {"m2-max-image2": 13, "m1-pro-mx-mac": 8, "m1-pro-converged": 10, "m2-max-converged": 12, "m1-pro-converged-fresh": 10}
+# With gum: sudo -v for the OpenGL check's package (exits 1, unanswered), the human checks (one-line prompts, so
+# a bare Enter can be told from a typed y), then sudo -v for the charge limit and for the benchmarks' package.
+GUM_UNANSWERED = [CommandResult(1, "", ""), *[EOF] * 13, CommandResult(1, "", ""), CommandResult(1, "", "")]
+# Which corpus machines have no eglinfo, so the Graphics section installs mesa-utils first (no question now).
+OPENGL_OFFERED = {"m2-max-image2": 0, "m1-pro-mx-mac": 0, "m1-pro-converged": 0, "m2-max-converged": 0, "m1-pro-converged-fresh": 0}
+# How many of them come before the Wi-Fi first-join check asks to reload the driver (at a local seat only).
+BEFORE_RELOAD = {"m2-max-image2": 6, "m1-pro-mx-mac": 4, "m1-pro-converged": 6, "m2-max-converged": 6, "m1-pro-converged-fresh": 4}
+# What only a run at a local seat asks besides: the Ports section's "plug in what you have" (after the reload).
+AT_THE_SEAT_ONLY = 1
+
+
+# The Sleep section (after the reload question) asks whether to close the lid for the suspend step, then
+# whether an external display is showing, then (only after a yes) whether to close the lid with it on.
+SLEEP_DECLINED = (EOF, EOF)
+# The Power section at the Mac (on AC power, as recorded) asks for the charger out and waits for it (no prompt);
+# left in, neither the idle measurement nor the drain asleep is offered.
+POWER_DECLINED = ()
+
+
+def at_the_seat(machine: str, reload: str | object = EOF, sleep: tuple = SLEEP_DECLINED, power: tuple = POWER_DECLINED) -> list:
+    """A whole run's answers at the Mac, after the disclaimer: its human checks unanswered, `reload` at the
+    driver-reload question, `sleep` at the Sleep section's, `power` at the Power section's, and the benchmarks'
+    package offer unanswered."""
+    before = BEFORE_RELOAD[machine]
+    return [*[EOF] * OPENGL_OFFERED[machine], *[EOF] * before, reload, *sleep, *[EOF] * (HUMAN_QUESTIONS[machine] - before + AT_THE_SEAT_ONLY), *power, *BENCHMARK_OFFER]
+
+LOGO = " ▄█████▄    ▄███████████▄\n███   ███  ███   ███   ███\n ▀█████▀    ▀█   ███   █▀"
+# A Catppuccin-like palette, so its colours can't be mistaken for Tokyo Night's.
+COLORS_TOML = 'accent = "#89b4fa"\nforeground = "#cdd6f4"\ngreen = "#a6e3a1"\nred = "#f38ba8"\n'
+RESOLVED = "accent\t#89b4fa\ndark_foreground\t#6c7086\nforeground\t#cdd6f4\ngreen\t#a6e3a1\nmode\tdark\nred\t#f38ba8\n"
+GREEN_RGB = "38;2;166;227;161"        # #a6e3a1
+ACCENT_RGB = "38;2;137;180;250"       # #89b4fa
+GREY_RGB = "38;2;108;112;134"         # #6c7086
+TOKYO_GREEN_RGB = "38;2;158;206;106"  # #9ece6a
+
+
+def recording(name: str = "m2-max-image2") -> dict[str, Any]:
+    with open(os.path.join(RECORDINGS, f"{name}.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def command(argv: list[str], stdout: str = "", returncode: int = 0, stderr: str = "") -> dict[str, Any]:
+    return {"argv": argv, "returncode": returncode, "stdout": stdout, "stderr": stderr}
+
+
+def with_home(rec: dict[str, Any], env: dict[str, str] | None = None, checkpoint: str | None = None) -> dict[str, Any]:
+    """The recording with $HOME set, so the run checkpoints; optionally with a checkpoint left by an earlier run."""
+    rec = copy.deepcopy(rec)
+    rec.setdefault("env", {}).update({"HOME": HOME, **(env or {})})
+    rec["files"][CHECKPOINT] = None if checkpoint is None else {"text": checkpoint}
+    rec["files"].setdefault(TESTER_LINK, DECLINED)
+    return rec
+
+
+def omarchy_desktop(rec: dict[str, Any], env: dict[str, str] | None = None) -> dict[str, Any]:
+    """An Omarchy install: logo, current theme, omarchy-theme-color and gum."""
+    rec = with_home(rec, env)
+    rec["files"].update({
+        LOGO_PATHS[0]: {"text": LOGO + "\n"},
+        f"{THEME}/colors.toml": {"text": COLORS_TOML},
+    })
+    rec["commands"] += [
+        command(["omarchy-theme-color", "--file", f"{THEME}/colors.toml", "--all"], RESOLVED),
+        command(["gum", "--version"], "gum version 0.16.0\n"),
+    ]
+    return rec
+
+
+def bare_desktop(rec: dict[str, Any], gum: bool = False, old_theme: str | None = None) -> dict[str, Any]:
+    """No Omarchy files: another Asahi distro (or, with old_theme, an older Omarchy's theme dir)."""
+    rec = with_home(rec)
+    for path in LOGO_PATHS:
+        rec["files"][path] = None
+    for directory in (THEME, OLD_THEME):
+        rec["files"][f"{directory}/colors.toml"] = None
+        rec["files"][f"{directory}/alacritty.toml"] = None
+    if old_theme is not None:
+        rec["files"][f"{OLD_THEME}/colors.toml"] = {"text": old_theme}
+        rec["commands"].append(command(["omarchy-theme-color", "--file", f"{OLD_THEME}/colors.toml", "--all"], "", 127, "not found\n"))
+    rec["commands"] += [
+        command(["gum", "--version"], "gum version 0.16.0\n" if gum else "", 0 if gum else 127),
+    ]
+    return rec
+
+
+def host(rec: dict[str, Any], answers=(), terminal: Terminal | None = None, **kwargs) -> RecordedHost:
+    return RecordedHost(rec, answers=list(answers), terminal_size=terminal, **kwargs)
+
+
+# -- sections that exercise the framework through the whole CLI -----------------
+
+VOLUME_DOWN = ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "0.30"]
+VOLUME_BACK = ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "0.45"]
+MUTE = ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "1"]
+UNMUTE = ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"]
+LISTEN = "Did you hear the tone? [Y/n/s] "
+
+
+def _tone(ctx: Context) -> list[dict]:
+    ctx.change("the speaker volume", VOLUME_DOWN, VOLUME_BACK)
+    ctx.change("the speaker mute", MUTE, UNMUTE)
+    ctx.host.prompt(LISTEN)
+    return []
+
+
+def _kernel(ctx: Context) -> list[dict]:
+    ctx.host.run(["uname", "-r"])
+    ctx.host.run(FIRST_BOOT)
+    return []
+
+
+FIRST_BOOT = ["journalctl", "--unit=omarchy-provision-hardware.service", "--output=short-iso", "--no-pager"]
+TONE = Section("tone", "Tone", "Plays a quiet tone.", (), _tone)
+KERNEL = Section("kernel", "Kernel", "Reads the kernel release.", (), _kernel)
+SECTIONS = (*APPLE, TONE)
+FEED_SECTIONS = (*APPLE, KERNEL)
+
+
+def with_section_commands(rec: dict[str, Any], restore_returncode: int = 0) -> dict[str, Any]:
+    rec = copy.deepcopy(rec)
+    rec["commands"] += [
+        command(VOLUME_DOWN), command(VOLUME_BACK, returncode=restore_returncode, stderr="no default sink\n" if restore_returncode else ""),
+        command(MUTE), command(UNMUTE),
+    ]
+    return rec

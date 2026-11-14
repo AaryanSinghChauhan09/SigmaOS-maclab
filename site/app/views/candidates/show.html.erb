@@ -1,0 +1,41 @@
+<% content_for :title, "Candidate set #{@set.name}" %>
+<h1>Candidate set <%= @set.name %></h1>
+<p class="subtitle">
+  <%= pluralize(@set.reports.size, "run") %>, <%= pluralize(@set.tester_reports.size, "tester run") %>.
+  Only tester runs count here; community runs are listed below.
+</p>
+<%= card "promotion" do %>
+  <p class="verdict verdict-<%= @set.verdict %>" id="verdict" data-verdict="<%= @set.verdict %>"><%= @set.verdict_words %></p>
+  <% if @set.failures.any? %>
+    <ul class="links" id="failures">
+      <% @set.failures.each do |finding| %>
+        <li class="finding" data-state="<%= finding.cell.state %>"><%= state_badge(finding.cell.state) %> <%= finding.row.model_name %> (<%= finding.row.configuration.label %>): <a href="<%= feature_path(finding.feature["id"]) %>"><%= finding.feature["name"] %></a>, <%= finding.cell.summary %></li>
+      <% end %>
+    </ul>
+  <% end %>
+  <% if @set.partials.any? %>
+    <p class="dim">Partial (some checks or testers disagree):</p>
+    <ul class="links" id="partials">
+      <% @set.partials.each do |finding| %>
+        <li class="finding"><%= finding.row.model_name %> (<%= finding.row.configuration.label %>): <a href="<%= feature_path(finding.feature["id"]) %>"><%= finding.feature["name"] %></a>, <%= finding.cell.summary %></li>
+      <% end %>
+    </ul>
+  <% end %>
+<% end %>
+<%= card "tester results: model × feature" do %>
+  <% if @set.tested_rows.empty? %>
+    <p class="dim">No tester has run this candidate set yet.</p>
+  <% else %>
+    <%= render "shared/matrix", rows: @set.tested_rows, features: @set.features %>
+    <%= render "shared/legend" %>
+  <% end %>
+<% end %>
+<%= card "runs" do %>
+  <%= render "shared/report_list", reports: @set.reports.sort_by { |report| [ report.created_at, report.id ] }.reverse %>
+<% end %>
+<% if @matched.any? %>
+  <%= card "runs matched by package", id: "matched" do %>
+    <p class="dim">These runs' images don't name a set, but their omarchy package is this set's. They're listed, not counted towards promotion.</p>
+    <%= render "shared/report_list", reports: @matched.sort_by(&:upload_order).reverse %>
+  <% end %>
+<% end %>

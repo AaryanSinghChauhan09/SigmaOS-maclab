@@ -1,0 +1,29 @@
+<% content_for :title, "Compatibility matrix" %>
+<% group = @group %>
+<% if @by_model %>
+  <% content_for :head do %><%= javascript_include_tag "model_results", defer: true %><% end %>
+<% end %>
+<h1>Compatibility matrix</h1>
+<div class="matrix-view-controls">
+  <span class="matrix-view-label" id="matrix-view-label">Group by</span>
+  <nav class="matrix-view-switch" aria-labelledby="matrix-view-label">
+    <% [ [ "model", "Model" ], [ "release", "Release" ], [ "build", "Build" ] ].each do |value, label| %>
+      <%= link_to label, matrix_path + query(@filter.to_params(group: value)),
+                  data: { view: value }, aria: { current: ("page" if group == value) } %>
+    <% end %>
+  </nav>
+</div>
+<%= render "shared/filter_bar", filter: @filter, options: @options, path: matrix_path, keys: ReportFilter::KEYS, count: @matrix.runs_count,
+                                extra: { group: }, exports: [ [ "matrix.json", api_v1_matrix_path(format: :json) + query(@filter.to_params(group:)) ],
+                                                               [ "checks.csv", api_v1_checks_path(format: :csv) + query(@filter.to_params) ] ] %>
+<% if @by_model %>
+  <p class="matrix-note">Each model and stack combines each machine’s latest check results, ordered by upload time. Skipped checks keep their earlier results. Summaries can include several kernels; hover for the source kernels and latest test date, or expand the builds for the full history.</p>
+<% end %>
+<%= card(@by_model ? "model × stack" : (@by_build ? "model × stack/version × build" : "model × stack/version")) do %>
+  <% if @matrix.empty? || @matrix.rows.empty? %>
+    <p class="dim">No reports<%= " match these filters" if @filter.any? %> yet.</p>
+  <% else %>
+    <%= render "shared/matrix", rows: @matrix.rows, features: @matrix.features, history: @history %>
+  <% end %>
+  <%= render "shared/legend" %>
+<% end %>
