@@ -1,0 +1,167 @@
+#!/bin/bash
+# Check the mini's three rear ports, with no reset:
+#
+#   sudo scripts/mini/ports [--tool FILE]
+#
+# For each port (RID 0 is the middle one, 1 the left, 2 the right, facing the
+# back): what the mini sees on it, the reset tool's own answer, and the
+# Out-of-band controller's. Then the tool is given four bad RIDs (none, not a
+# number, negative, no such port) and the controller one, and each must be
+# refused. Last, the controller must run under launchd and listen on this
+# machine only. Nothing is reset: the one command the tool is ever given
+# here is nop. A Maintenance run ends with this check. Needs only what macOS
+# has.
+#
+#   --tool FILE  the reset tool (default: the Deployed build's)
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+
+usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+tool="$RESET_TOOL"
+while (( $# )); do
+  case "$1" in
+    --tool) [[ $# -ge 2 ]] || usage; tool="$2"; shift ;;
+    *) usage ;;
+  esac
+  shift
+done
+need_root
+[[ -x $tool ]] || fail "no reset tool at $tool: a Deploy brings it (bin/$RESET_TOOL_NAME of the server bundle)"
+
+RIDS=(0 1 2)
+FAILED=0
+good() { echo "ok    $*"; }
+bad() { echo "FAIL  $*"; FAILED=$((FAILED + 1)); }
+indent() { sed 's/^/        /'; }
+
+registry="$(ioreg -l -w0 -r -c AppleHPM)" || fail "ioreg could not read the port controllers"
+
+# seen RID: the port controller with that RID as ioreg shows it, as
+# name|connected|plug count|connection id|transports|partner's product id.
+seen() {
+  awk -v want="$1" '
+    function flush() { if (rid != "" && rid == want) print name "|" active "|" plugs "|" uuid "|" transports "|" product }
+    BEGIN { rid = "" }
+    /^\+-o / { flush(); rid = ""; name = ""; active = ""; plugs = ""; uuid = ""; transports = ""; product = "" }
+    /\+-o / {
+      port = ($0 ~ /<class AppleHPMInterface/)
+      partner = ($0 ~ /<class IOPortTransportComponentCCUSBPDSOP[,>]/)
+      if (port) { name = $0; sub(/^.*\+-o /, "", name); sub(/  <class.*$/, "", name) }
+      next
+    }
+    {
+      line = $0
+      sub(/^[ |]*/, "", line)
+      if (rid == "" && line ~ /^"RID" = [0-9]+$/) { rid = line; sub(/^.* = /, "", rid) }
+      value = line
+      sub(/^"[^"]*" = /, "", value)
+      if (port && line ~ /^"ConnectionActive" = /) active = value
+      if (port && line ~ /^"Plug Event Count" = /) plugs = value
+      if (port && line ~ /^"ConnectionUUID" = /) { uuid = value; gsub(/"/, "", uuid) }
+      if (port && line ~ /^"TransportsActive" = /) { transports = value; gsub(/[()"]/, "", transports) }
+      if (partner && line ~ /^"Product ID" = /) product = value
+    }
+    END { flush() }
+  ' <<<"$registry"
+}
+
+# absent: a RID no port controller of this machine has.
+absent() {
+  local n=3
+  while grep -Eq "\"RID\" = $n\$" <<<"$registry"; do n=$((n + 1)); done
+  echo "$n"
+}
+
+echo "The ports, as the mini sees them and as the reset tool answers (nop):"
+for rid in "${RIDS[@]}"; do
+  IFS='|' read -r name active plugs uuid transports product <<<"$(seen "$rid")"
+  if [[ -z $name ]]; then
+    bad "RID $rid: this machine has no such port controller"
+    continue
+  fi
+  if [[ $active == Yes ]]; then
+    good "RID $rid ($name): connected, transports ${transports:-none}, product id ${product:-none}, plug count $plugs, connection id ${uuid:-none}"
+  else
+    good "RID $rid ($name): nothing connected, plug count $plugs"
+  fi
+  out="$("$tool" --rid "$rid" nop 2>&1)"
+  code=$?
+  if [[ $active == Yes && $code != 0 ]]; then
+    bad "RID $rid: the tool failed on a connected port (exit $code)"
+    indent <<<"$out"
+  elif [[ $active == Yes ]]; then
+    good "RID $rid: the tool answers: $(grep -m 1 '^Connection:' <<<"$out" || tail -n 1 <<<"$out")"
+  else
+    good "RID $rid: the tool says: $(tail -n 1 <<<"$out")"
+  fi
+done
+
+echo
+echo "A bad RID, refused by the tool:"
+# refused WHAT ARGS...: the tool, given ARGS, must fail.
+refused() {
+  local what="$1" out code
+  shift
+  out="$("$tool" "$@" 2>&1)"
+  code=$?
+  if (( code == 0 )); then
+    bad "$what was not refused: $tool $*"
+    indent <<<"$out"
+  else
+    good "$what: $(tail -n 1 <<<"$out")"
+  fi
+}
+refused "no RID" nop
+refused "a RID that is not a number" --rid x nop
+refused "a negative RID" --rid -1 nop
+none="$(absent)"
+refused "a RID with no such port ($none)" --rid "$none" nop
+
+echo
+echo "The Out-of-band controller:"
+if ! launchctl print "system/$OOBD_LABEL" >/dev/null 2>&1; then
+  bad "$OOBD_LABEL is not loaded: scripts/mini/setup starts it once a build is Deployed"
+elif [[ ! -s $OOBD_TOKEN ]]; then
+  bad "no token at $OOBD_TOKEN: scripts/mini/setup makes it"
+else
+  good "$OOBD_LABEL is loaded"
+  # ask PATH: the controller's answer and its status, the token given on
+  # standard input so that it is in no command line.
+  ask() {
+    printf 'header = "Authorization: Bearer %s"\n' "$(<"$OOBD_TOKEN")" |
+      curl -sS --max-time 120 -K - -w '\n%{http_code}' "http://$OOBD_LISTEN$1" 2>&1
+  }
+  for rid in "${RIDS[@]}"; do
+    answer="$(ask "/v1/ports/$rid/status?probe=1")"
+    if [[ "$(tail -n 1 <<<"$answer")" == 200 ]]; then
+      good "RID $rid: $(sed '$d' <<<"$answer" | tr -d '\n')"
+    else
+      bad "RID $rid: the controller answered $(tail -n 1 <<<"$answer")"
+      sed '$d' <<<"$answer" | indent
+    fi
+  done
+  answer="$(ask "/v1/ports/$none/status")"
+  if [[ "$(tail -n 1 <<<"$answer")" == 400 ]]; then
+    good "RID $none is refused: $(sed '$d' <<<"$answer" | tr -d '\n')"
+  else
+    bad "RID $none was not refused by the controller: $(tail -n 1 <<<"$answer")"
+  fi
+  listening="$(lsof -nP -iTCP -sTCP:LISTEN -a -c oobd 2>/dev/null | awk 'NR > 1 { print $9 }' | sort -u)"
+  if [[ -z $listening ]]; then
+    bad "oobd listens nowhere that lsof shows"
+  elif grep -Evq '^(127\.0\.0\.1|\[::1\]):[0-9]+$' <<<"$listening"; then
+    bad "oobd listens beyond this machine: $(tr '\n' ' ' <<<"$listening")"
+  else
+    good "oobd listens on this machine only: $(tr '\n' ' ' <<<"$listening")"
+  fi
+fi
+
+echo
+if (( FAILED )); then
+  fail "$FAILED checks failed; nothing was reset"
+fi
+say "every check passed; nothing was reset"

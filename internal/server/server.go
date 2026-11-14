@@ -71,6 +71,10 @@ type Config struct {
 	// person may look at their own Macs (see scope.go). labd itself sets
 	// none; tests of scope name people with it.
 	Person func(r *http.Request) string
+	// OOB is the Out-of-band controller on this machine, which resets a
+	// port; nil when labd was given no token file for it, and then no Mac
+	// gets a Hard reset.
+	OOB *oob.Client
 	// OOBFactory builds a controller for a device; tests swap in fakes.
 	OOBFactory func(*api.Device) (oob.Controller, error)
 	// BuilderToken authenticates builder hosts; empty disables builds.

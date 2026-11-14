@@ -12,6 +12,9 @@ RELEASE_URL="https://github.com/omacom/omarchy-maclab/releases/download"
 LAB_HOST="lab.omarchy-mac.org"
 LABD_LABEL="org.omarchy-mac.lab.labd"
 LABD_LISTEN="127.0.0.1:7770"
+OOBD_LABEL="com.maclab.oobd"
+OOBD_LISTEN="127.0.0.1:7780"
+RESET_TOOL_NAME="macvdmtool"
 
 ROOT_OWNER=root
 ROOT_GROUP=wheel
@@ -25,23 +28,30 @@ SYSROOT="${LAB_SYSROOT:-}"
 if [[ -n $SYSROOT ]]; then
   ROOT_OWNER="$(id -un)" ROOT_GROUP="$(id -gn)" LAB_OWNER="$(id -un)" LAB_GROUP="$(id -gn)"
   LABD_LISTEN="${LAB_LOOPBACK:-$LABD_LISTEN}"
+  OOBD_LISTEN="${LAB_OOBD_LOOPBACK:-$OOBD_LISTEN}"
 else
   PATH=/usr/bin:/bin:/usr/sbin:/sbin
   export PATH
 fi
 
 # Root's, and only root writes there: the builds, the copy of the Homebrew
-# tools the daemons run from, the release key.
+# tools the daemons run from, the release key, and the secrets of what runs
+# as root, which only root reads.
 LAB_ROOT="$SYSROOT/usr/local/lab"
 LAB_BUILDS="$LAB_ROOT/builds"
 LAB_CURRENT="$LAB_ROOT/current"
 LAB_TOOLS="$LAB_ROOT/tools"
 LAB_SIGNERS="$LAB_ROOT/allowed_signers"
+LAB_SECRETS="$LAB_ROOT/secrets"
+OOBD_TOKEN="$LAB_SECRETS/oobd.token"
+RESET_TOOL="$LAB_CURRENT/bin/$RESET_TOOL_NAME"
 # The lab account's, and only it reads there: data, secrets, the socket, logs.
 LAB_HOME="$SYSROOT/var/lab"
 LABD_SOCKET="$LAB_HOME/run/labd.sock"
 LABD_LOG="$LAB_HOME/log/labd.log"
+LABD_OOBD_TOKEN="$LAB_HOME/secrets/oobd.token"
 LAUNCHD_DIR="$SYSROOT/Library/LaunchDaemons"
+OOBD_PLIST="$LAUNCHD_DIR/$OOBD_LABEL.plist"
 BREW_PREFIX="$SYSROOT/opt/homebrew"
 
 umask 022

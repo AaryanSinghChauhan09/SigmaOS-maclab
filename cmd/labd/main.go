@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/omacom/omarchy-maclab/internal/oob"
 	"github.com/omacom/omarchy-maclab/internal/server"
 )
 
@@ -44,6 +45,8 @@ func main() {
 	omtSite := flag.String("omt-site", "https://omarchy-m-testing.org", "where omarchy-m-test reports are published (lab publish, --publish); empty never publishes")
 	omtPublish := flag.Bool("omt-publish", false, "publish known-good omarchy-m-test runs (baselines and --omt-every runs) by themselves")
 	omtEvery := flag.Duration("omt-every", 0, "re-run omarchy-m-test on each idle Mac's known-good kernel this often, e.g. 24h (reboots the Mac); 0 never")
+	oobd := flag.String("oobd", "http://127.0.0.1:7780", "the Out-of-band controller's address, on this machine")
+	oobdTokenFile := flag.String("oobd-token-file", "", "labd's copy of the Out-of-band controller's token: a file only the account labd runs as reads. With none, no Mac gets a Hard reset")
 	rebootWarning := flag.Duration("reboot-warning", 5*time.Minute, "how long before a Volunteer job's first reboot its Mac shows the Volunteer a notice, which the job then waits for; 0 shows none and waits for none")
 	flag.Parse()
 	if *partsAtOnce != 1 && *partsAtOnce != 4 {
@@ -82,6 +85,10 @@ func main() {
 		}
 		terms = string(b)
 	}
+	controller, err := outOfBand(*oobd, *oobdTokenFile)
+	if err != nil {
+		log.Fatal(err)
+	}
 	lc := server.ListenConfig{Addr: *listen, Socket: *socket}
 	if err := lc.Check(); err != nil {
 		log.Fatal(err)
@@ -111,7 +118,7 @@ func main() {
 	// ./volunteer downloads the lab-agent built alongside labd.
 	exe, _ := os.Executable()
 	s, err := server.New(ctx, server.Config{DataDir: *data, FirstMaintainer: *maintainer, FirstMaintainerToken: tok,
-		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms, GitHub: app, Admins: admins,
+		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms, GitHub: app, Admins: admins, OOB: controller,
 		OMT: *omt, OMTSite: *omtSite, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
 		BootTimeout: *bootTimeout, OfflineAfter: *offlineAfter, AliveWindow: *aliveWindow, QuietGrace: *quietGrace, StageTimeout: *stageTimeout, WatchdogOpenTimeout: *watchdogOpenTimeout, RebootWarning: *rebootWarning, NtfyURL: *ntfy, NotifyCmd: *notifyCmd,
 		BuilderToken: strings.TrimSpace(string(btok)), ArtifactBudget: *artifactGB << 30, Transfers: server.Transfers{AtOnce: *partsAtOnce},
@@ -156,6 +163,27 @@ func main() {
 	if err := server.Serve(hs, lns...); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+// outOfBand is labd's side of the Out-of-band controller. A token file that
+// is not there yet is no error: the mini's set-up makes it, and labd reads it
+// when it sends a request. One that others can read stops labd.
+func outOfBand(addr, tokenFile string) (*oob.Client, error) {
+	if tokenFile == "" {
+		return nil, nil
+	}
+	c, err := oob.NewClient(addr, tokenFile)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Lstat(tokenFile); os.IsNotExist(err) {
+		log.Printf("the Out-of-band controller's token is not at %s yet: no Hard reset until the mini's set-up makes it", tokenFile)
+		return c, nil
+	}
+	if _, err := oob.ReadToken(tokenFile); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func envOr(key, def string) string {

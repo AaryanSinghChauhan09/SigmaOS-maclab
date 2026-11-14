@@ -153,6 +153,10 @@ func TestLabdsLaunchDaemon(t *testing.T) {
 		"--public-url": "https://" + shell(t, "LAB_HOST"),
 		"--alias":      "maclab.omarchy.org",
 		"--sign-in":    "/var/lab/secrets",
+		// labd's copy of the Out-of-band controller's token is the lab
+		// account's own file, and the controller is on this machine.
+		"--oobd":            "http://" + shell(t, "OOBD_LISTEN"),
+		"--oobd-token-file": "/var/lab/secrets/oobd.token",
 	} {
 		if got, ok := flags[flag]; !ok || got != want {
 			t.Errorf("%s is %q, want %q", flag, got, want)

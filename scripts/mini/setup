@@ -6,9 +6,11 @@
 # Makes the lab account and its folders, pins the release key, installs the
 # Homebrew formulae deploy/homebrew-formulae names and what deploy/pins
 # names, and copies the Homebrew tools into a folder only root can write,
-# which is where every daemon runs them from. Safe to run again: it changes
-# only what is not yet as it should be. It starts nothing: Deploy does.
-# Needs only what macOS has, and Homebrew for its own formulae.
+# which is where every daemon runs them from. Makes the Out-of-band
+# controller's token, installs the controller's LaunchDaemon file and, once
+# a build is Deployed, starts it. Safe to run again: it changes only what is
+# not yet as it should be. It never starts labd: Deploy does. Needs only
+# what macOS has, and Homebrew for its own formulae.
 #
 #   --dry-run           say what would change, and change nothing
 #   --release-key FILE  the allowed_signers file Deploy checks a bundle
@@ -21,7 +23,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
@@ -255,10 +257,97 @@ pins() {
   while read -r name version sum url <&3; do
     [[ -n $name ]] || continue
     [[ -n $url && ${#sum} == 64 ]] || fail "deploy/pins: the line of $name is not: name version sha256 url"
+    # The reset tool is built from its pinned source by the release
+    # workflow and arrives in the server bundle.
+    [[ $name != "$RESET_TOOL_NAME" ]] || continue
     have="$(awk -v n="$name" '$1 == n { print $2, $3 }' "$LAB_ROOT/installed-pins" 2>/dev/null || true)"
     [[ $have != "$version $sum" ]] || continue
     change "install $name $version, which deploy/pins names" install_pin "$name" "$version" "$sum" "$url"
   done 3< <(sed -e 's/#.*//' "$deploy/pins")
+}
+
+# The Out-of-band controller. Its token is made here and never shown: root's
+# copy where only root reads, labd's copy where only the lab account does.
+# Its LaunchDaemon runs it from the Deployed build, so it starts once there
+# is one, and again whenever its token or its file changed.
+
+TOKEN_NEW=0
+
+make_token() {
+  (umask 077 && openssl rand -hex 32 > "$OOBD_TOKEN.new")
+  if [[ "$(wc -c < "$OOBD_TOKEN.new" | tr -d ' ')" != 65 ]]; then
+    rm -f "$OOBD_TOKEN.new"
+    fail "openssl made no token"
+  fi
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$OOBD_TOKEN.new"
+  mv "$OOBD_TOKEN.new" "$OOBD_TOKEN"
+}
+
+seal_token() {
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$OOBD_TOKEN"
+  chmod 0600 "$OOBD_TOKEN"
+}
+
+copy_token() {
+  (umask 077 && cp "$OOBD_TOKEN" "$LABD_OOBD_TOKEN.new")
+  chown "$LAB_OWNER:$LAB_GROUP" "$LABD_OOBD_TOKEN.new"
+  mv "$LABD_OOBD_TOKEN.new" "$LABD_OOBD_TOKEN"
+}
+
+oobd_token() {
+  if [[ -d $LAB_SECRETS && ! -r $LAB_SECRETS ]]; then
+    say "$LAB_SECRETS is $ROOT_OWNER's: the Out-of-band controller's token is not looked at without sudo"
+    return 0
+  fi
+  folder "$LAB_SECRETS" "$ROOT_OWNER" "$ROOT_GROUP" 700
+  if [[ ! -s $OOBD_TOKEN ]]; then
+    change "make the Out-of-band controller's token at $OOBD_TOKEN, which only $ROOT_OWNER reads" make_token
+    TOKEN_NEW=1
+  elif [[ "$(looks "$OOBD_TOKEN")" != "$(shape - 600) $ROOT_OWNER:$ROOT_GROUP" ]]; then
+    change "give $OOBD_TOKEN back to $ROOT_OWNER alone" seal_token
+  fi
+  if (( TOKEN_NEW )) || ! cmp -s "$OOBD_TOKEN" "$LABD_OOBD_TOKEN" || [[ "$(looks "$LABD_OOBD_TOKEN")" != "$(shape - 600) $LAB_OWNER:$LAB_GROUP" ]]; then
+    change "give labd its copy of the token at $LABD_OOBD_TOKEN, which only $LAB_OWNER reads" copy_token
+  fi
+}
+
+oobd_loaded() { launchctl print "system/$OOBD_LABEL" >/dev/null 2>&1; }
+
+install_oobd() {
+  cp "$deploy/$OOBD_LABEL.plist" "$OOBD_PLIST"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$OOBD_PLIST"
+  chmod 0644 "$OOBD_PLIST"
+}
+
+start_oobd() {
+  local n
+  launchctl bootout "system/$OOBD_LABEL" 2>/dev/null || true
+  for n in 1 2 3 4 5 6 7 8 9 10; do
+    oobd_loaded || break
+    sleep 1
+  done
+  ! oobd_loaded || fail "$OOBD_LABEL did not stop ($n s)"
+  launchctl enable "system/$OOBD_LABEL" || true
+  launchctl bootstrap system "$OOBD_PLIST"
+}
+
+controller() {
+  local again=$TOKEN_NEW
+  [[ -f $deploy/$OOBD_LABEL.plist ]] || fail "no deploy/$OOBD_LABEL.plist beside scripts/"
+  if ! cmp -s "$deploy/$OOBD_LABEL.plist" "$OOBD_PLIST" || [[ "$(looks "$OOBD_PLIST")" != "$(shape - 644) $ROOT_OWNER:$ROOT_GROUP" ]]; then
+    change "install $OOBD_PLIST" install_oobd
+    again=1
+  fi
+  if [[ ! -x $LAB_CURRENT/bin/oobd ]]; then
+    say "the Out-of-band controller starts once a build is Deployed: run the set-up again after the first Deploy"
+    return 0
+  fi
+  [[ -x $RESET_TOOL ]] || say "the Deployed build has no reset tool ($RESET_TOOL): the controller answers status and refuses every reset"
+  if (( again )) && oobd_loaded; then
+    change "start $OOBD_LABEL again, for its new token or file" start_oobd
+  elif ! oobd_loaded; then
+    change "start $OOBD_LABEL, from $LAB_CURRENT/bin/oobd" start_oobd
+  fi
 }
 
 account
@@ -266,6 +355,8 @@ folders
 release_key
 homebrew
 pins
+oobd_token
+controller
 
 if (( CHANGES == 0 )); then
   say "nothing to change"

@@ -23,6 +23,7 @@ import (
 const (
 	bundleName = "lab-server-darwin-arm64.tar.gz"
 	labdLabel  = "org.omarchy-mac.lab.labd"
+	oobdLabel  = "com.maclab.oobd"
 	signer     = "release@omarchy-m-testing.org"
 	namespace  = "omarchy-m-test-release"
 )
@@ -96,9 +97,16 @@ type mini struct {
 	env  []string
 }
 
+// launchctl keeps one file for each loaded daemon: "loaded" for labd,
+// "loaded.<label>" for any other.
 const launchctlStub = `#!/bin/bash
 echo "launchctl $*" >> "$STUB_LOG"
+case "$1" in
+  bootstrap) label="$(basename "$3" .plist)" ;;
+  *) label="${2#system/}" ;;
+esac
 state="$STUB_STATE/loaded"
+[[ $label == org.omarchy-mac.lab.labd ]] || state="$STUB_STATE/loaded.$label"
 case "$1" in
   print) [[ -f $state ]] || exit 113; echo "state = running" ;;
   bootout) rm -f "$state" ;;
@@ -178,6 +186,7 @@ func newMini(t *testing.T) *mini {
 		info, _ := e.Info()
 		write(t, filepath.Join(m.tree, "scripts", "mini", e.Name()), string(b), info.Mode().Perm())
 	}
+	write(t, m.tree+"/deploy/"+oobdLabel+".plist", read(t, filepath.Join(repo(t), "deploy", oobdLabel+".plist")), 0o644)
 	write(t, m.tree+"/deploy/homebrew-formulae", "# none\n", 0o644)
 	write(t, m.tree+"/deploy/pins", "# none\n", 0o644)
 	m.env = append(os.Environ(),

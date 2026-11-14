@@ -1,5 +1,15 @@
 # What the mini runs that Homebrew does not bring, pinned by version and
-# checksum. scripts/mini/setup and the Maintenance run download each, compare
-# the checksum and only then install it; a Deploy touches none.
+# checksum.
 #
-#   name  version  sha256  url (https, a .pkg)
+#   name  version  sha256  url
+#
+# A line whose url is a .pkg (https) is installed on the mini:
+# scripts/mini/setup and the Maintenance run download it, compare the
+# checksum and only then install it; a Deploy touches none.
+#
+# macvdmtool is the reset tool, the lab's fork with a required, strictly
+# parsed --rid. Its version is the commit, its checksum the sha256 of
+# `git archive --format=tar <commit>`, its url the repository. The release
+# workflow's macOS job checks both and builds it (release/reset-tool.sh);
+# it reaches the mini in the server bundle, never by a download there.
+macvdmtool d57c4850b386fea7c0c7e406addde2703a5f9f29 2f84325a8066947137769b100bfd1f5c0cd9b506046b74a2e4214e9e52049701 https://github.com/omacom/macvdmtool
