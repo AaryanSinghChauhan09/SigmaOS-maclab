@@ -180,9 +180,22 @@ func (n *noticeLab) macTopic() string {
 }
 
 // hang submits a job whose Lab boot hangs for good: nothing on the Mac can
-// bring it back, so only a human can.
+// bring it back, so only a human can. It returns once the Mac has left for
+// that boot: until then labd is waiting for the Mac's answers, and a test
+// that steps the clock while a slow one is on its way has labd count the Mac
+// as lost and end the job before it hangs.
 func (n *noticeLab) hang() string {
-	return n.submitJob(api.JobSpec{Kernel: n.artifact("krel=7.2-hang behavior=hang")})
+	n.t.Helper()
+	id := n.submitJob(api.JobSpec{Kernel: n.artifact("krel=7.2-hang behavior=hang")})
+	n.waitJob(id, func(j *api.Job) bool {
+		for _, e := range j.Events {
+			if strings.HasPrefix(e.Msg, "one-shot armed") {
+				return true
+			}
+		}
+		return false
+	})
+	return id
 }
 
 // step moves the clock on in steps of by until cond holds, giving labd time
