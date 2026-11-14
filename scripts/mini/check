@@ -2,8 +2,22 @@
 # Read the mini's state against what the set-up leaves, and change nothing:
 #
 #   sudo scripts/mini/check
+#   sudo scripts/mini/check services
+#   sudo scripts/mini/check tool NAME
 #
-# One line for each thing looked at: ok, FAIL, or a note. It shows:
+# services and tool are what a Maintenance run asks after its restart.
+# services: every daemon of the lab that is installed is loaded, and runs
+# if launchd keeps it up; labd answers on this machine and, once the tunnel
+# is installed, through the Front door; the Builder asks labd for work and
+# the Out-of-band controller answers it. tool: one Homebrew tool of the
+# lab's list by its own check: cloudflared (the tunnel is connected),
+# tailscale (the node is on the tailnet under its tag), litestream (it runs
+# and its log gains no error while labd writes), restic (the house copy
+# lists a snapshot), signal-cli (one line through it, to "Agents" only).
+# Both wait a while for what has just started.
+#
+# With no argument, one line for each thing looked at: ok, FAIL, or a note.
+# It shows:
 #
 #   - each of the lab's daemons installed under the account the spec's table
 #     gives, its file naming no path under Homebrew and no environment, its
@@ -32,9 +46,15 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
-(( $# == 0 )) || usage
+mode="${1:-all}"
+case "$mode" in
+  all) (( $# == 0 )) || usage ;;
+  services) (( $# == 1 )) || usage ;;
+  tool) (( $# == 2 )) || usage ;;
+  *) usage ;;
+esac
 need_root
 [[ -f $deploy/homebrew-formulae && -f $deploy/pins ]] || fail "no deploy/ folder beside scripts/: run the check from the Deployed build or an unpacked bundle"
 
@@ -260,6 +280,8 @@ formulas() {
       bad "$name is not installed in $(shown "$BREW_PREFIX")"
     elif [[ -z $copied ]]; then
       bad "$name $installed is installed and is not in the copy the daemons run from"
+    elif [[ $installed != "$copied" && "$(awk -v n="$name" '$1 == n { print $2 }' "$LAB_TOOLS/current/HELD" 2>/dev/null)" == "$installed" ]]; then
+      note "$name: the daemons run $copied. A Maintenance run switched it back from $installed, which failed its check, and it stays until Homebrew has another version"
     elif [[ $installed != "$copied" ]]; then
       note "$name: the daemons run $copied and Homebrew now has $installed. Only a Maintenance run brings the copy up"
     else
@@ -434,6 +456,142 @@ secrets() {
     good "no process has a token, a key, a check's address or anything the lab keeps in its secrets as an argument"
   fi
 }
+
+# What a Maintenance run asks after its restart.
+
+answers() { [[ "$(curl -fsS --max-time 5 -A lab-check "$@" 2>/dev/null)" == ok ]]; }
+
+# services_now: a line for each service, FAIL for one that is not as it
+# should be. Returns how many failed.
+services_now() {
+  local pair label plist out failed=0 wrong
+  for pair in $LAB_DAEMONS; do
+    label="${pair%%:*}"
+    plist="$LAUNCHD_DIR/$label.plist"
+    if [[ ! -f $plist ]]; then
+      echo "note  $label is not installed on this machine yet"
+    elif ! out="$(launchctl print "system/$label" 2>/dev/null)"; then
+      echo "FAIL  $label is installed and not loaded"
+      failed=$((failed + 1))
+    elif grep -q '<key>KeepAlive</key>' "$plist" && [[ -z "$(awk '$1 == "pid" && $2 == "=" { print $3; exit }' <<<"$out")" ]]; then
+      echo "FAIL  $label is loaded and does not run: see its log"
+      failed=$((failed + 1))
+    else
+      echo "ok    $label"
+    fi
+  done
+  if answers "http://$LABD_LISTEN/healthz" && answers --unix-socket "$LABD_SOCKET" -H 'X-Forwarded-Proto: https' "http://$LAB_HOST/healthz"; then
+    echo "ok    labd answers on its loopback port and on its socket"
+  else
+    echo "FAIL  labd does not answer on its loopback port and its socket"
+    failed=$((failed + 1))
+  fi
+  if [[ ! -f $LAUNCHD_DIR/$CLOUDFLARED_LABEL.plist ]]; then
+    echo "note  the tunnel is not installed on this machine: the Front door was not asked"
+  elif answers "$FRONT_DOOR/healthz"; then
+    echo "ok    labd answers through the Front door"
+  else
+    echo "FAIL  labd does not answer through the Front door ($FRONT_DOOR/healthz)"
+    failed=$((failed + 1))
+  fi
+  wrong="$(parts_bad)"
+  if [[ -n $wrong ]]; then
+    while read -r out; do
+      echo "FAIL  $out"
+      failed=$((failed + 1))
+    done <<<"$wrong"
+  else
+    echo "ok    the Builder and the Out-of-band controller are as labd expects"
+  fi
+  return "$failed"
+}
+
+services() {
+  local n out
+  for (( n = ${LAB_SERVICE_TRIES:-120}; n > 0; n-- )); do
+    if out="$(services_now)"; then
+      echo "$out"
+      say "every service is up"
+      exit 0
+    fi
+    (( n == 1 )) || sleep 1
+  done
+  echo "$out"
+  fail "$(grep -c '^FAIL' <<<"$out") services are not as they should be"
+}
+
+# tool_wrong NAME: why that tool fails its own check, or nothing.
+tool_wrong() {
+  local state before after dir status
+  case "$1" in
+    cloudflared)
+      loaded "$CLOUDFLARED_LABEL" || { echo "$CLOUDFLARED_LABEL is not loaded"; return; }
+      curl -fsS -o /dev/null --max-time 5 "$TUNNEL_READY" 2>/dev/null || echo "the tunnel holds no connection to Cloudflare (cloudflared's own /ready)"
+      ;;
+    tailscale)
+      [[ -x $TAILSCALE ]] || { echo "no tailscale in the copy of the Homebrew tools"; return; }
+      state="$("$TAILSCALE" --socket="$TAILSCALED_SOCKET" status --json 2>/dev/null |
+        jq -r --arg tag "$TAILNET_TAG" '[.BackendState // "", (if ((.Self.Tags // []) | index($tag)) != null then "yes" else "no" end)] | join(" ")' 2>/dev/null || true)"
+      case "$state" in
+        "Running yes") ;;
+        Running\ *) echo "the node is on the tailnet without $TAILNET_TAG" ;;
+        "") echo "tailscaled does not answer" ;;
+        *) echo "the node is not on the tailnet (${state%% *})" ;;
+      esac
+      ;;
+    litestream)
+      state="$(launchctl print "system/$LITESTREAM_LABEL" 2>/dev/null | awk '$1 == "state" && $2 == "=" { print $3; exit }')"
+      [[ $state == running ]] || { echo "Litestream does not run (launchd: ${state:-not loaded})"; return; }
+      # labd writes at least once a minute: a Litestream that cannot send
+      # what was written says so in its log.
+      before="$(as_lab grep -c 'level=ERROR' "$LAB_HOME/log/litestream.log" 2>/dev/null || true)"
+      sleep "${LAB_LITESTREAM_WAIT:-70}"
+      after="$(as_lab grep -c 'level=ERROR' "$LAB_HOME/log/litestream.log" 2>/dev/null || true)"
+      [[ ${after:-0} == "${before:-0}" ]] || echo "Litestream's log gained $(( ${after:-0} - ${before:-0} )) errors in ${LAB_LITESTREAM_WAIT:-70} s: it is not replicating"
+      ;;
+    restic)
+      [[ -x $RESTIC ]] || { echo "no restic in the copy of the Homebrew tools"; return; }
+      status="$(as_lab "$here/backup" restic house snapshots --latest 1 --json 2>/dev/null | jq -r 'length' 2>/dev/null || true)"
+      [[ $status =~ ^[1-9][0-9]*$ ]] || echo "restic lists no snapshot of the house copy"
+      ;;
+    signal-cli)
+      loaded "$SIGNAL_LABEL" || { echo "$SIGNAL_LABEL is not loaded"; return; }
+      if ! as_lab test -s "$LAB_HOME/secrets/signal-agents-group"; then
+        return
+      fi
+      [[ -x $LAB_CURRENT/bin/labd ]] || { echo "no build is Deployed: the line is sent by labd's own sender"; return; }
+      # One line to "Agents" alone: labd's own test line, sent with a folder
+      # that holds that group's id and not the Lab group's.
+      # shellcheck disable=SC2016
+      as_lab /bin/sh -c 'dir="$(mktemp -d)" && cp "$1/signal-agents-group" "$dir/" && "$2" --signal-socket "$3" --signal "$dir" --signal-test >/dev/null 2>&1; status=$?; rm -rf "$dir"; exit "$status"' \
+        line "$LAB_HOME/secrets" "$LAB_CURRENT/bin/labd" "$SIGNAL_SOCKET" || echo "a line through signal-cli to \"Agents\" was not sent"
+      ;;
+    *) echo "$1 is no tool of the lab's Homebrew list with a check of its own" ;;
+  esac
+}
+
+tool() {
+  local n why=""
+  formulae | sed 's|.*/||' | grep -qx "$1" || fail "$1 is not on the lab's Homebrew list (deploy/homebrew-formulae)"
+  for (( n = ${LAB_TOOL_TRIES:-60}; n > 0; n-- )); do
+    why="$(tool_wrong "$1")"
+    if [[ -z $why ]]; then
+      if [[ $1 == signal-cli ]] && ! as_lab test -s "$LAB_HOME/secrets/signal-agents-group"; then
+        say "signal-cli: its daemon is loaded; \"Agents\" has no group id yet, so no line was sent"
+      else
+        say "$1 passes its check"
+      fi
+      exit 0
+    fi
+    (( n == 1 )) || sleep 1
+  done
+  fail "$1 fails its check: $why"
+}
+
+case "$mode" in
+  services) services ;;
+  tool) tool "$2" ;;
+esac
 
 daemons
 foreign

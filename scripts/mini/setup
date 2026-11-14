@@ -379,6 +379,7 @@ brew_as_owner() {
 
 KEG_NAMES=()
 KEG_PATHS=()
+KEGS_HELD=""
 TOOLS_COPIED=0
 
 # whole NEW: stop, and drop the copy being made, unless nothing in it leads
@@ -407,6 +408,7 @@ new_copy() {
   done
   whole "$new"
   printf '%s' "$1" > "$new/VERSIONS"
+  [[ -z $KEGS_HELD ]] || printf '%s' "$KEGS_HELD" > "$new/HELD"
   chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$new"
   chmod -R ug-s,go-w "$new"
   chmod 0755 "$new"
@@ -422,8 +424,12 @@ new_copy() {
   done
 }
 
+# A tool whose new version failed its check in a Maintenance run was
+# switched back there, and the copy names that version in HELD. While
+# Homebrew still has that version, the copy keeps the one it runs.
 copy_tools() {
-  local names name keg manifest=""
+  local names name keg base version held manifest=""
+  KEGS_HELD=""
   names="$({ printf '%s\n' "$@"; for name in "$@"; do brew_as_owner deps "$name" || fail "brew could not say what $name needs to run"; done; } | sort -u)"
   for name in $names; do
     if ! keg="$(cd "$(brew_as_owner --prefix "$name")" 2>/dev/null && pwd -P)"; then
@@ -433,9 +439,17 @@ copy_tools() {
       return 0
     fi
     # A formula of a tap is named tap/formula; its copy is the formula's name.
-    KEG_NAMES+=("${name##*/}")
+    base="${name##*/}"
+    version="$(basename "$keg")"
+    held="$(awk -v n="$base" '$1 == n { print $2 }' "$LAB_TOOLS/current/HELD" 2>/dev/null || true)"
+    if [[ -n $held && $held == "$version" && -d $LAB_TOOLS/current/$base ]]; then
+      keg="$(cd "$LAB_TOOLS/current/$base" && pwd -P)"
+      version="$(awk -v n="$base" '$1 == n { print $2 }' "$LAB_TOOLS/current/VERSIONS")"
+      KEGS_HELD+="$base $held"$'\n'
+    fi
+    KEG_NAMES+=("$base")
     KEG_PATHS+=("$keg")
-    manifest+="${name##*/} $(basename "$keg")"$'\n'
+    manifest+="$base $version"$'\n'
   done
   if [[ -f $LAB_TOOLS/current/VERSIONS && "$(<"$LAB_TOOLS/current/VERSIONS")"$'\n' == "$manifest" ]]; then return 0; fi
   TOOLS_COPIED=1

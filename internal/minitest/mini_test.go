@@ -168,6 +168,27 @@ case "$1" in
       # tailscale's keg holds the command and the daemon; the set-up asks the command.
       [[ $f != tailscale ]] || { cp "$STUB_TAILSCALE" "$prefix/Cellar/$f/1.0/bin/tailscale"; printf '#!/bin/sh\n# tailscaled 1.0\n' > "$prefix/Cellar/$f/1.0/bin/tailscaled"; chmod 0775 "$prefix/Cellar/$f/1.0/bin/tailscaled"; }
     done ;;
+  update) [[ ! -f $prefix/update.fails ]] || exit 1 ;;
+  # A Maintenance run's upgrade: a formula with a file newer/<formula> gets
+  # the version that file names, and the program newer/<formula>.bin if any.
+  upgrade)
+    [[ ! -f $prefix/upgrade.fails ]] || { echo "Error: no bottle" >&2; exit 1; }
+    shift
+    for f in "$@"; do
+      f="${f##*/}"
+      [[ -f $prefix/newer/$f ]] || continue
+      v="$(<"$prefix/newer/$f")" old="$(ls "$prefix/Cellar/$f" | head -n 1)"
+      [[ $v != "$old" ]] || continue
+      cp -Rp "$prefix/Cellar/$f/$old" "$prefix/Cellar/$f/$v"
+      chmod -R u+w "$prefix/Cellar/$f"
+      if [[ -f $prefix/newer/$f.bin ]]; then
+        cat "$prefix/newer/$f.bin" > "$prefix/Cellar/$f/$v/bin/$f"
+      elif [[ $f != tailscale ]]; then
+        printf '#!/bin/sh\necho %s %s\n' "$f" "$v" > "$prefix/Cellar/$f/$v/bin/$f"
+      fi
+      rm -rf "$prefix/Cellar/$f/$old"
+      ln -sfn "../Cellar/$f/$v" "$prefix/opt/$f"
+    done ;;
   *) echo "brew $1: not expected of the set-up" >&2; exit 1 ;;
 esac
 `

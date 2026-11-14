@@ -1,0 +1,431 @@
+#!/bin/bash
+# The Maintenance run on the mini: tools, container and macOS brought up to
+# date, and a restart with no Unlock. Started by the owner, from the
+# Deployed build:
+#
+#   sudo /usr/local/lab/current/scripts/mini/maintenance [--dry-run] [--wait MINUTES]
+#                                [--major] [--deploy vX.Y.Z[-rc.N]] [--from URL]
+#   sudo /usr/local/lab/current/scripts/mini/maintenance --after-restart
+#
+# Before the restart, in this order:
+#
+#   1. says so in "Agents" and drains jobs;
+#   2. upgrades the tools on the lab's Homebrew list (deploy/homebrew-formulae)
+#      and nothing else, as the account /opt/homebrew belongs to, never root;
+#   3. runs the Deployed build's set-up, which installs what the build pins
+#      (container; the reset tool came with the build), copies the upgraded
+#      tools into a new folder only root can write, keeps the copy it
+#      replaces, and starts each daemon from the new copy;
+#   4. installs the macOS updates Software Update lists, with no restart of
+#      its own. A major macOS is left alone unless --major is given;
+#   5. restarts the mini with fdesetup authrestart, which asks for the
+#      account's name and password at this terminal: stay at it. Nothing
+#      keeps them.
+#
+# After the restart the second half runs by itself, from a LaunchDaemon the
+# first half leaves and the second removes (--after-restart runs it by hand):
+#
+#   6. verifies every service (scripts/mini/check services);
+#   7. checks each Homebrew tool by its own check (scripts/mini/check tool).
+#      A tool that fails after its upgrade is switched back: its daemon runs
+#      the version of the previous copy again, and it is checked again;
+#   8. Deploys the Lab release named with --deploy, or the latest one when it
+#      is newer than what runs, and then runs that build's set-up;
+#   9. checks each connected port with no reset (scripts/mini/ports);
+#  10. reports in "Agents". The report, with each tool's version before and
+#      after, is a file under /usr/local/lab/maintenance.
+#
+# Run it from the house's network or at the mini's own screen: tailscaled
+# starts again in step 3, and a session over the tailnet ends there. Needs
+# only what macOS has, and Homebrew for its own formulae.
+#
+#   --dry-run       say what the first half would do, and change nothing
+#   --wait MINUTES  how long to wait for running jobs to end (30)
+#   --major         install a major macOS too: only once container, the reset
+#                   tool and tailscaled are confirmed on it
+#   --deploy TAG    the Lab release to Deploy after the restart, a Release
+#                   candidate allowed; --from URL is where its two files are
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+deploy="$(cd "$here/../.." && pwd)/deploy"
+
+usage() { sed -n '2,49p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+after=0
+wait=30
+major=0
+tag=""
+from=""
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --after-restart) after=1 ;;
+    --major) major=1 ;;
+    --wait) [[ $# -ge 2 && $2 =~ ^[0-9]{1,4}$ ]] || usage; wait="$2"; shift ;;
+    --deploy) [[ $# -ge 2 ]] || usage; tag="$2"; shift ;;
+    --from) [[ $# -ge 2 ]] || usage; from="$2"; shift ;;
+    *) usage ;;
+  esac
+  shift
+done
+[[ -z $tag || $tag =~ $RELEASE_TAG ]] || fail "\"$tag\" is not a Lab release's tag: vX.Y.Z or vX.Y.Z-rc.N"
+[[ -z $from || -n $tag ]] || fail "--from says where the files of --deploy TAG are: name the version"
+[[ -z $from || $from =~ ^(https://|file:///)[A-Za-z0-9._~/:@%+-]*$ ]] || fail "$from is neither https:// nor file:///"
+(( DRY )) || need_root
+
+RELEASES_LATEST="https://api.github.com/repos/omacom/omarchy-maclab/releases/latest"
+[[ -z $SYSROOT ]] || RELEASES_LATEST="${LAB_RELEASES_LATEST:-$RELEASES_LATEST}"
+STATE="$MAINTENANCE/run"
+PLIST="$LAUNCHD_DIR/$MAINTENANCE_LABEL.plist"
+REPORT=""
+
+# note TEXT: a line of the report, which is also printed.
+note() {
+  say "$1"
+  [[ -z $REPORT ]] || printf '%s %s\n' "$(date -u +%H:%M:%SZ)" "$1" >> "$REPORT"
+}
+
+# into_report: what a step prints, printed here and kept in the report.
+into_report() {
+  if [[ -n $REPORT ]]; then tee -a "$REPORT"; else cat; fi
+}
+
+# Homebrew. brew runs as the account its prefix belongs to, never as root,
+# and upgrades the formulae it is given and nothing that leans on them.
+BREW_OWNER=""
+BREW_ENV=(HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1)
+
+brew_as_owner() {
+  if [[ "$(id -un)" == "$BREW_OWNER" ]]; then
+    (cd / && env "${BREW_ENV[@]}" "$BREW_PREFIX/bin/brew" "$@")
+  else
+    (cd / && sudo -u "$BREW_OWNER" -H env "${BREW_ENV[@]}" "$BREW_PREFIX/bin/brew" "$@")
+  fi
+}
+
+# versions: the tools of the copy the daemons run from, as "name version".
+versions() { cat "$LAB_TOOLS/current/VERSIONS" 2>/dev/null || true; }
+
+pinned_now() { awk '{ print $1, $2 }' "$LAB_ROOT/installed-pins" 2>/dev/null || true; }
+
+macos_now() { sys sw_vers -productVersion 2>/dev/null || echo unknown; }
+
+# daemon_of TOOL: the daemon that runs a Homebrew tool, or nothing: restic
+# is run by the nightly backup, at its time.
+daemon_of() {
+  case "$1" in
+    cloudflared) echo "$CLOUDFLARED_LABEL" ;;
+    tailscale) echo "$TAILSCALED_LABEL" ;;
+    litestream) echo "$LITESTREAM_LABEL" ;;
+    signal-cli) echo "$SIGNAL_LABEL" ;;
+  esac
+}
+
+# updates: what Software Update lists, as "major|label": major is 1 for a
+# macOS of a later major version than the one that runs.
+updates() {
+  local out now
+  now="$(macos_now)"
+  out="$(sys softwareupdate --list 2>&1)" || { echo "?|Software Update did not answer"; return 0; }
+  awk -v now="${now%%.*}" '
+    /^[[:space:]]*\* Label: / { label = $0; sub(/^[[:space:]]*\* Label: /, "", label); sub(/[[:space:]]+$/, "", label); next }
+    label != "" && /Title: / {
+      title = $0; sub(/^.*Title: /, "", title); sub(/,.*$/, "", title)
+      version = $0; sub(/^.*Version: /, "", version); sub(/[,.].*$/, "", version)
+      big = (title ~ /^macOS / && version ~ /^[0-9]+$/ && now ~ /^[0-9]+$/ && version + 0 > now + 0) ? 1 : 0
+      print big "|" label
+      label = ""
+    }
+    END { if (label != "") print "0|" label }' <<<"$out"
+}
+
+# ---- before the restart ----
+
+stopped_early() {
+  lift_drain
+  tell "Maintenance run on the mini stopped: $1. The mini was not restarted, and jobs start again."
+  fail "$1"
+}
+
+first_half() {
+  local list f before after pins_before line name old new labels=() big label skipped="" stamp
+  [[ -L $LAB_CURRENT ]] || fail "no build is Deployed: a Maintenance run installs what the Deployed build pins"
+  [[ $here -ef $LAB_CURRENT/scripts/mini ]] || fail "run the Deployed build's own: sudo /usr/local/lab/current/scripts/mini/maintenance. What runs after the restart is that one"
+  [[ -f $deploy/homebrew-formulae && -f $deploy/pins ]] || fail "the Deployed build has no deploy/ folder"
+  [[ ! -e $STATE ]] || fail "a Maintenance run waits for its second half: sudo /usr/local/lab/current/scripts/mini/maintenance --after-restart"
+  list="$(formulae)"
+  if [[ -n $list ]]; then
+    [[ -x $BREW_PREFIX/bin/brew ]] || fail "deploy/homebrew-formulae names tools, and there is no Homebrew at $BREW_PREFIX"
+    BREW_OWNER="$(owner_of "$BREW_PREFIX")"
+    [[ $BREW_OWNER != root ]] || fail "$BREW_PREFIX belongs to root: brew never runs as root"
+  fi
+  if (( DRY )); then
+    say "would tell \"Agents\" and drain jobs, waiting up to $wait minutes for those that run"
+    say "would upgrade, as ${BREW_OWNER:-nobody}, the tools of the lab's Homebrew list and nothing else: $(tr '\n' ' ' <<<"$list")"
+    say "would run $here/setup: what the Deployed build pins, a new copy of the tools that only $ROOT_OWNER can write with the one in use kept, each daemon started from the new copy"
+    while IFS='|' read -r big label; do
+      [[ -n $label ]] || continue
+      if [[ $big == "?" ]]; then
+        say "$label"
+      elif (( big && ! major )); then
+        say "would leave $label alone: a major macOS waits for --major"
+      else
+        say "would install $label, with no restart of its own"
+      fi
+    done < <(updates)
+    say "would restart the mini with fdesetup authrestart, which asks for the account's name and password"
+    say "after the restart, by itself: every service verified, each Homebrew tool by its own check and switched back to the previous copy if it fails after its upgrade, a Deploy when a newer Lab release exists, each port checked with no reset, the report in \"Agents\""
+    say "nothing was changed"
+    exit 0
+  fi
+  no_planted_link
+  [[ "$(sys fdesetup supportsauthrestart 2>/dev/null)" == true ]] || fail "this Mac cannot restart with no Unlock (fdesetup supportsauthrestart): nothing was changed"
+
+  mkdir -p "$MAINTENANCE"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$MAINTENANCE"
+  chmod 0700 "$MAINTENANCE"
+  stamp="$(date -u +%Y-%m-%dT%H%M%SZ)"
+  REPORT="$MAINTENANCE/report-$stamp.txt"
+  : > "$REPORT"
+  note "Maintenance run on the mini, started $stamp, on the build $(basename "$(readlink "$LAB_CURRENT")")"
+
+  tell "Maintenance run on the mini: started. Jobs are drained; the tools, container and macOS are brought up to date; then the mini restarts with no Unlock. The lab is Dark while it restarts."
+  if ! drain_jobs "$wait"; then
+    tell "Maintenance run on the mini did not go on: $STILL_RUNNING still ran after $wait minutes. Nothing was changed, and jobs start again."
+    fail "$STILL_RUNNING still ran after $wait minutes: cancel them (lab cancel) or run it later. Nothing was changed"
+  fi
+
+  before="$(versions)"
+  pins_before="$(pinned_now)"
+  note "macOS before: $(macos_now)"
+  note "pinned before: $(tr '\n' ';' <<<"$pins_before" | sed 's/;$//; s/;/; /g')"
+  note "tools before: $(tr '\n' ';' <<<"$before" | sed 's/;$//; s/;/; /g')"
+
+  if [[ -n $list ]]; then
+    note "upgrading the lab's Homebrew tools as $BREW_OWNER: $(tr '\n' ' ' <<<"$list")"
+    brew_as_owner update 2>&1 | into_report || stopped_early "Homebrew could not read what is new (brew update)"
+    # shellcheck disable=SC2086
+    brew_as_owner upgrade $list 2>&1 | into_report || stopped_early "Homebrew could not upgrade the lab's tools (brew upgrade)"
+  fi
+
+  note "running the set-up: the pins, the tools' new copy, each daemon started from it"
+  "$here/setup" 2>&1 | into_report || stopped_early "the set-up failed, so the tools' copy may be the one from before. Read what it said, put it right and start the run again"
+
+  after="$(versions)"
+  : > "$MAINTENANCE/upgraded"
+  while read -r name new; do
+    [[ -n $name ]] || continue
+    old="$(awk -v n="$name" '$1 == n { print $2 }' <<<"$before")"
+    if [[ -z $old ]]; then
+      note "tool $name: new at $new"
+    elif [[ $old != "$new" ]]; then
+      note "tool $name: $old -> $new"
+      echo "$name $old $new" >> "$MAINTENANCE/upgraded"
+    else
+      note "tool $name: $new, as before"
+    fi
+  done <<<"$after"
+  while read -r name new; do
+    [[ -n $name ]] || continue
+    old="$(awk -v n="$name" '$1 == n { print $2 }' <<<"$pins_before")"
+    if [[ ${old:-nothing} != "$new" ]]; then note "pinned $name: ${old:-nothing} -> $new"; else note "pinned $name: $new, as before"; fi
+  done <<<"$(pinned_now)"
+
+  while IFS='|' read -r big label; do
+    [[ -n $label ]] || continue
+    if [[ $big == "?" ]]; then
+      note "macOS: $label; nothing was installed"
+    elif (( big && ! major )); then
+      skipped+="${skipped:+; }$label"
+      note "macOS: $label is a major macOS and was left alone: it waits until container, the reset tool and tailscaled are confirmed on it (--major)"
+    else
+      labels+=("$label")
+    fi
+  done < <(updates)
+  if (( ${#labels[@]} )); then
+    note "macOS: installing ${labels[*]}, with no restart of its own"
+    sys softwareupdate --install "${labels[@]}" 2>&1 | into_report || note "macOS: Software Update did not install everything: see above. The run goes on"
+  else
+    note "macOS: Software Update lists nothing to install"
+  fi
+
+  # What the second half reads. Only root writes here.
+  {
+    echo "report $REPORT"
+    echo "deploy ${tag:--}"
+    echo "from ${from:--}"
+    echo "macos $(awk '$2 == "macOS" && $3 == "before:" { print $4 }' "$REPORT")"
+  } > "$STATE"
+  cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The second half of a Maintenance run: scripts/mini/maintenance writes
+     this file before it restarts the mini and removes it when it is done. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$MAINTENANCE_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/current/scripts/mini/maintenance</string>
+    <string>--after-restart</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/var/log/lab-maintenance.log</string>
+  <key>StandardErrorPath</key><string>/var/log/lab-maintenance.log</string>
+</dict>
+</plist>
+EOF
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$PLIST"
+  chmod 0644 "$PLIST"
+
+  tell "Maintenance run on the mini: restarting now, with no Unlock. The lab is Dark until it is back; the checks run by themselves then."
+  note "restarting with fdesetup authrestart: it asks for the account's name and password"
+  if ! sys fdesetup authrestart; then
+    note "fdesetup did not restart the mini"
+    fail "the mini was not restarted. Everything before the restart is done: run sudo fdesetup authrestart yourself, and the second half runs once the mini is back. Jobs wait until then"
+  fi
+  say "the mini restarts now. The second half runs by itself and reports in \"Agents\"; it writes to /var/log/lab-maintenance.log and to $REPORT"
+}
+
+# ---- after the restart ----
+
+FAILED=""
+failed() {
+  FAILED+="${FAILED:+; }$1"
+  note "FAILED: $1"
+}
+
+state() { awk -v k="$1" '$1 == k { sub(/^[^ ]+ /, ""); print; exit }' "$STATE"; }
+
+# back TOOL OLD NEW: the tool's folder in the copy the daemons run from is
+# the previous copy's again, and its daemon starts from it. The copy names
+# NEW in HELD, so that the set-up does not copy that version again.
+back() {
+  local name="$1" label cur prev
+  label="$(daemon_of "$name")"
+  cur="$(cd -P "$LAB_TOOLS/current" 2>/dev/null && pwd -P)" || return 1
+  prev="$(cd -P "$LAB_TOOLS/previous" 2>/dev/null && pwd -P)" || return 1
+  [[ -d $prev/$name && $cur != "$prev" ]] || return 1
+  if [[ -n $label ]] && loaded "$label"; then stopped "$label" || return 1; fi
+  rm -rf "${cur:?}/.$name.failed"
+  mv "$cur/$name" "$cur/.$name.failed"
+  cp -R "$prev/$name" "$cur/$name"
+  chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$cur/$name"
+  chmod -R ug-s,go-w "$cur/$name"
+  rm -rf "${cur:?}/.$name.failed"
+  awk -v n="$name" -v v="$2" '$1 == n { print n, v; next } { print }' "$cur/VERSIONS" > "$cur/VERSIONS.new"
+  mv -f "$cur/VERSIONS.new" "$cur/VERSIONS"
+  { grep -v "^$name " "$cur/HELD" 2>/dev/null || true; echo "$name $3"; } > "$cur/HELD.new"
+  mv -f "$cur/HELD.new" "$cur/HELD"
+  if [[ -n $label && -f $LAUNCHD_DIR/$label.plist ]]; then
+    launchctl enable "system/$label" || true
+    launchctl bootstrap system "$LAUNCHD_DIR/$label.plist" || return 1
+  fi
+}
+
+tools() {
+  local f name old new why
+  for f in $(formulae); do
+    name="${f##*/}"
+    if why="$("$here/check" tool "$name" 2>&1)"; then
+      note "tool $name: passes its check"
+      continue
+    fi
+    why="$(tail -n 1 <<<"$why" | sed 's/^check: [^ ]* fails its check: //')"
+    read -r _ old new <<<"$(grep "^$name " "$MAINTENANCE/upgraded" 2>/dev/null || true)"
+    if [[ -z $old ]]; then
+      failed "tool $name: $why. It was not upgraded in this run, so there is no version to switch back to"
+      continue
+    fi
+    note "tool $name: $why, after its upgrade from $old to $new: switching it back to $old, from the previous copy"
+    if ! back "$name" "$old" "$new"; then
+      failed "tool $name $new fails its check, and it could not be switched back to $old"
+    elif why="$("$here/check" tool "$name" 2>&1)"; then
+      failed "tool $name $new failed its check after the upgrade: it was switched back to $old from the previous copy, and $old passes"
+    else
+      failed "tool $name $new failed its check after the upgrade: it was switched back to $old from the previous copy, and $old fails as well ($(tail -n 1 <<<"$why" | sed 's/^check: [^ ]* fails its check: //'))"
+    fi
+  done
+}
+
+# newer A B: whether the Lab release A is newer than B. A Release candidate
+# is older than the release it is a candidate for.
+newer() {
+  local a="${1#v}" b="${2#v}" ar=99999 br=99999 i x y
+  if [[ $a == *-rc.* ]]; then ar="${a##*-rc.}"; a="${a%%-rc.*}"; fi
+  if [[ $b == *-rc.* ]]; then br="${b##*-rc.}"; b="${b%%-rc.*}"; fi
+  for i in 1 2 3; do
+    x="$(cut -d. -f"$i" <<<"$a")" y="$(cut -d. -f"$i" <<<"$b")"
+    (( 10#$x == 10#$y )) || { (( 10#$x > 10#$y )); return; }
+  done
+  (( 10#$ar > 10#$br ))
+}
+
+lab_release() {
+  local want runs where
+  want="$(state deploy)"
+  where="$(state from)"
+  runs="$(basename "$(readlink "$LAB_CURRENT")")"
+  if [[ $want == - ]]; then
+    want="$(curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' "$RELEASES_LATEST" 2>/dev/null | jq -r '.tag_name // ""' 2>/dev/null || true)"
+    if [[ ! $want =~ $RELEASE_TAG ]]; then
+      note "Lab release: the latest one could not be read from GitHub; $runs stays"
+      return 0
+    fi
+    if ! newer "$want" "$runs"; then
+      note "Lab release: $runs runs, and the latest is $want: nothing to Deploy"
+      return 0
+    fi
+  elif [[ $want == "$runs" ]]; then
+    note "Lab release: $want already runs"
+    return 0
+  fi
+  note "Lab release: Deploying $want over $runs"
+  if [[ $where == - ]]; then
+    "$here/deploy" "$want" 2>&1 | into_report || { failed "the Deploy of $want failed: $runs runs"; return 0; }
+  else
+    "$here/deploy" --from "$where" "$want" 2>&1 | into_report || { failed "the Deploy of $want failed: $runs runs"; return 0; }
+  fi
+  note "Lab release: $want is Deployed; running its set-up for what it pins"
+  "$LAB_CURRENT/scripts/mini/setup" 2>&1 | into_report || failed "the set-up of $want failed"
+}
+
+second_half() {
+  local n
+  [[ -f $STATE ]] || fail "no Maintenance run waits for its second half"
+  REPORT="$(state report)"
+  [[ $REPORT == "$MAINTENANCE"/report-*.txt && -f $REPORT && ! -L $REPORT ]] || fail "$STATE names no report of this folder"
+  mkdir "$MAINTENANCE/.second-half" 2>/dev/null || fail "the second half of the Maintenance run is running already ($MAINTENANCE/.second-half)"
+  trap 'rmdir "$MAINTENANCE/.second-half" 2>/dev/null || true' EXIT
+  note "the mini is back, macOS $(macos_now) (it was $(state macos))"
+
+  # labd tells "Agents" nothing before it runs.
+  for (( n = ${LAB_BACK_TRIES:-300}; n > 0; n-- )); do
+    [[ ! -S $OPS_SOCKET ]] || ! loaded "$LABD_LABEL" || break
+    sleep 1
+  done
+  tell "Maintenance run on the mini: back after the restart with no Unlock, on macOS $(macos_now). Checking every service and tool."
+
+  note "every service:"
+  "$here/check" services 2>&1 | into_report || failed "not every service is up (scripts/mini/check services)"
+  tools
+  lab_release
+  note "each port, with no reset:"
+  "$LAB_CURRENT/scripts/mini/ports" 2>&1 | into_report || failed "the check of the ports failed (scripts/mini/ports)"
+
+  rm -f "$STATE" "$MAINTENANCE/upgraded" "$PLIST"
+  if [[ -n $FAILED ]]; then
+    tell "Maintenance run on the mini ended with something wrong: $FAILED. The report is $REPORT on the mini."
+    fail "the Maintenance run ended with something wrong; the report is $REPORT"
+  fi
+  tell "Maintenance run on the mini: done. macOS $(macos_now); tools: $(versions | tr '\n' ';' | sed 's/;$//; s/;/, /g'). Every service and tool passed its check and the ports were checked with no reset. The report is $REPORT on the mini."
+}
+
+if (( after )); then
+  second_half
+else
+  first_half
+fi

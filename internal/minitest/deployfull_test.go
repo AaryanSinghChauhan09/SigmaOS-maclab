@@ -185,7 +185,11 @@ func TestDeployGoesThroughItsStepsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.sql("labd.db", "INSERT INTO seen VALUES('a job that ended')")
-	o.set(func(o *ops) { o.drain = []string{"1 1", "1 0", "0 0"}; o.lines = nil; o.parts = "builder ok\ncontroller ok\n" })
+	o.set(func(o *ops) {
+		o.drain = []string{"1 1", "1 0", "0 0"}
+		o.lines = nil
+		o.parts = "builder ok\ncontroller ok\n"
+	})
 	os.Remove(m.log)
 	asked := d.count()
 
