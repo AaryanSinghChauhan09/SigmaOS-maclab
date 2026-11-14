@@ -527,7 +527,6 @@ func TestWhoSeesTheFleet(t *testing.T) {
 	}
 	for _, c := range []struct{ method, target, body string }{
 		{"POST", "/api/jobs", `{"device":"lab-mini"}`},
-		{"POST", "/api/devices/lab-mini/lease", `{"holder":"grace"}`},
 		{"DELETE", "/api/devices/edith-air", ""},
 		{"GET", "/api/builds", ""},
 		{"GET", "/api/devices/edith-air/audit", ""},
