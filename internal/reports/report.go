@@ -25,6 +25,9 @@ type Report struct {
 	// report came, "" and 0 for nobody.
 	Handle    string
 	AccountID int64
+	// Verified is the verdict stamped when the report came: a Verified run,
+	// from a Mac signed in as an M team member then. Otherwise a Community run.
+	Verified bool
 
 	deletionTokenDigest string
 }
@@ -91,7 +94,7 @@ func newDeletionToken() string {
 
 type scanner interface{ Scan(...any) error }
 
-const reportColumns = `id, public_id, deletion_token_digest, schema_version, body, created_at, hidden_at, machine_id, handle, account_id`
+const reportColumns = `id, public_id, deletion_token_digest, schema_version, body, created_at, hidden_at, machine_id, handle, account_id, verified`
 
 func scanReport(row scanner) (*Report, error) {
 	var (
@@ -103,7 +106,7 @@ func scanReport(row scanner) (*Report, error) {
 		handle    sql.NullString
 		accountID sql.NullInt64
 	)
-	err := row.Scan(&r.ID, &r.PublicID, &r.deletionTokenDigest, &r.SchemaVersion, &body, &created, &hidden, &machine, &handle, &accountID)
+	err := row.Scan(&r.ID, &r.PublicID, &r.deletionTokenDigest, &r.SchemaVersion, &body, &created, &hidden, &machine, &handle, &accountID, &r.Verified)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoReport
 	}
