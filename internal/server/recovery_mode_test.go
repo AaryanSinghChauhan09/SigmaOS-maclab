@@ -293,6 +293,87 @@ func TestRecoveryTransactionRefusesForeignLeaseBeforeControllerUse(t *testing.T)
 	}
 }
 
+// The recovery policy outlasts the job, the Lease and a restart, so it is a
+// Maintainer's: an M team member's job under their own Lease sets none.
+func TestAnMTeamMembersJobSetsNoRecoveryPolicy(t *testing.T) {
+	l, c := countedModeLab(t, "mode-member")
+	grace := l.member("grace")
+	l.leaseAs(grace, 0)
+	before := c.counts()
+	code, _, body := l.submitAs(grace.Token, api.JobSpec{RecoveryMode: api.RecoveryNetworkOnly, Kernel: l.artifact("krel=mode-member behavior=ok")})
+	if code != http.StatusForbidden || !strings.Contains(body, "recovery_mode") || !strings.Contains(body, "Maintainer") {
+		t.Fatalf("an M team member's job with recovery_mode network-only: %d %s", code, body)
+	}
+	if jobs, _ := l.s.store.jobs(l.name, 100, true); len(jobs) != 0 {
+		t.Fatalf("the refused job was queued: %+v", jobs[0])
+	}
+	id := l.mustSubmitAs(grace, api.JobSpec{Kernel: l.artifact("krel=mode-member behavior=ok")})
+	l.expect(l.jobAPI(id, 60*time.Second), api.OutcomePass)
+	if d := l.s.dev(l.name).snapshot(); d.EffectiveRecoveryMode != "" || d.RecoveryTransaction != "" {
+		t.Fatalf("the Mac's recovery policy after an M team member's jobs: %q, transaction %q", d.EffectiveRecoveryMode, d.RecoveryTransaction)
+	}
+	if got := l.s.dev(l.name).noHardReset(); got != "" || c.counts() != before {
+		t.Fatalf("the Mac takes no Hard reset any more (%q), or one was sent (%d, was %d)", got, c.counts(), before)
+	}
+}
+
+// What a Maintainer's job or a Maintainer set, a Maintainer lifts: under
+// their own Lease on the idle Mac, which then takes a Hard reset again.
+func TestAMaintainerLiftsTheNetworkOnlyPolicy(t *testing.T) {
+	l, c := countedModeLab(t, "mode-lift")
+	grace := l.member("grace")
+	l.expect(l.run(api.JobSpec{RecoveryMode: api.RecoveryNetworkOnly, Kernel: l.artifact("krel=mode-lift behavior=ok")}), api.OutcomePass)
+	v := l.s.dev(l.name)
+	l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
+	if d := v.snapshot(); d.EffectiveRecoveryMode != api.RecoveryNetworkOnly || !strings.Contains(v.noHardReset(), "network-only") {
+		t.Fatalf("after a Maintainer's network-only job the policy is %q and a Hard reset %q", d.EffectiveRecoveryMode, v.noHardReset())
+	}
+	lift := func(token, holder string) (*http.Response, string) {
+		return l.as(token, "POST", "/api/devices/"+l.name+"/recovery-mode", api.RecoveryModeRequest{Mode: api.RecoveryHardReset, Holder: holder, Transaction: "lift-1"})
+	}
+	if r, body := lift(harnessToken, harnessMaintainer+"@laptop"); r.StatusCode != http.StatusConflict {
+		t.Fatalf("a Maintainer with no Lease lifting the policy: %s %s", r.Status, body)
+	}
+	l.leaseAs(grace, 0)
+	if r, body := lift(grace.Token, "grace@laptop"); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("an M team member lifting the policy under their Lease: %s %s", r.Status, body)
+	}
+	if r, body := l.as(grace.Token, "DELETE", "/api/devices/"+l.name+"/lease", nil); r.StatusCode != 200 {
+		t.Fatalf("grace releasing: %s %s", r.Status, body)
+	}
+	if d := v.snapshot(); d.EffectiveRecoveryMode != api.RecoveryNetworkOnly {
+		t.Fatalf("a refused request changed the policy to %q", d.EffectiveRecoveryMode)
+	}
+
+	l.leaseAs(harnessAda, 0)
+	r, body := lift(harnessToken, harnessMaintainer+"@laptop")
+	var got api.RecoveryModeSelection
+	if json.Unmarshal([]byte(body), &got); r.StatusCode != 200 || got.Mode != api.RecoveryHardReset || got.Device != l.name {
+		t.Fatalf("a Maintainer lifting the policy under their own Lease: %s %s", r.Status, body)
+	}
+	if d := v.snapshot(); d.EffectiveRecoveryMode != "" || d.RecoveryModeJob != "" || d.RecoveryTransaction != "" || d.RecoveryHolder != "" || v.noHardReset() != "" {
+		t.Fatalf("the lifted policy: %q, job %q, transaction %q, holder %q; a Hard reset: %q", d.EffectiveRecoveryMode, d.RecoveryModeJob, d.RecoveryTransaction, d.RecoveryHolder, v.noHardReset())
+	}
+	// It stays lifted across a restart, and a job that names no mode inherits none.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	again, err := New(ctx, l.s.cfg, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := again.dev(l.name).snapshot(); d.EffectiveRecoveryMode != "" {
+		t.Fatalf("after a restart the lifted policy is %q", d.EffectiveRecoveryMode)
+	}
+	cancel()
+	before := c.counts()
+	if r, body := l.as(harnessToken, "POST", "/api/devices/"+l.name+"/reset", nil); r.StatusCode != 200 || c.counts() != before+1 {
+		t.Fatalf("a Hard reset once the policy is lifted: %s %s (%d sent, was %d)", r.Status, body, c.counts(), before)
+	}
+	if _, code, err := l.s.Submit(api.JobSpec{Device: l.name, RecoveryMode: api.RecoveryHardReset, Kernel: l.artifact("krel=mode-lift behavior=ok")}); err == nil || code != 400 {
+		t.Fatalf("a job that carries the lifting mode: %d %v", code, err)
+	}
+}
+
 // byMaintainer is req as a Maintainer's, for a handler called past the
 // routes' own wrappers.
 func byMaintainer(req *http.Request) *http.Request {

@@ -7,6 +7,10 @@ const (
 	// RecoverySerialAssisted is a mode of the old lab, kept as a name so it
 	// can be refused: see NoSerialConsole.
 	RecoverySerialAssisted = "serial-assisted"
+	// RecoveryHardReset is asked of the Maintainers' route only, and lifts
+	// a network-only policy: the Mac takes a Hard reset again. No job
+	// carries it.
+	RecoveryHardReset = "hard-reset"
 )
 
 // NoSerialConsole is what the lab answers wherever the serial console is

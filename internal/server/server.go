@@ -1623,8 +1623,8 @@ func validateRequiredWatchdog(tests []api.TestSpec, d api.Device) error {
 // whose source may come with the kernel already built from it, and notes go
 // in the job's events after the first. The job records what lab gate needs
 // to know about its Mac as it is now. An M team member's job needs their
-// own Lease on the Mac, and is never a baseline or a build: those stay with
-// Maintainers.
+// own Lease on the Mac, and is never a baseline or a build, nor sets the
+// Mac's recovery policy: those stay with Maintainers.
 func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...string) (*api.Job, int, error) {
 	maintainer := by.Handle
 	v := s.dev(spec.Device)
@@ -1643,6 +1643,9 @@ func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...st
 			return nil, 403, errors.New("a baseline is a Maintainer's to run")
 		case spec.Source != "" && spec.Kernel == "":
 			return nil, 403, errors.New("building a kernel from source is a Maintainer's until M team builds open: boot a kernel that is already built")
+		case spec.RecoveryMode != "" || spec.RecoveryTransaction != "":
+			// The policy stays on the Mac past the job and the Lease.
+			return nil, 403, errors.New("a Mac's recovery policy is a Maintainer's to set: leave recovery_mode out")
 		}
 	}
 	v.recoveryMu.Lock()

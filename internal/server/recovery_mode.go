@@ -45,9 +45,9 @@ func (v *dev) resetOOB(ctx context.Context) (port string, err error) {
 }
 
 // This policy survives a failed return and controller restart. An empty legacy
-// request inherits a network hold, and nothing lifts one: the serial-assisted
-// mode, which did, is refused (see errNoConsole). Nothing clears or rewrites
-// Device.OOB.
+// request inherits a network hold, and no job lifts one: the serial-assisted
+// mode, which did, is refused (see errNoConsole). A Maintainer lifts it (see
+// liftRecoveryHold). Nothing clears or rewrites Device.OOB.
 func (s *Server) beginJobRecoveryMode(ctx context.Context, v *dev, j *api.Job) error {
 	v.recoveryMu.Lock()
 	defer v.recoveryMu.Unlock()
@@ -119,6 +119,21 @@ func (s *Server) transitionRecoveryMode(ctx context.Context, v *dev, requested, 
 	return nil
 }
 
+// liftRecoveryHold ends v's network-only policy and the transaction that
+// selected it: the Mac takes a Hard reset again. Caller holds v.recoveryMu.
+func (s *Server) liftRecoveryHold(v *dev) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	mode, transaction, holder, job := v.d.EffectiveRecoveryMode, v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob
+	v.d.EffectiveRecoveryMode, v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob = "", "", "", ""
+	if err := s.store.saveDevice(&v.d, v.secretHash); err != nil {
+		v.d.EffectiveRecoveryMode, v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob = mode, transaction, holder, job
+		return fmt.Errorf("persist the lifted recovery policy: %w", err)
+	}
+	v.publishLocked()
+	return nil
+}
+
 var recoveryTransactionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$`)
 
 func (s *Server) hRecoveryMode(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +161,8 @@ func (s *Server) hRecoveryMode(w http.ResponseWriter, r *http.Request) {
 		s.hNoConsole(w, r)
 		return
 	}
-	if q.Mode == "" || !api.ValidRecoveryMode(q.Mode) || q.Holder == "" || !recoveryTransactionID.MatchString(q.Transaction) {
+	lifts := q.Mode == api.RecoveryHardReset
+	if q.Mode == "" || !(lifts || api.ValidRecoveryMode(q.Mode)) || q.Holder == "" || !recoveryTransactionID.MatchString(q.Transaction) {
 		httpErr(w, 400, "explicit mode, holder and bounded transaction required")
 		return
 	}
@@ -157,7 +173,11 @@ func (s *Server) hRecoveryMode(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 409, "own lease covering transition and idle device required")
 		return
 	}
-	if e := s.transitionRecoveryMode(r.Context(), v, q.Mode, q.Transaction, q.Holder, ""); e != nil {
+	transition := func() error { return s.transitionRecoveryMode(r.Context(), v, q.Mode, q.Transaction, q.Holder, "") }
+	if lifts {
+		transition = func() error { return s.liftRecoveryHold(v) }
+	}
+	if e := transition(); e != nil {
 		httpErr(w, 409, "recovery policy transition failed; inspect current state before retry: %v", e)
 		return
 	}
