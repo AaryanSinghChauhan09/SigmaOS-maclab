@@ -244,7 +244,7 @@ formulae() { sed -e 's/#.*//' "$deploy/homebrew-formulae" | awk 'NF { print $1 }
 # wifi_device: the Wi-Fi port's device, or nothing on a Mac with none.
 # (awk reads to the end: a tool cut off in the middle of its answer would
 # fail the pipe.)
-wifi_device() { sys networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: Wi-Fi/ { getline; if (!seen) print $2; seen = 1 }'; }
+wifi_device() { sys networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: Wi-Fi/ { getline; if (!seen) print $2; seen = 1 }' || true; }
 
 # wired_address: the address of the first wired port that has one.
 wired_address() {
@@ -263,11 +263,11 @@ wired_address() {
 # reads its configuration; SSHD_WANT is keys only. Empty without root.
 SSHD_WANT="kbdinteractiveauthentication no passwordauthentication no"
 sshd_says() {
-  sys sshd -T 2>/dev/null | awk '$1 == "passwordauthentication" || $1 == "kbdinteractiveauthentication" { print $1, $2 }' | sort | tr '\n' ' ' | sed 's/ $//'
+  sys sshd -T 2>/dev/null | awk '$1 == "passwordauthentication" || $1 == "kbdinteractiveauthentication" { print $1, $2 }' | sort | tr '\n' ' ' | sed 's/ $//' || true
 }
 
 # power_value KEY: one of pmset's settings in use.
-power_value() { sys pmset -g 2>/dev/null | awk -v key="$1" '$1 == key && !seen { print $2; seen = 1 }'; }
+power_value() { sys pmset -g 2>/dev/null | awk -v key="$1" '$1 == key && !seen { print $2; seen = 1 }' || true; }
 
 # loaded LABEL: whether launchd has that daemon.
 loaded() { launchctl print "system/$1" >/dev/null 2>&1; }

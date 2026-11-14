@@ -1070,6 +1070,8 @@ keys_only() {
   fi
 }
 
+NOT_KEYS_ONLY=""
+
 remote_login() {
   local admin home keys says
   admin="${SUDO_USER:-$(id -un)}"
@@ -1085,8 +1087,10 @@ remote_login() {
   fi
   # Without root sshd says nothing about itself.
   says="$(sshd_says)"
+  # Said at once and failed at the end: what follows this step is still done.
   if (( ! DRY )) && [[ $says != "$SSHD_WANT" ]]; then
-    fail "SSH still takes a password after Unlock (sshd -T: ${says:-no answer}), though $SSHD_KEYS_ONLY says otherwise: a file sshd reads before it, in $(dirname "$SSHD_KEYS_ONLY") or sshd_config itself, sets it. Put that right and run the set-up again"
+    NOT_KEYS_ONLY="SSH still takes a password after Unlock (sshd -T: ${says:-no answer}), though $SSHD_KEYS_ONLY says otherwise: a file sshd reads before it, in $(dirname "$SSHD_KEYS_ONLY") or sshd_config itself, sets it. Put that right and run the set-up again"
+    say "$NOT_KEYS_ONLY"
   fi
 }
 
@@ -1135,7 +1139,9 @@ remote_login
 updates
 power
 
-if (( CHANGES == 0 )); then
+if [[ -n $NOT_KEYS_ONLY ]]; then
+  fail "$CHANGES changes made, and one thing is not as it should be: $NOT_KEYS_ONLY"
+elif (( CHANGES == 0 )); then
   say "nothing to change"
 elif (( DRY )); then
   say "$CHANGES changes would be made; nothing was changed"

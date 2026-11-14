@@ -295,9 +295,14 @@ func TestSetupMakesSSHKeysOnlyOnceTheOwnerHasAKey(t *testing.T) {
 
 	// A file read before the lab's that says otherwise wins, and is named.
 	write(t, m.path("etc/ssh/sshd_config.d/000-earlier.conf"), "PasswordAuthentication yes\n", 0o644)
+	m.set("pmset.sleep", "10\n")
 	out = m.refused("setup")
 	if !strings.Contains(out, "still takes a password") || !strings.Contains(out, "sshd_config.d") {
 		t.Errorf("an earlier file that allows passwords was not noticed:\n%s", out)
+	}
+	// The steps after it are done all the same.
+	if m.is("pmset.sleep") != "0" {
+		t.Errorf("the run stopped at sshd and left the rest undone:\n%s", out)
 	}
 }
 
