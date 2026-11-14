@@ -60,13 +60,14 @@ type personRow struct {
 	BadgeClass string
 	Macs       []string
 	Leases     []string
+	Seen       string
+	Path       string // opens the row, or shuts it when it is open
+	Open       *personOpen
+
 	// SignedIn is how many Macs are signed in as the person, and Counted
 	// whether their runs are Verified runs: the person is on the M team.
 	SignedIn int
 	Counted  bool
-	Seen     string
-	Path     string // opens the row, or shuts it when it is open
-	Open     *personOpen
 }
 
 // personOpen is the inside of an opened row.

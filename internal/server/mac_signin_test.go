@@ -389,6 +389,10 @@ func TestABlockEndsMacSignInsAndABlockedPersonGetsTheSentence(t *testing.T) {
 	if n := len(l.macSignIns(edithID)); n != 0 {
 		t.Errorf("%d Macs signed in", n)
 	}
+	// Tried on a Mac someone else is signed in on, it changes nothing of theirs.
+	if a := l.macSignIn("g", edithID); a.status != http.StatusForbidden || len(l.macSignIns(graceID)) != 1 {
+		t.Errorf("a Blocked person's sign-in on grace's Mac: %d, and grace has %d Macs signed in", a.status, len(l.macSignIns(graceID)))
+	}
 	up := l.macUpload("a", "m2-max-converged")
 	if report := l.storedReport(up); up.body["tester"] != false || report.Verified || report.Handle != "" || report.AccountID != 0 {
 		t.Errorf("a Blocked person's Mac uploaded: tester %v, stored %+v", up.body["tester"], report)
