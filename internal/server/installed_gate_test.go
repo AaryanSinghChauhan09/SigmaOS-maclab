@@ -183,6 +183,9 @@ func TestInstalledGateEndToEnd(t *testing.T) {
 		d := l.s.dev(device).snapshot()
 		return string(l.sim.InstalledObs("freeze", "", d.BootID, d.Kernel, "")), true
 	}
+	if resp, body := l.post("/api/devices/"+device+"/lease", api.LeaseRequest{Holder: harnessMaintainer + "@laptop"}); resp.StatusCode != 200 {
+		t.Fatalf("the Lease freeze-entry is read under: %s %s", resp.Status, body)
+	}
 	if resp, body := l.post("/api/installed/"+release+"/entry/"+device, map[string]any{}); resp.StatusCode != 200 {
 		t.Fatalf("freeze entry: %s %s", resp.Status, body)
 	}

@@ -321,7 +321,7 @@ func (s *Server) fillRelease(r *api.Release) error {
 			if m.PassedRun == "" && passedRun(j) {
 				m.PassedRun = j.ID
 			}
-			if r.StateAt != nil && r.State == api.ReleaseQualified && failedRun(j) && j.Updated.After(*r.StateAt) {
+			if r.StateAt != nil && failedRun(j) && j.Updated.After(*r.StateAt) {
 				r.Warnings = append(r.Warnings, fmt.Sprintf("Installed run %s on %s failed after this verdict (%s)", j.ID, m.Mac, j.Outcome))
 			}
 		}
