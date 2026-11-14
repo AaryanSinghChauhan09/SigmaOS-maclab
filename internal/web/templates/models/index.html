@@ -1,0 +1,46 @@
+{{define "head"}}{{template "results_scripts" .}}{{end}}
+
+{{define "main"}}<h1>Models</h1>
+<p class="subtitle">Every Apple Silicon Mac, how far Omarchy has brought it up, and which still need testing.</p>
+{{with .Data}}
+<section class="card" id="lineup">
+<h2 class="card-title">bring-up</h2>
+<p class="dim">{{.TestedWords}} of {{.Boards}} tested. Untested: {{.Untested}}.</p>
+<div class="matrix-scroll">
+<table class="list lineup-table">
+<thead><tr><th>Mac</th><th>GPU</th><th>Native display</th><th>Testing</th></tr></thead>
+<tbody>
+{{range .Lineup}}<tr class="lineup-row" data-chip="{{.Chip}}" data-boards="{{.Boards}}" data-tested="{{.Tested}}">
+<td><strong>{{.Name}}</strong> <span class="dim">({{.BoardNames}})</span><br><span class="dim">{{.ChipName}}</span></td>
+{{range .Statuses}}<td class="lineup-status" data-area="{{.Area}}" data-state="{{.State}}" data-source="{{.Source}}"{{if .Title}} title="{{.Title}}"{{end}}>
+<span class="badge badge-{{.Badge.State}}">{{.Badge.Label}}</span>{{if .Unconfirmed}} (unconfirmed){{end}}
+{{if .Note}}<span class="dim lineup-note">{{.Note}}</span>
+{{end}}{{range .Boards}}<div class="lineup-tested" data-board="{{.Board}}" data-state="{{.State}}" title="{{.Title}}">{{.Name}}: <span class="badge badge-{{.Badge.State}}">{{.Badge.Label}}</span>{{if .Unconfirmed}} (unconfirmed){{end}}</div>
+{{end}}</td>
+{{end}}<td class="lineup-testing">
+{{range .Testing}}<div data-board="{{.Board}}">{{if .Tested}}<a href="{{.Href}}">{{.Name}}</a>: {{.Runs}}{{if .Verified}}, {{.Verified}} verified{{end}}, <span class="dim">last {{.Last}}</span>{{else}}{{.Name}}: <span class="badge badge-not-tested">needs testing</span>{{end}}</div>
+{{end}}</td>
+</tr>
+{{end}}</tbody>
+</table>
+</div>
+<p class="legend-note">GPU and native display: what uploaded runs on that Mac found, each machine's latest run. Verified runs count on their own; Community runs are unconfirmed until {{.Agreement}} machines agree. A Mac nobody has tested shows what the feature catalogue expects from Asahi and Aurora.</p>
+</section>
+
+<section class="card">
+<h2 class="card-title">macs with reports</h2>
+{{if .Models}}<table class="list">
+<thead><tr><th>Mac</th><th>Chip</th><th>Board</th><th>Stacks / versions</th><th>Reports</th></tr></thead>
+<tbody>
+{{range .Models}}<tr class="model-row" id="model-{{.Board}}">
+<td><a href="{{.Href}}">{{.Name}}</a></td>
+<td>{{.Chip}}</td>
+<td class="dim">{{.Board}} · {{.SoC}}</td>
+<td>{{.Labels}}</td>
+<td>{{.Reports}}</td>
+</tr>
+{{end}}</tbody>
+</table>
+{{else}}<p class="dim">No reports yet.</p>
+{{end}}</section>
+{{end}}{{end}}

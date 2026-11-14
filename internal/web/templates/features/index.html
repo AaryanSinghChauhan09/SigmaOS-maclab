@@ -1,0 +1,22 @@
+{{define "head"}}{{template "results_scripts" .}}{{end}}
+
+{{define "main"}}<h1>Features</h1>
+{{with .Data}}<p class="subtitle">Feature catalogue v{{.Version}}: what each feature is expected to do per chip, in three layers.</p>
+{{template "filter_bar" .Bar}}{{if .NoneMatches}}<p class="dim">No reports match these filters yet.</p>
+{{end}}{{range .Layers}}<section class="card" id="layer-{{.Layer}}">
+<h2 class="card-title">{{.Title}}</h2>
+<table class="list feature-catalogue">
+<thead><tr><th>Feature</th><th>Checks</th><th>Tested on</th></tr></thead>
+<tbody>
+{{range .Features}}<tr class="feature-row" id="feature-{{.ID}}">
+<td><a href="{{.Href}}">{{.Name}}</a></td>
+<td class="dim">{{.Checks}}</td>
+<td>{{if .Results}}<ul class="feature-results">
+{{range .Results}}<li class="feature-result" data-board="{{.Board}}" data-build="{{.BuildID}}"><a class="chip-result has-tooltip {{.Class}}" href="{{.Href}}" aria-label="{{.Details}}" title="{{.Details}}"><span aria-hidden="true">{{.Glyph}}</span>{{template "tooltip" .Tip}}</a></li>
+{{end}}</ul>{{else}}<span class="dim">–</span>{{end}}</td>
+</tr>
+{{end}}</tbody>
+</table>
+</section>
+{{end}}{{template "legend" .Legend}}<p class="credit dim">{{.Credit}}</p>
+{{end}}{{end}}

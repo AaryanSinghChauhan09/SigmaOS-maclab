@@ -1,8 +1,40 @@
-{{define "main"}}<div class="hero">
-<img class="hero-logo" src="{{asset "omarchy-logo.svg"}}" alt="" width="112" height="112">
+{{define "head"}}{{template "results_scripts" .}}{{template "model_scripts" .}}{{end}}
+
+{{define "main"}}<section class="hero">
+<img class="hero-logo" src="{{asset "omarchy-logo.svg"}}" alt="Omarchy" width="96" height="96">
 <div>
 <h1>Omarchy Mac Lab</h1>
-<p class="tagline">What works on each Apple Silicon Mac under Omarchy, tested by omarchy-m-test.</p>
+<p class="tagline">What works on each Apple Silicon Mac under Omarchy, tested on real machines.</p>
 </div>
+</section>
+{{with .Data}}
+<section class="card" id="install-card">
+<h2 class="card-title">install</h2>
+<p>Run it on Omarchy on your Apple Silicon Mac. It tests the hardware, shows you the exact report, and uploads it only if you say so.</p>
+<pre class="command"><span class="prompt" aria-hidden="true">$ </span><code id="install">curl -fsSL {{.InstallURL}} | bash</code></pre>
+<p class="dim">The installer downloads the latest release of <code>omarchy-m-test</code>, verifies its signature and installs it for your user. Then run <code>omarchy-m-test</code>. <a href="https://github.com/omacom/omarchy-maclab">Source, releases and the release signing key</a>.</p>
+</section>
+
+<section class="card">
+<h2 class="card-title">compatibility matrix</h2>
+{{if .Empty}}<p class="dim">No reports yet. Run <code>omarchy-m-test</code> on your Mac to add the first.</p>
+{{else}}<p class="matrix-note">Latest results by model. Expand a row to see its builds, or <a href="{{href "/matrix"}}">filter and compare results</a>.</p>
+{{template "matrix" .Matrix}}{{end}}{{template "legend" .Legend}}</section>
+
+<div class="grid">
+<section class="card">
+<h2 class="card-title">explore</h2>
+<ul class="links">
+<li><a href="{{href "/models"}}">Models</a>: every Mac with reports, what its chip is expected to do.</li>
+<li><a href="{{href "/features"}}">Features</a>: every feature in the catalogue, per chip and per Mac.</li>
+<li><a href="{{href "/gaps"}}">Kernel gaps</a>: what Asahi has that Aurora lacks, and hardware nobody drives yet.</li>
+<li><a href="{{href "/reports"}}">Reports</a>: every run, as the terminal showed it.</li>
+<li><a href="{{href "/data"}}">Data</a>: all of it as JSON and CSV, CC0.</li>
+</ul>
+</section>
+<section class="card">
+<h2 class="card-title">privacy</h2>
+<p>Reports never carry serial numbers, MAC addresses, hostnames, user names, Wi-Fi network names, IP addresses or disk identifiers. Every upload comes with a deletion link that removes it for good.</p>
+</section>
 </div>
-{{end}}
+{{end}}{{end}}

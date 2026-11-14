@@ -1,0 +1,15 @@
+{{define "head"}}{{template "results_scripts" .}}{{with .Data}}{{if .ByModel}}{{template "model_scripts" .}}{{end}}{{end}}{{end}}
+
+{{define "main"}}<h1>Compatibility matrix</h1>
+{{with .Data}}<div class="matrix-view-controls">
+<span class="matrix-view-label" id="matrix-view-label">Group by</span>
+<nav class="matrix-view-switch" aria-labelledby="matrix-view-label">
+{{range .Views}}<a href="{{.Href}}" data-view="{{.Value}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>
+{{end}}</nav>
+</div>
+{{template "filter_bar" .Bar}}{{if .ByModel}}<p class="matrix-note">Each model and stack combines each machine’s latest check results, ordered by upload time. Skipped checks keep their earlier results. Summaries can include several kernels; hover for the source kernels and latest test date, or expand the builds for the full history.</p>
+{{end}}<section class="card">
+<h2 class="card-title">{{.Card}}</h2>
+{{if .Empty}}<p class="dim">No reports{{if .Any}} match these filters{{end}} yet.</p>
+{{else}}{{template "matrix" .Matrix}}{{end}}{{template "legend" .Legend}}</section>
+{{end}}{{end}}

@@ -21,7 +21,7 @@ import (
 	"strings"
 )
 
-//go:embed templates
+//go:embed all:templates
 var templateFiles embed.FS
 
 // Kind is who is looking at a page, in the order of the interface's table.

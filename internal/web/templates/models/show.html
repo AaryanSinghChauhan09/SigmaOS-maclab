@@ -1,0 +1,34 @@
+{{define "head"}}{{template "results_scripts" .}}{{end}}
+
+{{define "main"}}{{with .Data}}<h1>{{.Name}}</h1>
+<p class="subtitle">{{.Chip}} · {{.Generation}} generation · SoC {{.SoC}} · board {{.Board}}</p>
+
+<section class="card">
+<h2 class="card-title">features</h2>
+<ol class="configuration-key" aria-label="Tested builds">
+{{range .Configurations}}<li id="configuration-{{.N}}">{{.Label}}</li>
+{{end}}</ol>
+<div class="matrix-scroll">
+<table class="list features-table">
+<thead>
+<tr>
+<th scope="col">Feature</th><th scope="col">Asahi</th><th scope="col">Aurora</th><th scope="col">Omarchy</th>
+{{range .Configurations}}<th class="config-head" scope="col"><a href="#configuration-{{.N}}" title="{{.Label}}" aria-label="Build {{.N}}: {{.Label}}">#{{.N}}</a></th>
+{{end}}</tr>
+</thead>
+<tbody>
+{{range .Features}}<tr id="feature-{{.ID}}">
+<td><a href="{{.Href}}">{{.Name}}</a> <span class="layer layer-{{.Layer}}">{{.Layer}}</span></td>
+{{range .Expected}}<td class="{{.Class}}">{{.Words}}</td>
+{{end}}{{range .Cells}}{{template "cell" .}}
+{{end}}</tr>
+{{end}}</tbody>
+</table>
+</div>
+{{template "legend" .Legend}}<p class="credit dim">Asahi states: <a href="https://asahilinux.org/docs/platform/feature-support/overview/">Asahi Linux feature support</a>, CC BY 3.0.</p>
+</section>
+
+<section class="card">
+<h2 class="card-title">reports</h2>
+{{template "report_list" .Reports}}</section>
+{{end}}{{end}}

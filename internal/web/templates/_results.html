@@ -1,0 +1,96 @@
+{{define "results_scripts"}}<script src="{{asset "result-tooltips.js"}}" defer></script>
+{{end}}
+
+{{define "model_scripts"}}<script src="{{asset "model-results.js"}}" defer></script>
+{{end}}
+
+{{define "tooltip"}}<span class="result-tooltip cell-tooltip" aria-hidden="true"><span class="tooltip-verdict badge-{{.State}}"><span class="swatch {{.Swatch}}">{{.Glyph}}</span> {{.Meaning}}</span><span>{{.Confidence}}</span>{{if .Heading}}<strong>{{.Heading}}</strong>{{end}}{{range .Lines}}<span class="dim">{{.}}</span>{{end}}</span>{{end}}
+
+{{define "cell"}}<td class="{{.Class}} has-tooltip" title="{{.Title}}" data-feature="{{.Feature}}" data-state="{{.State}}"{{if .Verified}} data-verified="{{.Verified}}"{{end}}{{if .Kernels}} data-kernels="{{.Kernels}}" data-tested-at="{{.TestedAt}}"{{end}}>{{if .Link}}<a href="{{.Link}}" aria-label="{{.Title}}">{{.Glyph}}</a>{{else}}{{.Glyph}}{{end}}{{template "tooltip" .Tip}}</td>{{end}}
+
+{{define "legend"}}<ul class="legend" aria-label="Colour code">
+{{range .States}}<li><span class="swatch cell-{{.State}}">{{.Glyph}}</span> {{.Words}}</li>
+{{end}}<li><span class="swatch cell-unconfirmed cell-hint-works">{{.Works}}</span> outlined: unconfirmed</li>
+</ul>
+<p class="legend-note">Solid once {{.Agreement}} machines agree or a Verified run confirms. Hover a square for details.</p>
+{{end}}
+
+{{define "matrix_row"}}<tr class="matrix-row{{if .Summary}} model-summary{{end}}{{if .History}} build-row{{end}}" data-board="{{.Board}}" data-stack="{{.Stack}}" data-version="{{.Version}}" data-build="{{.BuildID}}">
+<th class="row-head" scope="row">
+<a href="{{.Href}}">{{.Name}}</a>
+<span class="row-meta">{{.Meta}}</span>
+{{if .Build}}<span class="row-meta row-build">{{.Build}}</span>
+{{end}}{{if .ToggleID}}<button class="model-toggle" type="button" hidden aria-expanded="true" aria-controls="{{.ToggleID}}" data-build-count="{{.Builds}}">Hide builds ({{.Builds}})</button>
+{{end}}</th>
+{{range .Cells}}{{template "cell" .}}
+{{end}}</tr>
+{{end}}
+
+{{define "matrix"}}<div class="matrix-scroll">
+<table class="matrix{{if .Grouped}} matrix-grouped{{end}}">
+<thead>
+<tr>
+<th class="row-head" scope="col">{{if .Grouped}}Mac · stack · latest results{{else}}Mac · stack / version · build{{end}}</th>
+{{range .Features}}<th class="feature-head layer-{{.Layer}}" scope="col"><a href="{{.Href}}" title="{{.Name}} ({{.LayerWords}})"><span>{{.Name}}</span></a></th>
+{{end}}</tr>
+</thead>
+{{range .Groups}}<tbody>
+{{template "matrix_row" .Row}}</tbody>
+{{if $.Grouped}}<tbody class="matrix-history" id="{{.HistoryID}}">
+{{range .Builds}}{{template "matrix_row" .}}{{end}}</tbody>
+{{end}}{{end}}</table>
+</div>
+{{end}}
+
+{{define "filter_bar"}}<form class="filter-bar" method="get" action="{{.Action}}" role="search" aria-label="Filter the runs">
+{{range .Hidden}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+{{end}}<div class="filter-fields">
+{{range .Selects}}<label class="filter-field">
+<span>{{.Label}}</span>
+<select name="{{.Key}}" data-filter="{{.Key}}">
+<option value="">any</option>
+{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Words}}</option>
+{{end}}</select>
+</label>
+{{end}}{{range .Dates}}<label class="filter-field">
+<span>uploaded {{.Name}}</span>
+<input type="date" name="{{.Name}}" value="{{.Value}}" data-filter="{{.Name}}">
+</label>
+{{end}}{{if .HasCheck}}<label class="filter-field filter-check">
+<input type="checkbox" name="confirmed" value="1"{{if .Confirmed}} checked{{end}} data-filter="confirmed">
+<span>confirmed only</span>
+</label>
+{{end}}</div>
+<div class="filter-actions">
+<button type="submit" class="button button-small">filter</button>
+</div>
+</form>
+<p class="filter-status" id="filter-status">
+<strong class="filter-count" data-count="{{.Count}}">{{.CountWords}}</strong> {{.Verb}}
+{{range .Chips}}<a class="filter-chip" data-filter="{{.Key}}" href="{{.Href}}" title="remove this filter" aria-label="remove the filter {{.Words}}">{{.Words}} <span aria-hidden="true">×</span></a>
+{{end}}{{if .Clear}}<a class="filter-clear" href="{{.Clear}}">clear</a>
+{{end}}{{if .Exports}}<span class="filter-exports">· download {{range .Exports}}<a href="{{.Href}}">{{.Name}}</a> {{end}}</span>
+{{end}}</p>
+{{end}}
+
+{{define "run_badge"}}{{if .}}<span class="badge badge-tester" title="A Verified run: its Mac was signed in as a member of the Omarchy M team when it was uploaded. Verified runs colour the matrix on their own.">verified</span>{{else}}<span class="badge badge-community" title="A Community run. It shows here right away, and counts toward the matrix once another machine agrees or a Verified run confirms.">community</span>{{end}}{{end}}
+
+{{define "result_counts"}}<span class="ok">{{.Pass}} pass</span> <span class="bad">{{.Fail}} fail</span>{{if .Gap}} <span class="gap" title="Failures the feature catalogue expects on this Mac: not yet supported, or no such hardware">{{.Gap}} gap</span>{{end}} <span class="dim">{{.Skip}} skip</span>{{end}}
+
+{{define "build_summary"}}{{if .}}<span class="build"><a class="build-id" title="{{.Words}}" href="{{.Href}}">{{.Label}}</a>{{if .MatchedSet}} · <span title="matched by its omarchy package">set {{if .SetHref}}<a href="{{.SetHref}}">{{.MatchedSet}}</a>{{else}}{{.MatchedSet}}{{end}}</span>{{end}}</span>{{else}}<span class="dim">–</span>{{end}}{{end}}
+
+{{define "report_list"}}<table class="list">
+<thead><tr><th>Uploaded</th><th>Mac</th><th>Stack / version</th><th>Build</th><th>Kernel</th><th>Results</th><th></th></tr></thead>
+<tbody>
+{{range .}}<tr class="report-row" id="report-{{.PublicID}}">
+<td class="nowrap">{{.Uploaded}}</td>
+<td><a href="{{.Href}}">{{.Model}}</a></td>
+<td>{{.Label}}</td>
+<td class="build-cell" data-build="{{.BuildID}}">{{template "build_summary" .Build}}</td>
+<td class="dim">{{.Kernel}}</td>
+<td class="nowrap">{{template "result_counts" .Counts}}</td>
+<td>{{template "run_badge" .Verified}}</td>
+</tr>
+{{end}}</tbody>
+</table>
+{{end}}

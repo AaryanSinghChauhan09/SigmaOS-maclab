@@ -1,0 +1,46 @@
+{{define "head"}}{{template "results_scripts" .}}{{template "model_scripts" .}}{{end}}
+
+{{define "main"}}{{with .Data}}<h1>{{.Name}}</h1>
+<p class="subtitle"><span class="layer layer-{{.Layer}}">{{.Layer}}</span> {{.LayerWords}}{{if .BuildsOn}} · builds on <a href="{{.BuildsOnHref}}">{{.BuildsOn}}</a>{{end}}</p>
+{{if .Note}}<p>{{.Note}}</p>
+{{end}}{{template "filter_bar" .Bar}}
+<section class="card">
+<h2 class="card-title">results</h2>
+{{if .Results}}<table class="list feature-result-table">
+<thead><tr><th>Mac · stack</th><th></th><th>Machines</th><th>Last tested</th></tr></thead>
+{{range .Results}}<tbody>
+<tr class="result-summary" data-board="{{.Board}}" data-stack="{{.Stack}}">
+<td><a href="{{.Href}}">{{.Name}}</a> <span class="dim">{{.StackWords}}</span> <button class="model-toggle" type="button" hidden aria-expanded="true" aria-controls="{{.HistoryID}}" data-build-count="{{len .Builds}}">Hide builds ({{len .Builds}})</button></td>
+{{template "cell" .Cell}}
+<td class="summary">{{.Words}}</td>
+<td class="dim">{{if .Day}}<a href="{{.DayHref}}" title="{{.DayTitle}}">{{.Day}}</a>{{end}}</td>
+</tr>
+</tbody>
+<tbody class="feature-history" id="{{.HistoryID}}">
+{{range .Builds}}<tr class="result-row" data-board="{{.Board}}" data-stack="{{.Stack}}" data-build="{{.BuildID}}">
+<td class="build-label">{{.Version}}{{if .Build}} <span class="dim">· build {{.Build}}</span>{{end}}</td>
+{{template "cell" .Cell}}
+<td class="summary">{{.Words}}</td>
+<td class="dim"><a href="{{.Href}}">{{.Day}}</a></td>
+</tr>
+{{end}}</tbody>
+{{end}}</table>
+{{template "legend" .Legend}}{{else}}<p class="dim">No report{{if .Any}} matching these filters{{end}} has tested this yet{{if not .Checks}}: no check covers it in this version of omarchy-m-test{{end}}.</p>
+{{end}}{{if .Checks}}<p class="dim">Tested by {{range $i, $id := .Checks}}{{if $i}}, {{end}}<code>{{$id}}</code>{{end}}.</p>
+{{end}}</section>
+
+<section class="card">
+<h2 class="card-title">expected per chip</h2>
+<table class="list">
+<thead><tr><th>Chip</th><th>Asahi</th><th>Aurora</th><th>Omarchy</th></tr></thead>
+<tbody>
+{{range .Chips}}<tr id="chip-{{.Key}}">
+<td>{{.Name}}</td>
+{{range .Expected}}<td class="{{.Class}}">{{.Words}}</td>
+{{end}}</tr>
+{{end}}</tbody>
+</table>
+{{if .PerBoard}}<p class="dim">Per board: {{.PerBoard}}.</p>
+{{end}}<p class="credit dim">{{.Credit}}</p>
+</section>
+{{end}}{{end}}
