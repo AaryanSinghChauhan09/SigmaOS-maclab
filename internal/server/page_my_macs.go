@@ -80,12 +80,14 @@ type macCard struct {
 	JobNotices          bool
 	// Holder is who holds its Lease, HolderKind their kind, Until its end.
 	Holder, HolderKind, HolderClass, Until string
-	Agent                                  string
-	Jobs                                   []macJobRow
-	Reports                                []cardReport
-	Record, Audit, Exec                    []recordShownLine
-	Commands                               []cardCommand
-	LeaveSentence                          string
+	// Agent is the Mac's lab-agent; LabAgent the lab's when the Mac's is
+	// older, and UpdateLine what its Volunteer runs at the Mac then.
+	Agent, LabAgent, UpdateLine string
+	Jobs                        []macJobRow
+	Reports                     []cardReport
+	Record, Audit, Exec         []recordShownLine
+	Commands                    []cardCommand
+	LeaveSentence               string
 }
 
 type cardHands struct {
@@ -225,7 +227,7 @@ func (s *Server) macCard(v *dev, p Person) macCard {
 	c := macCard{Name: d.Name, Page: "/macs/" + url.PathEscape(d.Name), Configuration: row.Configuration, State: row.State, Reason: d.StateReason,
 		Limited: d.Limited, Publishing: d.Publish, Eligible: d.SnapshotEligible, Topic: s.macTopicURL(d.Enrollment), JobNotices: d.JobNotices,
 		Holder: row.Holder, HolderKind: row.HolderKind, HolderClass: row.HolderClass, Until: row.Until,
-		Agent: d.Facts.AgentVersion, Commands: onlyAtTheMac, LeaveSentence: leaveSentence(d.Name)}
+		Agent: d.Facts.AgentVersion, LabAgent: d.LabAgent, UpdateLine: agentUpdateLine(d), Commands: onlyAtTheMac, LeaveSentence: leaveSentence(d.Name)}
 	// Until its first baseline has passed, the stage says what the Mac
 	// waits for; labd's own note then is a Maintainer's.
 	if d.Arrival != "" && d.Arrival != ArrivalReady {

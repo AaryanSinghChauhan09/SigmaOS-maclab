@@ -880,7 +880,9 @@ the Mac's own page; and the reports the lab published from it, each with
 Delete, which asks twice and deletes for good. The job then says "deleted by
 the Mac's Volunteer" and when, and the lab does not publish it again. Pause,
 Limit and Leave are the card's buttons. What only the Mac can give is shown
-as the command typed there, `sudo lab-agent update` among them.
+as the command typed there, `sudo lab-agent update` among them. When the
+Mac's `lab-agent` is older than the lab's, its card says so beside the
+number, with that line.
 
 A Mac whose enrollment ended is no card: the page keeps its name, when it
 left and who ended it. The link a Notice carries is `/my-macs/<name>`, which

@@ -40,7 +40,7 @@
 <dt>Installed runs</dt><dd>{{if .Eligible}}Eligible{{else}}not Eligible <span class="dim">its system cannot be captured first</span>{{end}} <span class="dim">Installed runs are not offered on a Volunteer's Mac yet.</span></dd>
 <dt>Notices</dt><dd>{{if .Topic}}<code>{{.Topic}}</code>{{else}}<span class="dim">no topic</span>{{end}} <span class="nowrap">job Notices {{if .JobNotices}}on{{else}}off{{end}}</span></dd>
 <dt>Lease</dt><dd>{{if .Holder}}@{{.Holder}}{{if .HolderKind}} <span class="badge {{.HolderClass}}">{{.HolderKind}}</span>{{end}} <span class="nowrap">until {{.Until}}</span>{{else}}<span class="dim">none</span>{{end}}</dd>
-<dt>lab-agent</dt><dd>{{if .Agent}}{{.Agent}}{{else}}<span class="dim">unknown</span>{{end}}</dd>
+<dt>lab-agent</dt><dd>{{if .Agent}}{{.Agent}}{{else}}<span class="dim">unknown</span>{{end}}{{if .LabAgent}} <span class="dim">older than the lab's {{.LabAgent}}</span>{{if .UpdateLine}} <span class="nowrap">Update it at the Mac: <code>{{.UpdateLine}}</code></span>{{end}}{{end}}</dd>
 </dl>
 <div class="controls" id="controls-{{.Name}}">
 {{if .PausedHere}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/resume")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Resume</button></form>

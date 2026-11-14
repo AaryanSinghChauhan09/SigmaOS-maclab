@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/window"
 )
@@ -215,7 +216,7 @@ func TestACardShowsEverythingItsVolunteerMaySeeAndDo(t *testing.T) {
 		"Installed runs Eligible",
 		"Notices https://ntfy.example/linus-own-topic job Notices on",
 		"Lease @grace M team until " + when(lease.Expires),
-		"lab-agent 0.2.0",
+		"lab-agent 0.2.0 older than the lab's " + agent.Version + " Update it at the Mac: sudo lab-agent update",
 	} {
 		if !strings.Contains(facts, want) {
 			t.Errorf("the card's facts lack %q:\n%s", want, facts)
@@ -305,13 +306,17 @@ func TestACardShowsEverythingItsVolunteerMaySeeAndDo(t *testing.T) {
 	v.mu.Lock()
 	v.d.AccessLevel, v.d.Publish, v.d.SnapshotEligible, v.d.JobNotices, v.d.NtfyOwnURL = api.AccessQualification, false, false, false, ""
 	v.d.Window = nil
+	v.d.Facts.AgentVersion = agent.Version
 	v.mu.Unlock()
 	linus.did("/my-macs/vol-air/remove-limit")
 	facts = factsOf(t, linus.myMacs().sole(t, "#mac-vol-air"))
-	for _, want := range []string{"Availability window none yet", "Access level Qualification", "Publishing off", "Installed runs not Eligible", "job Notices off"} {
+	for _, want := range []string{"Availability window none yet", "Access level Qualification", "Publishing off", "Installed runs not Eligible", "job Notices off", "lab-agent " + agent.Version} {
 		if !strings.Contains(facts, want) {
 			t.Errorf("the facts lack %q:\n%s", want, facts)
 		}
+	}
+	if strings.Contains(facts, "older than") || strings.Contains(facts, "Update it") {
+		t.Errorf("a Mac on the lab's lab-agent is told to update it:\n%s", facts)
 	}
 }
 
