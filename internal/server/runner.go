@@ -1327,7 +1327,8 @@ func (r *jobRun) restore(ctx context.Context) error {
 func (r *jobRun) build(ctx context.Context) (string, string) {
 	r.state(api.JobBuilding)
 	r.ev("resolving %s", r.j.Spec.Source)
-	b, err := r.s.EnsureBuild(ctx, api.BuildRequest{Source: r.j.Spec.Source, Device: r.j.Spec.Device, Config: r.j.Spec.Config})
+	b, err := r.s.EnsureBuild(ctx, api.BuildRequest{Source: r.j.Spec.Source, Device: r.j.Spec.Device, Config: r.j.Spec.Config,
+		AskedBy: orStr(r.j.Maintainer, "labd")})
 	if err != nil {
 		return api.OutcomeBuildFailed, err.Error()
 	}

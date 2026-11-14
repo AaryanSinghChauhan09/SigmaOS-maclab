@@ -8,12 +8,13 @@ import (
 
 // Everything an enrolled Mac or a stored record carries keeps its maclab
 // name (spec, section 5, "Kept names"). A name leaves these lists only when
-// the spec says it goes.
+// the spec says it goes: MACLAB_BUILDER_TOKEN went with the shared builder
+// token (section 12), which leaves 37 of the 38 variables.
 
 const keptVariables = `
 MACLAB_ALLOW_PLAIN_HTTP MACLAB_ARCHIVE_TEST_PLAN MACLAB_ARCHIVE_TEST_RECEIPT MACLAB_ARCHIVE_TEST_STATE
 MACLAB_BODY MACLAB_BOOT_TEST_ENTRY_CONTROL MACLAB_BOOT_TEST_PROFILE_CONTROL MACLAB_BROWSER
-MACLAB_BUILDER_TOKEN MACLAB_CA_FILE MACLAB_CHAOS_CODES MACLAB_COLLECTOR_EOF MACLAB_DEVICE
+MACLAB_CA_FILE MACLAB_CHAOS_CODES MACLAB_COLLECTOR_EOF MACLAB_DEVICE
 MACLAB_FREEZE_EOF MACLAB_GATE MACLAB_GATE_SAMPLE MACLAB_HOLDER MACLAB_IN MACLAB_INSTALLED_SAMPLE
 MACLAB_JOB MACLAB_LISTEN MACLAB_LIVE_GUI_USER MACLAB_LIVE_OUTPUT MACLAB_NATIVE_PYTHON
 MACLAB_NATIVE_SCRIPT MACLAB_NODE MACLAB_NOTIFY_CMD MACLAB_NTFY MACLAB_OUT MACLAB_PRIORITY
@@ -79,7 +80,7 @@ func TestKeptNames(t *testing.T) {
 		re   *regexp.Regexp
 		want int
 	}{
-		{"variable", keptVariables, variableRE, 38},
+		{"variable", keptVariables, variableRE, 37},
 		{"schema id", keptSchemaIDs, schemaIDRE, 17},
 		{"systemd unit or drop-in", keptUnits, unitRE, 8},
 	} {

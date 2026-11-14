@@ -14,6 +14,9 @@ import (
 
 var gcMu sync.Mutex
 
+// artifactBudget is the artifact store's size when labd is given none: 20 GB.
+const artifactBudget = 20 << 30
+
 func (s *Server) gcLoop() {
 	s.gcArtifacts()
 	t := time.NewTicker(time.Hour)
@@ -51,13 +54,17 @@ func (s *Server) pinRows(query string, keep, pinned map[string]bool) error {
 // recent build or a device config refers to is kept; everything else is
 // deleted once it is a day old. If the store is still over budget, the
 // oldest artifacts go first, except those in use by unfinished work, device
-// configs and package recipes.
+// configs and package recipes, and what arrived in the last hour.
+//
+// The store is the folder artifacts/ and nothing else. What a job collected
+// from a Mac (journals, logs, screenshots, reports, under jobs/) and a
+// build's log (under builds/) are not in it: the budget never clears them.
 func (s *Server) gcArtifacts() {
 	gcMu.Lock()
 	defer gcMu.Unlock()
 	budget := s.cfg.ArtifactBudget
 	if budget <= 0 {
-		budget = 20 << 30
+		budget = artifactBudget
 	}
 	pinned := map[string]bool{mesa.GLProbeSHA: true, mesa.VKProbeSHA: true, mesa.OfficialArchiveSHA: true} // immutable bootstrap assets
 	keep := map[string]bool{}                                                                              // deleted only when over budget

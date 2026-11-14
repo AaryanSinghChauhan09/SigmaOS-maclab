@@ -379,12 +379,12 @@ func (p *partsReader) Close() error {
 	return p.cur.Close()
 }
 
-// uploadScope is whose upload a request is about. A named builder's belongs
-// to the build it runs, named by ?build=; anyone else's to its SHA-256 alone,
-// so two people sending the same file fill the same upload.
+// uploadScope is whose upload a request is about. A builder's belongs to
+// the build it runs, named by ?build=; a person's to its SHA-256 alone, so
+// two people sending the same file fill the same upload.
 func (s *Server) uploadScope(w http.ResponseWriter, r *http.Request) (c builderCred, build string, ok bool) {
 	c = builderCredOf(r)
-	if c.shared() {
+	if c.nobody() {
 		return c, "", true
 	}
 	id := r.URL.Query().Get("build")
@@ -425,7 +425,7 @@ func (s *Server) hStartUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := s.cfg.ArtifactBudget
 	if limit <= 0 {
-		limit = 20 << 30
+		limit = artifactBudget
 	}
 	if build != "" {
 		limit = min(limit, builderUploadMax)
@@ -490,7 +490,7 @@ func (s *Server) hPutPart(w http.ResponseWriter, r *http.Request) {
 	defer interruptReadsOnCancel(w, r.Context())()
 	if err := u.put(n, ctxReader{r.Context(), r.Body}); err != nil {
 		switch {
-		case !c.shared() && r.Context().Err() != nil:
+		case !c.nobody() && r.Context().Err() != nil:
 			httpErr(w, 403, "%v", errBuilderRemoved)
 		case errors.Is(err, errNoUpload):
 			noUpload(w, u.SHA256)

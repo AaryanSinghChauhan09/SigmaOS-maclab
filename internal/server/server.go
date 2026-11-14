@@ -73,8 +73,13 @@ type Config struct {
 	OOB *oob.Client
 	// OOBFactory builds a controller for a device; tests swap in fakes.
 	OOBFactory func(*api.Device) (oob.Controller, error)
-	// BuilderToken authenticates builder hosts; empty disables builds.
-	BuilderToken string
+	// SourceHosts are the hosts a build's source may come from beside
+	// github.com, as SourceHosts returns them (see sources.go).
+	SourceHosts []string
+	// MTeamBuilds opens builds to the M team. It stays off until the two
+	// isolation tests of the Builder have passed (see builders.go); labd
+	// has no flag for it.
+	MTeamBuilds bool
 	// ArtifactBudget caps the artifact store; unreferenced artifacts go first.
 	ArtifactBudget int64
 	// Transfers are the limits uploads work inside; the zero value is the lab's.
@@ -677,10 +682,10 @@ func (s *Server) routes() []route {
 		{"GET /api/join/terms", invited, s.hJoinTerms},
 		{"DELETE /api/enroll-tokens/{name}", maintainers, s.hRevokeEnrollTokens},
 		{"POST /api/devices/{name}/artifact-grants", maintainers, s.hArtifactGrants},
-		{"POST /api/artifacts", maintainers, s.hPutArtifact},
-		{"POST /api/artifacts/uploads", maintainers, s.hStartUpload},
-		{"PUT /api/artifacts/uploads/{sha}/parts/{n}", maintainers, s.hPutPart},
-		{"POST /api/artifacts/uploads/{sha}/close", maintainers, s.hCloseUpload},
+		{"POST /api/artifacts", teamBuilds, s.teamUpload(s.hPutArtifact)},
+		{"POST /api/artifacts/uploads", teamBuilds, s.teamUpload(s.hStartUpload)},
+		{"PUT /api/artifacts/uploads/{sha}/parts/{n}", teamBuilds, s.teamUpload(s.hPutPart)},
+		{"POST /api/artifacts/uploads/{sha}/close", teamBuilds, s.teamUpload(s.hCloseUpload)},
 		{"POST /api/mesa/jobs", maintainers, s.hSubmit},
 		{"POST /api/jobs", maintainers, s.hSubmit},
 		{"GET /api/jobs", scoped, s.hJobs},
@@ -702,7 +707,7 @@ func (s *Server) routes() []route {
 		{"POST /api/builder/artifacts/uploads/{sha}/close", builder, s.hCloseUpload},
 		{"GET /api/builder/artifacts/{sha}", builder, s.hBuilderGetArtifact},
 		{"GET /api/builder/self", builder, s.hBuilderSelf},
-		{"POST /api/builds", maintainers, s.hCreateBuild},
+		{"POST /api/builds", teamBuilds, s.hCreateBuild},
 		{"POST /api/installed/{release}/manifest", maintainers, s.hFreezeManifest},
 		{"POST /api/installed/{release}/entry/{device}", maintainers, s.hFreezeEntry},
 		{"POST /api/installed/{release}/promote", maintainers, s.hPromote},
@@ -1631,7 +1636,7 @@ func (s *Server) pinnedConfig(old *api.Job) (cfg, note string, err error) {
 // build resolved, as repo#sha. Its source may name a branch or pull request
 // that has moved on since.
 func (s *Server) pinnedSource(old *api.Job) (string, error) {
-	if src, err := parseSource(old.Spec.Source); err == nil && reHex40.MatchString(src.Ref) {
+	if src, err := s.source(old.Spec.Source); err == nil && reHex40.MatchString(src.Ref) {
 		return old.Spec.Source, nil // a commit already
 	}
 	again := fmt.Sprintf("run it afresh with `lab run %s --kernel %s`", old.Spec.Device, old.Spec.Source)
@@ -1696,7 +1701,7 @@ func (s *Server) submit(maintainer string, spec api.JobSpec, retryOf string, not
 		if spec.Baseline || spec.Crash != "" {
 			return nil, 400, errors.New("baseline and crash-test jobs run the known-good kernel; drop the source")
 		}
-		if _, err := parseSource(spec.Source); err != nil {
+		if _, err := s.source(spec.Source); err != nil {
 			return nil, 400, err
 		}
 	}

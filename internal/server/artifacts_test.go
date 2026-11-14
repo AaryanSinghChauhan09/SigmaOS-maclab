@@ -206,7 +206,7 @@ func TestArtifactHTTPFailureDoesNotReturnSHA(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{cfg: Config{DataDir: dir}}
-	for _, handler := range []http.HandlerFunc{s.hPutArtifact, s.hBuilderArtifact} {
+	for _, handler := range []http.HandlerFunc{s.hPutArtifact} {
 		recorder := httptest.NewRecorder()
 		handler(recorder, httptest.NewRequest(http.MethodPost, "/api/artifacts", artifactBrokenReader{}))
 		if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), `"sha256"`) {
@@ -443,15 +443,18 @@ func TestLabdRefusesAnyBodyOver90MB(t *testing.T) {
 	}
 	// With no Content-Length the limit holds while the body streams.
 	b := transferLab(t, Transfers{BodyMax: 2000}, nil)
-	for path, token := range map[string]string{"/api/artifacts": "lab_mtok", "/api/builder/artifacts": "bld"} {
+	builder := b.addBuilder("mini")
+	running := b.queue("")
+	b.poll(builder, "", 5*time.Second)
+	for path, token := range map[string]string{"/api/artifacts": "lab_mtok", "/api/builder/artifacts?build=" + running.ID: builder} {
 		pr, pw := io.Pipe()
 		go func() { pw.Write(bytes.Repeat([]byte("x"), 4096)); pw.Close() }()
 		if code, body := b.do(b.ctx, "POST", path, token, pr); code != 413 || strings.Contains(string(body), `"sha256"`) {
 			t.Errorf("%s streaming past the limit: %d %s", path, code, body)
 		}
 	}
-	if ents, _ := os.ReadDir(filepath.Join(b.dir, "artifacts")); len(ents) != 0 {
-		t.Fatalf("a refused body left %v", ents)
+	if ents, _ := os.ReadDir(filepath.Join(b.dir, "artifacts")); len(ents) != 1 {
+		t.Fatalf("a refused body left %v beside the running build's input", ents)
 	}
 	if code, _ := b.do(b.ctx, "POST", "/api/artifacts", "lab_mtok", strings.NewReader("small")); code != 200 {
 		t.Fatalf("a body under the limit: %d", code)
@@ -498,9 +501,16 @@ func TestADownloadHonoursARangeAndIsPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The Builder reads it as the input of the build it runs.
+	builder := b.addBuilder("mini")
+	if _, err := b.s.queueBuild(&api.Build{ID: "b-range", Key: "key-range", ConfigSHA: sha, State: api.BuildQueued, Created: b.s.now(),
+		Source: api.Source{Repo: "https://github.com/labtest/linux", SHA: strings.Repeat("a", 40)}}, true); err != nil {
+		t.Fatal(err)
+	}
+	b.poll(builder, "", 5*time.Second)
 	get := func(rng string) (*http.Response, []byte) {
 		req, _ := http.NewRequest("GET", b.url+"/api/builder/artifacts/"+sha, nil)
-		req.Header.Set("Authorization", "Bearer bld")
+		req.Header.Set("Authorization", "Bearer "+builder)
 		if rng != "" {
 			req.Header.Set("Range", rng)
 		}

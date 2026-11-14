@@ -22,43 +22,188 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
+// retiredVariable held the shared builder token in the old lab.
+const retiredVariable = "MACLAB_BUILDER" + "_TOKEN"
+
+const testToken = "bldr_0123456789abcdef0123456789abcdef01234567"
+
+func tokenFile(t *testing.T, text string, mode os.FileMode) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "builder.token")
+	if err := os.WriteFile(file, []byte(text), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(file, mode); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// The token is read from a file of the account lab-builder runs as that
+// nobody else reads, and no error shows it.
 func TestBuilderToken(t *testing.T) {
-	dir := t.TempDir()
-	good := filepath.Join(dir, "good")
-	os.WriteFile(good, []byte("bldr_abc\n"), 0o600)
-	open := filepath.Join(dir, "open")
-	os.WriteFile(open, []byte("bldr_abc"), 0o644)
-	os.Chmod(open, 0o644)
-	empty := filepath.Join(dir, "empty")
-	os.WriteFile(empty, []byte("\n"), 0o600)
+	good := tokenFile(t, testToken+"\n", 0o600)
+	link := filepath.Join(t.TempDir(), "link")
+	os.Symlink(good, link)
 	for _, c := range []struct {
-		name, flag, file, env, want string
-		err                         bool
+		name, file, want string
 	}{
-		{name: "file", file: good, flag: "ignored", env: "ignored", want: "bldr_abc"},
-		{name: "readable by others", file: open, err: true},
-		{name: "empty file", file: empty, err: true},
-		{name: "missing file", file: filepath.Join(dir, "none"), err: true},
-		{name: "flag", flag: "bldr_flag", env: "ignored", want: "bldr_flag"},
-		{name: "env", env: " bldr_env\n", want: "bldr_env"},
+		{name: "its own file", file: good, want: testToken},
+		{name: "read-only", file: tokenFile(t, testToken, 0o400), want: testToken},
+		{name: "readable by its group", file: tokenFile(t, testToken, 0o640)},
+		{name: "readable by others", file: tokenFile(t, testToken, 0o644)},
+		{name: "a link", file: link},
+		{name: "empty", file: tokenFile(t, "\n", 0o600)},
+		{name: "two lines", file: tokenFile(t, testToken+"\n"+testToken+"\n", 0o600)},
+		{name: "missing", file: filepath.Join(t.TempDir(), "none")},
 	} {
-		got, err := builderToken(c.flag, c.file, c.env)
-		if (err != nil) != c.err || got != c.want {
+		got, err := builderToken(c.file)
+		if (err == nil) != (c.want != "") || got != c.want {
 			t.Errorf("%s: %q %v", c.name, got, err)
 		}
-		if err != nil && strings.Contains(err.Error(), "bldr_abc") {
+		if err != nil && strings.Contains(err.Error(), testToken) {
 			t.Errorf("%s: the error shows the token: %v", c.name, err)
 		}
 	}
 }
 
+// No shared builder token: nothing but --token-file gives lab-builder a
+// token. The old lab's variable for it (retiredVariable) is ignored, and
+// there is no --token, which ps would show.
+func TestTheTokenComesFromItsFileAlone(t *testing.T) {
+	t.Setenv(retiredVariable, "bldr_from_the_environment_0123456789abcdef")
+	var out bytes.Buffer
+	if b, err := configure([]string{"--server", "http://127.0.0.1:7770"}, &out); err == nil {
+		t.Fatalf("lab-builder took a token from the environment: %q", b.token)
+	} else if !strings.Contains(err.Error(), "--token-file") {
+		t.Fatalf("without a token file: %v", err)
+	}
+	if _, err := configure([]string{"--server", "http://127.0.0.1:7770", "--token", testToken}, &out); err == nil ||
+		!strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("--token: %v", err)
+	}
+	b, err := configure([]string{"--server", "http://127.0.0.1:7770", "--token-file", tokenFile(t, testToken, 0o600)}, &out)
+	if err != nil || b.token != testToken {
+		t.Fatalf("with a token file: %v", err)
+	}
+	src, _ := os.ReadFile("main.go")
+	for _, gone := range []string{retiredVariable, `"token"`, "github-token", "builder.token"} {
+		if bytes.Contains(src, []byte(gone)) {
+			t.Errorf("lab-builder still knows %s", gone)
+		}
+	}
+}
+
+// A build gets 10 cores and 16 GB; 8 and 6 cores are the settings the gate
+// test steps down to, and nothing else is one. The volumes are 40 GB and
+// 120 GB.
+func TestTheLimitsOfABuild(t *testing.T) {
+	file := tokenFile(t, testToken, 0o600)
+	conf := func(args ...string) (*builder, error) {
+		return configure(append([]string{"--server", "http://127.0.0.1:7770", "--token-file", file}, args...), io.Discard)
+	}
+	b, err := conf()
+	if err != nil || b.cpus != "10" || b.mem != "16G" || b.pkgJobs != "10" {
+		t.Fatalf("by default: %+v %v", b, err)
+	}
+	for _, cpus := range []string{"8", "6"} {
+		if b, err := conf("--cpus", cpus); err != nil || b.cpus != cpus || b.mem != "16G" {
+			t.Errorf("--cpus %s: %v", cpus, err)
+		}
+	}
+	for _, cpus := range []string{"12", "18", "4", "0", "", "ten", "10.0"} {
+		if _, err := conf("--cpus", cpus); err == nil {
+			t.Errorf("--cpus %q was taken", cpus)
+		}
+	}
+	if _, err := conf("--memory", "32G"); err == nil {
+		t.Error("--memory is still a setting")
+	}
+	if kernelVolumeSize != "40G" || packageVolumeSize != "120G" {
+		t.Errorf("the volumes are %s and %s", kernelVolumeSize, packageVolumeSize)
+	}
+}
+
+// fakeContainer plays Apple's container CLI with its server stopped: it
+// writes down what it was asked and fails as the real one does then.
+const fakeContainer = `#!/bin/sh
+echo "$*" >> "$(dirname "$0")/calls"
+echo "Error: apiserver is not running and not registered with launchd" >&2
+exit 1
+`
+
+// lab-builder never starts container's server: found stopped, a build fails
+// and says so, and the LaunchDaemon of the mini is what starts it again.
+// The build's VM gets the limits, and the token reaches nothing it runs.
+func TestLabBuilderNeverStartsTheService(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "container"), []byte(fakeContainer), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var result api.BuildResult
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testToken {
+			http.Error(w, "no", 401)
+			return
+		}
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/builder/artifacts/"):
+			io.WriteString(w, "CONFIG_X=y\n")
+		case strings.HasSuffix(r.URL.Path, "/progress"):
+			io.WriteString(w, "{}")
+		case strings.HasSuffix(r.URL.Path, "/done"):
+			mu.Lock()
+			json.NewDecoder(r.Body).Decode(&result)
+			mu.Unlock()
+			close(done)
+			w.WriteHeader(204)
+		}
+	}))
+	defer srv.Close()
+	b, err := configure([]string{"--server", srv.URL, "--token-file", tokenFile(t, testToken, 0o600), "--io", t.TempDir()}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.containerBin = filepath.Join(bin, "container")
+	b.run(context.Background(), api.BuildAssignment{LabVer: "-labx", Build: api.Build{ID: "b1", ConfigSHA: strings.Repeat("c", 64),
+		Source: api.Source{Repo: "https://github.com/o/r", SHA: strings.Repeat("a", 40)}}})
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if result.Error == "" {
+		t.Fatal("a build with container's server stopped did not fail")
+	}
+	raw, _ := os.ReadFile(filepath.Join(bin, "calls"))
+	calls := strings.TrimSpace(string(raw))
+	if calls == "" {
+		t.Fatal("container was never run")
+	}
+	for _, line := range strings.Split(calls, "\n") {
+		if f := strings.Fields(line); f[0] == "system" || strings.Contains(line, "start") {
+			t.Errorf("lab-builder ran: container %s", line)
+		}
+		if strings.Contains(line, testToken) {
+			t.Errorf("the token is an argument: container %s", line)
+		}
+	}
+	if !strings.Contains(calls, "run --rm --name maclab-b1 --cpus 10 --memory 16G -v maclab-cache:/cache") {
+		t.Errorf("the build VM was started as: %s", calls)
+	}
+	// Nothing but the config is handed to the VM: no credential for a source.
+	if strings.Contains(calls, "token") {
+		t.Errorf("something named a token went to the VM: %s", calls)
+	}
+}
+
 // Nothing lab-builder starts gets a MACLAB_ variable, the token among them.
 func TestChildEnvDropsMaclabVariables(t *testing.T) {
-	env := childEnv([]string{"HOME=/var/root", "MACLAB_BUILDER_TOKEN=bldr_x", "MACLAB_URL=https://x", "PATH=/usr/bin"})
+	env := childEnv([]string{"HOME=/var/root", "MACLAB_TOKEN=lab_x", "MACLAB_URL=https://x", "PATH=/usr/bin"})
 	if strings.Join(env, " ") != "HOME=/var/root PATH=/usr/bin" {
 		t.Fatalf("env %q", env)
 	}
-	t.Setenv("MACLAB_BUILDER_TOKEN", "bldr_secret")
+	t.Setenv("MACLAB_TOKEN", "bldr_secret")
 	cmd := (&builder{}).container(context.Background(), "list")
 	for _, e := range cmd.Env {
 		if strings.HasPrefix(e, "MACLAB_") || strings.Contains(e, "bldr_secret") {

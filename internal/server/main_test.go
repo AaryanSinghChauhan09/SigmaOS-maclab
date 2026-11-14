@@ -43,6 +43,12 @@ func TestMain(m *testing.M) {
 	if dir, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
 		os.Setenv("TMPDIR", dir)
 	}
+	// The tests' git finds https://github.com/labtest/<name> in a folder of
+	// this machine: a source has to be a public GitHub repository, and no
+	// test reaches GitHub.
+	os.Setenv("GIT_CONFIG_COUNT", "1")
+	os.Setenv("GIT_CONFIG_KEY_0", "url.file://"+testGitRoot+"/.insteadOf")
+	os.Setenv("GIT_CONFIG_VALUE_0", testGitHub)
 	flag.Parse()
 	n := shards()
 	if n < 2 {
@@ -171,3 +177,9 @@ func needsLinux(t *testing.T, what string) {
 		t.Skip("needs Linux: " + what)
 	}
 }
+
+// testGitHub is where the tests' repositories are said to be, and
+// testGitRoot the folder git is told to find them in (gitRepo makes them).
+const testGitHub = "https://github.com/labtest/"
+
+var testGitRoot = filepath.Join(os.TempDir(), "labgit-"+strconv.Itoa(os.Getpid()))

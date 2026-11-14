@@ -1,7 +1,7 @@
 package server
 
-// Kernel builds from source. A builder host (lab-builder on the controller
-// Mac) long-polls for work, streams its log here, and uploads the artifact.
+// Kernel builds from source. The Builder (lab-builder on the mini)
+// long-polls for work, streams its log here, and uploads the artifact.
 // Builds are keyed by what determines the kernel, so the same commit and
 // config is only ever built once.
 
@@ -46,6 +46,9 @@ type buildMgr struct {
 	// named builders' holds, guarded by it. See builders.go.
 	state  sync.Mutex
 	claims map[string]*claim
+
+	// team orders the M team's requests for a build (see askedBy).
+	team sync.Mutex
 }
 
 func newBuildMgr(s *Server) *buildMgr {
@@ -155,7 +158,7 @@ func (s *Server) EnsureBuild(ctx context.Context, req api.BuildRequest) (*api.Bu
 	if req.Recipe != "" {
 		return s.ensurePackageBuild(ctx, req)
 	}
-	src, err := parseSource(req.Source)
+	src, err := s.source(req.Source)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +180,8 @@ func (s *Server) EnsureBuild(ctx context.Context, req api.BuildRequest) (*api.Bu
 	}
 	now := s.now()
 	b := &api.Build{ID: "b" + now.Format("0102-150405") + "-" + randHex(2), Key: buildKey(src, cfg), Source: src,
-		Device: req.Device, ConfigSHA: cfg, State: api.BuildQueued, Created: now, Updated: now}
+		Device: req.Device, ConfigSHA: cfg, State: api.BuildQueued, Created: now, Updated: now,
+		AskedBy: req.AskedBy, AskedByID: req.AskedByID, ByTeam: req.ByTeam}
 	if req.Config != "" {
 		b.Device, b.ConfigName = "", req.ConfigName // built with the uploaded config, not a Mac's
 	}
@@ -202,7 +206,7 @@ func (s *Server) ensurePackageBuild(ctx context.Context, req api.BuildRequest) (
 	var src api.Source
 	if req.Source != "" {
 		var err error
-		if src, err = parseSource(req.Source); err != nil {
+		if src, err = s.source(req.Source); err != nil {
 			return nil, err
 		}
 		if src, err = resolve(ctx, src); err != nil {
@@ -212,7 +216,8 @@ func (s *Server) ensurePackageBuild(ctx context.Context, req api.BuildRequest) (
 	now := s.now()
 	return s.queueBuild(&api.Build{ID: "b" + now.Format("0102-150405") + "-" + randHex(2), Kind: api.BuildPackage,
 		Key: packageKey(src, req.Recipe, req.Pkgrel), Source: src, Recipe: req.Recipe, RecipeDir: req.RecipeDir,
-		Pkgrel: req.Pkgrel, State: api.BuildQueued, Created: now, Updated: now}, req.Force)
+		Pkgrel: req.Pkgrel, State: api.BuildQueued, Created: now, Updated: now,
+		AskedBy: req.AskedBy, AskedByID: req.AskedByID, ByTeam: req.ByTeam}, req.Force)
 }
 
 var rePkgrel = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
@@ -240,7 +245,7 @@ func (s *Server) queueBuild(b *api.Build, force bool) (*api.Build, error) {
 	if err := s.store.saveBuild(b); err != nil {
 		return nil, err
 	}
-	s.log.Printf("build %s queued: %s", b.ID, buildWhat(b))
+	s.log.Printf("build %s queued for %s: %s", b.ID, orStr(b.AskedBy, "labd"), buildWhat(b))
 	s.hub.publish("build", "", b)
 	go s.builds.bump()
 	return b, nil
@@ -333,22 +338,13 @@ func (s *Server) estimate(like *api.Build) float64 {
 
 // ---- builder host API ----
 
-// hBuilderPoll hands the oldest queued build to a builder, long-polling up to
-// 25s. Builders say which kinds they can run (?kinds=kernel,package); one that
-// doesn't say only gets kernel builds. A named builder is known by its own
-// name and gets only the kinds it was given; ?host names a host that uses the
-// shared builder.token.
+// hBuilderPoll hands the oldest queued build to a builder that runs none,
+// long-polling up to 25s. Builders say which kinds they can run
+// (?kinds=kernel,package); one that doesn't say only gets kernel builds. A
+// builder is known by its own name and gets only the kinds it was given.
 func (s *Server) hBuilderPoll(w http.ResponseWriter, r *http.Request) {
 	c := builderCredOf(r)
-	host := r.URL.Query().Get("host")
-	if !c.shared() {
-		host = c.name
-	} else if host == "" {
-		host = "builder"
-	} else if s.store.hasBuilder(host) {
-		httpErr(w, 409, "%s is a named builder; the shared builder token can't poll as it", host)
-		return
-	}
+	host := c.name
 	where := kindsWhere(c, r.URL.Query().Get("kinds"))
 	deadline := s.now().Add(25 * time.Second)
 	for {
@@ -435,16 +431,7 @@ func (s *Server) hBuilderProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hBuilderArtifact(w http.ResponseWriter, r *http.Request) {
-	if c := builderCredOf(r); !c.shared() {
-		s.namedUpload(w, r, c)
-		return
-	}
-	sha, n, err := s.storeArtifact(r.Body)
-	if err != nil {
-		s.artifactErr(w, err)
-		return
-	}
-	writeJSON(w, map[string]any{"sha256": sha, "size": n})
+	s.namedUpload(w, r, builderCredOf(r))
 }
 
 func (s *Server) hBuilderDone(w http.ResponseWriter, r *http.Request) {
@@ -513,7 +500,7 @@ func (s *Server) hBuilderDone(w http.ResponseWriter, r *http.Request) {
 			b.State, b.Error = api.BuildFailed, "builder reported outputs that were never uploaded"
 			break
 		}
-		if !c.shared() && !cl.uploadedAll(d) {
+		if !cl.uploadedAll(d) {
 			b.State, b.Error = api.BuildFailed, "builder "+c.name+" reported outputs it did not upload for this build"
 			break
 		}
@@ -533,6 +520,12 @@ func (s *Server) hCreateBuild(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "%v", err)
 		return
 	}
+	unlock, err := s.askedBy(r, &req)
+	if err != nil {
+		httpErr(w, statusOf(err), "%v", err)
+		return
+	}
+	defer unlock()
 	b, err := s.EnsureBuild(r.Context(), req)
 	if err != nil {
 		httpErr(w, 400, "%v", err)
@@ -672,23 +665,11 @@ func (s *Server) hCancelBuild(w http.ResponseWriter, r *http.Request) {
 }
 
 // reconcileRunningBuilds settles, when labd starts and before it serves, the
-// builds that were running when it stopped. A named builder's claim is not
-// kept across a restart (builders.go), so what it was running fails. Anything
-// else is usually still running on its builder, which keeps reporting to the
-// new labd: it gets the same silence window as any build.
+// builds that were running when it stopped. A builder's claim is not kept
+// across a restart (builders.go), so what it was running fails.
 func (s *Server) reconcileRunningBuilds() {
 	running, _ := s.store.builds(`state='running'`)
-	var orphaned []*api.Build
-	s.builds.mu.Lock()
 	for _, b := range running {
-		if s.store.hasBuilder(b.Builder) {
-			orphaned = append(orphaned, b)
-			continue
-		}
-		s.builds.beat[b.ID] = s.now()
-	}
-	s.builds.mu.Unlock()
-	for _, b := range orphaned {
 		b.State, b.Error, b.ETA = api.BuildFailed, "labd restarted while builder "+b.Builder+" was running it", 0
 		s.saveBuild(b)
 	}

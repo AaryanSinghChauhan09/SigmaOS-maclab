@@ -34,7 +34,13 @@ type Client struct {
 	// Note is told what a transfer is doing when it is worth a line, such as
 	// an upload that resumes; nil says nothing.
 	Note func(format string, args ...any) `json:"-"`
-	http *http.Client
+	// UploadFor names the Mac an upload is for. An M team member uploads
+	// only for a job on a Mac they lease, and labd asks which.
+	UploadFor string `json:"-"`
+	// UploadForBuild marks an upload as a build's input (a config, a
+	// recipe), so that whoever may not build is told so by the upload.
+	UploadForBuild bool `json:"-"`
+	http           *http.Client
 	// release is the Lab release the lab said it runs, on its last answer.
 	release atomic.Value
 	// Tests shorten these: the longest file sent in one request, and the
@@ -203,7 +209,14 @@ func (c *Client) OOBStatus(ctx context.Context, name string) (map[string]any, er
 // one request up to 32 MiB, in numbered parts beyond, which a later Upload
 // of the same file resumes.
 func (c *Client) Upload(ctx context.Context, path string) (string, error) {
-	return upload.Sender{Client: c.http, URL: c.URL + "/api/artifacts", Token: c.Token, PartBytes: c.partBytes, Pause: c.pause, Note: c.Note}.File(ctx, path)
+	q := url.Values{}
+	if c.UploadFor != "" {
+		q.Set("device", c.UploadFor)
+	}
+	if c.UploadForBuild {
+		q.Set("purpose", "build")
+	}
+	return upload.Sender{Client: c.http, URL: c.URL + "/api/artifacts", Query: q, Token: c.Token, PartBytes: c.partBytes, Pause: c.pause, Note: c.Note}.File(ctx, path)
 }
 
 func (c *Client) Submit(ctx context.Context, spec api.JobSpec) (*api.Job, error) {

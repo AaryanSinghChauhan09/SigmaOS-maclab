@@ -40,8 +40,15 @@ func TestKernelModuleBuildOutputs(t *testing.T) {
 				return sha
 			}
 			boot, inputs := store("boot archive"), store("module build archive")
-			src := api.Source{Repo: "https://example.invalid/kernel", SHA: strings.Repeat("a", 40)}
-			b := &api.Build{ID: "future-build", Source: src, ConfigSHA: strings.Repeat("b", 64), State: api.BuildRunning, Created: time.Now()}
+			// The Builder runs the build and uploaded both archives for it.
+			testBuilder(t, s)
+			_, gen, err := s.store.builderByToken(hashSecret("bld"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			src := api.Source{Repo: "https://github.com/labtest/kernel", SHA: strings.Repeat("a", 40)}
+			b := &api.Build{ID: "future-build", Source: src, ConfigSHA: strings.Repeat("b", 64), State: api.BuildRunning, Builder: testBuilderName, Created: time.Now()}
+			s.builds.claims[b.ID] = &claim{gen: gen, uploads: map[string]bool{boot: true, inputs: true}}
 			b.Key = buildKey(src, b.ConfigSHA)
 			if tc.old {
 				b.Key = "historical-key"
@@ -56,6 +63,7 @@ func TestKernelModuleBuildOutputs(t *testing.T) {
 			}
 			raw, _ := json.Marshal(result)
 			r := httptest.NewRequest("POST", "/done", bytes.NewReader(raw))
+			r = r.WithContext(context.WithValue(r.Context(), builderCredKey{}, builderCred{name: testBuilderName, gen: gen}))
 			r.SetPathValue("id", b.ID)
 			s.hBuilderDone(httptest.NewRecorder(), r)
 			got, err := s.getBuild(b.ID)

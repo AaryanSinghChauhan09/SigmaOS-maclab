@@ -179,7 +179,7 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	}
 	logger := log.New(logw, "labd: ", log.Ltime|log.Lmicroseconds)
 	cfg := Config{DataDir: t.TempDir(), Interval: 200 * time.Millisecond,
-		BootTimeout: 4 * time.Second, OfflineAfter: time.Hour, BuilderToken: "bld", Clock: clock,
+		BootTimeout: 4 * time.Second, OfflineAfter: time.Hour, Clock: clock,
 		RebootGrace: 2 * time.Second, LabClockSkew: time.Second, WatchdogIdleReset: 2 * time.Second,
 		OOBFactory: func(*api.Device) (oob.Controller, error) { return l.oob, nil }}
 	// labd's address is known before it starts, for its public URL.
@@ -201,6 +201,7 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 		t.Fatal(err)
 	}
 	l.s = s
+	testBuilder(t, s)
 	s.OnNotify(func(n Notification) { l.mu.Lock(); l.notes = append(l.notes, n); l.mu.Unlock() })
 	handler := s.Handler()
 	if c.wrap != nil {
@@ -649,24 +650,36 @@ func (l *lab) fakeBuilder(ctx context.Context, builds *int) {
 	}
 	for ctx.Err() == nil {
 		var a api.BuildAssignment
-		if post("/api/builder/poll?host=fake", nil, &a) != 200 {
+		if post("/api/builder/poll", nil, &a) != 200 {
 			continue
 		}
 		*builds++
 		lines := `{"lines":["==> fetch","@@stage fetch","@@stage build","@@progress 50 100","CC some/file.o warning: x","@@progress 100 100"]}`
 		post("/api/builder/builds/"+a.Build.ID+"/progress", strings.NewReader(lines), nil)
 		var up struct{ SHA256 string }
-		post("/api/builder/artifacts", strings.NewReader("krel=7.2-src"+a.LabVer+" behavior=ok"), &up)
+		post("/api/builder/artifacts?build="+a.Build.ID, strings.NewReader("krel=7.2-src"+a.LabVer+" behavior=ok"), &up)
 		var headers struct{ SHA256 string }
-		post("/api/builder/artifacts", strings.NewReader("simulated module build inputs"), &headers)
+		post("/api/builder/artifacts?build="+a.Build.ID, strings.NewReader("simulated module build inputs"), &headers)
 		files := []api.BuildFile{{Name: "kernel.tar.zst", SHA256: up.SHA256}, {Name: "module-build.tar.zst", SHA256: headers.SHA256}}
 		done, _ := json.Marshal(api.BuildResult{Release: "7.2-src" + a.LabVer, Artifact: up.SHA256, Files: files, Seconds: 1})
 		post("/api/builder/builds/"+a.Build.ID+"/done", bytes.NewReader(done), nil)
 	}
 }
 
+// gitRepo makes a repository on this machine and returns the public GitHub
+// address the tests' git finds it under (see testGitRoot).
 func gitRepo(t *testing.T) string {
-	dir := t.TempDir()
+	if err := os.MkdirAll(testGitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(testGitRoot, "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.RemoveAll(dir)
+		os.Remove(testGitRoot)
+	})
 	run := func(args ...string) {
 		c := exec.Command("git", args...)
 		c.Dir = dir
@@ -679,7 +692,7 @@ func gitRepo(t *testing.T) string {
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("all:\n"), 0o644)
 	run("add", ".")
 	run("commit", "-q", "-m", "x")
-	return "file://" + dir + "@main"
+	return testGitHub + filepath.Base(dir) + "#main"
 }
 
 func TestSourceBuildJobAndReuse(t *testing.T) {
@@ -726,7 +739,7 @@ func TestSourceBuildJobAndReuse(t *testing.T) {
 func TestBuildFailureFailsJob(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
-	j := l.run(api.JobSpec{Source: "file:///nonexistent/repo.git@main"})
+	j := l.run(api.JobSpec{Source: testGitHub + "nonexistent#main"})
 	l.expect(j, api.OutcomeBuildFailed)
 
 	// A build that starts and fails still links the job to its build and log.
@@ -734,7 +747,7 @@ func TestBuildFailureFailsJob(t *testing.T) {
 	defer cancel()
 	go func() {
 		for ctx.Err() == nil {
-			req, _ := http.NewRequestWithContext(ctx, "POST", l.url+"/api/builder/poll?host=x", nil)
+			req, _ := http.NewRequestWithContext(ctx, "POST", l.url+"/api/builder/poll", nil)
 			req.Header.Set("Authorization", "Bearer bld")
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil || resp.StatusCode != 200 {
@@ -773,7 +786,7 @@ func TestPackageBuild(t *testing.T) {
 	poll := func(kinds string, wait time.Duration) (api.BuildAssignment, int) {
 		pctx, done := context.WithTimeout(ctx, wait)
 		defer done()
-		req, _ := http.NewRequestWithContext(pctx, "POST", l.url+"/api/builder/poll?host=x&kinds="+kinds, nil)
+		req, _ := http.NewRequestWithContext(pctx, "POST", l.url+"/api/builder/poll?kinds="+kinds, nil)
 		req.Header.Set("Authorization", "Bearer bld")
 		var a api.BuildAssignment
 		resp, err := http.DefaultClient.Do(req)
@@ -793,7 +806,7 @@ func TestPackageBuild(t *testing.T) {
 		t.Fatalf("package builder got %d %+v labver %q", code, a.Build, a.LabVer)
 	}
 	upload := func(content string) string {
-		req, _ := http.NewRequest("POST", l.url+"/api/builder/artifacts", strings.NewReader(content))
+		req, _ := http.NewRequest("POST", l.url+"/api/builder/artifacts?build="+b.ID, strings.NewReader(content))
 		req.Header.Set("Authorization", "Bearer bld")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -1463,7 +1476,7 @@ func TestRetryPinsCommit(t *testing.T) {
 	builds := 0
 	go l.fakeBuilder(ctx, &builds)
 
-	src := gitRepo(t) // file://<dir>@main
+	src := gitRepo(t) // https://github.com/labtest/<dir>#main
 	j := l.run(api.JobSpec{Source: src})
 	l.expect(j, api.OutcomePass)
 	first, err := l.s.getBuild(j.Spec.Build)
@@ -1471,7 +1484,7 @@ func TestRetryPinsCommit(t *testing.T) {
 		t.Fatalf("build %+v %v", first, err)
 	}
 	// main moves on, and the kernel the first job booted is collected
-	dir := strings.TrimSuffix(strings.TrimPrefix(src, "file://"), "@main")
+	dir := filepath.Join(testGitRoot, strings.TrimSuffix(strings.TrimPrefix(src, testGitHub), "#main"))
 	commit := exec.Command("git", "-c", "user.name=t", "-c", "user.email=816217+joshuaswarren@users.noreply.github.com", "commit", "-q", "--allow-empty", "-m", "moved on")
 	commit.Dir = dir
 	if out, err := commit.CombinedOutput(); err != nil {
@@ -1497,7 +1510,7 @@ func TestRetryPinsCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "file://" + dir + "#" + first.Source.SHA; r.Spec.Source != want || r.Spec.Kernel != "" || r.Spec.Build != "" || r.Spec.Config != first.ConfigSHA || r.RetryOf != j.ID {
+	if want := strings.TrimSuffix(src, "#main") + "#" + first.Source.SHA; r.Spec.Source != want || r.Spec.Kernel != "" || r.Spec.Build != "" || r.Spec.Config != first.ConfigSHA || r.RetryOf != j.ID {
 		t.Fatalf("retry %+v, want source %s and config %s", r, want, first.ConfigSHA)
 	}
 	if len(r.Events) != 2 || !strings.Contains(r.Events[1].Msg, "builds with the config build "+first.ID+" used") {
@@ -1588,47 +1601,38 @@ func TestBuildWithUploadedConfig(t *testing.T) {
 	}
 }
 
-func TestRunningBuildSurvivesLabdRestart(t *testing.T) {
+// A builder's claim on a build lives in labd's memory, so a labd restart
+// fails a running build: an accepted risk, by name.
+func TestALabdRestartFailsARunningBuild(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dir := t.TempDir()
 	quiet := log.New(io.Discard, "", 0)
-	s1, err := newWith(harnessMaintainer, "a", ctx, Config{DataDir: dir, BuilderToken: "bld"}, quiet)
+	s1, err := newWith(harnessMaintainer, "a", ctx, Config{DataDir: dir}, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
+	testBuilder(t, s1)
 	now := time.Now()
 	b := &api.Build{ID: "b1004-000000-abcd", Key: "k", Source: api.Source{Repo: "https://github.com/x/y", SHA: strings.Repeat("a", 40)},
-		ConfigSHA: "c", State: api.BuildRunning, Stage: "build", Created: now, Updated: now}
+		ConfigSHA: "c", State: api.BuildRunning, Builder: testBuilderName, Stage: "build", Created: now, Updated: now}
 	s1.saveBuild(b)
-	// labd restarts while the builder keeps compiling.
-	s2, err := newWith(harnessMaintainer, "a", ctx, Config{DataDir: dir, BuilderToken: "bld"}, quiet)
+	s2, err := newWith(harnessMaintainer, "a", ctx, Config{DataDir: dir}, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond) // let buildMonitor's startup pass run
-	if got, _ := s2.getBuild(b.ID); got.State != api.BuildRunning {
+	got, _ := s2.getBuild(b.ID)
+	if got.State != api.BuildFailed || !strings.Contains(got.Error, "labd restarted") {
 		t.Fatalf("after restart: %s %s", got.State, got.Error)
 	}
+	// What the builder still sends for it is refused.
 	hs := httptest.NewServer(s2.Handler())
 	defer hs.Close()
-	up, _ := http.NewRequest("POST", hs.URL+"/api/builder/artifacts", strings.NewReader("kernel"))
-	up.Header.Set("Authorization", "Bearer bld")
-	resp, err := http.DefaultClient.Do(up)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var art struct{ SHA256 string }
-	json.NewDecoder(resp.Body).Decode(&art)
-	resp.Body.Close()
-	done, _ := json.Marshal(api.BuildResult{Release: "7.2-x", Artifact: art.SHA256, Seconds: 1})
+	done, _ := json.Marshal(api.BuildResult{Release: "7.2-x", Seconds: 1})
 	req, _ := http.NewRequest("POST", hs.URL+"/api/builder/builds/"+b.ID+"/done", bytes.NewReader(done))
 	req.Header.Set("Authorization", "Bearer bld")
-	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 204 {
-		t.Fatalf("done: %v %v", resp, err)
-	}
-	if got, _ := s2.getBuild(b.ID); got.State != api.BuildDone {
-		t.Fatalf("after done: %s %s", got.State, got.Error)
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 403 {
+		t.Fatalf("done after the restart: %v %v", resp, err)
 	}
 }
 

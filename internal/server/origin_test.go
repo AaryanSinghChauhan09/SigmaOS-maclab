@@ -19,10 +19,11 @@ const labdAt = "http://10.1.1.5:7770"
 func TestSameOrigin(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(), BuilderToken: "bld"}, log.New(io.Discard, "", 0))
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir()}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
+	testBuilder(t, s)
 	h := s.Handler()
 	try := func(method, url, origin, site, token string) int {
 		t.Helper()

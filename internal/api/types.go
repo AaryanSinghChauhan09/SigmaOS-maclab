@@ -1187,12 +1187,19 @@ type Build struct {
 	Size       int64       `json:"size,omitempty"`
 	Error      string      `json:"error,omitempty"`
 	Builder    string      `json:"builder,omitempty"`
-	Reused     bool        `json:"reused,omitempty"` // an earlier identical build was reused
-	Created    time.Time   `json:"created"`
-	Started    time.Time   `json:"started,omitempty"`
-	Updated    time.Time   `json:"updated"`
-	Seconds    float64     `json:"seconds,omitempty"`
-	LogLines   int         `json:"log_lines"`
+	// AskedBy is the handle, then, of whoever asked for the build, and
+	// AskedByID their account id; a build a job asked for records the job's
+	// person. ByTeam marks an M team member's build, which waits behind the
+	// Maintainers'.
+	AskedBy   string    `json:"asked_by,omitempty"`
+	AskedByID int64     `json:"asked_by_id,omitempty"`
+	ByTeam    bool      `json:"by_team,omitempty"`
+	Reused    bool      `json:"reused,omitempty"` // an earlier identical build was reused
+	Created   time.Time `json:"created"`
+	Started   time.Time `json:"started,omitempty"`
+	Updated   time.Time `json:"updated"`
+	Seconds   float64   `json:"seconds,omitempty"`
+	LogLines  int       `json:"log_lines"`
 }
 
 type BuildRequest struct {
@@ -1208,6 +1215,12 @@ type BuildRequest struct {
 	Recipe    string `json:"recipe,omitempty"`
 	RecipeDir string `json:"recipe_dir,omitempty"`
 	Pkgrel    string `json:"pkgrel,omitempty"`
+
+	// Who asked, set by labd from the caller's credential and never read
+	// from a request.
+	AskedBy   string `json:"-"`
+	AskedByID int64  `json:"-"`
+	ByTeam    bool   `json:"-"`
 }
 
 // BuildAssignment is what a builder host receives.
@@ -1385,20 +1398,16 @@ type RemovedBuilder struct {
 	FailedBuilds []string `json:"failed_builds"`
 }
 
-// BuilderSelf is who labd takes a builder's token for. Shared is the data
-// directory's builder.token, the controller's own builder.
+// BuilderSelf is who labd takes a builder's token for.
 type BuilderSelf struct {
-	Name   string   `json:"name,omitempty"`
-	Kinds  []string `json:"kinds,omitempty"`
-	Shared bool     `json:"shared,omitempty"`
+	Name  string   `json:"name,omitempty"`
+	Kinds []string `json:"kinds,omitempty"`
 }
 
-// BuilderStatus is one builder in GET /api/builders: a named builder, or a
-// host that polled with the shared builder.token.
+// BuilderStatus is one builder in GET /api/builders.
 type BuilderStatus struct {
 	Host       string    `json:"host"`
 	Registered bool      `json:"registered,omitempty"`
-	Shared     bool      `json:"shared,omitempty"`
 	Kinds      []string  `json:"kinds,omitempty"`
 	Added      time.Time `json:"added,omitzero"`
 	AddedBy    string    `json:"added_by,omitempty"`

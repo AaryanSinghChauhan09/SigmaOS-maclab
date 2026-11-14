@@ -46,6 +46,8 @@ func main() {
 	stageTimeout := flag.Duration("stage-timeout", 45*time.Minute, "time a Mac gets for each attempt to stage a kernel, download included")
 	watchdogOpenTimeout := flag.Duration("watchdog-open-timeout", 0, "watchdog.open_timeout on every Lab boot: how long the kernel feeds the hardware watchdog before systemd must open it; an early hang resets about 30s after it (0 is half the job's boot timeout, at least 120s)")
 	artifactGB := flag.Int64("artifact-budget-gb", 20, "cap on the kernel artifact store; unreferenced artifacts go first")
+	var sourceHosts hostList
+	flag.Var(&sourceHosts, "source-host", "a host a build's public source may come from beside github.com, such as git.kernel.org (repeatable)")
 	partsAtOnce := flag.Int("parts-at-once", 1, "how many parts of an upload labd tells a client to send at the same time: 1 or 4")
 	omt := flag.Bool("omt", true, "run omarchy-m-test (github.com/maralcbr/omarchy-m-testing) in every job on Macs with a desktop user, and compare it with the known-good kernel")
 	omtSite := flag.String("omt-site", "https://omarchy-m-testing.org", "where omarchy-m-test reports are published (lab publish, --publish); empty never publishes")
@@ -123,14 +125,9 @@ func main() {
 	if err := os.MkdirAll(*data, 0o700); err != nil {
 		log.Fatal(err)
 	}
-	btokPath := filepath.Join(*data, "builder.token")
-	btok, err := os.ReadFile(btokPath)
-	if os.IsNotExist(err) {
-		btok = []byte("bld_" + randHex())
-		if err := os.WriteFile(btokPath, btok, 0o600); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("created builder token in %s (give it to lab-builder)\n", btokPath)
+	hosts, err := server.SourceHosts(sourceHosts)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -141,7 +138,7 @@ func main() {
 		PublicURL: pub, Alias: *alias, Preview: *preview, Release: version, Terms: terms, GitHub: app, Admins: admins, OOB: controller, MachineIDKey: idKey, Signal: sender, SignalDir: *signalDir,
 		OMT: *omt, OMTSite: *omtSite, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
 		BootTimeout: *bootTimeout, OfflineAfter: *offlineAfter, AliveWindow: *aliveWindow, QuietGrace: *quietGrace, StageTimeout: *stageTimeout, WatchdogOpenTimeout: *watchdogOpenTimeout, RebootWarning: *rebootWarning, NtfyURL: *ntfy, NotifyCmd: *notifyCmd,
-		BuilderToken: strings.TrimSpace(string(btok)), ArtifactBudget: *artifactGB << 30, Transfers: server.Transfers{AtOnce: *partsAtOnce},
+		SourceHosts: hosts, ArtifactBudget: *artifactGB << 30, Transfers: server.Transfers{AtOnce: *partsAtOnce},
 		AgentBinary: filepath.Join(filepath.Dir(exe), "lab-agent-linux-arm64")}, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -228,4 +225,14 @@ func randHex() string {
 	f.Read(b)
 	f.Close()
 	return fmt.Sprintf("%x", b)
+}
+
+// hostList is a flag given once for each host.
+type hostList []string
+
+func (l *hostList) String() string { return strings.Join(*l, ",") }
+
+func (l *hostList) Set(v string) error {
+	*l = append(*l, v)
+	return nil
 }

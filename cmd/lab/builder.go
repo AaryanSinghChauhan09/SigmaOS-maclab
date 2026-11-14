@@ -15,9 +15,9 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/client"
 )
 
-// builderCmd handles `lab builder ...`: the named builder hosts, each with a
+// builderCmd handles `lab builder ...`: the lab's Builder, the mini's, with a
 // token of its own that may only build. A builder's kernels boot as root on
-// lab Macs, so add only builders whose operators you trust with that.
+// lab Macs, so add only a builder whose operator you trust with that.
 func builderCmd(ctx context.Context, c *client.Client, args []string) error {
 	const use = "lab builder add <name> [--kinds kernel[,package]] [-o FILE] | remove <name> [--generation G] | list"
 	if len(args) < 1 {
@@ -58,12 +58,7 @@ func builderCmd(ctx context.Context, c *client.Client, args []string) error {
 		w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 		fmt.Fprintln(w, "BUILDER\tKINDS\tADDED\tBY\tLAST SEEN\tBUILD")
 		for _, b := range l {
-			kinds, added := strings.Join(b.Kinds, ","), "-"
-			if b.Shared {
-				kinds = "shared token"
-			} else {
-				added = b.Added.Format(time.DateOnly)
-			}
+			kinds, added := strings.Join(b.Kinds, ","), b.Added.Format(time.DateOnly)
 			seen := "never"
 			if !b.LastSeen.IsZero() {
 				seen = b.LastSeen.Format(time.DateTime)
@@ -128,9 +123,9 @@ func addBuilder(ctx context.Context, c *client.Client, name string, kinds []stri
 		fmt.Fprintf(stdout, "Builder %s (%s) added. Its token is in %s (mode 0600) and nowhere else.\n\n",
 			b.Name, strings.Join(b.Kinds, ","), file)
 	}
-	fmt.Fprintf(stdout, "On the builder Mac, keep the token in a file only root can read, and run lab-builder as root with\n\n"+
-		"  --server %s --token-file <that file>\n\n"+
-		"(see \"Builders\" in the README). Remove the builder with: lab builder remove %s\n"+
-		"Generation %s: lab builder remove %s --generation %s removes only this one.\n", c.URL, b.Name, b.Generation, b.Name, b.Generation)
+	fmt.Fprintf(stdout, "On the mini, hand the token's file to the set-up, which puts it where only root reads it and starts the Builder:\n\n"+
+		"  sudo scripts/mini/setup --builder-token <that file>\n\n"+
+		"(see \"The Builder\" in the README). Remove the builder with: lab builder remove %s\n"+
+		"Generation %s: lab builder remove %s --generation %s removes only this one.\n", b.Name, b.Generation, b.Name, b.Generation)
 	return nil
 }

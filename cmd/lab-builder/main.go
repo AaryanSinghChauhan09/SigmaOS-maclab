@@ -1,7 +1,12 @@
-// Command lab-builder builds kernels for the lab on a controller Mac. Each
-// build runs `kbuild` in an Apple `container` micro-VM, or with --runtime
-// docker in a Docker container (Colima, Docker Desktop); the only state it
-// keeps is one cache volume.
+// Command lab-builder is the lab's Builder: it builds kernels and packages on
+// the mini, one build at a time. Each build runs `kbuild` or `pkgbuild` in an
+// Apple `container` micro-VM, or with --runtime docker in a Docker container
+// (Colima, Docker Desktop); the only state it keeps is its cache volumes.
+//
+// It never starts `container`'s server: a LaunchDaemon of the mini does, at
+// boot and again whenever it finds it stopped. A build's source is public,
+// so the Builder holds no credential but its own token, in a file only the
+// account it runs as (root) can read.
 package main
 
 import (
@@ -13,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -22,6 +28,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,8 +37,22 @@ import (
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/oob"
 	"github.com/omacom/omarchy-maclab/internal/upload"
-	"io/fs"
+)
+
+// The limits of a build: 10 of the mini's 18 cores and 16 of its 64 GB. The
+// cores are a setting only so far as the Builder's gate test steps them
+// down, 10, then 8, then 6; the memory is not one.
+const buildMemory = "16G"
+
+var buildCores = []string{"10", "8", "6"}
+
+// The sizes of what the Builder keeps: the kernel cache volume and the
+// package volume. The mini's set-up makes them at these sizes.
+const (
+	kernelVolumeSize  = "40G"
+	packageVolumeSize = "120G"
 )
 
 type builder struct {
@@ -42,112 +63,126 @@ type builder struct {
 	cpus, mem           string
 	pkgJobs             string // OMARCHY_BUILD_JOBS for package builds
 	io                  string
-	githubToken         string // file holding a GitHub token for private repos
 	runtime             string // "container" (Apple container) or "docker"
 	docker              string // the docker CLI
 	dockerContext       string // its --context, if any
 	asUser              *user.User
 	http                *http.Client
 	rt                  http.RoundTripper // every request to labd, with labhttp's policy
+	// What runs `container`, and what puts it in the user's session.
+	containerBin, launchctl string
 }
 
-func main() {
+// configure reads the flags. The token comes from --token-file and from
+// nowhere else: not from an argument, which ps shows, and not from the
+// environment.
+func configure(args []string, out io.Writer) (*builder, error) {
 	home, _ := os.UserHomeDir()
-	hostname, _ := os.Hostname()
-	b := &builder{}
-	flag.StringVar(&b.server, "server", os.Getenv("MACLAB_URL"), "labd URL, e.g. https://labd.example.com/maclab")
-	caFile := flag.String("ca-file", os.Getenv("MACLAB_CA_FILE"), "PEM file of CA certificates for labd's https certificate, when the system doesn't trust it")
-	plain := flag.Bool("allow-plain-http", os.Getenv("MACLAB_ALLOW_PLAIN_HTTP") == "1", "allow an http:// labd on another machine: the builder token then crosses the network unencrypted")
-	flag.StringVar(&b.token, "token", "", "builder token; it shows in ps, so prefer --token-file (or MACLAB_BUILDER_TOKEN)")
-	tokenFile := flag.String("token-file", "", "file holding the builder token (from lab builder add -o, or labd's builder.token); readable by its owner only")
-	flag.StringVar(&b.host, "name", strings.Split(hostname, ".")[0], "name shown in the lab when using the shared builder.token (a named builder's name comes from labd)")
-	flag.StringVar(&b.prefix, "container-prefix", "maclab", "build VMs are named <prefix>-<build id>; give a second lab-builder on this Mac its own")
-	flag.StringVar(&b.image, "image", "maclab-kbuild:1", "builder image")
-	flag.StringVar(&b.volume, "volume", "maclab-cache", "cache volume (create with: container volume create -s 40G maclab-cache)")
-	flag.StringVar(&b.pkgImage, "pkg-image", "maclab-pkgbuild:1", "package builder image (builder/pkg); empty to take kernel builds only")
-	flag.StringVar(&b.pkgVolume, "pkg-volume", "maclab-pkgcache", "package build volume; needs room for a whole kernel tree (create with: container volume create -s 120G maclab-pkgcache)")
-	flag.StringVar(&b.cpus, "cpus", "10", "")
-	pkgJobs := flag.String("pkg-jobs", "", "parallel jobs for package builds, given to the recipe as OMARCHY_BUILD_JOBS (default: --cpus)")
-	flag.StringVar(&b.mem, "memory", "16G", "")
-	flag.StringVar(&b.io, "io", "", "scratch dir for inputs and the artifact; emptied after each build (default ~/maclab/io of the container user)")
-	flag.StringVar(&b.githubToken, "github-token-file", "", "GitHub token for cloning private github.com repos (default ~/.config/maclab/github-token of the container user)")
-	as := flag.String("as-user", "", "run container as this user, in their login session. Lets lab-builder run as a root daemon, which macOS Local Network privacy does not block")
-	flag.StringVar(&b.runtime, "runtime", "container", "what runs the builds: container (Apple container) or docker (Colima, Docker Desktop)")
-	flag.StringVar(&b.docker, "docker", "docker", "the docker CLI, with --runtime docker")
-	flag.StringVar(&b.dockerContext, "context", "", "docker context, with --runtime docker (e.g. colima)")
-	flag.Parse()
-	tok, err := builderToken(b.token, *tokenFile, os.Getenv("MACLAB_BUILDER_TOKEN"))
-	if err != nil {
-		log.Fatal(err)
+	b := &builder{mem: buildMemory, containerBin: "/usr/local/bin/container", launchctl: "/bin/launchctl"}
+	fl := flag.NewFlagSet("lab-builder", flag.ContinueOnError)
+	fl.SetOutput(out)
+	fl.StringVar(&b.server, "server", os.Getenv("MACLAB_URL"), "labd URL: on the mini http://127.0.0.1:7770")
+	caFile := fl.String("ca-file", os.Getenv("MACLAB_CA_FILE"), "PEM file of CA certificates for labd's https certificate, when the system doesn't trust it")
+	plain := fl.Bool("allow-plain-http", os.Getenv("MACLAB_ALLOW_PLAIN_HTTP") == "1", "allow an http:// labd on another machine: the builder token then crosses the network unencrypted")
+	tokenFile := fl.String("token-file", "", "file holding this builder's token (from lab builder add -o); it belongs to the account lab-builder runs as and nobody else reads it")
+	fl.StringVar(&b.prefix, "container-prefix", "maclab", "build VMs are named <prefix>-<build id>")
+	fl.StringVar(&b.image, "image", "maclab-kbuild:1", "builder image")
+	fl.StringVar(&b.volume, "volume", "maclab-cache", "kernel cache volume, "+kernelVolumeSize+" (the set-up makes it: container volume create -s "+kernelVolumeSize+" maclab-cache)")
+	fl.StringVar(&b.pkgImage, "pkg-image", "maclab-pkgbuild:1", "package builder image (builder/pkg); empty to take kernel builds only")
+	fl.StringVar(&b.pkgVolume, "pkg-volume", "maclab-pkgcache", "package build volume, "+packageVolumeSize+": room for a whole kernel tree (container volume create -s "+packageVolumeSize+" maclab-pkgcache)")
+	fl.StringVar(&b.cpus, "cpus", buildCores[0], "cores a build gets: "+strings.Join(buildCores, ", then ")+" if the Builder's gate test fails; every build gets "+buildMemory)
+	pkgJobs := fl.String("pkg-jobs", "", "parallel jobs for package builds, given to the recipe as OMARCHY_BUILD_JOBS (default: --cpus)")
+	fl.StringVar(&b.io, "io", "", "scratch dir for inputs and the artifact; emptied after each build (default ~/maclab/io of the container user)")
+	as := fl.String("as-user", "", "run container as this user, in their session. Lets lab-builder run as a root daemon, which macOS Local Network privacy does not block")
+	fl.StringVar(&b.runtime, "runtime", "container", "what runs the builds: container (Apple container) or docker (Colima, Docker Desktop)")
+	fl.StringVar(&b.docker, "docker", "docker", "the docker CLI, with --runtime docker")
+	fl.StringVar(&b.dockerContext, "context", "", "docker context, with --runtime docker (e.g. colima)")
+	if err := fl.Parse(args); err != nil {
+		return nil, err
 	}
-	b.token = tok
-	os.Unsetenv("MACLAB_BUILDER_TOKEN") // so nothing started from here inherits it
+	if fl.NArg() > 0 {
+		return nil, fmt.Errorf("lab-builder takes flags only, not %q", fl.Arg(0))
+	}
+	if !slices.Contains(buildCores, b.cpus) {
+		return nil, fmt.Errorf("--cpus %s: a build gets %s cores", b.cpus, strings.Join(buildCores, ", 8 or "))
+	}
+	var err error
 	if b.pkgJobs, err = packageJobs(*pkgJobs, b.cpus); err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	if !rePrefix.MatchString(b.prefix) {
-		log.Fatalf("--container-prefix %q: letters, digits, dots, dashes and underscores, up to 32", b.prefix)
+		return nil, fmt.Errorf("--container-prefix %q: letters, digits, dots, dashes and underscores, up to 32", b.prefix)
 	}
 	b.server = strings.TrimRight(b.server, "/")
+	if b.server == "" || *tokenFile == "" {
+		return nil, errors.New("need --server and --token-file: the token is read from a file and from nowhere else")
+	}
 	if err := labhttp.CheckServer(b.server, *plain); err != nil {
-		log.Fatal(err)
+		return nil, err
+	}
+	if b.token, err = builderToken(*tokenFile); err != nil {
+		return nil, err
 	}
 	pol := labhttp.Policy{AllowPlainHTTP: *plain}
 	if *caFile != "" {
 		ca, err := labhttp.ReadCAFile(*caFile)
 		if err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
 		pol.CAPEM = ca
 	}
 	rt, err := pol.Transport()
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	b.rt, b.http = rt, labhttp.Client(rt, 60*time.Second)
 	switch b.runtime {
 	case "container":
 		if b.dockerContext != "" {
-			log.Fatal("--context is for --runtime docker")
+			return nil, errors.New("--context is for --runtime docker")
 		}
 	case "docker":
 		p, err := exec.LookPath(b.docker)
 		if err != nil {
-			log.Fatalf("--runtime docker: %v", err)
+			return nil, fmt.Errorf("--runtime docker: %v", err)
 		}
 		b.docker = p
 	default:
-		log.Fatalf("--runtime %q: want container or docker", b.runtime)
+		return nil, fmt.Errorf("--runtime %q: want container or docker", b.runtime)
 	}
 	if *as != "" {
 		u, err := user.Lookup(*as)
 		if err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
 		b.asUser, home = u, u.HomeDir
 	}
 	if b.io == "" {
 		b.io = filepath.Join(home, "maclab", "io")
 	}
-	if b.githubToken == "" {
-		b.githubToken = filepath.Join(home, ".config", "maclab", "github-token")
+	return b, nil
+}
+
+func main() {
+	b, err := configure(os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		os.Exit(2)
 	}
-	if b.server == "" || b.token == "" {
-		log.Fatal("need --server and a token (--token-file)")
+	if err != nil {
+		log.Fatal(err)
 	}
-	b.server = strings.TrimRight(b.server, "/")
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	b.whoami(ctx)
-	log.Printf("lab-builder %s: %s, image %s, volume %s, %s cpus, %s, build VMs %s-*", b.host, b.runtime, b.image, b.volume, b.cpus, b.mem, b.prefix)
+	log.Printf("lab-builder %s: %s, image %s, volume %s (%s), %s cpus, %s, build VMs %s-*", b.host, b.runtime, b.image, b.volume, kernelVolumeSize, b.cpus, b.mem, b.prefix)
 	kinds := "kernel"
 	if b.pkgImage != "" {
 		kinds += ",package"
-		log.Printf("package builds: image %s, volume %s, %s jobs", b.pkgImage, b.pkgVolume, b.pkgJobs)
+		log.Printf("package builds: image %s, volume %s (%s), %s jobs", b.pkgImage, b.pkgVolume, packageVolumeSize, b.pkgJobs)
 	}
 	for ctx.Err() == nil {
 		var a api.BuildAssignment
-		code, err := b.call(ctx, "POST", "/api/builder/poll?host="+b.host+"&kinds="+kinds, nil, &a)
+		code, err := b.call(ctx, "POST", "/api/builder/poll?kinds="+kinds, nil, &a)
 		if err != nil {
 			log.Printf("poll: %v", err)
 			sleep(ctx, 10*time.Second)
@@ -163,7 +198,7 @@ func main() {
 // container runs the runtime's CLI (container, or docker with its context),
 // in the configured user's session if any.
 func (b *builder) container(ctx context.Context, args ...string) *exec.Cmd {
-	bin := "/usr/local/bin/container"
+	bin := b.containerBin
 	if b.runtime == "docker" {
 		bin = b.docker
 		if b.dockerContext != "" {
@@ -175,7 +210,7 @@ func (b *builder) container(ctx context.Context, args ...string) *exec.Cmd {
 		cmd = exec.CommandContext(ctx, bin, args...)
 	} else {
 		full := append([]string{"asuser", b.asUser.Uid, "sudo", "-n", "-u", b.asUser.Username, bin}, args...)
-		cmd = exec.CommandContext(ctx, "/bin/launchctl", full...)
+		cmd = exec.CommandContext(ctx, b.launchctl, full...)
 	}
 	cmd.Env = childEnv(os.Environ())
 	return cmd
@@ -183,32 +218,14 @@ func (b *builder) container(ctx context.Context, args ...string) *exec.Cmd {
 
 var rePrefix = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$`)
 
-// builderToken picks the builder token: --token-file, else --token, else
-// MACLAB_BUILDER_TOKEN. A token file must be readable by its owner only.
-func builderToken(flagTok, file, env string) (string, error) {
-	if file != "" {
-		st, err := os.Stat(file)
-		if err != nil {
-			return "", err
-		}
-		if st.Mode().Perm()&0o077 != 0 {
-			return "", fmt.Errorf("%s can be read by others than its owner (mode %o): chmod 600 it", file, st.Mode().Perm())
-		}
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			return "", err
-		}
-		tok := strings.TrimSpace(string(raw))
-		if tok == "" {
-			return "", fmt.Errorf("%s holds no token", file)
-		}
-		return tok, nil
+// builderToken reads this builder's token from its file, which must be a
+// plain file of the account lab-builder runs as that nobody else can read.
+// No error carries the token.
+func builderToken(file string) (string, error) {
+	if _, err := os.Lstat(file); os.IsNotExist(err) {
+		return "", fmt.Errorf("this builder's token is not at %s: a Maintainer makes it with lab builder add, and the mini's set-up puts it there", file)
 	}
-	if flagTok != "" {
-		log.Printf("warning: a token in --token shows in ps; use --token-file")
-		return flagTok, nil
-	}
-	return strings.TrimSpace(env), nil
+	return oob.ReadToken(file)
 }
 
 // packageJobs is the job count package builds get: --pkg-jobs, else --cpus,
@@ -236,7 +253,7 @@ func (b *builder) buildEnv(bd api.Build, labVer string) []string {
 }
 
 // childEnv is the environment for what lab-builder starts: its own, without
-// any MACLAB_ variable (the builder token among them).
+// any MACLAB_ variable.
 func childEnv(env []string) []string {
 	var out []string
 	for _, e := range env {
@@ -257,8 +274,6 @@ func (b *builder) whoami(ctx context.Context) {
 		log.Fatalf("labd at %s refused this builder's token: %v", b.server, err)
 	case err != nil:
 		log.Printf("labd at %s: %v (polling anyway)", b.server, err)
-	case me.Shared:
-		log.Printf("labd at %s takes this builder for its own (the shared builder.token), as %s", b.server, b.host)
 	default:
 		b.host = me.Name
 		log.Printf("labd at %s knows this builder as %s (%s)", b.server, me.Name, strings.Join(me.Kinds, ","))
@@ -459,16 +474,6 @@ func (b *builder) run(ctx context.Context, a api.BuildAssignment) {
 		return
 	}
 	b.chown(filepath.Join(dir, input))
-	// Private GitHub repos: the token goes into this build's scratch dir only
-	// (never onto a command line) and kbuild deletes it right after fetching.
-	if strings.HasPrefix(bd.Source.Repo, "https://github.com/") {
-		if tok, err := os.ReadFile(b.githubToken); err == nil && len(strings.TrimSpace(string(tok))) > 0 {
-			p := filepath.Join(dir, "github-token")
-			if err := os.WriteFile(p, []byte(strings.TrimSpace(string(tok))), 0o600); err == nil {
-				b.chown(p)
-			}
-		}
-	}
 	vm := b.prefix + "-" + bd.ID
 	pr, pw := io.Pipe()
 	scanned := make(chan struct{})

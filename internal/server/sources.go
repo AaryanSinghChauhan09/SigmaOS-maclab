@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,9 +15,18 @@ import (
 
 var reHex40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// A build's source is public: labd and the Builder hold no credential for
+// one. It is a repository at https://github.com/<owner>/<repo>, or at a host
+// the server's configuration lists (Config.SourceHosts). An address that
+// carries credentials is refused whatever its host. A refused source is
+// never contacted: the rule is applied before anything is resolved.
+
+var reGitHubName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}$`)
+
 // parseSource understands what people paste: GitHub repo, branch (tree/...),
-// commit and pull request URLs, or any git URL with #ref or @ref.
-func parseSource(in string) (api.Source, error) {
+// commit and pull request URLs, or a git URL at a listed host with #ref or
+// @ref. hosts are the hosts allowed beside github.com.
+func parseSource(in string, hosts ...string) (api.Source, error) {
 	s := api.Source{Input: strings.TrimSpace(in)}
 	raw := s.Input
 	if raw == "" {
@@ -30,12 +40,26 @@ func parseSource(in string) (api.Source, error) {
 		raw = raw[:i]
 	}
 	u, err := url.Parse(raw)
-	if err == nil && (u.Host == "github.com" || u.Host == "www.github.com") {
+	if err != nil || u.Host == "" {
+		return s, fmt.Errorf("a build's source is a public repository at https://github.com/<owner>/<repo>; this is not one")
+	}
+	// The address is not repeated: it may hold a secret.
+	if u.User != nil {
+		return s, fmt.Errorf("a build's source is public: an address that carries credentials is refused, and the lab keeps none for a source")
+	}
+	host := strings.ToLower(u.Host)
+	if u.Scheme != "https" {
+		return s, fmt.Errorf("a build's source is fetched over https: https://github.com/<owner>/<repo>, not %s://", u.Scheme)
+	}
+	if host == "github.com" || host == "www.github.com" {
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 		if len(parts) < 2 {
 			return s, fmt.Errorf("%q is not a GitHub repository URL", in)
 		}
 		owner, repo := parts[0], strings.TrimSuffix(parts[1], ".git")
+		if !reGitHubName.MatchString(owner) || !reGitHubName.MatchString(repo) {
+			return s, fmt.Errorf("%q is not a GitHub repository URL", in)
+		}
 		s.Repo = "https://github.com/" + owner + "/" + repo
 		rest := parts[2:]
 		switch {
@@ -50,13 +74,40 @@ func parseSource(in string) (api.Source, error) {
 		}
 		return s, nil
 	}
-	// Plain git URL, optionally repo@ref.
-	if i := strings.LastIndex(raw, "@"); i > strings.Index(raw, "://")+3 && !strings.Contains(raw[i:], "/") {
+	if !slices.Contains(hosts, host) {
+		return s, fmt.Errorf("a build's source is a public repository at https://github.com/<owner>/<repo>: %s is not on the lab's list of other hosts", host)
+	}
+	if u.RawQuery != "" {
+		return s, fmt.Errorf("a build's source is a repository's address, with no query")
+	}
+	// A git URL at a listed host, optionally repo@ref.
+	if i := strings.LastIndex(raw, "@"); i > 0 && !strings.Contains(raw[i:], "/") {
 		s.Ref = raw[i+1:]
 		raw = raw[:i]
 	}
 	s.Repo = raw
 	return s, nil
+}
+
+// source is parseSource with the hosts this labd was configured with.
+func (s *Server) source(in string) (api.Source, error) {
+	return parseSource(in, s.cfg.SourceHosts...)
+}
+
+// SourceHosts checks a list for Config.SourceHosts: host names, lower case,
+// with a port only where the repository is served on one.
+func SourceHosts(list []string) ([]string, error) {
+	var out []string
+	for _, h := range list {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if u, err := url.Parse("https://" + h); h == "" || err != nil || u.Host != h || u.User != nil {
+			return nil, fmt.Errorf("source host %q: give a host name, such as git.kernel.org", h)
+		}
+		if h != "github.com" {
+			out = append(out, h)
+		}
+	}
+	return out, nil
 }
 
 // resolve pins the source to a commit with a single `git ls-remote`.

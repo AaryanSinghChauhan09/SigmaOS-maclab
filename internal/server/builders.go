@@ -1,28 +1,27 @@
 package server
 
-// Builders build kernels and packages for the lab (lab-builder). A builder
-// proves who it is with one of two kinds of token.
+// Builders build kernels and packages for the lab (lab-builder). The lab has
+// one, on the mini, and it proves who it is with its own token.
 //
-// The data directory's builder.token is the controller's own builder. It is
-// trusted with every builder right (any build, any artifact) and is never
-// handed out.
-//
-// Any other builder is added by a Maintainer (lab builder add) and gets a
-// token of its own, shown once. With it a builder may only build: take
-// queued builds of the kinds it was given, and for the builds it took, read
-// their inputs, report progress, upload outputs and finish them. Each token is
-// one generation of its name. Removing the builder ends its open requests,
-// fails what it was building and drops its claims; adding the name again makes
-// a new generation that inherits nothing. Claims are kept in memory, so a labd
-// restart fails a named builder's running builds rather than trusting a claim
-// it can no longer check.
+// A builder is added by a Maintainer (lab builder add) and gets a token of
+// its own, shown once. labd makes and accepts no other builder token: there
+// is no shared one. With its token a builder may only build: take queued
+// builds of the kinds it was given, and for the build it took, read its
+// inputs, report progress, upload outputs and finish it. Each token is one
+// generation of its name. Removing the builder ends its open requests,
+// fails what it was building and drops its claims; adding the name again
+// makes a new generation that inherits nothing. Claims are kept in memory,
+// so a labd restart fails a running build rather than trusting a claim it
+// can no longer check.
 //
 // A builder's kernels boot as root on lab Macs. Adding one trusts whoever runs
 // it, for that, as much as a Maintainer.
+//
+// Who may ask for a build is at the end of this file: Maintainers, and the
+// M team once their builds open.
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -36,15 +35,16 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
-// builderCred is who a builder request comes from: a named builder's
-// generation, or (gen "") the shared builder.token.
+// builderCred is the builder a request comes from: one generation of a
+// named builder. The zero value is no builder: a person, on the upload
+// routes people and builders share.
 type builderCred struct {
 	name  string
 	gen   string
 	kinds []string
 }
 
-func (c builderCred) shared() bool { return c.gen == "" }
+func (c builderCred) nobody() bool { return c.gen == "" }
 
 type builderCredKey struct{}
 
@@ -84,43 +84,33 @@ var builderUploadMax int64 = 4 << 30
 
 var errBuilderRemoved = errors.New("this builder was removed")
 
-// builderAuth admits a builder: a named builder by its token (its request
-// ends when it is removed), or the shared builder.token.
+// builderAuth admits a builder by its own token; its request ends when it
+// is removed. Nothing else opens a builder route.
 func (s *Server) builderAuth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := bearer(r)
-		var c builderCred
-		if b, gen, err := s.store.builderByToken(hashSecret(tok)); tok != "" && err == nil {
-			c = builderCred{name: b.Name, gen: gen, kinds: b.Kinds}
-		} else if s.cfg.BuilderToken == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.BuilderToken)) != 1 {
+		b, gen, err := s.store.builderByToken(hashSecret(tok))
+		if tok == "" || err != nil || gen == "" {
 			httpErr(w, 401, "bad builder token")
 			return
 		}
+		c := builderCred{name: b.Name, gen: gen, kinds: b.Kinds}
 		ctx, cancel := context.WithCancel(context.WithValue(r.Context(), builderCredKey{}, c))
-		if c.shared() {
-			noteCaller(r, "builder")
-			defer cancel()
-		} else {
-			noteCaller(r, "builder:"+c.name)
-			defer s.bconns.add(cancel, c.gen)()
-			// Removed between the lookup and registering this request.
-			if !s.store.builderGenCurrent(c.gen) {
-				httpErr(w, 401, "bad builder token")
-				return
-			}
+		noteCaller(r, "builder:"+c.name)
+		defer s.bconns.add(cancel, c.gen)()
+		// Removed between the lookup and registering this request.
+		if !s.store.builderGenCurrent(c.gen) {
+			httpErr(w, 401, "bad builder token")
+			return
 		}
 		h(w, r.WithContext(ctx))
 	}
 }
 
-// ownsLocked says whether c may act on build b: always for the shared token;
-// for a named builder, only while b runs on the claim its current generation
-// made. Callers hold s.builds.state.
+// ownsLocked says whether c may act on build b: only while b runs on the
+// claim its current generation made. Callers hold s.builds.state.
 func (s *Server) ownsLocked(c builderCred, b *api.Build) error {
-	if c.shared() {
-		return nil
-	}
-	if !s.store.builderGenCurrent(c.gen) {
+	if c.nobody() || !s.store.builderGenCurrent(c.gen) {
 		return errBuilderRemoved
 	}
 	cl := s.builds.claims[b.ID]
@@ -134,11 +124,8 @@ func (s *Server) ownsLocked(c builderCred, b *api.Build) error {
 // kinds its lab-builder asked for (?kinds=kernel,package; none: kernel only).
 func kindsWhere(c builderCred, asked string) string {
 	askedPkg := slices.Contains(splitList(asked), api.BuilderPackage)
-	kernel, pkg := true, askedPkg
-	if !c.shared() {
-		kernel = slices.Contains(c.kinds, api.BuilderKernel)
-		pkg = askedPkg && slices.Contains(c.kinds, api.BuilderPackage)
-	}
+	kernel := slices.Contains(c.kinds, api.BuilderKernel)
+	pkg := askedPkg && slices.Contains(c.kinds, api.BuilderPackage)
 	switch {
 	case kernel && pkg:
 		return `1=1`
@@ -151,18 +138,24 @@ func kindsWhere(c builderCred, asked string) string {
 }
 
 // claimBuild records that a builder polled and hands it the oldest queued
-// build matching where, under the state lock: two builders never take the
-// same build, and a removed named builder takes none and isn't seen again.
+// build matching where, a Maintainer's before an M team member's, under the
+// state lock: a builder runs one build at a time, two builders never take
+// the same build, and a removed builder takes none and isn't seen again.
 func (s *Server) claimBuild(c builderCred, host, where string) (*api.Build, error) {
 	s.builds.state.Lock()
 	defer s.builds.state.Unlock()
-	if !c.shared() && !s.store.builderGenCurrent(c.gen) {
+	if !s.store.builderGenCurrent(c.gen) {
 		return nil, errBuilderRemoved
 	}
 	s.builds.mu.Lock()
 	s.builds.builders[host] = s.now()
 	s.builds.mu.Unlock()
-	q, err := s.store.builds(`state='queued' AND (` + where + `) ORDER BY created ASC LIMIT 1`)
+	for id, cl := range s.builds.claims {
+		if b, err := s.getBuild(id); cl.gen == c.gen && err == nil && b.State == api.BuildRunning {
+			return nil, nil
+		}
+	}
+	q, err := s.store.builds(`state='queued' AND (` + where + `) ORDER BY COALESCE(json_extract(data, '$.by_team'), 0) ASC, created ASC LIMIT 1`)
 	if err != nil || len(q) == 0 {
 		return nil, err
 	}
@@ -172,46 +165,36 @@ func (s *Server) claimBuild(c builderCred, host, where string) (*api.Build, erro
 	s.builds.mu.Lock()
 	s.builds.beat[b.ID] = s.now()
 	s.builds.mu.Unlock()
-	if c.shared() {
-		delete(s.builds.claims, b.ID)
-	} else {
-		s.builds.claims[b.ID] = &claim{gen: c.gen, uploads: map[string]bool{}}
-	}
+	s.builds.claims[b.ID] = &claim{gen: c.gen, uploads: map[string]bool{}}
 	s.saveBuild(b)
 	return b, nil
 }
 
 func (s *Server) hBuilderSelf(w http.ResponseWriter, r *http.Request) {
 	c := builderCredOf(r)
-	if c.shared() {
-		writeJSON(w, api.BuilderSelf{Shared: true})
-		return
-	}
 	writeJSON(w, api.BuilderSelf{Name: c.name, Kinds: c.kinds})
 }
 
-// hBuilderGetArtifact serves a builder an artifact: the shared token any; a
-// named builder only an input (config or recipe) of a build it runs now.
+// hBuilderGetArtifact serves a builder an artifact only when it proves it
+// holds a running build whose input (config or recipe) that artifact is.
 func (s *Server) hBuilderGetArtifact(w http.ResponseWriter, r *http.Request) {
-	if c := builderCredOf(r); !c.shared() {
-		sha := r.PathValue("sha")
-		s.builds.state.Lock()
-		ok := false
-		for id, cl := range s.builds.claims {
-			if cl.gen != c.gen {
-				continue
-			}
-			if b, err := s.getBuild(id); err == nil && s.ownsLocked(c, b) == nil && sha != "" &&
-				(b.ConfigSHA == sha || b.Recipe == sha) {
-				ok = true
-				break
-			}
+	c, sha := builderCredOf(r), r.PathValue("sha")
+	s.builds.state.Lock()
+	ok := false
+	for id, cl := range s.builds.claims {
+		if cl.gen != c.gen {
+			continue
 		}
-		s.builds.state.Unlock()
-		if !ok {
-			httpErr(w, 404, "no artifact %s for this builder now", short(sha))
-			return
+		if b, err := s.getBuild(id); err == nil && s.ownsLocked(c, b) == nil && sha != "" &&
+			(b.ConfigSHA == sha || b.Recipe == sha) {
+			ok = true
+			break
 		}
+	}
+	s.builds.state.Unlock()
+	if !ok {
+		httpErr(w, 404, "no artifact %s for this builder now", short(sha))
+		return
 	}
 	s.hBuilderFetch(w, r)
 }
@@ -253,7 +236,7 @@ func interruptReadsOnCancel(w http.ResponseWriter, ctx context.Context) (stop fu
 	}
 }
 
-// namedUpload stores a named builder's upload for the build it names
+// namedUpload stores a builder's upload for the build it names
 // (?build=), capped while it streams, and records it for that build only if
 // the builder still holds the build once the body is in.
 func (s *Server) namedUpload(w http.ResponseWriter, r *http.Request, c builderCred) {
@@ -403,8 +386,7 @@ func (s *Server) hRemoveBuilder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, api.RemovedBuilder{Removed: name, FailedBuilds: failed})
 }
 
-// hBuilders lists the named builders, and the hosts that polled with the
-// shared builder.token, with the build each is running.
+// hBuilders lists the builders, with the build each is running.
 func (s *Server) hBuilders(w http.ResponseWriter, r *http.Request) {
 	named, err := s.store.builders()
 	if err != nil {
@@ -417,22 +399,112 @@ func (s *Server) hBuilders(w http.ResponseWriter, r *http.Request) {
 		on[b.Builder] = b.ID
 	}
 	s.builds.mu.Lock()
-	seen := map[string]bool{}
 	out := []api.BuilderStatus{}
 	for _, b := range named {
 		st := api.BuilderStatus{Host: b.Name, Registered: true, Kinds: b.Kinds, Added: b.Added, AddedBy: b.AddedBy, Build: on[b.Name]}
 		if t, ok := s.builds.builders[b.Name]; ok {
 			st.LastSeen, st.Alive = t, s.since(t) < time1Minute
 		}
-		seen[b.Name] = true
 		out = append(out, st)
-	}
-	for host, t := range s.builds.builders {
-		if !seen[host] {
-			out = append(out, api.BuilderStatus{Host: host, Shared: true, LastSeen: t, Alive: s.since(t) < time1Minute, Build: on[host]})
-		}
 	}
 	s.builds.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
 	writeJSON(w, out)
+}
+
+// ---- who may ask for a build, and who may upload ----
+
+// Maintainers build. An M team member's build is refused until M team
+// builds open (Config.MTeamBuilds), which waits for two tests of the
+// Builder: that a build reaches the internet and nothing of the mini, the
+// home network or the tailnet, and that one build reads nothing of another.
+// Once open, a member may ask only for a build for a job on a Mac they
+// lease, with one build queued or running at a time, behind the
+// Maintainers' builds (claimBuild).
+//
+// An M team member uploads an artifact only for a job on a Mac they lease.
+
+const (
+	teamBuildsClosed = "M team builds are not open yet: only a Maintainer builds on the lab's Builder for now"
+	teamBuildsNeed   = "builds are for Maintainers, and for the M team once M team builds open"
+	teamUploadsNeed  = "an M team member uploads an artifact only for a job on a Mac they lease: name the Mac (--for MAC) while you hold its Lease"
+)
+
+// buildsTeam admits a Maintainer, and an M team member for the handler to
+// answer by the rules above.
+func (s *Server) buildsTeam(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch a, who := s.access(r); a {
+		case adminAccess:
+			s.asMaintainer(w, r, who, h)
+		case teamAccess:
+			s.asSignedIn(w, r, teamKey{}, h)
+		case ownAccess:
+			httpErr(w, 403, "@%s lends a Mac and sees their own Macs; %s", who, teamBuildsNeed)
+		case signedInAccess:
+			httpErr(w, 403, "@%s is signed in with no role in the lab; %s", who, teamBuildsNeed)
+		case viewAccess:
+			httpErr(w, 403, "%s may only look; %s", who, teamBuildsNeed)
+		case blockedAccess:
+			httpErr(w, 403, "%s", blockedSentence)
+		default:
+			s.noCredential(w, r)
+		}
+	}
+}
+
+// leasesMac is whether p holds the Lease on the Mac called name now.
+func (s *Server) leasesMac(p Person, name string) bool {
+	v := s.dev(name)
+	return name != "" && v != nil && s.holdsLease(v, p)
+}
+
+// askedBy writes who asks for a build into req and applies the M team's
+// rule. The caller runs done once the build is queued: an M team member's
+// requests are answered one after another, so two at once cannot both find
+// the member's queue empty.
+func (s *Server) askedBy(r *http.Request, req *api.BuildRequest) (done func(), err error) {
+	p := leaser(r)
+	req.AskedBy, req.AskedByID, req.ByTeam = p.Handle, p.AccountID, false
+	if callerOf(r).team == "" {
+		return func() {}, nil
+	}
+	if !s.cfg.MTeamBuilds {
+		return nil, refuse(403, "%s", teamBuildsClosed)
+	}
+	if !s.leasesMac(p, req.Device) {
+		return nil, refuse(403, "an M team member builds only for a job on a Mac they lease: name the Mac (--device MAC) while you hold its Lease")
+	}
+	s.builds.team.Lock()
+	open, err := s.store.builds(`state IN ('queued','running') AND json_extract(data, '$.asked_by_id') = ? LIMIT 1`, p.AccountID)
+	if err == nil && len(open) > 0 {
+		err = refuse(409, "@%s already has build %s %s: an M team member has one build queued or running at a time", p.Handle, open[0].ID, open[0].State)
+	}
+	if err != nil {
+		s.builds.team.Unlock()
+		return nil, err
+	}
+	req.ByTeam = true
+	return s.builds.team.Unlock, nil
+}
+
+// teamUpload lets an M team member reach an upload route only for a Mac
+// they lease (?device=); a Maintainer's upload passes as it is. A build's
+// input (?purpose=build, as lab build and lab package send it) is refused
+// with the build's own line while M team builds are closed.
+func (s *Server) teamUpload(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if callerOf(r).team != "" {
+			q := r.URL.Query()
+			if q.Get("purpose") == "build" && !s.cfg.MTeamBuilds {
+				httpErr(w, 403, "%s", teamBuildsClosed)
+				return
+			}
+			if !s.leasesMac(leaser(r), q.Get("device")) {
+				httpErr(w, 403, "%s", teamUploadsNeed)
+				return
+			}
+		}
+		h(w, r)
+	}
 }

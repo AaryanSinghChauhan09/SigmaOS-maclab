@@ -77,7 +77,8 @@ func (l *callerLog) rawForTest(t *testing.T) string {
 // Every request leaves one line: the caller's address, the person or Mac it
 // came from, and the edge's ray id.
 func TestTheCallerLogNamesAddressCallerAndRay(t *testing.T) {
-	s := aliasServer(t, func(c *Config) { c.BuilderToken = "bld_shared" })
+	s := aliasServer(t, nil)
+	testBuilder(t, s)
 	h := s.Handler()
 	enr, err := s.store.addTokenForTest("m1-pro")
 	if err != nil {
@@ -109,7 +110,7 @@ func TestTheCallerLogNamesAddressCallerAndRay(t *testing.T) {
 	}
 	ask("POST", "/api/agent/checkin", mac, "198.51.100.20", "8f1e2d3c4b5a6979-SYD")
 	ask("GET", "/api/devices", "mnt_wrong", "198.51.100.99", "8f1e2d3c4b5a697a-SYD")
-	ask("POST", "/api/builder/poll", "bld_shared", "127.0.0.1", "")
+	ask("POST", "/api/builder/poll", "bld", "127.0.0.1", "")
 	ask("GET", "/healthz", "", "2001:db8::7", "8f1e2d3c4b5a697b-LAX")
 
 	lines := s.callers.linesForTest(t)
@@ -120,7 +121,7 @@ func TestTheCallerLogNamesAddressCallerAndRay(t *testing.T) {
 		{Addr: "203.0.113.7", Who: "person:ada", Ray: "8f1e2d3c4b5a6978-BNE", Method: "GET", Path: "/api/devices", Status: 200, Agent: "lab/0.2.0"},
 		{Addr: "198.51.100.20", Who: "mac:m1-pro", Ray: "8f1e2d3c4b5a6979-SYD", Method: "POST", Path: "/api/agent/checkin", Agent: "lab/0.2.0"},
 		{Addr: "198.51.100.99", Who: "", Ray: "8f1e2d3c4b5a697a-SYD", Method: "GET", Path: "/api/devices", Status: 401, Agent: "lab/0.2.0"},
-		{Addr: "127.0.0.1", Who: "builder", Method: "POST", Path: "/api/builder/poll", Agent: "lab/0.2.0"},
+		{Addr: "127.0.0.1", Who: "builder:" + testBuilderName, Method: "POST", Path: "/api/builder/poll", Agent: "lab/0.2.0"},
 		{Addr: "2001:db8::7", Ray: "8f1e2d3c4b5a697b-LAX", Method: "GET", Path: "/healthz", Status: 200, Agent: "lab/0.2.0"},
 	} {
 		got := lines[i]
@@ -135,7 +136,7 @@ func TestTheCallerLogNamesAddressCallerAndRay(t *testing.T) {
 			t.Errorf("line %d:\n got %+v\nwant %+v", i, got, want)
 		}
 	}
-	if raw := s.callers.rawForTest(t); strings.Contains(raw, "lab_adm_secret") || strings.Contains(raw, mac) || strings.Contains(raw, "mnt_wrong") || strings.Contains(raw, "bld_shared") {
+	if raw := s.callers.rawForTest(t); strings.Contains(raw, "lab_adm_secret") || strings.Contains(raw, mac) || strings.Contains(raw, "mnt_wrong") || strings.Contains(raw, "Bearer bld") {
 		t.Errorf("the caller log holds a credential:\n%s", raw)
 	}
 }

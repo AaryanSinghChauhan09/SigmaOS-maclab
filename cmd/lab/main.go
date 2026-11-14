@@ -83,7 +83,7 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
   lab shell <device>                  shell over the serial link: works with the Mac's network down (Ctrl-] exits)
   lab serial <device> [-n 100] | lab oob <device>
   lab audit <device>                  labd's copy of a Volunteer's Mac's Audit log: every Maintainer action on it
-  lab upload <file>                   to the artifact store, in 32 MiB parts; cut, the same command resumes
+  lab upload <file> [--for <mac>]     to the artifact store, in 32 MiB parts; cut, the same command resumes
   lab mcp                             MCP server on stdio, for AI agents
   lab version                         the Lab release this lab came from, and the one Omarchy Mac Lab runs
 `
@@ -330,6 +330,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		if err := need(pos, 1, "lab run <device> [flags]"); err != nil {
 			return err
 		}
+		c.UploadFor = pos[0]
 		spec := api.JobSpec{Device: pos[0], Cmdline: *cmdline, RecoveryMode: *mode, RecoveryTransaction: *transaction, BootTimeoutSec: *bootTimeout, Holder: holder(), Publish: *publish}
 		spec.OMTAllow = splitAllow(*omtAllow)
 		spec.CmdlineBase = *cmdlineBase
@@ -423,6 +424,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 			return err
 		}
 		req := api.BuildRequest{Source: pos[0], Device: *dev, Force: *force}
+		c.UploadForBuild = true
 		if *config != "" {
 			if *dev != "" {
 				return fmt.Errorf("give --device or --config, not both")
@@ -450,6 +452,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		if err := need(pos, 1, "lab package <recipe-dir> [--commit <url>] [--pkgrel N] [-o dir]"); err != nil {
 			return err
 		}
+		c.UploadForBuild = true
 		sha, names, err := uploadRecipe(ctx, c, pos[0])
 		if err != nil {
 			return err
@@ -788,8 +791,9 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		return nil
 
 	case "upload":
+		fs.StringVar(&c.UploadFor, "for", "", "the Mac the file is for; an M team member uploads only for a job on a Mac they lease")
 		pos := parse(fs, args)
-		if err := need(pos, 1, "lab upload <file>"); err != nil {
+		if err := need(pos, 1, "lab upload <file> [--for <mac>]"); err != nil {
 			return err
 		}
 		sha, err := c.Upload(ctx, pos[0])

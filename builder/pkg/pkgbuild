@@ -17,7 +17,6 @@ rm -rf "$W" /io/out
 mkdir -p "$W/recipe" "$W/out" /io/out
 step() { echo "==> $*"; echo "@@stage ${1%% *}"; }
 fail() { echo "error: $*"; exit 1; }
-rm -f /io/github-token # public source downloads only
 
 step "recipe"
 tar -C "$W/recipe" -xf /io/recipe.tar

@@ -71,7 +71,7 @@ func TestBuilderAddWritesTheTokenOnlyToItsFile(t *testing.T) {
 	if raw, _ := os.ReadFile(file); string(raw) != testBuilderToken {
 		t.Fatalf("file holds %q", raw)
 	}
-	if strings.Contains(out.String(), testBuilderToken) || !strings.Contains(out.String(), "--token-file") ||
+	if strings.Contains(out.String(), testBuilderToken) || !strings.Contains(out.String(), "setup --builder-token") ||
 		!strings.Contains(out.String(), "--generation "+testGeneration) {
 		t.Fatalf("output: %s", out.String())
 	}
@@ -156,5 +156,50 @@ func TestBuilderRemoveByGeneration(t *testing.T) {
 	}
 	if want := "DELETE /api/builders/m5mbp?generation=" + testGeneration + "|DELETE /api/builders/m5mbp"; strings.Join(*seen, "|") != want {
 		t.Fatalf("requests %q", *seen)
+	}
+}
+
+// An M team member's lab build and lab package are refused in one line: the
+// lab's own sentence, with nothing built and nothing but the refusal shown.
+func TestBuildAndPackageShowTheLabsRefusal(t *testing.T) {
+	const closed = "M team builds are not open yet: only a Maintainer builds on the lab's Builder for now"
+	var mu sync.Mutex
+	var seen []string
+	labd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, strings.TrimSuffix(r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery, "?"))
+		mu.Unlock()
+		http.Error(w, closed, 403)
+	}))
+	t.Cleanup(labd.Close)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("MACLAB_URL", labd.URL)
+	t.Setenv("MACLAB_TOKEN", "tok")
+	recipe := t.TempDir()
+	if err := os.WriteFile(filepath.Join(recipe, "PKGBUILD"), []byte("pkgname=x\npkgver=1\npkgrel=1\nsource=()\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	os.WriteFile(config, []byte("CONFIG_X=y\n"), 0o644)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"build", "https://github.com/o/r", "--device", "m1-pro"}, "POST /api/builds"},
+		{[]string{"build", "https://github.com/o/r", "--config", config}, "POST /api/artifacts?purpose=build"},
+		{[]string{"package", recipe}, "POST /api/artifacts?purpose=build"},
+	} {
+		seen = nil
+		cl, err := client.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = dispatch(context.Background(), cl, c.args[0], c.args[1:])
+		if err == nil || !strings.Contains(err.Error(), closed) || strings.Contains(strings.TrimSpace(err.Error()), "\n") {
+			t.Errorf("lab %s: %v", strings.Join(c.args, " "), err)
+		}
+		if strings.Join(seen, "|") != c.want {
+			t.Errorf("lab %s asked labd for %q, want %q", strings.Join(c.args, " "), seen, c.want)
+		}
 	}
 }
