@@ -155,8 +155,12 @@ step_site() {
     local parity="$LOGS/report-parity"
     run "report parity: the port writes the corpus" env REPORT_PARITY_DIR="$parity" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
     run "Rails: prepare the test database" in_dir site env RAILS_ENV=test bin/rails db:test:prepare
-    run "Rails: tests" in_dir site env RAILS_ENV=test REPORT_PARITY_DIR="$parity" bin/rails test
+    local pages="$LOGS/page-parity"
+    run "page parity: the port writes the seeded corpus" env PAGE_PARITY_DIR="$pages" go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
+    run "Rails: tests" in_dir site env RAILS_ENV=test REPORT_PARITY_DIR="$parity" PAGE_PARITY_DIR="$pages" bin/rails test
     run "report parity: the port and the site agree" env REPORT_PARITY_VERDICTS="$parity/rails-verdicts.jsonl" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
+    run "page parity: the port and the site count alike" env PAGE_PARITY_AGGREGATION="$pages/rails-aggregation.json" go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
+    run "page parity: the port's pages pin what the site's pin" env PAGE_PARITY_DIR="$pages" go test -count=1 -run TestThePagesPinWhatTheOldSitesPin ./internal/server
   else
     skip "Rails reference" "needs Postgres running and Ruby $(tr -d 'ruby-\n' < site/.ruby-version)"
   fi

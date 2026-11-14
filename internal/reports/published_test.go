@@ -222,6 +222,12 @@ func TestWhichSkippedChecksStillCountInAModelSummary(t *testing.T) {
 	if got := cell("skip", "not-tested").State(); got != "not-tested" {
 		t.Errorf("any other skip: %q, want not-tested", got)
 	}
+	if got := cell("skip", "fails").State(); got != "not-tested" {
+		t.Errorf("a skip that names another outcome: %q, want not-tested", got)
+	}
+	if got := cell("fail", "fails").State(); got != "fails" {
+		t.Errorf("a failure: %q, want fails", got)
+	}
 }
 
 func TestCommunityRunsColourACellOnlyOnceTwoMachinesAgree(t *testing.T) {

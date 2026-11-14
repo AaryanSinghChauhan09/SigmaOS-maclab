@@ -183,12 +183,28 @@ jobs:
         env:
           REPORT_PARITY_DIR: ${{ runner.temp }}/report-parity
         run: go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
+      - name: The port writes the seeded corpus both will count and render
+        working-directory: .
+        env:
+          PAGE_PARITY_DIR: ${{ runner.temp }}/page-parity
+        run: go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
       - run: bin/rails db:test:prepare
       - run: bin/rails test
         env:
           REPORT_PARITY_DIR: ${{ runner.temp }}/report-parity
+          PAGE_PARITY_DIR: ${{ runner.temp }}/page-parity
       - name: The port and the site judge that corpus alike
         working-directory: .
         env:
           REPORT_PARITY_VERDICTS: ${{ runner.temp }}/report-parity/rails-verdicts.jsonl
         run: go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
+      - name: The port and the site count that corpus alike
+        working-directory: .
+        env:
+          PAGE_PARITY_AGGREGATION: ${{ runner.temp }}/page-parity/rails-aggregation.json
+        run: go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
+      - name: The port's pages pin the elements the site's pages pin
+        working-directory: .
+        env:
+          PAGE_PARITY_DIR: ${{ runner.temp }}/page-parity
+        run: go test -count=1 -run TestThePagesPinWhatTheOldSitesPin ./internal/server
