@@ -441,7 +441,7 @@ func (s *Server) hBuilderArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	sha, n, err := s.storeArtifact(r.Body)
 	if err != nil {
-		httpErr(w, 500, "%v", err)
+		s.artifactErr(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"sha256": sha, "size": n})
@@ -553,7 +553,7 @@ func (s *Server) hBuildFile(w http.ResponseWriter, r *http.Request) {
 		if f.Name == name {
 			w.Header().Set("Content-Disposition", `attachment; filename="`+f.Name+`"`)
 			w.Header().Set("Content-Type", "application/octet-stream")
-			http.ServeFile(w, r, s.artifactPath(f.SHA256))
+			serveArtifact(w, r, s.artifactPath(f.SHA256))
 			return
 		}
 	}
@@ -564,7 +564,7 @@ func (s *Server) hBuildFile(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Disposition", `attachment; filename="`+api.RecipeFile+`"`)
 		w.Header().Set("Content-Type", "application/x-tar")
-		http.ServeFile(w, r, s.artifactPath(b.Recipe))
+		serveArtifact(w, r, s.artifactPath(b.Recipe))
 		return
 	}
 	httpErr(w, 404, "build %s has no file %q", b.ID, name)

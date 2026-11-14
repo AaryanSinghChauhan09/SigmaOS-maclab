@@ -3,11 +3,18 @@ package server
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 const artifactChunkBytes = 1 << 20
@@ -107,6 +114,14 @@ func writeVerifiedArtifact(file artifactTemp, body io.Reader, drop func(artifact
 }
 
 func storeArtifactIn(dir string, body io.Reader, disk artifactDisk) (string, int64, error) {
+	return storeArtifactAs(dir, body, disk, "")
+}
+
+// errNotTheSHA256 is an upload whose bytes are not the SHA-256 it was started with.
+var errNotTheSHA256 = errors.New("the bytes are not the SHA-256 the upload named")
+
+// storeArtifactAs stores body only if its SHA-256 is want; "" takes any.
+func storeArtifactAs(dir string, body io.Reader, disk artifactDisk, want string) (string, int64, error) {
 	file, err := disk.create(dir)
 	if err != nil {
 		return "", 0, err
@@ -115,6 +130,9 @@ func storeArtifactIn(dir string, body io.Reader, disk artifactDisk) (string, int
 	sha, size, err := writeVerifiedArtifact(file, body, disk.drop)
 	if err != nil {
 		return "", 0, err
+	}
+	if want != "" && sha != want {
+		return "", 0, fmt.Errorf("%w: they are %s", errNotTheSHA256, sha)
 	}
 	// Replace a same-name CAS object only with the newly verified body; its
 	// existence alone is not evidence that the old bytes are correct.
@@ -125,4 +143,338 @@ func storeArtifactIn(dir string, body io.Reader, disk artifactDisk) (string, int
 		return "", 0, fmt.Errorf("artifact commit directory sync: %w", err)
 	}
 	return sha, size, nil
+}
+
+// Transfers are the limits uploads work inside the Front door's: the edge
+// refuses a request body over 100 MB. The zero value is the lab's own.
+type Transfers struct {
+	// PartBytes is the size of every part of an upload but its last; 0 is 32 MiB.
+	PartBytes int64
+	// BodyMax is the largest body labd reads in one request; 0 is 90 MB.
+	BodyMax int64
+	// AtOnce is how many parts labd tells a client to send at the same time: 4, or 1.
+	AtOnce int
+}
+
+const (
+	defaultPartBytes = 32 << 20
+	defaultBodyMax   = 90_000_000
+)
+
+func (s *Server) partBytes() int64 {
+	if n := s.cfg.Transfers.PartBytes; n > 0 {
+		return n
+	}
+	return defaultPartBytes
+}
+
+func (s *Server) bodyMax() int64 {
+	if n := s.cfg.Transfers.BodyMax; n > 0 {
+		return n
+	}
+	return defaultBodyMax
+}
+
+func (s *Server) tooBig(w http.ResponseWriter) {
+	httpErr(w, http.StatusRequestEntityTooLarge, "refused: a request body over %d MB; a larger file goes up in parts", s.bodyMax()/1_000_000)
+}
+
+// capBodies refuses a body longer than BodyMax by its Content-Length, before
+// reading it, and stops reading one that came without a length at BodyMax.
+func (s *Server) capBodies(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > s.bodyMax() {
+			s.tooBig(w)
+			return
+		}
+		if r.Body != nil && r.Body != http.NoBody {
+			r.Body = http.MaxBytesReader(w, r.Body, s.bodyMax())
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// artifactErr answers a failed store: 413 for a body cut at BodyMax, else 500.
+func (s *Server) artifactErr(w http.ResponseWriter, err error) {
+	if errors.As(err, new(*http.MaxBytesError)) {
+		s.tooBig(w)
+		return
+	}
+	httpErr(w, 500, "%v", err)
+}
+
+// serveArtifact sends a stored file, honouring a Range. Its bytes never
+// change, but who may fetch it does: no shared cache keeps it.
+func serveArtifact(w http.ResponseWriter, r *http.Request, path string) {
+	w.Header().Set("Cache-Control", "private")
+	http.ServeFile(w, r, path)
+}
+
+// A partUpload is a file arriving in numbered parts: a folder beside the
+// artifacts holding its size, its part size and one file for each part held.
+type partUpload struct {
+	dir string
+	api.UploadState
+}
+
+const partUploadMeta = "upload.json"
+
+func (u partUpload) parts() int { return int((u.Size + u.PartBytes - 1) / u.PartBytes) }
+
+func (u partUpload) partLen(n int) int64 {
+	return min(u.PartBytes, u.Size-int64(n-1)*u.PartBytes)
+}
+
+func (u partUpload) path(n int) string { return filepath.Join(u.dir, strconv.Itoa(n)) }
+
+func (u partUpload) held() []int {
+	held := []int{}
+	for n := 1; n <= u.parts(); n++ {
+		if st, err := os.Stat(u.path(n)); err == nil && st.Size() == u.partLen(n) {
+			held = append(held, n)
+		}
+	}
+	return held
+}
+
+func loadPartUpload(dir string) (partUpload, error) {
+	u := partUpload{dir: dir}
+	b, err := os.ReadFile(filepath.Join(dir, partUploadMeta))
+	if err != nil {
+		return u, err
+	}
+	if err := json.Unmarshal(b, &u.UploadState); err != nil || u.Size <= 0 || u.PartBytes <= 0 {
+		return u, fmt.Errorf("upload %s: unreadable", filepath.Base(dir))
+	}
+	return u, nil
+}
+
+// beginPartUpload finds the upload in dir again, or starts it. One started
+// with another size or part size is not this upload: it is dropped.
+func beginPartUpload(dir string, want api.UploadState) (partUpload, error) {
+	if u, err := loadPartUpload(dir); err == nil && u.Size == want.Size && u.PartBytes == want.PartBytes {
+		now := time.Now()
+		return u, os.Chtimes(dir, now, now)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return partUpload{}, err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return partUpload{}, err
+	}
+	b, _ := json.Marshal(want)
+	return partUpload{dir: dir, UploadState: want}, os.WriteFile(filepath.Join(dir, partUploadMeta), b, 0o600)
+}
+
+// put stores part n. The part is held only once all its bytes are on disk.
+func (u partUpload) put(n int, body io.Reader) error {
+	f, err := os.CreateTemp(u.dir, ".part-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	got, err := io.Copy(f, body)
+	if err == nil && got != u.partLen(n) {
+		err = io.ErrUnexpectedEOF
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if err = errors.Join(err, f.Close()); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), u.path(n))
+}
+
+// partsReader reads an upload's parts one after another, as the file they make.
+type partsReader struct {
+	u    partUpload
+	next int
+	cur  *os.File
+}
+
+func (p *partsReader) Read(b []byte) (int, error) {
+	for {
+		if p.cur == nil {
+			if p.next > p.u.parts() {
+				return 0, io.EOF
+			}
+			f, err := os.Open(p.u.path(p.next))
+			if err != nil {
+				return 0, err
+			}
+			p.cur, p.next = f, p.next+1
+		}
+		n, err := p.cur.Read(b)
+		if err == io.EOF {
+			p.cur.Close()
+			p.cur, err = nil, nil
+		}
+		if n > 0 || err != nil {
+			return n, err
+		}
+	}
+}
+
+func (p *partsReader) Close() error {
+	if p.cur == nil {
+		return nil
+	}
+	return p.cur.Close()
+}
+
+// uploadScope is whose upload a request is about. A named builder's belongs
+// to the build it runs, named by ?build=; anyone else's to its SHA-256 alone,
+// so two people sending the same file fill the same upload.
+func (s *Server) uploadScope(w http.ResponseWriter, r *http.Request) (c builderCred, build string, ok bool) {
+	c = builderCredOf(r)
+	if c.shared() {
+		return c, "", true
+	}
+	id := r.URL.Query().Get("build")
+	s.builds.state.Lock()
+	b, err := s.getBuild(id)
+	if err == nil {
+		err = s.ownsLocked(c, b)
+	}
+	s.builds.state.Unlock()
+	if err != nil {
+		httpErr(w, 403, "an upload must name a build this builder is running (?build=): %v", err)
+		return c, "", false
+	}
+	return c, b.ID, true
+}
+
+func (s *Server) partUploadDir(build, sha string) string {
+	if build != "" {
+		build += "-"
+	}
+	return filepath.Join(s.cfg.DataDir, "artifacts", ".upload-"+build+sha)
+}
+
+// hStartUpload opens an upload in parts, or finds it again, and says which
+// parts labd holds: that is how an upload resumes.
+func (s *Server) hStartUpload(w http.ResponseWriter, r *http.Request) {
+	_, build, ok := s.uploadScope(w, r)
+	if !ok {
+		return
+	}
+	var req api.UploadStart
+	if !decodeBody(w, r, 4<<10, &req) {
+		return
+	}
+	if !reSHA.MatchString(req.SHA256) || req.Size <= 0 {
+		httpErr(w, 400, "an upload is started with its sha256 and its size in bytes")
+		return
+	}
+	limit := s.cfg.ArtifactBudget
+	if limit <= 0 {
+		limit = 20 << 30
+	}
+	if build != "" {
+		limit = min(limit, builderUploadMax)
+	}
+	if req.Size > limit {
+		httpErr(w, 413, "an upload is limited to %d bytes", limit)
+		return
+	}
+	atOnce := 1
+	if s.cfg.Transfers.AtOnce == 4 {
+		atOnce = 4
+	}
+	u, err := beginPartUpload(s.partUploadDir(build, req.SHA256), api.UploadState{SHA256: req.SHA256, Size: req.Size, PartBytes: s.partBytes()})
+	if err != nil {
+		httpErr(w, 500, "%v", err)
+		return
+	}
+	u.AtOnce, u.Held = atOnce, u.held()
+	writeJSON(w, u.UploadState)
+}
+
+// openUpload is the upload a part or a close names; 404 when labd holds none.
+func (s *Server) openUpload(w http.ResponseWriter, r *http.Request) (u partUpload, c builderCred, build string, ok bool) {
+	if c, build, ok = s.uploadScope(w, r); !ok {
+		return
+	}
+	sha := r.PathValue("sha")
+	if !reSHA.MatchString(sha) {
+		httpErr(w, 400, "bad sha256")
+		return u, c, build, false
+	}
+	u, err := loadPartUpload(s.partUploadDir(build, sha))
+	if err != nil {
+		httpErr(w, 404, "no upload %s: start it again", short(sha))
+		return u, c, build, false
+	}
+	return u, c, build, true
+}
+
+func (s *Server) hPutPart(w http.ResponseWriter, r *http.Request) {
+	u, _, _, ok := s.openUpload(w, r)
+	if !ok {
+		return
+	}
+	n, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil || n < 1 || n > u.parts() {
+		httpErr(w, 404, "upload %s has parts 1 to %d", short(u.SHA256), u.parts())
+		return
+	}
+	switch {
+	case r.ContentLength < 0:
+		httpErr(w, http.StatusLengthRequired, "a part is sent with its Content-Length")
+		return
+	case r.ContentLength != u.partLen(n):
+		httpErr(w, 400, "part %d of upload %s is %d bytes, not %d", n, short(u.SHA256), u.partLen(n), r.ContentLength)
+		return
+	}
+	if err := u.put(n, r.Body); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			httpErr(w, 400, "part %d was cut short: send it again", n)
+			return
+		}
+		httpErr(w, 500, "%v", err)
+		return
+	}
+	writeJSON(w, map[string]int{"part": n})
+}
+
+// hCloseUpload stores the parts as one artifact if they are the SHA-256 the
+// upload was started with; parts that are not are dropped, all of them.
+func (s *Server) hCloseUpload(w http.ResponseWriter, r *http.Request) {
+	u, c, build, ok := s.openUpload(w, r)
+	if !ok {
+		return
+	}
+	if held := u.held(); len(held) != u.parts() {
+		var missing []string
+		for n := 1; n <= u.parts(); n++ {
+			if len(held) == 0 || held[0] != n {
+				missing = append(missing, strconv.Itoa(n))
+				continue
+			}
+			held = held[1:]
+		}
+		httpErr(w, 409, "upload %s is not whole: missing parts %s", short(u.SHA256), strings.Join(missing, ", "))
+		return
+	}
+	parts := &partsReader{u: u, next: 1}
+	defer parts.Close()
+	sha, n, err := storeArtifactAs(filepath.Join(s.cfg.DataDir, "artifacts"), parts, artifactDiskOps(), u.SHA256)
+	switch {
+	case errors.Is(err, errNotTheSHA256):
+		os.RemoveAll(u.dir)
+		httpErr(w, http.StatusUnprocessableEntity, "upload %s: %v; nothing is stored, send the file again", short(u.SHA256), err)
+		return
+	case err != nil:
+		httpErr(w, 500, "%v", err)
+		return
+	}
+	if build != "" {
+		if err := s.claimUpload(c, build, sha); err != nil {
+			httpErr(w, 403, "not recorded: %v", err)
+			return
+		}
+	}
+	os.RemoveAll(u.dir)
+	writeJSON(w, api.StoredArtifact{SHA256: sha, Size: n})
 }

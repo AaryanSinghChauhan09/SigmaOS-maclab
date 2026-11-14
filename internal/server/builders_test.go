@@ -28,6 +28,10 @@ type builderLab struct {
 	s   *Server
 	url string
 	n   int
+	// transfers and wrap shape the labd start makes: the limits uploads work
+	// inside, and a test's transport in front of labd's handler.
+	transfers Transfers
+	wrap      func(http.Handler) http.Handler
 }
 
 func newBuilderLab(t *testing.T) *builderLab {
@@ -40,12 +44,18 @@ func newBuilderLab(t *testing.T) *builderLab {
 
 // start (re)starts labd on b.dir.
 func (b *builderLab) start() {
-	s, err := New(b.ctx, Config{DataDir: b.dir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: "mtok", BuilderToken: "bld"},
+	s, err := New(b.ctx, Config{DataDir: b.dir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: "mtok", BuilderToken: "bld", Transfers: b.transfers},
 		log.New(io.Discard, "", 0))
 	if err != nil {
 		b.t.Fatal(err)
 	}
-	hs := httptest.NewServer(s.Handler())
+	h := s.Handler()
+	if b.wrap != nil {
+		h = b.wrap(h)
+	}
+	hs := httptest.NewUnstartedServer(h)
+	hs.Config.ErrorLog = log.New(io.Discard, "", 0)
+	hs.Start()
 	b.t.Cleanup(hs.Close)
 	b.s, b.url = s, hs.URL
 }

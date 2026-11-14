@@ -154,7 +154,7 @@ func (s *Server) hBuilderFetch(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "bad sha256")
 		return
 	}
-	http.ServeFile(w, r, s.artifactPath(sha))
+	serveArtifact(w, r, s.artifactPath(sha))
 }
 
 // Explicit grants: a Maintainer lets a Mac fetch named artifacts for a
@@ -245,8 +245,9 @@ func (s *Server) hArtifactGrants(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// uploadMax caps one file a Mac adds to a job; tests lower it.
-var uploadMax int64 = 1 << 30
+// uploadMax caps one file a Mac adds to a job, at the largest body labd
+// reads: a Mac sends it in one request. Tests lower it.
+var uploadMax int64 = defaultBodyMax
 
 // hUpload stores a file a Mac adds to its active job (see the top of this
 // file). The body goes to a temporary file first; it replaces the job's file

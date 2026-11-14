@@ -217,6 +217,9 @@ func TestArtifactResumesFromTheOffsetAMacAsksFor(t *testing.T) {
 	if want := fmt.Sprintf("bytes 250-%d/%d", len(content)-1, len(content)); resp.Header.Get("Content-Range") != want {
 		t.Fatalf("Content-Range %q, want %q", resp.Header.Get("Content-Range"), want)
 	}
+	if got := resp.Header.Get("Cache-Control"); got != "private" {
+		t.Fatalf("Cache-Control %q: an artifact is never kept by a shared cache", got)
+	}
 }
 
 func TestArtifactRangePastTheEndIsRefused(t *testing.T) {

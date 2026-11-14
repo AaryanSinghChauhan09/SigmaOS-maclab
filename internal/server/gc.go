@@ -140,9 +140,11 @@ func (s *Server) gcArtifacts() {
 		if err != nil {
 			continue
 		}
+		// An upload nobody finished: a body that never ended, or the folder
+		// of an upload in parts, whose time is that of its latest part.
 		if strings.HasPrefix(e.Name(), ".upload-") {
 			if time.Since(info.ModTime()) > 24*time.Hour {
-				os.Remove(filepath.Join(dir, e.Name()))
+				os.RemoveAll(filepath.Join(dir, e.Name()))
 			}
 			continue
 		}

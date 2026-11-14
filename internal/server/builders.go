@@ -271,7 +271,7 @@ func (s *Server) namedUpload(w http.ResponseWriter, r *http.Request, c builderCr
 	sha, n, err := s.storeArtifact(http.MaxBytesReader(w, ctxReader{r.Context(), r.Body}, builderUploadMax))
 	switch {
 	case errors.As(err, new(*http.MaxBytesError)):
-		httpErr(w, 413, "an upload is limited to %d bytes", builderUploadMax)
+		httpErr(w, 413, "an upload in one request is limited to %d bytes", min(builderUploadMax, s.bodyMax()))
 		return
 	case err != nil && r.Context().Err() != nil:
 		httpErr(w, 403, "%v", errBuilderRemoved)
@@ -280,18 +280,26 @@ func (s *Server) namedUpload(w http.ResponseWriter, r *http.Request, c builderCr
 		httpErr(w, 500, "%v", err)
 		return
 	}
+	if err := s.claimUpload(c, id, sha); err != nil {
+		httpErr(w, 403, "not recorded: %v", err)
+		return
+	}
+	writeJSON(w, map[string]any{"sha256": sha, "size": n})
+}
+
+// claimUpload records a stored artifact for the build a named builder still holds.
+func (s *Server) claimUpload(c builderCred, id, sha string) error {
 	s.builds.state.Lock()
 	defer s.builds.state.Unlock()
-	b, err = s.getBuild(id)
+	b, err := s.getBuild(id)
 	if err == nil {
 		err = s.ownsLocked(c, b)
 	}
 	if err != nil {
-		httpErr(w, 403, "not recorded: %v", err)
-		return
+		return err
 	}
 	s.builds.claims[id].uploads[sha] = true
-	writeJSON(w, map[string]any{"sha256": sha, "size": n})
+	return nil
 }
 
 // ---- Maintainer API ----

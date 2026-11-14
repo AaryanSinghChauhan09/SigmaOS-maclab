@@ -819,8 +819,8 @@ func TestPackageBuild(t *testing.T) {
 		t.Fatalf("finished build %+v", b)
 	}
 	if r, body := l.get("GET", "/api/builds/"+b.ID+"/files/"+files[1].Name); r.StatusCode != 200 || body != "headers" ||
-		!strings.Contains(r.Header.Get("Content-Disposition"), files[1].Name) {
-		t.Fatalf("file: %s %q", r.Status, body)
+		!strings.Contains(r.Header.Get("Content-Disposition"), files[1].Name) || r.Header.Get("Cache-Control") != "private" {
+		t.Fatalf("file: %s %q, Cache-Control %q", r.Status, body, r.Header.Get("Cache-Control"))
 	}
 	if r, _ := l.get("GET", "/api/builds/"+b.ID+"/files/..%2Fetc%2Fpasswd"); r.StatusCode != 404 {
 		t.Fatalf("unknown file: %s", r.Status)

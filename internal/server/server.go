@@ -77,6 +77,8 @@ type Config struct {
 	BuilderToken string
 	// ArtifactBudget caps the artifact store; unreferenced artifacts go first.
 	ArtifactBudget int64
+	// Transfers are the limits uploads work inside; the zero value is the lab's.
+	Transfers Transfers
 	// OMT runs omarchy-m-test in every job on Macs with a desktop user.
 	OMT bool
 	// OMTSite is where omarchy-m-test reports are published; empty never publishes.
@@ -548,7 +550,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	// The UI's own files and themes: no Mac's data, so anyone.
 	web.Register(m, s.basePath())
-	return s.edge(m)
+	return s.edge(s.capBodies(m))
 }
 
 // routes is every API route and who may reach it (see reach).
@@ -606,6 +608,9 @@ func (s *Server) routes() []route {
 		{"DELETE /api/enroll-tokens/{name}", maintainers, s.hRevokeEnrollTokens},
 		{"POST /api/devices/{name}/artifact-grants", maintainers, s.hArtifactGrants},
 		{"POST /api/artifacts", maintainers, s.hPutArtifact},
+		{"POST /api/artifacts/uploads", maintainers, s.hStartUpload},
+		{"PUT /api/artifacts/uploads/{sha}/parts/{n}", maintainers, s.hPutPart},
+		{"POST /api/artifacts/uploads/{sha}/close", maintainers, s.hCloseUpload},
 		{"POST /api/mesa/jobs", maintainers, s.hSubmit},
 		{"POST /api/jobs", maintainers, s.hSubmit},
 		{"GET /api/jobs", scoped, s.hJobs},
@@ -622,6 +627,9 @@ func (s *Server) routes() []route {
 		{"POST /api/builder/builds/{id}/progress", builder, s.hBuilderProgress},
 		{"POST /api/builder/builds/{id}/done", builder, s.hBuilderDone},
 		{"POST /api/builder/artifacts", builder, s.hBuilderArtifact},
+		{"POST /api/builder/artifacts/uploads", builder, s.hStartUpload},
+		{"PUT /api/builder/artifacts/uploads/{sha}/parts/{n}", builder, s.hPutPart},
+		{"POST /api/builder/artifacts/uploads/{sha}/close", builder, s.hCloseUpload},
 		{"GET /api/builder/artifacts/{sha}", builder, s.hBuilderGetArtifact},
 		{"GET /api/builder/self", builder, s.hBuilderSelf},
 		{"POST /api/builds", maintainers, s.hCreateBuild},
@@ -1136,7 +1144,7 @@ func (s *Server) artifactPath(sha string) string {
 func (s *Server) hPutArtifact(w http.ResponseWriter, r *http.Request) {
 	sha, n, err := s.storeArtifact(r.Body)
 	if err != nil {
-		httpErr(w, 500, "%v", err)
+		s.artifactErr(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"sha256": sha, "size": n})
