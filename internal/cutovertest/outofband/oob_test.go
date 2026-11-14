@@ -180,6 +180,7 @@ func TestEveryDryRunSaysItsStepsAndSendsNothing(t *testing.T) {
 // Each of the eight against a labd on loopback and the made-up mini: the
 // lab's own rules do what the test expects of them, hands played.
 func TestTheEightRunAgainstAMadeUpMini(t *testing.T) {
+	t.Parallel()
 	bins(t)
 	for name, wants := range map[string][]string{
 		"oob01-tool": {"m1-pro is sighted on the right port by the name it shows", "left port, reset 3 of 3: Hard reset sent to m1-pro through the left port",
