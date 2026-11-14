@@ -33,6 +33,8 @@ func enrollTokenLab(t *testing.T) (*client.Client, *[]map[string]any) {
 		json.NewEncoder(w).Encode(map[string]any{"token": "enr_fixture_token", "expires": time.Now().Add(time.Hour)})
 	}))
 	t.Cleanup(hs.Close)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("MACLAB_URL", hs.URL)
 	t.Setenv("MACLAB_TOKEN", "tok")
 	c, err := client.Load()
