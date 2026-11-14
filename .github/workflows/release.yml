@@ -1,57 +1,107 @@
 name: Release
 
-# Push a tag v<TOOL_VERSION> (by convention on main; not enforced) to publish
-# a signed CLI release. The
-# installer downloads releases/latest/download/omarchy-m-test.tar.gz and its
-# .sig, and the CLI's newer-release check reads VERSION.
+# A Lab release. The owner pushes a tag on main: vX.Y.Z, or vX.Y.Z-rc.N for a
+# Release candidate. The tag is the one number, stamped into omarchy-m-test,
+# lab and labd.
+#
+# "build" tests and builds every file with no secret. "publish" runs in the
+# environment "release" (the owner as required reviewer, v* tags only), so it
+# waits for the owner's approval: only then is the release key read, lab-agent
+# and every file signed, and the GitHub Release made. A Release candidate is a
+# pre-release and never "latest", so no install line offers it; vX.Y.Z becomes
+# "latest", with the generated notes under the fixed lines of
+# release/notes/X.Y.Z.txt when that file exists.
+#
+# release/local.sh does the same on one machine with a throwaway key.
 
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build:
+    name: Build
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: The tag is a Lab release's and sits on main
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "$GITHUB_REF_NAME is not vX.Y.Z or vX.Y.Z-rc.N"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_REF_NAME is not on main"; exit 1; }
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Tag matches the CLI's version
-        run: |
-          version="$(python3 -c 'import sys; sys.path.insert(0, "cli"); import omarchy_m_test as t; print(t.TOOL_VERSION)')"
-          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME doesn't match TOOL_VERSION $version"; exit 1; }
       - name: Tests
         run: |
           python cli/scripts/check_boundary.py
           (cd cli && python -m unittest discover -s tests -t .)
+          go vet ./...
       - name: Build the versioned native GPU helper (no GPU execution)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config libvulkan-dev glslang-tools spirv-tools
           cli/scripts/build_gpu_benchmark.sh "$RUNNER_TEMP/gpu-benchmark"
           echo "OMARCHY_GPU_BINARY_DIR=$RUNNER_TEMP/gpu-benchmark" >> "$GITHUB_ENV"
-      - name: Check the tarball's contents
+      - name: Check every file of a Lab release
         run: release/check.sh
       - name: Build
-        run: release/build.sh dist
+        run: LAB_RELEASE="$GITHUB_REF_NAME" release/build.sh dist
+      - name: One file, so the modes survive
+        run: tar -cf lab-release.tar -C dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lab-release
+          path: lab-release.tar
+          if-no-files-found: error
+
+  publish:
+    name: Sign and publish
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: lab-release
+      - name: Unpack
+        run: mkdir dist && tar -xf lab-release.tar -C dist
       - name: Sign
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
-          umask 077
           key="$RUNNER_TEMP/release-key"
-          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
-          ssh-keygen -q -Y sign -f "$key" -n omarchy-m-test-release dist/omarchy-m-test.tar.gz
-          shred -u "$key"
-          ssh-keygen -Y verify -f release/allowed_signers -I release@omarchy-m-testing.org \
-            -n omarchy-m-test-release -s dist/omarchy-m-test.tar.gz.sig < dist/omarchy-m-test.tar.gz
+          trap 'shred -u "$key"' EXIT
+          (umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")
+          release/sign.sh dist "$key"
+      - name: Verify against the pinned release key
+        run: release/verify.sh dist release/allowed_signers "$GITHUB_REF_NAME"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "omarchy-m-test ${GITHUB_REF_NAME#v}" --generate-notes --latest \
-            dist/omarchy-m-test.tar.gz dist/omarchy-m-test.tar.gz.sig dist/VERSION
+          title="Omarchy Mac Lab ${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF_NAME" == *-rc.* ]]; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$title" --notes "" \
+              --prerelease --latest=false dist/*
+          else
+            fixed="release/notes/${GITHUB_REF_NAME#v}.txt"
+            notes="$RUNNER_TEMP/notes"
+            : > "$notes"
+            if [[ -f $fixed ]]; then sed G "$fixed" > "$notes"; fi
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$title" --generate-notes --notes-file "$notes" \
+              --latest dist/*
+          fi
