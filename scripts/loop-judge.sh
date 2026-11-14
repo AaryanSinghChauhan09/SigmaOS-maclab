@@ -31,9 +31,8 @@ The job booted a test kernel once. That kernel may have been broken on purpose i
 - hang_early: a hang with interrupts off before SMP, so only the bootloader's watchdog resets the Mac
 - hang_late: userspace never starts while the kernel stays alive
 - netdown: a healthy kernel whose Wi-Fi driver fails to load
-Read the evidence with the lab tools, for this job only: lab_job first, then lab_log for the kernel and journal logs,
-and lab_serial if the Mac has a serial console. Don't read other jobs. Decide from the evidence, not from the job's
-outcome alone.
+Read the evidence with the lab tools, for this job only: lab_job first, then lab_log for the kernel and journal logs.
+Don't read other jobs. Decide from the evidence, not from the job's outcome alone.
 Answer with one JSON object and nothing else:
 {"fault": "<one of the modes above, or unsure>", "lab_outcome_agrees": <true if the lab's outcome fits what you found>,
  "human_needed": <true if the Mac needs a person now>, "evidence": ["<log file and line your call rests on>"],
@@ -43,7 +42,7 @@ EOF
 
 out=$(cd "$work" && claude -p "$prompt" --model "$MODEL" --mcp-config "$cfg" --strict-mcp-config --no-session-persistence \
 	--tools "" --setting-sources "" --permission-mode dontAsk \
-	--allowedTools "mcp__maclab__lab_job,mcp__maclab__lab_log,mcp__maclab__lab_serial" \
+	--allowedTools "mcp__maclab__lab_job,mcp__maclab__lab_log" \
 	--output-format json </dev/null) || :
 
 # A failed run (not logged in, API error) exits 1 with the reason in .result: say it.

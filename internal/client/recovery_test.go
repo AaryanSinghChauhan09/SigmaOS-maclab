@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +11,7 @@ import (
 )
 
 func TestRecoveryCapabilityGatePrecedesEveryExplicitPost(t *testing.T) {
-	for _, mode := range []string{api.RecoveryNetworkOnly, api.RecoverySerialAssisted} {
+	for _, mode := range []string{api.RecoveryNetworkOnly} {
 		for _, kind := range []string{"old-server", "old-schema", "no-isolation", "missing-mode", "valid", "mismatched-return"} {
 			t.Run(mode+kind, func(t *testing.T) {
 				posts := 0
@@ -79,30 +78,16 @@ func TestRecoveryCapabilityGatePrecedesEveryExplicitPost(t *testing.T) {
 	}
 }
 
-func TestRecoveryTransactionCapabilityBeforeSelectionPost(t *testing.T) {
-	for _, supported := range []bool{false, true} {
-		t.Run(fmt.Sprint(supported), func(t *testing.T) {
-			posts := 0
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == "GET" {
-					json.NewEncoder(w).Encode(api.RecoveryCapabilities{Schema: 1, Modes: []string{api.RecoveryNetworkOnly}, PerJobOOBIsolation: true, TransactionIsolation: supported})
-					return
-				}
-				posts++
-				var q api.RecoveryModeRequest
-				json.NewDecoder(r.Body).Decode(&q)
-				json.NewEncoder(w).Encode(api.RecoveryModeSelection{Schema: 1, Device: "m1", Mode: q.Mode, Holder: q.Holder, Transaction: q.Transaction, Quiescent: true})
-			}))
-			defer s.Close()
-			c := &Client{URL: s.URL, http: s.Client()}
-			_, e := c.SelectRecoveryMode(context.Background(), "m1", api.RecoveryModeRequest{Mode: api.RecoveryNetworkOnly, Holder: "own", Transaction: "fresh"})
-			if supported {
-				if e != nil || posts != 1 {
-					t.Fatal(e, posts)
-				}
-			} else if e == nil || posts != 0 {
-				t.Fatal("old server received selection", e, posts)
-			}
-		})
+// The serial-assisted mode went with the serial console: lab says so and
+// asks labd nothing.
+func TestASerialAssistedJobIsRefusedBeforeLabdIsAsked(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("labd was asked %s %s", r.Method, r.URL.Path)
+	}))
+	defer s.Close()
+	c := &Client{URL: s.URL, Token: "CPU_ONLY", http: s.Client()}
+	_, err := c.Submit(context.Background(), api.JobSpec{Device: "m1", RecoveryMode: api.RecoverySerialAssisted})
+	if err == nil || err.Error() != "The serial console is not part of Omarchy Mac Lab." {
+		t.Fatalf("a serial-assisted job: %v", err)
 	}
 }

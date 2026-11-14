@@ -189,11 +189,6 @@ func (c *Client) Reset(ctx context.Context, name, by string) (string, error) {
 	return out, c.do(ctx, "POST", "/api/devices/"+url.PathEscape(name)+"/reset?by="+url.QueryEscape(by), nil, &out)
 }
 
-func (c *Client) Serial(ctx context.Context, name string, lines int) (string, error) {
-	var out string
-	return out, c.do(ctx, "GET", fmt.Sprintf("/api/devices/%s/serial?lines=%d", url.PathEscape(name), lines), nil, &out)
-}
-
 // Audit is labd's copy of a Volunteer Mac's Audit log.
 func (c *Client) Audit(ctx context.Context, name string) ([]api.AuditEntry, error) {
 	var out []api.AuditEntry
@@ -336,44 +331,6 @@ func (c *Client) Gate(ctx context.Context, kernel string, families []string, vol
 		q += "&exclude=" + url.QueryEscape(strings.Join(exclude, ","))
 	}
 	return &out, c.do(ctx, "GET", "/api/gate/"+url.PathEscape(kernel)+q, nil, &out)
-}
-
-// ConsoleArm puts the Mac's debug UART into serial mode.
-func (c *Client) ConsoleArm(ctx context.Context, name string) error {
-	return c.do(ctx, "POST", "/api/devices/"+url.PathEscape(name)+"/console/arm", nil, nil)
-}
-
-// ConsoleWrite types bytes into the Mac's serial console.
-func (c *Client) ConsoleWrite(ctx context.Context, name string, b []byte) error {
-	req, _ := http.NewRequestWithContext(ctx, "POST", c.URL+"/api/devices/"+url.PathEscape(name)+"/console", bytes.NewReader(b))
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		m, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("%s", strings.TrimSpace(string(m)))
-	}
-	return nil
-}
-
-// ConsoleRaw streams console bytes to w until ctx ends.
-func (c *Client) ConsoleRaw(ctx context.Context, name string, w io.Writer) error {
-	req, _ := http.NewRequestWithContext(ctx, "GET", c.URL+"/api/devices/"+url.PathEscape(name)+"/console", nil)
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		m, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("%s", strings.TrimSpace(string(m)))
-	}
-	_, err = io.Copy(w, resp.Body)
-	return err
 }
 
 func (c *Client) Build(ctx context.Context, req api.BuildRequest) (*api.Build, error) {

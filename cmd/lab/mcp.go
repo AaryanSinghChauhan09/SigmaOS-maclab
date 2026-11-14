@@ -67,7 +67,7 @@ func serveMCP(ctx context.Context) error {
 		Cmdline           string        `json:"cmdline,omitempty" jsonschema:"extra kernel command line arguments, appended to the base"`
 		CmdlineBase       string        `json:"cmdline_base,omitempty" jsonschema:"cmdline the test boot starts from: known-good (default), default (the distro's stock KERNEL_CMDLINE[default]), or a literal cmdline with root="`
 		CmdlineStrip      []string      `json:"cmdline_strip,omitempty" jsonschema:"globs of base parameters to drop, e.g. asahi.* apple_t6030_display.*"`
-		VerboseBoot       bool          `json:"verbose_boot,omitempty" jsonschema:"boot with loglevel=7 and without quiet/splash; by default a test boot keeps the Mac's own (always verbose with a serial console)"`
+		VerboseBoot       bool          `json:"verbose_boot,omitempty" jsonschema:"boot with loglevel=7 and without quiet/splash; by default a test boot keeps the Mac's own"`
 		InstalledManifest string        `json:"installed_manifest,omitempty" jsonschema:"sha256 of a frozen expected manifest: boot the INSTALLED release through its installer entry, check identity, compare with the frozen pre-install baseline, never promote (needs a lease)"`
 		Tests             []string      `json:"tests,omitempty" jsonschema:"builtin tests: boot-health (always run), gui-smoke, gui-terminal, suspend-devices"`
 		GUITests          []string      `json:"gui_tests,omitempty" jsonschema:"builtin tests to run inside the GUI user's Hyprland session: gui-smoke, gui-terminal"`
@@ -307,20 +307,6 @@ func serveMCP(ctx context.Context) error {
 			out, err := c.Reset(ctx, a.Device, who)
 			return text(out), nil, err
 		})
-	type serialArg struct {
-		Device string `json:"device"`
-		Lines  int    `json:"lines,omitempty"`
-	}
-	mcp.AddTool(s, &mcp.Tool{Name: "lab_serial", Description: "Recent serial console lines from a Mac with an out-of-band controller."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, a serialArg) (*mcp.CallToolResult, any, error) {
-			n := a.Lines
-			if n <= 0 {
-				n = 200
-			}
-			out, err := c.Serial(ctx, a.Device, n)
-			return text(out), nil, err
-		})
-
 	type buildArg struct {
 		Source     string `json:"source" jsonschema:"GitHub URL of a repo, branch, commit or pull request (or git URL#ref)"`
 		Device     string `json:"device,omitempty" jsonschema:"build with this Mac's running kernel config"`
@@ -384,7 +370,7 @@ func serveMCP(ctx context.Context) error {
 		Command    string `json:"command" jsonschema:"shell command, run as root with bash -c"`
 		TimeoutSec int    `json:"timeout_sec,omitempty"`
 	}
-	mcp.AddTool(s, &mcp.Tool{Name: "lab_exec", Description: "Run a shell command on a Mac as root and get stdout, stderr and the exit code. Use this instead of ssh. It goes through the lab agent, or the serial console when the Mac's network is down."},
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_exec", Description: "Run a shell command on a Mac as root, through lab-agent, and get stdout, stderr and the exit code. Use this instead of ssh. It needs your own Lease on the Mac (lab_lease), a Maintainer's too. The command's text is kept in the Exec record for 12 months: never put a secret in a command."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a execArg) (*mcp.CallToolResult, any, error) {
 			r, err := c.Exec(ctx, a.Device, api.ExecArgs{Command: a.Command, TimeoutSec: a.TimeoutSec})
 			return text(r), nil, err

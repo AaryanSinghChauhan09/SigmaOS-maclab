@@ -301,15 +301,13 @@ func TestEveryCallNamesItself(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "foo")
 	os.WriteFile(file, []byte("foo"), 0o600)
 	c.Devices(ctx)
-	c.ConsoleWrite(ctx, "m1", []byte("x"))
-	c.ConsoleRaw(ctx, "m1", io.Discard)
 	c.BuildLog(ctx, "b1", false, io.Discard)
 	c.Exec(ctx, "m1", execArgs)
 	if _, err := c.Upload(ctx, file); err != nil {
 		t.Fatal(err)
 	}
 	c.BuildFile(ctx, "b1", "linux.pkg", "00", filepath.Join(t.TempDir(), "out"))
-	if len(lab.agents) < 8 {
+	if len(lab.agents) < 6 {
 		t.Fatalf("the lab saw %v", lab.paths)
 	}
 	for i, a := range lab.agents {
@@ -348,7 +346,6 @@ func TestAnEdgeErrorPageIsNeverPrinted(t *testing.T) {
 		"status":    func() error { _, err := c.Devices(ctx); return err },
 		"reset":     func() error { _, err := c.Reset(ctx, "m1", "ada"); return err },
 		"exec":      func() error { _, err := c.Exec(ctx, "m1", execArgs); return err },
-		"console":   func() error { return c.ConsoleRaw(ctx, "m1", io.Discard) },
 		"build-log": func() error { return c.BuildLog(ctx, "b1", false, io.Discard) },
 		"build-get": func() error { return c.BuildFile(ctx, "b1", "linux.pkg", "00", filepath.Join(t.TempDir(), "out")) },
 		"upload":    func() error { _, err := c.Upload(ctx, file); return err },

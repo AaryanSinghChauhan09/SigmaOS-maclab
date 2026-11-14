@@ -51,7 +51,9 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
   lab package <recipe-dir> [--commit <github-url>] [--pkgrel 11.14] [-o dir]
                                       build release packages from a PKGBUILD recipe with makepkg, as the release machine does
   lab builds | lab build-log <build> [-f] | lab build-get <build> [-o dir]
-  lab exec <device> <command...>      run a command on a Mac as root (agent, or serial if its network is down)
+  lab exec <device> <command...>      run a command on a Mac as root, through lab-agent. It needs your own Lease on
+                                      the Mac, a Maintainer's too. The command's text is kept in the Exec record
+                                      for 12 months: never put a secret in a command
   lab run <device> [--kernel <file|sha256|build-id|github-url>] [--cmdline ".."] [--cmdline-base known-good|default|"<cmdline>"] [--cmdline-strip "glob .."] [--verbose-boot] [--test boot-health] [--gui-test gui-smoke]
                    [--script t.sh] [--gui-script t.sh] [--boot-timeout 240] [--script-timeout 90m] [--publish] [--omt-allow ids] [--no-wait]
   lab crashtest <device>              deliberately panic the Mac and check it recovers by itself
@@ -79,8 +81,7 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
   lab installed status --release R                   the frozen files of a release
   lab reset <device>                  run the recovery ladder on an idle Mac by hand; a Mac that left
                                       (lab-agent uninstall) goes back in the lab first
-  lab shell <device>                  shell over the serial link: works with the Mac's network down (Ctrl-] exits)
-  lab serial <device> [-n 100] | lab oob <device>
+  lab oob <device>
   lab audit <device>                  labd's copy of a Volunteer's Mac's Audit log: every Maintainer action on it
   lab upload <file> [--for <mac>]     to the artifact store, in 32 MiB parts; cut, the same command resumes
   lab mcp                             MCP server on stdio, for AI agents
@@ -104,7 +105,7 @@ func main() {
 		err = bootTest(args)
 	case "login":
 		err = login(args, os.Stdin, os.Stdout)
-	case "forget", "maintainer":
+	case "forget", "maintainer", "shell", "console", "serial", "recovery-mode":
 		err = retired(cmd)
 	case "pack":
 		err = pack(args)
@@ -196,6 +197,9 @@ func need(pos []string, n int, what string) error {
 }
 
 func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) error {
+	if err := retired(cmd); err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	switch cmd {
 	case "status", "devices":
@@ -252,22 +256,8 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		}
 		return showDevice(ctx, c, pos[0])
 
-	case "recovery-mode":
-		mode := fs.String("mode", "", "network-only or serial-assisted")
-		transaction := fs.String("transaction", "", "fresh reviewed transaction identity")
-		pos := parse(fs, args)
-		if err := need(pos, 1, "lab recovery-mode <device> --mode MODE --transaction ID"); err != nil {
-			return err
-		}
-		out, err := c.SelectRecoveryMode(ctx, pos[0], api.RecoveryModeRequest{Mode: *mode, Holder: holder(), Transaction: *transaction})
-		if err != nil {
-			return err
-		}
-		b, _ := json.MarshalIndent(out, "", "  ")
-		fmt.Println(string(b))
-		return nil
 	case "baseline":
-		mode := fs.String("recovery-mode", "", "network-only or serial-assisted (empty inherits current policy)")
+		mode := fs.String("recovery-mode", "", "network-only (empty inherits current policy)")
 		transaction := fs.String("recovery-transaction", "", "selected recovery transaction identity")
 		noWait := fs.Bool("no-wait", false, "")
 		pos := parse(fs, args)
@@ -277,7 +267,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		return submit(ctx, c, api.JobSpec{Device: pos[0], Baseline: true, RecoveryMode: *mode, RecoveryTransaction: *transaction, Holder: holder()}, *noWait)
 
 	case "crashtest":
-		mode := fs.String("recovery-mode", "", "network-only or serial-assisted (empty inherits current policy)")
+		mode := fs.String("recovery-mode", "", "network-only (empty inherits current policy)")
 		transaction := fs.String("recovery-transaction", "", "selected recovery transaction identity")
 		noWait := fs.Bool("no-wait", false, "")
 		pos := parse(fs, args)
@@ -287,14 +277,14 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		return submit(ctx, c, api.JobSpec{Device: pos[0], Crash: "panic", RecoveryMode: *mode, RecoveryTransaction: *transaction, Holder: holder()}, *noWait)
 
 	case "run":
-		mode := fs.String("recovery-mode", "", "network-only or serial-assisted (empty inherits current policy)")
+		mode := fs.String("recovery-mode", "", "network-only (empty inherits current policy)")
 		transaction := fs.String("recovery-transaction", "", "selected recovery transaction identity")
 		kernel := fs.String("kernel", "", "kernel artifact: a file to upload, or a sha256 already uploaded")
 		cmdline := fs.String("cmdline", "", "extra kernel arguments, appended to the base")
 		runConfig := fs.String("config", "", "with a source URL --kernel: build with this .config (file or uploaded sha256) instead of the Mac's own")
 		cmdlineBase := fs.String("cmdline-base", "", `cmdline the test boot starts from: known-good (default), "default" (the distro's stock KERNEL_CMDLINE[default]), or a literal cmdline with root=`)
 		cmdlineStrip := fs.String("cmdline-strip", "", `globs of base parameters to drop, space- or comma-separated, e.g. 'asahi.* apple_t6030_display.* dcpext_*'`)
-		verboseBoot := fs.Bool("verbose-boot", false, "boot with loglevel=7 and without quiet/splash, to watch the console (default: keep the Mac's own; always verbose with a serial console)")
+		verboseBoot := fs.Bool("verbose-boot", false, "boot with loglevel=7 and without quiet/splash, to watch the console (default: keep the Mac's own)")
 		bootTimeout := fs.Int("boot-timeout", 0, "seconds to wait for the Mac to come back (default 240)")
 		noWait := fs.Bool("no-wait", false, "queue and return")
 		scriptTimeout := fs.Duration("script-timeout", 0, "time each --script/--gui-script test may run, e.g. 90m for a hands-on session (default 5m, at most 4h)")
@@ -506,8 +496,12 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 
 	case "exec":
 		timeout := fs.Int("timeout", 120, "seconds")
+		fs.Usage = func() {
+			fmt.Fprintln(fs.Output(), "usage:", execUsage)
+			fs.PrintDefaults()
+		}
 		pos := parse(fs, args)
-		if err := need(pos, 2, "lab exec <device> <command...>"); err != nil {
+		if err := need(pos, 2, execUsage); err != nil {
 			return err
 		}
 		res, err := c.Exec(ctx, pos[0], api.ExecArgs{Command: strings.Join(pos[1:], " "), TimeoutSec: *timeout})
@@ -719,23 +713,6 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 			return err
 		}
 		out, err := c.Reset(ctx, pos[0], holder())
-		fmt.Print(out)
-		return err
-
-	case "shell", "console":
-		pos := parse(fs, args)
-		if err := need(pos, 1, "lab shell <device>"); err != nil {
-			return err
-		}
-		return shell(ctx, c, pos[0])
-
-	case "serial":
-		n := fs.Int("n", 100, "lines")
-		pos := parse(fs, args)
-		if err := need(pos, 1, "lab serial <device>"); err != nil {
-			return err
-		}
-		out, err := c.Serial(ctx, pos[0], *n)
 		fmt.Print(out)
 		return err
 
@@ -1135,7 +1112,7 @@ func showDevice(ctx context.Context, c *client.Client, name string) error {
 	}
 	fmt.Printf("  kernel:      %s (known-good: %s)\n", d.Kernel, orDash(d.KnownGood, "no baseline yet"))
 	fmt.Printf("  last seen:   %s, uptime %.0fs, systemd %s\n", ago(d.LastSeen), d.Health.Uptime, d.Health.SystemState)
-	tiers := []string{"panic reboot + one-shot fallback", "+ hardware watchdog", "+ out-of-band reset and serial"}
+	tiers := []string{"panic reboot + one-shot fallback", "+ hardware watchdog", "+ out-of-band reset"}
 	fmt.Printf("  recovery:    tier %d (%s)\n", d.Tier, tiers[d.Tier])
 	if d.OOB != nil {
 		fmt.Printf("  oob:         %s\n", d.OOB.URL)
@@ -1193,9 +1170,18 @@ func trunc(s string, n int) string {
 	return s
 }
 
+// execUsage is lab exec's help.
+const execUsage = `lab exec <device> [--timeout 120] <command...>
+  Runs the command on the Mac as root, through lab-agent. It needs your own Lease on the Mac
+  (lab lease <device>), a Maintainer's too. The command's text, its exit code and how long it ran
+  are kept in the Exec record for 12 months, and the text shows on the Mac while it runs:
+  never put a secret in a command.`
+
 // retired is what a command the lab no longer has says, nil for any other.
 func retired(cmd string) error {
 	switch cmd {
+	case "shell", "console", "serial", "recovery-mode":
+		return errors.New(api.NoSerialConsole)
 	case "forget":
 		return errors.New("`lab forget` is not part of Omarchy Mac Lab.")
 	case "maintainer":
