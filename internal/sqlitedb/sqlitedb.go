@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"net/url"
 	"path/filepath"
+	"testing"
 
 	_ "modernc.org/sqlite"
 )
@@ -23,14 +24,22 @@ type DB struct{ w, r *sql.DB }
 //
 // synchronous is the driver's own default, named so that it stays. fullfsync
 // only does something on macOS, where a plain fsync leaves the data in the
-// drive's cache: the mini has no battery.
-func Open(path string) (*DB, error) {
+// drive's cache: the mini has no battery. It costs milliseconds a commit, and
+// the server's tests step a clock faster than that, so a test binary leaves
+// it off.
+func Open(path string) (*DB, error) { return open(path, !testing.Testing()) }
+
+func open(path string, fullfsync bool) (*DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
 	file := (&url.URL{Scheme: "file", Path: abs}).String()
-	w, err := sql.Open("sqlite", file+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=fullfsync(1)&_txlock=immediate")
+	write := file + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_txlock=immediate"
+	if fullfsync {
+		write += "&_pragma=fullfsync(1)"
+	}
+	w, err := sql.Open("sqlite", write)
 	if err != nil {
 		return nil, err
 	}

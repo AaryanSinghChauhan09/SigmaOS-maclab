@@ -10,10 +10,11 @@ import (
 	"time"
 )
 
-func open(t *testing.T) (*DB, string) {
+// openDB opens a database as labd does outside a test, fullfsync on.
+func openDB(t *testing.T) (*DB, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.db")
-	d, err := Open(path)
+	d, err := open(path, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func pragma(t *testing.T, q interface{ QueryRow(string, ...any) *sql.Row }, name
 // The settings read back as set, on the write connection and on every
 // connection of the read pool.
 func TestSettingsReadBackAsSet(t *testing.T) {
-	d, _ := open(t)
+	d, _ := openDB(t)
 	for name, want := range map[string]string{"journal_mode": "wal", "synchronous": "2", "fullfsync": "1", "busy_timeout": "5000", "query_only": "0"} {
 		if got := pragma(t, d.w, name); got != want {
 			t.Errorf("write connection: %s is %s, want %s", name, got, want)
@@ -58,6 +59,20 @@ func TestSettingsReadBackAsSet(t *testing.T) {
 	}
 }
 
+// A test binary leaves fullfsync off and changes nothing else.
+func TestATestBinaryLeavesFullfsyncOff(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for name, want := range map[string]string{"journal_mode": "wal", "synchronous": "2", "fullfsync": "0", "busy_timeout": "5000"} {
+		if got := pragma(t, d.w, name); got != want {
+			t.Errorf("%s is %s, want %s", name, got, want)
+		}
+	}
+}
+
 // The driver's own level, with nothing set: the answer section 17 of the
 // spec asks for. Open sets the same level by name, so a later driver that
 // changes its default changes nothing here.
@@ -79,7 +94,7 @@ func TestTheDriversDefaultSynchronousLevel(t *testing.T) {
 }
 
 func TestReadsGoOnWhileAWriteTransactionIsOpen(t *testing.T) {
-	d, _ := open(t)
+	d, _ := openDB(t)
 	if _, err := d.Exec(`CREATE TABLE t (n INTEGER)`); err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +138,7 @@ func TestReadsGoOnWhileAWriteTransactionIsOpen(t *testing.T) {
 // A write transaction holds the write lock from its first statement, BEGIN
 // IMMEDIATE: another connection cannot write until it ends.
 func TestWriteTransactionsStartImmediate(t *testing.T) {
-	d, path := open(t)
+	d, path := openDB(t)
 	if _, err := d.Exec(`CREATE TABLE t (n INTEGER)`); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +164,7 @@ func TestWriteTransactionsStartImmediate(t *testing.T) {
 }
 
 func TestTheReadPoolCannotWrite(t *testing.T) {
-	d, _ := open(t)
+	d, _ := openDB(t)
 	if _, err := d.Exec(`CREATE TABLE t (n INTEGER)`); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +178,7 @@ func TestTheReadPoolCannotWrite(t *testing.T) {
 }
 
 func TestCloseClosesBoth(t *testing.T) {
-	d, _ := open(t)
+	d, _ := openDB(t)
 	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +220,7 @@ func schema(t *testing.T, d *DB) string {
 // Each file depends on the one before, and none can run twice: the second
 // would add a column that is there.
 func TestMigrationsApplyOnceInOrder(t *testing.T) {
-	d, path := open(t)
+	d, path := openDB(t)
 	one := files(map[string]string{"0001_first.sql": `CREATE TABLE a (id INTEGER PRIMARY KEY);`})
 	if err := d.Migrate(one); err != nil {
 		t.Fatal(err)
@@ -234,7 +249,7 @@ func TestMigrationsApplyOnceInOrder(t *testing.T) {
 
 	// A second start.
 	d.Close()
-	d, err := Open(path)
+	d, err := open(path, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +272,7 @@ func TestMigrationsApplyOnceInOrder(t *testing.T) {
 // A migration that fails leaves nothing of itself behind and is tried again
 // on the next start.
 func TestAFailedMigrationLeavesNothing(t *testing.T) {
-	d, _ := open(t)
+	d, _ := openDB(t)
 	bad := files(map[string]string{
 		"0001_first.sql":  `CREATE TABLE a (id INTEGER PRIMARY KEY);`,
 		"0002_second.sql": `CREATE TABLE b (id INTEGER PRIMARY KEY); ALTER TABLE missing ADD COLUMN c TEXT;`,
@@ -277,7 +292,7 @@ func TestAFailedMigrationLeavesNothing(t *testing.T) {
 // The way back is the previous Lab release on a database the newer one has
 // added to: it starts and leaves the database as it is.
 func TestAnOlderReleaseStartsOnANewerDatabase(t *testing.T) {
-	d, _ := open(t)
+	d, _ := openDB(t)
 	newer := files(map[string]string{
 		"0001_first.sql":  `CREATE TABLE a (id INTEGER PRIMARY KEY);`,
 		"0002_second.sql": `ALTER TABLE a ADD COLUMN second TEXT;`,
@@ -310,7 +325,7 @@ func TestMigrationsAreNumberedWithoutGaps(t *testing.T) {
 		"no files at all":  {},
 		"an upper-case id": {"0001_A.sql": `CREATE TABLE a (n);`},
 	} {
-		d, _ := open(t)
+		d, _ := openDB(t)
 		if err := d.Migrate(files(set)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
@@ -330,7 +345,7 @@ func TestMigrationsOnlyAdd(t *testing.T) {
 		`CREATE TABLE a (n INTEGER); ALTER TABLE a ADD COLUMN m TEXT NOT NULL DEFAULT '';`,
 		`CREATE TABLE a (n INTEGER); ALTER TABLE a ADD m TEXT;`,
 	} {
-		d, _ := open(t)
+		d, _ := openDB(t)
 		if err := d.Migrate(files(map[string]string{"0001_a.sql": ok})); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}
@@ -350,7 +365,7 @@ func TestMigrationsOnlyAdd(t *testing.T) {
 		`CREATE TABLE a (n INTEGER); CREATE TRIGGER t AFTER INSERT ON a BEGIN DELETE FROM a; END;`,
 		`CREATE TABLE a (n INTEGER); VACUUM;`,
 	} {
-		d, _ := open(t)
+		d, _ := openDB(t)
 		err := d.Migrate(files(map[string]string{"0001_a.sql": bad}))
 		if err == nil || !strings.Contains(err.Error(), "only add") {
 			t.Errorf("%q accepted: %v", bad, err)
@@ -367,7 +382,7 @@ func TestMigrationsOnlyAdd(t *testing.T) {
 func BenchmarkCommit(b *testing.B) {
 	for _, full := range []string{"1", "0"} {
 		b.Run("fullfsync="+full, func(b *testing.B) {
-			d, err := Open(filepath.Join(b.TempDir(), "bench.db"))
+			d, err := open(filepath.Join(b.TempDir(), "bench.db"), true)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -388,7 +403,7 @@ func BenchmarkCommit(b *testing.B) {
 // Every read connection is open from the start and stays: a reader that
 // opened the file later could find it gone and would make an empty one.
 func TestReadersOpenAtTheStartAndNeverMakeTheFile(t *testing.T) {
-	d, path := open(t)
+	d, path := openDB(t)
 	if n := d.r.Stats().OpenConnections; n != readers {
 		t.Errorf("%d read connections open after Open, want %d", n, readers)
 	}
@@ -414,7 +429,7 @@ func TestAPathIsTakenAsItIs(t *testing.T) {
 	}
 	t.Chdir(dir)
 	for _, path := range []string{filepath.Join(dir, "whole.db"), "bare.db"} {
-		d, err := Open(path)
+		d, err := open(path, true)
 		if err != nil {
 			t.Fatal(err)
 		}
