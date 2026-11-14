@@ -604,7 +604,7 @@ func (s *Server) omtPublish(j *api.Job, by Person) (string, error) {
 // Maintainer any job's, an M team member their own job's.
 func mayPublish(p Person, j *api.Job) error {
 	switch {
-	case p.Blocked || !p.OnMTeam():
+	case !p.OnMTeam():
 		return refuse(403, "publishing a job's report is for Maintainers, and for an M team member's own job")
 	case p.isMaintainer():
 		return nil
@@ -626,7 +626,7 @@ func isRefresh(j *api.Job) bool {
 // became the Mac's Reference: each baseline, and one refresh a week.
 func (r *jobRun) publishRun(becameReference bool) {
 	s, j := r.s, r.j
-	if j.Result.OMT == nil || r.ir != nil {
+	if j.Result.OMT == nil {
 		return
 	}
 	not := func(why string) {

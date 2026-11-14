@@ -541,6 +541,9 @@ func TestTheVolunteersSwitchIsCheckedAtTheMomentOfPublishing(t *testing.T) {
 	if got := listed(); len(got) != 1 || got[0].Job != "j-on" {
 		t.Errorf("after the deletion the Mac lists %+v", got)
 	}
+	if _, err := os.Stat(l.s.deletionLinkPath("j-off")); !os.IsNotExist(err) {
+		t.Errorf("the link of a deleted report is still kept: %v", err)
+	}
 	said := ravi.jobSaid("j-off").Result.OMT
 	if said.ReportState != api.ReportIsDeleted || said.ReportDeleted == nil || said.ReportDeleted.By != "whoever holds its deletion link" || !said.ReportDeleted.Time.Equal(l.s.now()) {
 		t.Errorf("the job of a report deleted by its link says %q, %+v", said.ReportState, said.ReportDeleted)
@@ -982,5 +985,97 @@ func TestAJobsPageShowsItsReportsStateAndPublish(t *testing.T) {
 	ravi.published("j-vol")
 	if got := report(linus, "j-vol").words(); got != "Report: published the report" {
 		t.Errorf("the Volunteer reads %q", got)
+	}
+}
+
+// ended is a run's end for a job left as the runner has it then: still
+// collecting, on the runner's own copy.
+func (l *signInLab) ended(j *api.Job, becameReference bool) *api.OMTResult {
+	l.t.Helper()
+	j.State = api.JobCollecting
+	(&jobRun{s: l.s, j: j, v: l.s.dev(j.Spec.Device)}).publishRun(becameReference)
+	j.State = api.JobDone
+	l.s.updateJob(j, func(*api.Job) {})
+	return j.Result.OMT
+}
+
+// At a run's end: `run --publish` is by hand, for whoever submitted the
+// job, if they may still publish; everything else is the lab by itself.
+func TestAtARunsEndWhoAskedIsWhoSubmittedTheJob(t *testing.T) {
+	l := publishLab(t, nil)
+	l.lrMac("m2-max", "j416c", nil)
+	l.lrMaintainer()
+	l.lrMember(edithID)
+	l.lrMember(graceID)
+	asks := func(j *api.Job) { j.Spec.Publish = true }
+
+	// A member's own run, asked to be published: theirs, whether or not it became the Reference.
+	o := l.ended(l.ran("j-ediths", "m2-max", edithID, nil, asks), false)
+	if report := l.report(o.ReportID); report.AskedHandle != "edith" || report.AskedAccountID != edithID || report.LabJob != "j-ediths" {
+		t.Errorf("a member's run --publish: %+v", report)
+	}
+	// A baseline a Maintainer asked to publish is asked by them; one nobody asked is the lab's own.
+	o = l.ended(l.ran("j-ravis-baseline", "m2-max", maintainerID, nil, func(j *api.Job) { j.Spec.Baseline, j.Spec.Publish = true, true }), true)
+	if report := l.report(o.ReportID); report.AskedHandle != "ravi" {
+		t.Errorf("a Maintainer's baseline --publish: %+v", report)
+	}
+	o = l.ended(l.ran("j-baseline", "m2-max", maintainerID, nil, func(j *api.Job) { j.Spec.Baseline = true }), true)
+	if report := l.report(o.ReportID); report.AskedHandle != "" || report.AskedAccountID != 0 {
+		t.Errorf("a baseline nobody asked to publish names who ran it: %+v", report)
+	}
+	before := len(l.everyReport())
+
+	// Whoever left the M team, or was Blocked, between asking and the run's end asked for nothing.
+	left := l.ran("j-left", "m2-max", graceID, nil, asks)
+	l.lrUnmark(graceID)
+	if o := l.ended(left, true); o.ReportID != "" || !strings.Contains(o.PublishNote, "publishing a job's report is for Maintainers") {
+		t.Errorf("a run whose member left the M team: %+v", o)
+	}
+	blocked := l.ran("j-blocked", "m2-max", edithID, nil, asks)
+	if err := l.s.store.block(edithID, maintainerID, "a test", l.s.now()); err != nil {
+		t.Fatal(err)
+	}
+	if o := l.ended(blocked, true); o.ReportID != "" || o.PublishNote == "" {
+		t.Errorf("a run whose member was Blocked: %+v", o)
+	}
+	// A person's job under the scheduler's label is no refresh, and a
+	// person's Known-good run that became the Reference waits to be asked.
+	for name, change := range map[string]func(*api.Job){
+		"j-labelled": func(j *api.Job) { j.Spec.Holder = omtHolder },
+		"j-plain":    nil,
+	} {
+		if o := l.ended(l.ran(name, "m2-max", maintainerID, nil, change), true); o.ReportID != "" || o.PublishNote != "" {
+			t.Errorf("%s was published by itself: %+v", name, o)
+		}
+	}
+	// A baseline that did not become the Reference.
+	if o := l.ended(l.ran("j-failed-baseline", "m2-max", maintainerID, nil, func(j *api.Job) { j.Spec.Baseline = true }), false); o.ReportID != "" ||
+		!strings.Contains(o.PublishNote, "only a run that became the Mac's Reference") {
+		t.Errorf("a baseline that did not become the Reference: %+v", o)
+	}
+	// An Installed run has no end that publishes.
+	if o := l.ended(l.ran("j-installed", "m2-max", maintainerID, nil, func(j *api.Job) { j.Spec.InstalledManifest, j.Spec.Publish = strings.Repeat("ab", 32), true }), true); o.ReportID != "" {
+		t.Errorf("an Installed run was published: %+v", o)
+	}
+	if n := len(l.everyReport()); n != before {
+		t.Errorf("%d more reports published", n-before)
+	}
+}
+
+// Two asks for one job at once publish it once, and the second finds what
+// the first did.
+func TestTwoAsksForOneJobPublishItOnce(t *testing.T) {
+	l := publishLab(t, nil)
+	l.lrMac("m2-max", "j416c", nil)
+	ravi := l.lrMaintainer()
+	l.ran("j1", "m2-max", 0, nil, nil)
+	stale, _ := l.s.store.job("j1")
+	id := ravi.published("j1")
+	url, err := l.s.omtPublish(stale, Person{})
+	if err != nil || url != labAddress+"/reports/"+id {
+		t.Fatalf("the second ask: %q %v", url, err)
+	}
+	if o := ravi.jobSaid("j1").Result.OMT; o.ReportID != id || o.ReportState != api.ReportPublished || o.PublishNote != "" || len(l.everyReport()) != 1 {
+		t.Errorf("after two asks the job says %+v", o)
 	}
 }
