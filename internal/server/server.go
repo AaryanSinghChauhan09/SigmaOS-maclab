@@ -254,6 +254,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	}
 	rep, err := reports.Open(filepath.Join(cfg.DataDir, "reports.db"))
 	if err != nil {
+		st.db.Close()
 		return nil, err
 	}
 	s := &Server{cfg: cfg, store: st, reports: rep, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, hosts: hosts}
