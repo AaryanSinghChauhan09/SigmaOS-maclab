@@ -153,7 +153,10 @@ func (v *dev) viewLocked() DeviceView {
 	if cable != nil && cable.NoHardReset == "" {
 		tier = 2
 	}
-	return DeviceView{Device: d, Tier: tier, Alive: v.aliveLocked(), Queued: len(v.queue) + len(v.parked), ScreenAt: v.screenAt, Cable: cable}
+	if p := d.SitePause; p != nil && !p.Active(v.s.now()) {
+		d.SitePause = nil // its time has passed
+	}
+	return DeviceView{Device: d, Tier: tier, Alive: v.aliveLocked(), Queued: len(v.queue) + len(v.parked), ScreenAt: v.screenAt, Cable: cable, Arrival: v.arrivalLocked()}
 }
 
 // publishLocked sends the device to the web UI, which adds a device it

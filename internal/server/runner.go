@@ -177,6 +177,7 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 	// that left the lab. A lease someone else takes meanwhile sets the job
 	// aside instead (see park).
 	length := r.expectedLength()
+	needs := needsFull(j.Spec)
 	holdLocked := func() string {
 		if v.d.State == api.StateLeft {
 			return ""
@@ -186,6 +187,10 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		}
 		if !v.aliveLocked() || (v.d.State != api.StateReady && v.d.State != api.StateNew) {
 			return fmt.Sprintf("waiting for %s to be ready (%s)", j.Spec.Device, v.d.State)
+		}
+		if needs != "" && v.d.Limited && v.d.AccessLevel == api.AccessFull {
+			// lab-agent, which knows nothing of the site, would run it.
+			return fmt.Sprintf("%s is limited to Access level Qualification by its Volunteer, which allows no %s, until they remove the limit", v.d.Name, needs)
 		}
 		return v.windowHoldLocked(length)
 	}
@@ -258,7 +263,7 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			s.copySerial(v.d.Name, r.serial0, j.ID)
 		}
 		v.mu.Lock()
-		v.d.ActiveJob = ""
+		v.d.ActiveJob, v.siteCut = "", siteCut{}
 		if v.d.State == api.StateBusy || v.d.State == api.StateRecovering {
 			v.setStateLocked(v.idleStateLocked(), "")
 		}
@@ -289,6 +294,11 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 	outcome, summary := r.execute(ctx)
 	if ctx.Err() != nil && outcome != api.OutcomeCanceled {
 		outcome, summary = r.canceledAfter(outcome, summary)
+	}
+	// What the Mac's Volunteer took away on the site stops the job as a
+	// closing window does: incomplete, restored, and queued again.
+	if cut := v.siteCutOf(j.ID); cut != "" && outcome == api.OutcomeCanceled {
+		outcome, summary = api.OutcomeIncomplete, "stopped: "+cut
 	}
 	left := v.leaving()
 	if left != "" {
@@ -356,6 +366,9 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		outcome, summary = r.ir.seal(outcome, summary, at)
 	}
 	r.finishAt(outcome, summary, at)
+	if j.Spec.Baseline && gone == "" {
+		s.firstBaselineEnded(v, j.ID, outcome)
+	}
 	if outcome == api.OutcomeIncomplete && gone == "" {
 		r.retry()
 	}
@@ -391,6 +404,7 @@ func (r *jobRun) retry() {
 		r.ev("not retried: %v", err)
 		return
 	}
+	r.v.firstBaselineMoved(r.j.ID, j.ID)
 	r.ev("retried in a later window as job %s", j.ID)
 }
 

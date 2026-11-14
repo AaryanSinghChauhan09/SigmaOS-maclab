@@ -110,6 +110,10 @@ type labConfig struct {
 	name      string
 	clock     *agent.FakeClock // nil runs labd and lab-agent on the wall clock
 	volunteer bool             // the Mac is a Volunteer's; drive its commands with l.volunteer
+	// lender is the account id of the person who lends the Mac, a
+	// Volunteer's, as a Join command made on "Lend a Mac" has it: the lab
+	// knows the person (@ada) and they have leave to lend.
+	lender int64
 	// wrap puts a test's transport (a flaky link, a stalled download) in front
 	// of labd's handler, so every request from the Mac and the Maintainers
 	// goes through it.
@@ -208,7 +212,21 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	if c.volunteer {
 		addToken = s.store.addVolunteerTokenForTest
 	}
-	tok, _ := addToken(name)
+	var tok string
+	if c.lender != 0 {
+		if err := s.store.know(c.lender, "ada", clock.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.setMark(c.lender, "leave_to_lend", true); err != nil {
+			t.Fatal(err)
+		}
+		tok = "enr_test_lent_" + name
+		if _, err := s.store.addJoinCommand(hashSecret(tok), api.EnrollTokenRequest{Name: name, Model: api.ModelLaptop, Volunteer: true, VolunteerID: c.lender}, c.lender, clock.Now(), clock.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		tok, _ = addToken(name)
+	}
 	terms, err := agent.FetchTerms(ctx, l.url, tok, policy)
 	if err != nil {
 		t.Fatal(err)

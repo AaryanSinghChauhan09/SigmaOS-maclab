@@ -149,7 +149,7 @@ func TestMaintainerLinksVolunteerLogin(t *testing.T) {
 
 	// A forgotten linked Mac takes its link with it: its name, taken again,
 	// is nobody's until a Maintainer links it, and the old jobs stay hidden.
-	if code, err := s.forget(s.dev("linked"), "", true); code != 200 {
+	if code, err := s.forget(s.dev("linked"), Person{}, "", true); code != 200 {
 		t.Fatalf("forget linked: %d %v", code, err)
 	}
 	if slices.Contains(names(visitor), "linked") {

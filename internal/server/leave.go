@@ -45,7 +45,7 @@ func (s *Server) hLeave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, api.LeaveResponse{Name: v.snapshot().Name, Canceled: canceled})
 }
 
-// leave takes v out of the pool: it goes to StateLeft, which only lab forget,
+// leave takes v out of the pool: it goes to StateLeft, which only lab remove,
 // an undo from uninstall or lab reset (rejoin) moves it out of, so no
 // automatic recovery resets it and no alert asks for hands. Its running job
 // is canceled, ending without a restore, and its queued jobs are canceled
@@ -59,7 +59,7 @@ func (s *Server) leave(v *dev, why string) ([]string, error) {
 	name := v.d.Name
 	if v.d.State != api.StateLeft {
 		v.leftBy = why
-		v.setStateLocked(api.StateLeft, why+" ran at "+s.now().Format(time.DateTime)+"; `lab forget "+name+"` takes it out of the lab, `lab reset "+name+"` puts it back")
+		v.setStateLocked(api.StateLeft, why+" ran at "+s.now().Format(time.DateTime)+"; `lab remove "+name+"` Retires it, `lab reset "+name+"` puts it back")
 	}
 	v.mu.Unlock()
 	s.log.Printf("%s is leaving the lab: %s", name, why)

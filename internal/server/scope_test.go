@@ -288,7 +288,7 @@ func TestPersonSeesOnlyTheirOwnMacs(t *testing.T) {
 		os.MkdirAll(filepath.Dir(p), 0o755)
 		os.WriteFile(p, []byte("old lab"), 0o644)
 	}
-	if code, err := s.forget(s.dev("lab"), "", true); code != 200 {
+	if code, err := s.forget(s.dev("lab"), Person{}, "", true); code != 200 {
 		t.Fatalf("forget lab: %d %v", code, err)
 	}
 	volunteer("visitor@github", "lab")

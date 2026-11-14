@@ -179,6 +179,10 @@ func (s *Server) macState(v *dev, d DeviceView) string {
 	switch {
 	case d.ActiveJob != "" || d.State == api.StateBusy:
 		return "running a job"
+	case d.Arrival != "" && d.Arrival != ArrivalReady:
+		return d.Arrival
+	case d.SitePause != nil:
+		return "Paused"
 	case d.IsVolunteer() && v.windowClosed():
 		return "outside its window"
 	case d.State == api.StateReady && d.Lease != nil:

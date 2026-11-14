@@ -186,3 +186,39 @@ func TestEvaluateAnswersOpenAttendedEndAndNext(t *testing.T) {
 		})
 	}
 }
+
+// A Pause taken on the lab's site closes the Mac whatever the Mac says, an
+// Open now included, and it is over at its time.
+func TestAPauseFromTheSiteClosesTheMacWhateverItsOwnSettingsSay(t *testing.T) {
+	now := at(t, "2026-10-19 20:00") // a Monday
+	s := Settings{Rules: rules(t, "mon-fri 19:00-23:00"), Zone: macZone, OpenUntil: now.Add(6 * time.Hour)}
+	if st := Evaluate(s, now); !st.Open {
+		t.Fatalf("the Mac is not open by its own settings: %+v", st)
+	}
+	if st := Paused(s, time.Time{}, now); st.Open || !st.Next.IsZero() {
+		t.Errorf("Paused until Resume: %+v, want closed with no opening ahead", st)
+	}
+	until := now.Add(2 * time.Hour)
+	if st := Paused(s, until, now); st.Open || !st.Next.Equal(until) {
+		t.Errorf("Paused for two hours inside a window: %+v, want closed, opening at %s", st, until)
+	}
+	// A Pause that ends between windows: the Mac opens with its next window.
+	s.OpenUntil = time.Time{}
+	until = at(t, "2026-10-20 03:00")
+	if st := Paused(s, until, now); st.Open || !st.Next.Equal(at(t, "2026-10-20 19:00")) {
+		t.Errorf("Paused past the window's end: %+v, want closed until Tuesday 19:00", st)
+	}
+	if st := Paused(s, now.Add(-time.Minute), now); !st.Open {
+		t.Errorf("a Pause whose time has passed still closes the Mac: %+v", st)
+	}
+}
+
+func TestScheduleReadsAsTheVolunteerTypedIt(t *testing.T) {
+	s := Settings{Rules: rules(t, "mon-fri 19:00-07:00", "sat 10:00-12:00")}
+	if got := s.Schedule(); got != "mon-fri 19:00-07:00, sat 10:00-12:00" || !s.Scheduled() {
+		t.Errorf("schedule %q, scheduled %v", got, s.Scheduled())
+	}
+	if (Settings{}).Schedule() != "" || (Settings{}).Scheduled() {
+		t.Error("a Mac with no weekly window has a schedule")
+	}
+}

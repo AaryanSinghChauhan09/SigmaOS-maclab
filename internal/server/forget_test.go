@@ -162,7 +162,7 @@ func TestForgetThenLateSave(t *testing.T) {
 func TestSubmitToForgottenMac(t *testing.T) {
 	l := newLab(t, false)
 	v := l.s.dev(l.name)
-	if code, err := l.s.forget(v, "", true); err != nil {
+	if code, err := l.s.forget(v, Person{}, "", true); err != nil {
 		t.Fatalf("forget: %d %v", code, err)
 	}
 	// as if Submit had looked v up just before the forget

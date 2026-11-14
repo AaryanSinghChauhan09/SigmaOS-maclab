@@ -66,6 +66,8 @@ func (s *Server) summaryMacs() []MacSummary {
 			m.State = MacLeased(orStr(l.Owner(), l.Holder), l.Expires)
 		case d.ActiveJob != "" || d.State == api.StateBusy || d.State == api.StateRecovering:
 			m.State = MacRunningJob
+		case v.paused():
+			m.State = MacPaused
 		case v.windowClosed():
 			m.State = MacOutsideWindow
 		case d.State == api.StateOffline || d.State == api.StateNeedsHands:

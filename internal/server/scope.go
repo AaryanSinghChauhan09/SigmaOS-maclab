@@ -423,5 +423,8 @@ func refuseBelowFull(d *api.Device, a action) error {
 	if d.AllowsAnything() {
 		return nil
 	}
+	if d.Limited && d.AccessLevel == api.AccessFull {
+		return fmt.Errorf("%s is a Volunteer's Mac its Volunteer limited to Access level Qualification, which allows no %s; only its Volunteer can remove the limit, on My Macs", d.Name, a.what)
+	}
 	return fmt.Errorf("%s is a Volunteer's Mac at Access level Qualification, which allows no %s; only its Volunteer can raise it (sudo lab-agent access full)", d.Name, a.what)
 }

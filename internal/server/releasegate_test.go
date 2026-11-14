@@ -898,7 +898,7 @@ func TestGateEndpoint(t *testing.T) {
 	}
 
 	// A Mac labd no longer has is listed as gone, not dropped.
-	if _, err := l.s.forget(v, "", true); err != nil {
+	if _, err := l.s.forget(v, Person{}, "", true); err != nil {
 		t.Fatal(err)
 	}
 	r = gate("/api/gate/"+k[:12]+"?families=m1", 200)

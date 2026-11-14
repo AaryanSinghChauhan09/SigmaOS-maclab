@@ -212,14 +212,22 @@ func (s *Server) macFacts(v *dev, d DeviceView) macFacts {
 		f.LastSeen = whenDay(d.LastSeen)
 	}
 	if f.Volunteers {
-		if d.AccessLevel != api.AccessFull {
+		switch {
+		case d.AccessLevel != api.AccessFull:
 			f.AccessLevel = "Qualification"
+		case d.Limited:
+			f.AccessLevel = "Qualification (limited by its Volunteer on the site; Full on the Mac)"
 		}
 		v.mu.Lock()
 		until := v.openUntilLocked()
 		v.mu.Unlock()
 		f.Window = "closed"
-		if !until.IsZero() {
+		switch {
+		case d.SitePause != nil && d.SitePause.Until.IsZero():
+			f.Window = "Paused by its Volunteer until they resume it"
+		case d.SitePause != nil:
+			f.Window = "Paused by its Volunteer until " + when(d.SitePause.Until)
+		case !until.IsZero():
 			f.Window = "open until " + when(until)
 		}
 	}
@@ -335,10 +343,6 @@ func (s *Server) macRecords(data *macPageData, v *dev, d DeviceView, p Person, a
 		data.Audit = append(data.Audit, recordShownLine{whenDay(e.Time), line})
 	}
 }
-
-// macRecord is the Mac's record: joined, window, Access level, left. The
-// lab writes no such line yet.
-func (s *Server) macRecord(d DeviceView) []recordShownLine { return nil }
 
 // execRecordFor is the Exec record's lines on v that p may read, newest
 // first: Maintainers and the Mac's Volunteer all of them, anyone else their

@@ -637,6 +637,7 @@ func (s *Server) routes() []route {
 		{"PATCH /api/devices/{name}", maintainers, s.hPatchDevice},
 		{"DELETE /api/devices/{name}", maintainers, s.hForgetDevice},
 		{"POST /api/devices/{name}/end-enrollment", maintainers, s.hEndEnrollment},
+		{"GET /api/retired", maintainers, s.hRetired},
 		{"POST /api/devices/{name}/lease", team, s.hLease},
 		{"DELETE /api/devices/{name}/lease", team, s.hRelease},
 		{"GET /api/devices/{name}/leases", macNamed, s.hLeaseRecord},
@@ -1000,6 +1001,7 @@ func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 		State: api.StateNew, StateReason: "enrolled; run a baseline job", Facts: req.Facts, Enrollment: enrollment(&t.EnrollTokenRequest, api.Enrollment{}),
 		TermsSHA256: req.TermsSHA256, TermsAccepted: s.now()}
 	d.Volunteer = d.IsVolunteer()
+	d.FirstBaseline = &api.FirstBaseline{}
 	if d.IsVolunteer() {
 		d.AccessLevel = api.AccessQualification // until its Volunteer chooses
 	}
@@ -1023,6 +1025,7 @@ func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	go s.deviceLoop(v)
 	s.log.Printf("enrolled %s (%s, %s); terms %s accepted", d.Name, d.Kind, req.Facts.DTModel, short(req.TermsSHA256))
+	s.joined(v)
 	writeJSON(w, api.EnrollResponse{DeviceID: d.ID, Name: d.Name, Secret: secret, AgentEnrollment: s.agentEnrollment(d.Enrollment)})
 }
 
@@ -1182,6 +1185,9 @@ type DeviceView struct {
 	// VolunteerHandle is the handle, as it is now, of the person who lends
 	// the Mac; "" for a Lab-owned Mac and on the stream.
 	VolunteerHandle string `json:"volunteer_handle,omitempty"`
+	// Arrival is the stage a Volunteer's Mac has reached since it Joined:
+	// one of the Arrival words; "" for a Lab-owned Mac.
+	Arrival string `json:"arrival,omitempty"`
 }
 
 func (s *Server) view(v *dev) DeviceView {
@@ -1285,7 +1291,7 @@ func (s *Server) hForgetDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force, _ := strconv.ParseBool(r.URL.Query().Get("force"))
-	if code, err := s.forget(v, r.URL.Query().Get("holder"), force); err != nil {
+	if code, err := s.forget(v, leaser(r), r.URL.Query().Get("holder"), force); err != nil {
 		httpErr(w, code, "%v", err)
 		return
 	}
@@ -1293,12 +1299,13 @@ func (s *Server) hForgetDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"forgot": r.PathValue("name")})
 }
 
-// forget deletes v's row and drops it from devs, ending its device loop and
-// out-of-band stream. It holds v.mu throughout, as every save of v does, and
-// marks v forgotten before letting go: nothing still holding v can then
-// write the row back, and Submit queues nothing more on it. A lease held by
-// holder doesn't count; force skips the lease and live-agent checks, never
-// the job check.
+// forget takes v out of the fleet and drops it from devs, ending its device
+// loop and out-of-band stream; its record is Retired, as by a Maintainer
+// ending its enrollment (by). It holds v.mu throughout, as every save of v
+// does, and marks v forgotten before letting go: nothing still holding v
+// can then write the row back, and Submit queues nothing more on it. A
+// lease held by holder doesn't count; force skips the lease and live-agent
+// checks, never the job check.
 // dropNamedState clears what labd keeps under a forgotten Mac's name, since
 // the name can be taken again by another Mac, or another person's: its
 // screens, serial log and baselines go; its Audit log is kept, renamed after
@@ -1316,7 +1323,7 @@ func (s *Server) dropNamedState(name, id string) {
 	}
 }
 
-func (s *Server) forget(v *dev, holder string, force bool) (int, error) {
+func (s *Server) forget(v *dev, by Person, holder string, force bool) (int, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	name := v.d.Name
@@ -1349,9 +1356,7 @@ func (s *Server) forget(v *dev, holder string, force bool) (int, error) {
 		return 409, fmt.Errorf("%s's lab-agent checked in %s ago, so it is still set up: run `sudo lab-agent uninstall` on the Mac first, or pass --force",
 			name, s.since(seen).Round(time.Second))
 	}
-	if err := s.store.deleteDevice(v.d.ID); err != nil {
-		return 500, err
-	}
+	d := v.d
 	v.forgotten = true
 	s.mu.Lock()
 	if s.devs[name] == v {
@@ -1359,7 +1364,7 @@ func (s *Server) forget(v *dev, holder string, force bool) (int, error) {
 	}
 	s.mu.Unlock()
 	close(v.gone)
-	s.dropNamedState(name, v.d.ID)
+	s.retired(&d, leaving{how: leftByMaintainer, by: by})
 	return 200, nil
 }
 

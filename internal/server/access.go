@@ -32,7 +32,8 @@ func accessCut(what string) (string, string) {
 }
 
 // syncAccessLocked takes the Access level and publishing opt-in a check-in
-// carried as labd's copy, and says whether they changed. Lowering the level
+// carried as labd's copy, and says whether they changed. Each change is an
+// event of the Mac's record and a line for the Lab group. Lowering the level
 // ends a lease at once. Only a Volunteer's Mac has them. Caller holds v.mu.
 func (v *dev) syncAccessLocked(ci api.Checkin) bool {
 	if !v.d.IsVolunteer() || ci.AccessLevel == "" {
@@ -42,14 +43,109 @@ func (v *dev) syncAccessLocked(ci api.Checkin) bool {
 		return false
 	}
 	lowered := v.d.AccessLevel == api.AccessFull && ci.AccessLevel != api.AccessFull
+	raised := v.d.AccessLevel != api.AccessFull && ci.AccessLevel == api.AccessFull
+	published := v.d.Publish != ci.Publish
+	// A Mac limited from the site was at Qualification for the lab already:
+	// lowering it on the Mac takes nothing more away.
+	cuts := lowered && !v.d.Limited
 	v.d.AccessLevel, v.d.Publish = ci.AccessLevel, ci.Publish
-	if l := v.liveLeaseLocked(); lowered && l != nil {
-		v.s.log.Printf("%s: its Volunteer lowered the Access level; %s's lease ends", v.d.Name, l.Holder)
-		ended := *l
-		ended.Expires = v.s.now()
-		v.d.Lease, v.leaseCut = &ended, "its Volunteer lowered the Access level"
+	switch {
+	case raised:
+		v.said(macAccessLevel, "its Volunteer raised its Access level to Full")
+		v.s.labGroup.AccessLevelRaised(v.d.Name)
+	case lowered:
+		v.said(macAccessLevel, "its Volunteer lowered its Access level to Qualification")
+		v.s.labGroup.AccessLevelLowered(v.d.Name)
+	}
+	if published {
+		v.said(macPublishing, "its Volunteer turned publishing "+map[bool]string{true: "on", false: "off"}[ci.Publish])
+		v.s.labGroup.Publishing(v.d.Name, ci.Publish)
+	}
+	if cuts {
+		v.endLeaseLocked("its Volunteer lowered the Access level")
 	}
 	return true
+}
+
+// endLeaseLocked ends the Mac's Lease now because its Volunteer took
+// something away (why); the keeper records and posts the ending. It says
+// whether a Lease was held. Caller holds v.mu.
+func (v *dev) endLeaseLocked(why string) bool {
+	l := v.liveLeaseLocked()
+	if l == nil {
+		return false
+	}
+	v.s.log.Printf("%s: %s; %s's lease ends", v.d.Name, why, l.Holder)
+	ended := *l
+	ended.Expires = v.s.now()
+	v.d.Lease, v.leaseCut = &ended, why
+	return true
+}
+
+// ---- Limit to Qualification, taken on the site ----
+
+// siteLimited is why a Limit its Volunteer took on the site cut a job or a
+// Lease short.
+const siteLimited = "its Volunteer limited the Mac to Qualification from the site"
+
+// limitMac is the Mac's Volunteer limiting it to Qualification on the
+// site, whatever Access level the Mac has: until "Remove limit" the lab
+// treats it as at Qualification. When that lowers the level, it stops a
+// running job that needs Full, incomplete as a closing window stops one,
+// and ends a Lease, as lowering the level on the Mac does.
+func (s *Server) limitMac(v *dev, by Person) error {
+	if err := s.lends(v, by); err != nil {
+		return err
+	}
+	v.mu.Lock()
+	if v.d.Limited {
+		v.mu.Unlock()
+		return refuse(http.StatusConflict, "This Mac is limited to Qualification already.")
+	}
+	lowers := v.d.AccessLevel == api.AccessFull
+	v.d.Limited = true
+	active := ""
+	if lowers {
+		if j, err := s.store.job(v.d.ActiveJob); v.d.ActiveJob != "" && err == nil && needsFull(j.Spec) != "" {
+			active = v.cutJobLocked(siteLimited)
+		}
+		v.endLeaseLocked(siteLimited)
+	}
+	v.said(macLimited, "its Volunteer limited it to Qualification from the site")
+	name := v.d.Name
+	v.saveLocked()
+	v.publishLocked()
+	v.bump()
+	v.mu.Unlock()
+	s.labGroup.Limited(name)
+	if active != "" {
+		s.cancelJob(active, siteLimited)
+	}
+	s.lapse(v)
+	return nil
+}
+
+// unlimitMac is "Remove limit": it undoes the Limit taken on the site and
+// nothing else. The Mac is back at the Access level its Volunteer set on
+// it, which the site cannot raise.
+func (s *Server) unlimitMac(v *dev, by Person) error {
+	if err := s.lends(v, by); err != nil {
+		return err
+	}
+	v.mu.Lock()
+	if !v.d.Limited {
+		v.mu.Unlock()
+		return refuse(http.StatusConflict, "No Limit taken on the site holds this Mac. The site undoes only what it took: the Access level is raised on the Mac (sudo lab-agent access full).")
+	}
+	v.d.Limited = false
+	v.said(macLimitRemoved, "its Volunteer removed the limit from the site")
+	name := v.d.Name
+	v.saveLocked()
+	v.publishLocked()
+	v.bump()
+	v.mu.Unlock()
+	s.labGroup.LimitRemoved(name)
+	return nil
 }
 
 // needsFull is why a job spec needs a Volunteer's Mac at Full, or "": a

@@ -48,6 +48,7 @@ type dev struct {
 	queue         chan string
 	parked        []parkedJob   // queued jobs someone else's lease holds back (see park)
 	leaseCut      string        // why the Mac's Volunteer or its window cut the Lease short, "" when nothing did
+	siteCut       siteCut       // the running job its Volunteer stopped from the site, and why (see cutJobLocked)
 	coresLooked   bool          // the Mac's jobs were looked through for its core counts (see configuration)
 	gone          chan struct{} // closed when the device is forgotten: ends deviceLoop
 	stop          chan struct{} // closed when the Mac's enrollment ends
@@ -183,6 +184,111 @@ func (v *dev) idleStateLocked() api.DeviceState {
 		return api.StateNew
 	}
 	return api.StateReady
+}
+
+// ---- arriving ----
+
+// The stages of a Volunteer's Mac from Joined to ready, as My Macs shows
+// them. A Mac arrives closed: with no Availability window it takes nothing.
+// Its first baseline, which the lab queues itself, runs in the first open
+// window; a failed one is shown, and a Maintainer looks.
+const (
+	ArrivalNoWindow    = "no window yet"
+	ArrivalFirstCheck  = "first check pending (restarts twice)"
+	ArrivalCheckFailed = "first check failed: a Maintainer looks"
+	ArrivalReady       = "ready"
+)
+
+// arrivalLocked is the stage a Volunteer's Mac has reached; "" for a
+// Lab-owned Mac. Caller holds v.mu.
+func (v *dev) arrivalLocked() string {
+	if !v.d.IsVolunteer() {
+		return ""
+	}
+	fb := v.d.FirstBaseline
+	switch {
+	case v.d.KnownGood != "" || fb != nil && fb.Outcome == api.FirstBaselinePassed:
+		return ArrivalReady
+	case fb != nil && fb.Outcome == api.FirstBaselineFailed:
+		return ArrivalCheckFailed
+	case (v.d.Window == nil || !v.d.Window.Scheduled()) && v.openUntilLocked().IsZero():
+		return ArrivalNoWindow
+	}
+	return ArrivalFirstCheck
+}
+
+// joined is what the lab does when a Mac has Joined: the line of the Mac's
+// record and of the Lab group and, for a Volunteer's Mac lent by a person,
+// the first baseline, which the lab queues itself. It waits, like any job,
+// for the Mac's first open window.
+func (s *Server) joined(v *dev) {
+	d := v.snapshot()
+	configuration := ""
+	if c := s.configuration(v); c != (api.Configuration{}) {
+		configuration = c.String()
+	}
+	as := "a Lab-owned Mac"
+	if d.IsVolunteer() {
+		as = "a Volunteer's Mac, at Qualification with publishing off"
+	}
+	s.macSaid(d.Name, d.ID, macJoined, "Joined as "+as+" ("+orUnknown(configuration)+")")
+	s.labGroup.MacJoined(d.Name, configuration, d.Kind)
+	if !d.IsVolunteer() || d.VolunteerID == 0 {
+		return
+	}
+	j, _, err := s.submit(Person{}, api.JobSpec{Device: d.Name, Baseline: true}, "")
+	if err != nil {
+		s.log.Printf("%s: the first baseline was not queued: %v", d.Name, err)
+		return
+	}
+	v.mu.Lock()
+	if v.d.FirstBaseline != nil && v.d.FirstBaseline.Job == "" {
+		v.d.FirstBaseline = &api.FirstBaseline{Job: j.ID}
+		v.saveLocked()
+		v.publishLocked()
+	}
+	v.mu.Unlock()
+	s.log.Printf("%s: the lab queued its first baseline, job %s", d.Name, j.ID)
+}
+
+// firstBaselineMoved follows the first baseline to the job that tries it
+// again, after a window closed on it.
+func (v *dev) firstBaselineMoved(from, to string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if fb := v.d.FirstBaseline; fb != nil && fb.Job == from && fb.Outcome == "" {
+		v.d.FirstBaseline = &api.FirstBaseline{Job: to}
+		v.saveLocked()
+	}
+}
+
+// firstBaselineEnded is a baseline job ending on v. Until the Mac has
+// passed one, each that passes or fails is its first baseline: an event of
+// the Mac's record and a line for the Lab group. One cut short or canceled
+// is neither.
+func (s *Server) firstBaselineEnded(v *dev, job, outcome string) {
+	if outcome == api.OutcomeIncomplete || outcome == api.OutcomeCanceled {
+		return
+	}
+	v.mu.Lock()
+	fb := v.d.FirstBaseline
+	if fb == nil || fb.Outcome == api.FirstBaselinePassed {
+		v.mu.Unlock()
+		return
+	}
+	passed := outcome == api.OutcomePass
+	next := api.FirstBaseline{Job: job, Outcome: api.FirstBaselineFailed}
+	line := "failed its first baseline (job " + job + ", " + outcome + "): a Maintainer looks"
+	if passed {
+		next.Outcome, line = api.FirstBaselinePassed, "passed its first baseline (job "+job+")"
+	}
+	v.d.FirstBaseline = &next
+	v.said(macFirstBaseline, line)
+	name := v.d.Name
+	v.saveLocked()
+	v.publishLocked()
+	v.mu.Unlock()
+	s.labGroup.FirstBaseline(name, passed)
 }
 
 // heartbeat records a check-in. Commands are handed out separately by deliver.

@@ -481,7 +481,7 @@ func (s *Server) block(r *http.Request, k knownPerson, reason string) error {
 	s.endLendingOf(k.AccountID)
 	s.endLeasesOf(k.Person, wasBlocked(*by))
 	s.endMacSignInsOf(k.AccountID)
-	s.endEnrollmentsOf(k.AccountID)
+	s.endEnrollmentsOf(k.AccountID, leaving{how: leftBlocked, by: *by})
 	s.agents.Blocked(by.Handle, k.Handle)
 	return s.recordNoted(r, "blocked", &k.Person, reason)
 }
@@ -514,12 +514,8 @@ func (p Person) access() access {
 	return signedInAccess
 }
 
-// What a Block ends that the lab does not keep yet: the one place its
-// ending is asked for. (endMacSignInsOf is in mac_signin.go.)
-
-// endEnrollmentsOf has the Macs the person lends Leave. Until it does, a
-// Blocked person's Macs stay enrolled, and the person no longer sees them.
-func (s *Server) endEnrollmentsOf(accountID int64) {}
+// What else a Block ends: endMacSignInsOf is in mac_signin.go and
+// endEnrollmentsOf in leaving.go.
 
 // endLendingOf takes back what a Blocked person had on the way to lending a
 // Mac: a waiting Request to lend and an unused Join command. Neither is an

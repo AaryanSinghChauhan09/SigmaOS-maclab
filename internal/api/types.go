@@ -205,7 +205,42 @@ type Device struct {
 	// labd had terms.
 	TermsSHA256   string    `json:"terms_sha256,omitempty"`
 	TermsAccepted time.Time `json:"terms_accepted,omitzero"`
+	// SitePause is a Pause the Mac's Volunteer took on the site, and Limited
+	// a Limit to Qualification taken there. The site only takes away: both
+	// apply under what the Mac's check-ins carry, and the site undoes only
+	// these two, never what the Volunteer set on the Mac.
+	SitePause *SitePause `json:"site_pause,omitempty"`
+	Limited   bool       `json:"limited,omitempty"`
+	// FirstBaseline is the Mac's first baseline since it Joined; nil for a
+	// Mac that was enrolled before the lab kept it.
+	FirstBaseline *FirstBaseline `json:"first_baseline,omitempty"`
 }
+
+// SitePause is a Pause taken on the site: the Mac is closed to the lab
+// until Until, or until Resume when Until is zero.
+type SitePause struct {
+	Since time.Time `json:"since"`
+	Until time.Time `json:"until,omitzero"`
+}
+
+// Active is whether the Pause still closes the Mac at now.
+func (p *SitePause) Active(now time.Time) bool {
+	return p != nil && (p.Until.IsZero() || now.Before(p.Until))
+}
+
+// FirstBaseline is where a Mac's first baseline stands. Job is the latest
+// baseline job that counted toward it: the one the lab queued itself at
+// Join for a Volunteer's Mac. Outcome is "" until one ends, then
+// FirstBaselinePassed or FirstBaselineFailed.
+type FirstBaseline struct {
+	Job     string `json:"job,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+}
+
+const (
+	FirstBaselinePassed = "passed"
+	FirstBaselineFailed = "failed"
+)
 
 // Access levels of a Volunteer's Mac. Qualification, the default, allows
 // only what a Qualification needs: no exec and no Maintainer's script.
@@ -215,8 +250,11 @@ const (
 )
 
 // AllowsAnything is whether Maintainers may do anything on the Mac a
-// Lab-owned Mac allows: a Lab-owned Mac, or a Volunteer's at Full.
-func (d *Device) AllowsAnything() bool { return !d.IsVolunteer() || d.AccessLevel == AccessFull }
+// Lab-owned Mac allows: a Lab-owned Mac, or a Volunteer's at Full that its
+// Volunteer has not limited to Qualification from the site.
+func (d *Device) AllowsAnything() bool {
+	return !d.IsVolunteer() || d.AccessLevel == AccessFull && !d.Limited
+}
 
 // Kinds of Mac. A Mac keeps its kind for as long as it is enrolled.
 const (

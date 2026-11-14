@@ -230,3 +230,35 @@ func Evaluate(s Settings, now time.Time) State {
 	}
 	return st
 }
+
+// Paused is Evaluate for a Mac under a Pause its Volunteer took on the lab's
+// site: closed until then, or until it is undone when until is zero,
+// whatever the Mac's own settings say. An Open now does not open the Mac
+// under it: the site only takes away. Next is when the Mac opens once the
+// Pause is over.
+func Paused(s Settings, until, now time.Time) State {
+	if until.IsZero() {
+		return State{}
+	}
+	if !until.After(now) {
+		return Evaluate(s, now)
+	}
+	after := Evaluate(s, until)
+	if after.Open {
+		return State{Next: until}
+	}
+	return State{Next: after.Next}
+}
+
+// Scheduled is whether the Mac has a weekly window at all.
+func (s Settings) Scheduled() bool { return len(s.Rules) > 0 }
+
+// Schedule is the weekly windows as their Volunteer typed them, "mon-fri
+// 19:00-07:00, sat 10:00-12:00"; "" with none.
+func (s Settings) Schedule() string {
+	out := make([]string, len(s.Rules))
+	for i, r := range s.Rules {
+		out[i] = r.String()
+	}
+	return strings.Join(out, ", ")
+}
