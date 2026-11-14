@@ -1,0 +1,179 @@
+#!/bin/bash
+# The rehearsal import of the old site's reports, on the mini (the Cutover's
+# step 11; spec section 5). With sudo, in this order:
+#
+#   sudo rehearsal-import key [--dry-run]
+#   sudo rehearsal-import run [--dry-run] --public-key FILE [--dump FILE]
+#
+# key  asks for the machine-id key at a prompt that does not show it: the
+#      128 hex digits derived inside Railway from the old site's
+#      SECRET_KEY_BASE. It becomes /var/lab/secrets/machine-id-key, the lab
+#      account's alone, and labd is restarted to read it. The same line goes
+#      into the off-machine copy by your own hand.
+# run  1. labd import dump reads the old site's Postgres into a new dump
+#         file only the lab account reads. It asks for the Postgres address
+#         at its own prompt and shows nothing of it. With --dump FILE that
+#         is there, the old site is not read.
+#      2. reports.db is emptied: labd stops, the file moves aside into
+#         /var/lab/import/reports-before (the copy before it goes), labd
+#         starts and makes an empty one.
+#      3. labd import load fills it from the dump, and the three checks
+#         run: the row counts; one Mac's machine id recomputed from its
+#         Machine public key (--public-key, the .pub line of one of your
+#         Macs); a deletion link the old site issued, asked for at a
+#         prompt, deletes its report. Upload one throwaway report to the
+#         old site before the dump and keep its deletion link for this.
+#      It stops at the first step that fails, and ends with the lines for
+#      docs/acceptance/: counts only, no report and no key.
+#
+#   --dry-run  say what would be asked and done, and change nothing
+#
+# Only a lab in Preview is given a key or emptied: once the lab is open its
+# reports are its own. The Postgres address and the key are never an
+# argument, are not printed and reach no log.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/cutover/mini.sh
+. "$here/mini.sh"
+
+usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+step="${1:-}"
+[[ $# -gt 0 ]] && shift
+public=""
+dump=""
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --public-key) [[ $# -ge 2 ]] || usage; public="$2"; shift ;;
+    --dump) [[ $# -ge 2 ]] || usage; dump="$2"; shift ;;
+    *) echo "$ME: an argument it does not take. Nothing was done." >&2; usage ;;
+  esac
+  shift
+done
+
+folder="$LAB_HOME/import"
+before="$folder/reports-before"
+
+checks() {
+  (( DRY )) || need_root
+  deployed
+  in_preview || fail "the lab is open: labd's LaunchDaemon file starts it without --preview. Its reports are its own now, and this is for a lab in Preview"
+  no_planted_link
+}
+
+# key_in_place: the file holds 64 bytes as 128 hex digits.
+key_in_place() {
+  # shellcheck disable=SC2016
+  as_lab /bin/sh -c 'tr -d "\n" < "$1" | LC_ALL=C grep -Eqx "[0-9a-fA-F]{128}"' key "$MACHINE_ID_KEY" 2>/dev/null
+}
+
+key() {
+  local typed=""
+  checks
+  [[ -d $LAB_HOME/secrets ]] || fail "no $LAB_HOME/secrets: run scripts/mini/setup first"
+  if (( DRY )); then
+    say "would ask for the machine-id key (128 hex digits), not shown"
+    say "would write $MACHINE_ID_KEY for $LAB_OWNER alone and restart labd to read it"
+    return 0
+  fi
+  printf '%s: ' "The machine-id key: 128 hex digits, derived inside Railway (it is not shown)" >&2
+  if [[ -t 0 ]]; then
+    IFS= read -rs typed || true
+    echo >&2
+  else
+    IFS= read -r typed || true
+  fi
+  typed="${typed//[[:space:]]/}"
+  [[ $typed =~ ^[0-9a-fA-F]{128}$ ]] || fail "that is not the machine-id key: 64 bytes as 128 hex digits on one line. Nothing was changed"
+  if printf '%s\n' "$typed" | as_lab cmp -s - "$MACHINE_ID_KEY" 2>/dev/null; then
+    say "that key is in place already: nothing was changed"
+    return 0
+  fi
+  printf '%s\n' "$typed" | lab_file "$MACHINE_ID_KEY" 600
+  typed=""
+  say "wrote $MACHINE_ID_KEY"
+  if loaded "$LABD_LABEL"; then
+    launchctl kickstart -k "system/$LABD_LABEL" || fail "launchd did not restart labd"
+    labd_answers || fail "labd does not answer after its restart: see $LABD_LOG"
+    say "restarted labd, which answers"
+  else
+    say "labd is not running: it reads the key when it starts"
+  fi
+  say "put the same line in the off-machine copy now. It is a permanent secret of the lab: with another key every Mac would look new"
+}
+
+run() {
+  local out given=0 stamp load listed f
+  [[ -n $public ]] || usage
+  checks
+  [[ -r $public ]] || fail "no Machine public key at $public: one of your Macs' .pub line, in a file"
+  if [[ -n $dump ]]; then
+    given=1
+    [[ $dump == /* ]] || fail "--dump is a whole path"
+  else
+    dump="$folder/old-site-$(date +%Y%m%d-%H%M%S).dump"
+  fi
+  if (( DRY )); then
+    if [[ "$(id -u)" == 0 || -n $SYSROOT ]]; then
+      key_in_place || say "the machine-id key is not in place yet: sudo $0 key"
+    fi
+    if (( given )) && [[ -e $dump ]]; then
+      say "would read $dump: the old site is not read"
+    else
+      say "would have labd import dump ask for the address of the old site's Postgres and write $dump"
+    fi
+    say "would stop labd and Litestream, move $LAB_DATA/reports.db aside into $before, and start them again"
+    say "would have labd import load fill reports.db from the dump"
+    say "would run the three checks: the row counts, a machine id from $public, a deletion link asked for at a prompt"
+    return 0
+  fi
+  key_in_place || fail "the machine-id key is not in place ($MACHINE_ID_KEY, 128 hex digits): sudo $0 key"
+  no_link "$folder" "$before" "$LAB_DATA"
+  lab_folder "$folder" 700
+  lab_file "$folder/machine.pub" 600 < "$public"
+
+  if as_lab test -e "$dump"; then
+    as_lab test -r "$dump" || fail "$LAB_OWNER cannot read $dump"
+    say "$dump is there: the old site is not read"
+  else
+    (( ! given )) || as_lab test -d "$(dirname "$dump")" || fail "no folder for $dump that $LAB_OWNER can write in: leave --dump out, and it goes in $folder"
+    say "reading the old site's Postgres into $dump"
+    as_lab "$LABD" import dump --to "$dump" || fail "no dump was written, and nothing of the lab was changed"
+  fi
+
+  say "emptying reports.db: the copy it held moves to $before"
+  stop_lab
+  as_lab rm -rf "$before"
+  as_lab mkdir "$before"
+  for f in reports.db reports.db-wal reports.db-shm; do
+    [[ ! -e $LAB_DATA/$f ]] || as_lab mv "$LAB_DATA/$f" "$before/$f"
+  done
+  start_lab || fail "labd does not answer after reports.db was moved aside: see $LABD_LOG. What it held is in $before"
+
+  out="$(mktemp "${TMPDIR:-/tmp}/lab-rehearsal.XXXXXX")"
+  # shellcheck disable=SC2064
+  trap "rm -f '$out'" EXIT
+  load=(import load --from "$dump" --data "$LAB_DATA")
+  [[ -z $SYSROOT || -z ${LAB_GITHUB_URL:-} ]] || load+=(--github-url "$LAB_GITHUB_URL")
+  as_lab "$LABD" "${load[@]}" | tee -a "$out" || fail "the import stopped: reports.db holds what it holds now, and the next run empties it again"
+  as_lab "$LABD" import check counts --from "$dump" --data "$LAB_DATA" | tee -a "$out" || fail "the first check failed: the row counts"
+  as_lab "$LABD" import check machine-id --machine-id-key "$MACHINE_ID_KEY" --public-key "$folder/machine.pub" --data "$LAB_DATA" | tee -a "$out" ||
+    fail "the second check failed: the machine id of the Mac whose public key is $public"
+  as_lab "$LABD" import check deletion-link --data "$LAB_DATA" | tee -a "$out" || fail "the third check failed: the old site's deletion link"
+
+  stamp="$(TZ=Australia/Brisbane date '+%Y-%m-%d %H:%M') Brisbane"
+  listed="$(grep -c '^  report ' "$out" || true)"
+  say "the import and its three checks passed. For docs/acceptance/, counts only:"
+  echo "---- rehearsal import, $stamp, labd $("$LABD" --version 2>/dev/null || echo unknown) ----"
+  grep -v '^  ' "$out" | sed -e "s|$dump|the dump|g"
+  echo "reports listed with a reason and carried all the same: $listed"
+  echo "----"
+}
+
+case "$step" in
+  key) key ;;
+  run) run ;;
+  *) usage ;;
+esac

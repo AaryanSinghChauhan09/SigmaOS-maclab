@@ -1,0 +1,273 @@
+#!/bin/bash
+# The old lab's data, from the labd on omarchy-gpu to the mini (the
+# Cutover's step 10; spec sections 5 and 15). Run on the mini, in this order:
+#
+#   old-lab stop    [--dry-run] [--from USER@HOST] [--unit NAME]
+#   old-lab copy    [--dry-run] [--from USER@HOST] [--data DIR] [--stage DIR]
+#   sudo old-lab upgrade [--dry-run] --stage DIR --account-id N HANDLE
+#
+# stop     stops and disables the old lab's labd on its host, over SSH as
+#          you: it is your command, and the old lab takes no job after it.
+# copy     copies its data directory into a folder of yours here, with its
+#          two token files left behind, and checks every file's SHA-256
+#          against the old host's own. The old directory is only read, and
+#          is checked again afterwards to be as it was.
+# upgrade  makes the copy the lab's data directory: upgraded where it lies,
+#          its Mac records Retired, what was done under the old admin token
+#          yours (HANDLE and --account-id: your GitHub handle and account
+#          id; the id must be one of the lab's Admins), nothing the old
+#          lab handed out honoured. labd is stopped
+#          for the switch and must answer afterwards, or the directory it
+#          had is put back. The lab must be in Preview and hold no Mac, job
+#          or build of its own. Its reports and its caller log move over;
+#          the rest of what it had stays beside it in data.before-old-lab.
+#
+#   --dry-run   say what would be done, and change nothing anywhere
+#   --from      the old lab's host as SSH reaches it (owner@omarchy-gpu)
+#   --unit      its labd's systemd user unit (labd)
+#   --data      its data directory there (.local/share/maclab)
+#   --stage     the folder of yours the copy waits in (copy: ~/old-lab)
+#
+# No token or secret is read, printed or passed: the token files are never
+# copied, and what the output names is counts and the Macs' names.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/cutover/mini.sh
+. "$here/mini.sh"
+
+usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+step="${1:-}"
+[[ $# -gt 0 ]] && shift
+from="owner@omarchy-gpu"
+unit="labd"
+data=".local/share/maclab"
+stage=""
+account=""
+handle=""
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --from) [[ $# -ge 2 ]] || usage; from="$2"; shift ;;
+    --unit) [[ $# -ge 2 ]] || usage; unit="$2"; shift ;;
+    --data) [[ $# -ge 2 ]] || usage; data="$2"; shift ;;
+    --stage) [[ $# -ge 2 ]] || usage; stage="$2"; shift ;;
+    --account-id) [[ $# -ge 2 ]] || usage; account="$2"; shift ;;
+    -*) usage ;;
+    *) [[ -z $handle ]] || usage; handle="$1" ;;
+  esac
+  shift
+done
+[[ $from =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || fail "--from is USER@HOST, as SSH reaches the old lab's host"
+[[ $unit =~ ^[A-Za-z0-9@._-]+$ ]] || fail "--unit is a systemd unit's name"
+[[ $data =~ ^[A-Za-z0-9._/-]+$ && $data != -* ]] || fail "--data is the old data directory's path on its host, of letters, digits, dots, dashes and slashes"
+if [[ -z $stage ]]; then
+  [[ $step != upgrade ]] || fail "name the folder the copy waits in: --stage DIR, as old-lab copy printed it"
+  stage="${HOME:?}/old-lab"
+fi
+[[ $stage == /* ]] || fail "--stage is a whole path on this machine"
+
+host="${from#*@}"
+# The two files that hold a token of the old lab. They stay where they are.
+tokens=(./admin.token ./builder.token)
+
+# remote COMMAND: run it on the old lab's host, as you.
+remote() { ssh -o BatchMode=yes -o ConnectTimeout=15 "$from" "$1"; }
+
+# old_labd: what the old host says of its labd: "active enabled", and a
+# third word when a labd runs there that systemd did not start.
+old_labd() {
+  remote "a=\$(systemctl --user is-active '$unit' 2>/dev/null); e=\$(systemctl --user is-enabled '$unit' 2>/dev/null); p=\$(pgrep -u \"\$(id -u)\" -x labd >/dev/null 2>&1 && echo running); echo \"\${a:-unknown} \${e:-unknown} \$p\"" ||
+    fail "$from was not reached over SSH. From your own Mac, come to the mini with your SSH agent (ssh -A), so that SSH from here is you, and accept the old host's key once by hand: ssh $from true"
+}
+
+runs_still() {
+  local is="$1"
+  case "$is" in
+    "active "* | "activating "* | "reloading "* | *" running") return 0 ;;
+    *" enabled"* | *" static"*) return 0 ;;
+  esac
+  return 1
+}
+
+stop() {
+  local is
+  is="$(old_labd)"
+  is="${is% }"
+  say "the old lab's labd on $host is: $is"
+  if ! runs_still "$is"; then
+    say "it is stopped and disabled already"
+    return 0
+  fi
+  change "stop and disable the old lab's labd on $host (systemctl --user disable --now $unit)" remote "systemctl --user disable --now '$unit'"
+  (( ! DRY )) || return 0
+  is="$(old_labd)"
+  is="${is% }"
+  ! runs_still "$is" || fail "the old lab's labd on $host still runs or is still enabled ($is): look at it there (systemctl --user status $unit)"
+  say "stopped and disabled: $is. The host stays on, for Unlock; its data directory stays as it is"
+}
+
+# manifest: the SHA-256 of every file of the old directory but the token
+# files, as its own host computes them, by path.
+manifest() {
+  remote "cd '$data' && find . -type f ! -path '${tokens[0]}' ! -path '${tokens[1]}' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum"
+}
+
+# whole DIR: every file of the manifest is in DIR with its SHA-256, and
+# DIR holds no other file.
+whole() {
+  local dir="$1"
+  (cd "$dir" && shasum -a 256 -c "$stage/manifest" >/dev/null 2>&1) || return 1
+  diff <(sed -e 's/^[0-9a-f]\{64\} [ *]//' "$stage/manifest" | LC_ALL=C sort) <(cd "$dir" && find . -type f | LC_ALL=C sort) >/dev/null
+}
+
+counted() { "$LABD" old-lab counts --data "$1" | tr '\n' ' ' | sed 's/ $//'; }
+
+copy() {
+  local is before files
+  [[ "$(id -u)" != 0 || -n $SYSROOT ]] || fail "copy runs as you, not root: it reaches $host with your SSH"
+  if [[ -d $stage/data ]]; then
+    whole "$stage/data" || fail "$stage/data is there and is not the whole copy its manifest lists: remove the folder (rm -r $stage) and copy again"
+    say "the copy in $stage/data is there and whole ($(wc -l < "$stage/manifest" | tr -d ' ') files): nothing to copy"
+    return 0
+  fi
+  is="$(old_labd)"
+  is="${is% }"
+  ! runs_still "$is" || fail "the old lab's labd on $host still runs or is still enabled ($is): stop it first (old-lab stop)"
+  remote "test -f '$data/labd.db'" || fail "no labd.db in $data on $host: name the old lab's data directory with --data"
+  if (( DRY )); then
+    say "would list every file of $host:$data with its SHA-256, but ${tokens[*]}"
+    say "would copy them into $stage/data, for you alone, and check each against that list"
+    say "would list the old directory again, to see that it is as it was"
+    return 0
+  fi
+  umask 077
+  mkdir -p "$stage"
+  rm -rf "$stage/data.part"
+  mkdir "$stage/data.part"
+  say "listing $host:$data"
+  manifest > "$stage/manifest.part" || fail "the old directory's files could not be listed on $host"
+  grep -q ' [ *]\./labd\.db$' "$stage/manifest.part" || fail "the list from $host has no labd.db"
+  mv "$stage/manifest.part" "$stage/manifest"
+  files="$(wc -l < "$stage/manifest" | tr -d ' ')"
+  say "copying $files files"
+  remote "tar -C '$data' --exclude='${tokens[0]}' --exclude='${tokens[1]}' -cf - ." | tar -C "$stage/data.part" -xf - ||
+    fail "the copy stopped part-way: run this again"
+  rm -f "$stage/data.part/${tokens[0]}" "$stage/data.part/${tokens[1]}"
+  whole "$stage/data.part" || fail "the copy in $stage/data.part is not what $host listed, file for file: run this again"
+  before="$(shasum -a 256 < "$stage/manifest")"
+  [[ "$(manifest | shasum -a 256)" == "$before" ]] ||
+    fail "the old directory on $host changed while it was copied: something still writes there. Stop it, remove $stage and copy again"
+  mv "$stage/data.part" "$stage/data"
+  say "copied: $files files, $(du -sk "$stage/data" | awk '{ printf "%.1f GB", $1 / 1048576 }'), each with the SHA-256 $host gave"
+  say "the old directory on $host is as it was: listed again after the copy, the same"
+  if [[ -x $LABD ]]; then say "the copy holds: $(counted "$stage/data")"; fi
+  say "next: sudo $0 upgrade --stage $stage --account-id <your GitHub account id> <your GitHub handle>"
+}
+
+new="$LAB_HOME/data.old-lab"
+kept="$LAB_HOME/data.before-old-lab"
+switching=0
+
+# shellcheck disable=SC2317,SC2329
+put_back() {
+  switching=0
+  say "the switch stopped part-way: putting the lab's directory back"
+  stopped "$LABD_LABEL" || true
+  stopped "$LITESTREAM_LABEL" || true
+  if [[ -d $kept ]]; then
+    if [[ -d $LAB_DATA ]]; then
+      # What moved over goes back first.
+      for f in reports.db reports.db-wal reports.db-shm callers; do
+        [[ ! -e $LAB_DATA/$f ]] || as_lab mv "$LAB_DATA/$f" "$kept/$f"
+      done
+      as_lab mv "$LAB_DATA" "$new"
+    fi
+    as_lab mv "$kept" "$LAB_DATA"
+  fi
+  if start_lab; then
+    fail "the old lab's data is not in: labd runs again on the directory it had. The upgraded copy is in $new, for a look"
+  fi
+  fail "the old lab's data is not in, and labd does not answer on the directory it had either: the lab is Dark. See $LABD_LOG"
+}
+
+# shellcheck disable=SC2317,SC2329
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if (( switching )); then (set +e; put_back) || true; fi
+  exit "$status"
+}
+
+upgrade() {
+  local had was is f
+  [[ $account =~ ^[1-9][0-9]*$ && -n $handle ]] || fail "name the owner: --account-id N HANDLE, your GitHub account id and handle. What was done under the old lab's admin token becomes theirs"
+  (( DRY )) || need_root
+  deployed
+  [[ -f $stage/data/labd.db && -f $stage/manifest ]] || fail "no copy of the old lab's data in $stage: old-lab copy first"
+  whole "$stage/data" || fail "$stage/data is not the whole copy its manifest lists: remove $stage and copy again"
+  in_preview || fail "the lab is open: labd's LaunchDaemon file starts it without --preview. The old lab's data goes in while the lab is in Preview"
+  no_planted_link
+  [[ ! -e $kept ]] || fail "$kept is there: the old lab's data went in before. It goes in once"
+  was="$(counted "$stage/data")" || fail "the copy in $stage/data could not be counted"
+  say "the copy holds: $was"
+  if [[ "$(id -u)" == 0 || -n $SYSROOT ]]; then
+    if as_lab test -f "$LAB_DATA/labd.db"; then
+      had="$(as_lab "$LABD" old-lab counts --data "$LAB_DATA" | tr '\n' ' ' | sed 's/ $//')"
+      [[ -n $had ]] || fail "the lab's own data in $LAB_DATA could not be counted: run this again"
+      [[ $had == "records 0 jobs 0 builds 0" ]] ||
+        fail "the lab already holds Macs, jobs or builds of its own ($had): the old lab's data goes in before any Mac Joins, since it takes the place of the lab's data directory"
+    fi
+    as_lab grep -qx "$account" "$LAB_HOME/secrets/admins" 2>/dev/null ||
+      fail "the account id $account is not one of the lab's Admins ($LAB_HOME/secrets/admins, which scripts/mini/sign-in writes): the old lab's work becomes the owner's, who is one"
+  else
+    say "not root: the lab's own data in $LAB_DATA and its Admins were not looked at"
+  fi
+  if (( DRY )); then
+    "$LABD" old-lab upgrade --dry-run --data "$stage/data" --account-id "$account" "$handle" || fail "the upgrade would fail on this copy"
+    say "would copy $stage/data to $new as $LAB_OWNER and upgrade it there"
+    say "would stop labd and Litestream, move $LAB_DATA to $kept, move the lab's reports.db and caller log into the upgraded directory, and make it $LAB_DATA"
+    say "would start labd and Litestream again and wait for labd to answer; if it does not, put $kept back"
+    return 0
+  fi
+
+  if [[ -e $new ]]; then
+    say "removing what an earlier run left in $new"
+    as_lab rm -rf "$new"
+  fi
+  lab_folder "$new" 700
+  say "copying $stage/data to $new as $LAB_OWNER"
+  tar -C "$stage/data" -cf - . | as_lab tar -C "$new" -xf - || fail "the copy into $new stopped part-way: run this again"
+  # shellcheck disable=SC2016
+  as_lab /bin/sh -c 'cd "$1" && shasum -a 256 -c - >/dev/null 2>&1' check "$new" < "$stage/manifest" ||
+    fail "$new is not the copy, file for file: run this again"
+  as_lab "$LABD" old-lab upgrade --data "$new" --account-id "$account" "$handle" || fail "the upgrade failed: the lab's own directory was not touched, and labd still runs"
+  is="$(as_lab "$LABD" old-lab counts --data "$new" | tr '\n' ' ' | sed 's/ $//')"
+  [[ $is == "$was" ]] || fail "the upgraded directory holds $is, and the copy held $was: the lab's own directory was not touched"
+
+  trap cleanup EXIT
+  stop_lab
+  switching=1
+  if [[ -d $LAB_DATA ]]; then
+    as_lab mv "$LAB_DATA" "$kept"
+    for f in reports.db reports.db-wal reports.db-shm callers; do
+      [[ ! -e $kept/$f ]] || as_lab mv "$kept/$f" "$new/$f"
+    done
+  fi
+  as_lab mv "$new" "$LAB_DATA"
+  start_lab || { say "labd does not answer on the old lab's data"; exit 1; }
+  switching=0
+  trap - EXIT
+
+  say "the old lab's data is the lab's: $is, as the copy held, and labd answers"
+  say "what the lab's directory held before is in $kept (your sign-in and Lab tokens of Preview with it: sign in again)"
+  say "the copy in $stage is no longer needed: rm -r $stage. The old directory on its host stays untouched until 30 days after Confirmed"
+}
+
+case "$step" in
+  stop) stop ;;
+  copy) copy ;;
+  upgrade) upgrade ;;
+  *) usage ;;
+esac
