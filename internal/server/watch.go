@@ -161,9 +161,9 @@ func (s *Server) startWatch() {
 
 // watchLoop looks once as labd starts and then every minute.
 func (s *Server) watchLoop() {
-	s.look(s.ctx)
 	t := s.clock().NewTicker(lookEvery)
 	defer t.Stop()
+	s.look(s.ctx)
 	for {
 		select {
 		case <-s.ctx.Done():
