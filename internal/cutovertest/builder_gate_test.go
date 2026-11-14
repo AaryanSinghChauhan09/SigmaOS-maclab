@@ -73,6 +73,7 @@ case "$1" in
     ) > /dev/null 2>&1 &
     echo "build $id: o/linux-aurora @ 0123456789ab (queued)" ;;
   upload)
+    [[ ! -f $GATE/upload.fails ]] || { echo "lab: the lab answered 502" >&2; exit 1; }
     sleep "${GATE_UPLOAD_SECONDS:-4}"
     shasum -a 256 "$2" | cut -d' ' -f1
     echo up >> "$GATE/uploads" ;;
@@ -552,8 +553,9 @@ func TestWhatCannotBeMeasuredDecidesNothing(t *testing.T) {
 			g.set("outcome.10.1", "stale\n")
 			g.set("says.stale", "kbuild: /in/config: No such file or directory\n")
 		}, "the cold kernel build (build b1115-000001-abcd) failed after "},
-		"a refused config": {func(g *gate) { g.set("outcome.10.2", "config\n") }, "the warm rebuild (build b1115-000002-abcd) failed after "},
-		"a refused build":  {func(g *gate) { g.set("refuse", "M team builds are not open yet") }, "the cold kernel build could not be asked for: lab: M team builds are not open yet"},
+		"a refused config":  {func(g *gate) { g.set("outcome.10.2", "config\n") }, "the warm rebuild (build b1115-000002-abcd) failed after "},
+		"a failed transfer": {func(g *gate) { g.set("upload.fails", "") }, "the upload failed: lab: the lab answered 502"},
+		"a refused build":   {func(g *gate) { g.set("refuse", "M team builds are not open yet") }, "the cold kernel build could not be asked for: lab: M team builds are not open yet"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
