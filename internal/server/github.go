@@ -3,8 +3,13 @@ package server
 // labd's side of the GitHub OAuth app: the web flow that signs a person in
 // with a browser. labd asks for no scope, reads the account's numeric id and
 // its handle from GET /user, and lets the token go: it is never stored.
+//
+// A Mac signs in with the device flow, which omarchy-m-test runs with the
+// app's client id alone and hands labd the token once: tokenUser checks that
+// this app issued it and names its account, and revoke lets it go.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,6 +100,42 @@ func (g *GitHubApp) user(ctx context.Context, token string) (githubIdentity, err
 	return id, nil
 }
 
+// tokenUser is who a token belongs to, only if this app issued it.
+func (g *GitHubApp) tokenUser(ctx context.Context, token string) (githubIdentity, error) {
+	var body struct {
+		User githubIdentity `json:"user"`
+	}
+	if err := g.appToken(ctx, http.MethodPost, token, &body); err != nil {
+		return githubIdentity{}, err
+	}
+	if body.User.ID <= 0 || !reHandle.MatchString(body.User.Login) {
+		return githubIdentity{}, errors.New("GitHub didn't say who signed in")
+	}
+	return body.User, nil
+}
+
+// revoke ends a token this app issued. One that stays expires anyway.
+func (g *GitHubApp) revoke(ctx context.Context, token string) error {
+	return g.appToken(ctx, http.MethodDelete, token, nil)
+}
+
+// appToken asks GitHub about a token as the app itself, with its id and
+// secret.
+func (g *GitHubApp) appToken(ctx context.Context, method, token string, into any) error {
+	payload, err := json.Marshal(map[string]string{"access_token": token})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, g.APIURL+"/applications/"+url.PathEscape(g.ClientID)+"/token", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(g.ClientID, g.ClientSecret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	return githubDo(req, into)
+}
+
 // errNoSuchAccount is GitHub saying it has no account under a handle.
 var errNoSuchAccount = errors.New("GitHub knows no such account")
 
@@ -138,6 +179,9 @@ func githubDo(req *http.Request, into any) error {
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		return githubStatus(res.StatusCode)
+	}
+	if into == nil {
+		return nil
 	}
 	if json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(into) != nil {
 		return errors.New("GitHub's answer wasn't JSON")

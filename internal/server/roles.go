@@ -23,12 +23,13 @@ import (
 	"unicode"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/reports"
 	"github.com/omacom/omarchy-maclab/internal/web"
 )
 
 // blockedSentence is all a Blocked person is told, wherever they meet the
 // lab: no reason and no name.
-const blockedSentence = "This GitHub account is blocked from Omarchy Mac Lab."
+const blockedSentence = reports.BlockedSentence
 
 // Role is the person's kind as the interface's table has it. A Blocked
 // person signs in nowhere, so it is never asked of one in earnest.
@@ -456,6 +457,9 @@ func (s *Server) blockEnds(k knownPerson) string {
 	if n := len(s.leasesHeldBy(k.Handle)); n > 0 {
 		ends = append(ends, counted(n, "Lease", "Leases")+" ended")
 	}
+	if signIns, _ := s.reports.SignInsOf(k.AccountID); len(signIns) > 0 {
+		ends = append(ends, counted(len(signIns), "Mac", "Macs")+" signed out")
+	}
 	switch {
 	case k.Maintainer:
 		ends = append(ends, "no longer a Maintainer")
@@ -472,8 +476,8 @@ func (s *Server) blockEnds(k knownPerson) string {
 }
 
 // block shuts k out of the lab. Sign-in, every browser session, the Lab
-// tokens, the Leases, the M team's mark, the Maintainer role and leave to
-// lend end with it.
+// tokens, the Leases, the Mac sign-ins, the M team's mark, the Maintainer
+// role and leave to lend end with it.
 func (s *Server) block(r *http.Request, k knownPerson, reason string) error {
 	by := PersonOf(r)
 	if err := mayBlock(by, k); err != nil {
@@ -522,12 +526,8 @@ func (p Person) access() access {
 	return signedInAccess
 }
 
-// What a Block ends that the lab does not keep yet. Each is the one place
-// its ending is asked for.
-
-// endMacSignInsOf signs every Mac out that is signed in as the person.
-// No Mac signs in to this lab yet.
-func (s *Server) endMacSignInsOf(accountID int64) {}
+// What a Block ends that the lab does not keep yet: the one place its
+// ending is asked for. (endMacSignInsOf is in mac_signin.go.)
 
 // endEnrollmentsOf has the Macs the person lends Leave. Until it does, a
 // Blocked person's Macs stay enrolled, and the person no longer sees them.

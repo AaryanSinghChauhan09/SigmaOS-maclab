@@ -1,7 +1,8 @@
 package server
 
 // A person's own page, and the cuts: their Lab tokens (make, revoke,
-// renew), their browsers ("Sign out everywhere") and "End all access". A
+// renew), their browsers ("Sign out everywhere") and "End all access". The
+// Macs signed in as them are listed there too (mac_signin.go). A
 // Maintainer makes the first and the last cut for another person from
 // People, at the two addresses under /people at the end of this file.
 
@@ -45,6 +46,10 @@ type mePage struct {
 	Periods              []mePeriod
 	Browsers             string
 	EndAll               string
+	// Macs are the Macs signed in as the person, and Counted whether their
+	// runs are Verified runs: the person is on the M team.
+	Macs    []macSignedIn
+	Counted bool
 	// Shown is a token just made: its secret is on this one answer only.
 	Shown *meShown
 	// Refused says why no token was made.
@@ -113,8 +118,12 @@ func (s *Server) me(r *http.Request) (*mePage, error) {
 	if err != nil {
 		return nil, err
 	}
+	macs, err := s.macsSignedInAs(p.AccountID)
+	if err != nil {
+		return nil, err
+	}
 	kind := s.viewerOf(r).Kind
-	page := &mePage{Handle: p.Handle, Kind: kind.String(), Allows: kindAllows[kind], Tokens: tokenRows(tokens, now), Count: len(tokens), Cap: labTokenCap,
+	page := &mePage{Macs: macs, Counted: p.OnMTeam(), Handle: p.Handle, Kind: kind.String(), Allows: kindAllows[kind], Tokens: tokenRows(tokens, now), Count: len(tokens), Cap: labTokenCap,
 		Browsers: counted(browsers, "browser", "browsers"), EndAll: endAllSentence(browsers, len(tokens))}
 	for _, days := range labTokenPeriods {
 		page.Periods = append(page.Periods, mePeriod{Value: map[bool]string{true: "never", false: strconv.Itoa(days)}[days == 0], Label: periodLabel(days), Default: days == labTokenDefaultPeriod})

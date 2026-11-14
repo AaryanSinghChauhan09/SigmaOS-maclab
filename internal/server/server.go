@@ -147,6 +147,10 @@ type Server struct {
 	ctx       context.Context
 	start     time.Time
 
+	// macSignIns answers a Mac's sign-in, status and sign-out; nil without
+	// the machine-id key, which names the Mac.
+	macSignIns *reports.MacSignIns
+
 	mu          sync.Mutex
 	devs        map[string]*dev // by name
 	cancels     map[string]context.CancelFunc
@@ -288,6 +292,12 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	s.agents = agentsLines{s.lines}
 	if rules != nil {
 		s.uploads = reports.NewUploads(rep, rules, s.now)
+		s.uploads.OnMTeam = s.onMTeam
+		var github reports.GitHub
+		if cfg.GitHub != nil {
+			github = macSignInGitHub{cfg.GitHub}
+		}
+		s.macSignIns = reports.NewMacSignIns(rep, rules, s.now, github, macSignInPeople{s})
 	}
 	if s.site, err = web.New(s.basePath()); err != nil {
 		return nil, err
@@ -623,6 +633,10 @@ func (s *Server) routes() []route {
 		// Reports from omarchy-m-test, and the two links each is answered
 		// with (reports.go): the deletion link's secret is its credential.
 		{"POST /api/v1/reports", anyone, s.hUploadReport},
+		// A Mac's sign-in, and its status and sign-out (mac_signin.go):
+		// each is signed by the Mac's Machine key.
+		{"POST /api/v1/tester_bindings", anyone, s.hMacSignIn},
+		{"POST /api/v1/tester_requests", anyone, s.hMacRequest},
 		{"GET /reports/{id}", anyone, s.hReportPage},
 		{"GET /reports/{id}/deletion", anyone, s.hReportDeletion},
 		{"POST /reports/{id}", anyone, s.hReportDelete},

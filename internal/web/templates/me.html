@@ -42,4 +42,20 @@
 <p>{{template "take" ($.Take "/me/sign-out-everywhere" "Sign out everywhere" (printf "Sign out everywhere: %s, this one too, are signed out now" .Browsers))}} <span class="dim">Browsers only: your Lab tokens go on working.</span></p>
 <p>{{template "take" ($.Take "/me/end-all-access" "End all access" .EndAll)}} <span class="dim">Every browser and every Lab token of yours stops. You can sign in again.</span></p>
 </section>
+<section class="card">
+<h2 class="card-title">macs signed in as you</h2>
+<p class="dim">A Mac signs in with <code>omarchy-m-test --sign-in</code>. {{if .Counted}}While you are on the Omarchy M team, its runs are published as Verified runs.{{else}}Its runs are published as Community runs: Verified runs come from Macs of the Omarchy M team.{{end}} Signing a Mac out changes no report it already sent.</p>
+{{if .Macs}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Mac</th><th>Signed in</th><th>Reports</th><th></th></tr></thead>
+<tbody>
+{{range .Macs}}<tr>
+<td>{{if .Model}}{{.Model}}{{else}}<span class="dim">no report yet</span>{{end}}</td>
+<td data-label="Signed in" class="nowrap">{{.Since}}</td>
+<td data-label="Reports">{{.Reports}}</td>
+<td class="actions">{{template "take" ($.Take (printf "/me/macs/%d/sign-out" .ID) "Sign out" "Sign out: this Mac's runs are Community runs from now on")}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+{{else}}<p class="dim">No Mac is signed in as you.</p>
+{{end}}</section>
 {{end}}{{end}}

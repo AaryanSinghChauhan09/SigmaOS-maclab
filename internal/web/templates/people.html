@@ -25,7 +25,7 @@
 <td data-label="Kind"><span class="badge {{.BadgeClass}}">{{.Badge}}</span></td>
 <td data-label="Their Macs">{{template "names" .Macs}}</td>
 <td data-label="Leases held">{{template "names" .Leases}}</td>
-<td data-label="Signed in for Verified runs"><span class="dim">0</span></td>
+<td data-label="Signed in for Verified runs">{{if .SignedIn}}{{.SignedIn}}{{if not .Counted}} <span class="dim">not counted</span>{{end}}{{else}}<span class="dim">0</span>{{end}}</td>
 <td data-label="Last seen" class="nowrap{{if .LastSeen.IsZero}} dim{{end}}">{{.Seen}}</td>
 </tr>
 {{with .Open}}<tr class="person-detail"><td colspan="6"><div class="person-blocks">
@@ -53,8 +53,10 @@
 </div>
 <div>
 <h3>Signed in for Verified runs</h3>
-<p class="dim">No Mac signed in.</p>
-</div>
+{{if .Macs}}{{if not $row.Counted}}<p class="dim">These are not counted: @{{$row.Handle}} is not on the M team, so the Macs' runs are Community runs.</p>
+{{end}}<ul>{{range .Macs}}<li>{{if .Model}}{{.Model}}{{else}}a Mac with no report yet{{end}} <span class="dim">signed in {{.Since}}, {{.Reports}}</span> {{template "take" ($.Take (printf "/people/%d/macs/%d/sign-out" $row.AccountID .ID) "Sign out" (printf "Sign this Mac of @%s out: its runs are Community runs from now on" $row.Handle))}}</li>{{end}}</ul>
+{{else}}<p class="dim">No Mac signed in.</p>
+{{end}}</div>
 <div>
 <h3>Lab tokens</h3>
 {{if $row.Blocked}}<p class="dim">None works while Blocked, and none comes back.</p>

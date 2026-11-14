@@ -8,6 +8,7 @@
   <div class="terminal-body">
     <p class="prompt-line"><span class="prompt">$</span> omarchy-m-test</p>
     <h1>{{.Model}}</h1>
+    <p class="report-badges">{{if .Verified}}<span class="badge badge-tester" title="Its Mac was signed in as a member of the Omarchy M team when it was uploaded">Verified run</span>{{else}}<span class="badge badge-community" title="Its Mac was not signed in as a member of the Omarchy M team when it was uploaded">Community run</span>{{end}}</p>
     <dl class="machine">
       <dt>chip</dt><dd>{{.Chip}} ({{.SoC}}, board {{.Board}})</dd>
       {{- if .Storage}}

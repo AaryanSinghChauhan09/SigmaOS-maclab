@@ -60,9 +60,13 @@ type personRow struct {
 	BadgeClass string
 	Macs       []string
 	Leases     []string
-	Seen       string
-	Path       string // opens the row, or shuts it when it is open
-	Open       *personOpen
+	// SignedIn is how many Macs are signed in as the person, and Counted
+	// whether their runs are Verified runs: the person is on the M team.
+	SignedIn int
+	Counted  bool
+	Seen     string
+	Path     string // opens the row, or shuts it when it is open
+	Open     *personOpen
 }
 
 // personOpen is the inside of an opened row.
@@ -75,6 +79,8 @@ type personOpen struct {
 	BlockSentence string
 	LeavesTeam    string // the sentence of Remove from M team
 	Tokens        []meToken
+	// Macs are the Macs signed in as the person.
+	Macs []macSignedIn
 	// EndAll is the sentence of "End all access", "" when the viewer may
 	// not use it on this person.
 	EndAll string
@@ -120,7 +126,8 @@ func (s *Server) showPeople(w http.ResponseWriter, r *http.Request, status int, 
 	}
 	people, err := s.store.knownPeople()
 	lines, lerr := s.store.recordLines(recordShown)
-	if err = errors.Join(err, lerr); err != nil {
+	signIns, serr := s.reports.SignIns()
+	if err = errors.Join(err, lerr, serr); err != nil {
 		s.log.Printf("People: %v", err)
 		httpErr(w, 500, "The lab couldn't read its people.")
 		return
@@ -136,6 +143,10 @@ func (s *Server) showPeople(w http.ResponseWriter, r *http.Request, status int, 
 	for _, c := range peopleKinds {
 		page.Chips = append(page.Chips, peopleChip{c.label, "/people?kind=" + c.id, counts[c.id], kind == c.id})
 	}
+	signedIn := map[int64]int{}
+	for _, signIn := range signIns {
+		signedIn[signIn.AccountID]++
+	}
 	handles, called := map[int64]string{}, map[string]int{}
 	for _, k := range people {
 		handles[k.AccountID] = k.Handle
@@ -147,7 +158,7 @@ func (s *Server) showPeople(w http.ResponseWriter, r *http.Request, status int, 
 			continue
 		}
 		row := personRow{knownPerson: k, You: k.AccountID == me.AccountID, Twin: called[strings.ToLower(k.Handle)] > 1, Badge: k.Role().Badge(), BadgeClass: k.Role().BadgeClass(),
-			Macs: s.macsLentBy(k.AccountID), Leases: s.leasesHeldBy(k.Handle), Seen: "not signed in yet"}
+			Macs: s.macsLentBy(k.AccountID), Leases: s.leasesHeldBy(k.Handle), SignedIn: signedIn[k.AccountID], Counted: k.OnMTeam(), Seen: "not signed in yet"}
 		if k.Blocked {
 			row.Badge, row.BadgeClass = "Blocked", "kind-blocked"
 		}
@@ -188,6 +199,11 @@ func (s *Server) openPerson(me *Person, k knownPerson, handles map[int64]string,
 			browsers, _ := s.store.countSessions(k.AccountID, s.now())
 			o.EndAll = endAllSentence(browsers, len(tokens)) + " for @" + k.Handle + "; they can sign in again"
 		}
+	}
+	if macs, err := s.macsSignedInAs(k.AccountID); err == nil {
+		o.Macs = macs
+	} else {
+		s.log.Printf("People: the Macs signed in as @%s: %v", k.Handle, err)
 	}
 	if lines, err := s.store.recordLinesOf(k.AccountID, recordShown); err == nil {
 		o.Record = shown(lines)

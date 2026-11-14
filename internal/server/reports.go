@@ -149,7 +149,7 @@ type reportPage struct {
 	ToolName, ToolVersion, CatalogueVersion string
 	Uploaded                                string
 	Pass, Fail, Gap, Skip                   int
-	Unattended                              bool
+	Unattended, Verified                    bool
 	Packages                                []reportPackage
 	Sections                                []*reportSection
 }
@@ -205,7 +205,7 @@ func (s *Server) reportPage(report *reports.Report) reportPage {
 		Storage: text("machine", "storage"), Kernel: text("machine", "kernel"),
 		Distro: text("system", "distro"), BootLoader: text("system", "boot_loader"), Encryption: text("system", "encryption"),
 		ToolName: text("tool", "name"), ToolVersion: text("tool", "version"), CatalogueVersion: text("catalogue_version"),
-		Uploaded: uploadedAt(report), Unattended: member(doc, "unattended") == true,
+		Uploaded: uploadedAt(report), Unattended: member(doc, "unattended") == true, Verified: report.Verified,
 	}
 	p.Title = strings.TrimPrefix(p.Model, "Apple ") + " report"
 	packages, _ := member(doc, "system", "packages").([]any)
