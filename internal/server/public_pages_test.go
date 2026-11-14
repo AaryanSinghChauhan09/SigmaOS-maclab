@@ -787,6 +787,12 @@ func TestFeatureFiltersKeepTheCatalogueAndNarrowTheResultBoxesByModelAndBuild(t 
 		t.Error("no row names the build")
 	}
 
+	// The feature pages take the model and the build, and no other filter.
+	if only, more := l.page("/features?model=j313"), l.page("/features?model=j313&stack=mx-mac&tool=9.9.9&confirmed=1"); count(t, only) == "0" ||
+		count(t, more) != count(t, only) || more.count(t, ".filter-chip") != 1 || more.count(t, ".feature-result") != only.count(t, ".feature-result") {
+		t.Error("the feature catalogue takes a filter that is not its own")
+	}
+
 	// Build choices follow the model and distinguish variants of one runtime.
 	page = l.page("/features?model=j416c")
 	var builds []string
