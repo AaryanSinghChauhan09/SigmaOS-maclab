@@ -38,7 +38,7 @@ func uploadedAtRun(run *reports.Run) string {
 	return run.CreatedAt.UTC().Format("2006-01-02 15:04 UTC")
 }
 
-func day(at time.Time) string { return at.UTC().Format(time.DateOnly) }
+func dayOf(at time.Time) string { return at.UTC().Format(time.DateOnly) }
 
 // tipView is a result's tooltip: what its colour means, in that colour, how
 // sure it is, then where it's from.

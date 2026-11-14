@@ -143,13 +143,13 @@ func (s *Server) pFeature(w http.ResponseWriter, r *http.Request) {
 		summary := featureSummary{Board: c.Board, Stack: c.Stack, StackWords: c.StackWords(), Name: row.ModelName, Href: s.href("/models/" + c.Board),
 			HistoryID: "builds-" + c.Board + "-" + c.Stack, Cell: s.cell(cell, id, latest, true, name, row.ModelName+" · "+c.ReleaseLabel()), Words: resultWords(cell)}
 		if latest != nil {
-			summary.Day, summary.DayHref, summary.DayTitle = day(latest.CreatedAt), s.href(reportPath(latest)), "kernel "+latest.Kernel()
+			summary.Day, summary.DayHref, summary.DayTitle = dayOf(latest.CreatedAt), s.href(reportPath(latest)), "kernel "+latest.Kernel()
 		}
 		for _, build := range history[[2]string{c.Board, c.Stack}] {
 			buildCell, bc := build.Cell(id), build.Configuration
 			first := buildCell.Runs[0]
 			summary.Builds = append(summary.Builds, featureBuild{Board: bc.Board, Stack: bc.Stack, BuildID: bc.BuildID, Version: bc.Version, Build: bc.Build,
-				Cell: s.cell(buildCell, id, first, false, name, build.ModelName+" · "+bc.Label()), Words: resultWords(buildCell), Day: day(first.CreatedAt), Href: s.href(reportPath(first))})
+				Cell: s.cell(buildCell, id, first, false, name, build.ModelName+" · "+bc.Label()), Words: resultWords(buildCell), Day: dayOf(first.CreatedAt), Href: s.href(reportPath(first))})
 		}
 		page.Results = append(page.Results, summary)
 	}

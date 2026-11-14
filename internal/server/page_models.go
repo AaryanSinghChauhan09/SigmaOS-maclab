@@ -66,7 +66,7 @@ func (s *Server) lineupRow(row *reports.LineupRow) lineupRowView {
 		boards, names = append(boards, board.Board), append(names, strings.ToUpper(board.Board))
 		b := lineupBoardView{Board: board.Board, Name: strings.ToUpper(board.Board), Tested: board.Tested()}
 		if board.Tested() {
-			b.Href, b.Runs, b.Verified, b.Last = s.href("/models/"+board.Board), reports.Plural(len(board.Runs), "run"), board.VerifiedRuns(), day(board.LastTestedAt())
+			b.Href, b.Runs, b.Verified, b.Last = s.href("/models/"+board.Board), reports.Plural(len(board.Runs), "run"), board.VerifiedRuns(), dayOf(board.LastTestedAt())
 		}
 		v.Testing = append(v.Testing, b)
 	}
