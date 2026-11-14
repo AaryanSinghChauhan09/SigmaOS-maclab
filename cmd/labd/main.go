@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/oob"
+	"github.com/omacom/omarchy-maclab/internal/reports"
 	"github.com/omacom/omarchy-maclab/internal/server"
 )
 
@@ -27,6 +28,7 @@ func main() {
 	alias := flag.String("alias", "", "the Alias, e.g. maclab.omarchy.org: the one other name the tunnel carries. A page request on it gets a 308 to the same path at the Lab address; anything under /api/ is refused")
 	preview := flag.Bool("preview", false, "the lab is in Preview: answering at the Lab address, closed, before it opens. Every answer tells crawlers not to index it")
 	signIn := flag.String("sign-in", "", "the folder with the lab's sign-in configuration: github-client-id and github-client-secret (the OAuth app; the secret readable by labd's account alone) and admins (the Admins' GitHub account ids, one a line). Without the app's two files sign-in is off")
+	machineIDKey := flag.String("machine-id-key", "", "the file with the machine-id key, which tells one Mac's reports from another's: 64 bytes as 128 hex digits, readable by labd's account alone. Without the file labd takes no reports")
 	githubURL := flag.String("github-url", "", "a stand-in for GitHub on this machine, for a lab under development, e.g. http://127.0.0.1:7791 (tools/fake-github): a loopback address only, and never beside --socket")
 	termsFile := flag.String("terms-file", "", "participation terms a Mac's owner accepts before it joins (default: labd's built-in terms)")
 	data := flag.String("data", filepath.Join(home, ".local/share/maclab"), "data directory")
@@ -77,6 +79,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	idKey, err := reports.ReadMachineIDKey(*machineIDKey)
+	if err != nil {
+		log.Fatal(err)
+	}
 	var terms string
 	if *termsFile != "" {
 		b, err := os.ReadFile(*termsFile)
@@ -118,7 +124,7 @@ func main() {
 	// ./volunteer downloads the lab-agent built alongside labd.
 	exe, _ := os.Executable()
 	s, err := server.New(ctx, server.Config{DataDir: *data, FirstMaintainer: *maintainer, FirstMaintainerToken: tok,
-		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms, GitHub: app, Admins: admins, OOB: controller,
+		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms, GitHub: app, Admins: admins, OOB: controller, MachineIDKey: idKey,
 		OMT: *omt, OMTSite: *omtSite, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
 		BootTimeout: *bootTimeout, OfflineAfter: *offlineAfter, AliveWindow: *aliveWindow, QuietGrace: *quietGrace, StageTimeout: *stageTimeout, WatchdogOpenTimeout: *watchdogOpenTimeout, RebootWarning: *rebootWarning, NtfyURL: *ntfy, NotifyCmd: *notifyCmd,
 		BuilderToken: strings.TrimSpace(string(btok)), ArtifactBudget: *artifactGB << 30, Transfers: server.Transfers{AtOnce: *partsAtOnce},
@@ -159,6 +165,12 @@ func main() {
 		log.Printf("sign-in goes to a stand-in for GitHub at %s, not to GitHub: this labd is under development; %d Admin(s)", *githubURL, len(admins))
 	default:
 		log.Printf("sign-in with GitHub is on; %d Admin(s) named in %s", len(admins), filepath.Join(*signIn, "admins"))
+	}
+	switch {
+	case *preview:
+		log.Printf("reports are refused: the lab is in Preview")
+	case idKey == nil:
+		log.Printf("reports are refused: no machine-id key (--machine-id-key <file>)")
 	}
 	if err := server.Serve(hs, lns...); err != http.ErrServerClosed {
 		log.Fatal(err)

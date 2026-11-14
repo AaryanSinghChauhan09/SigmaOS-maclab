@@ -102,6 +102,12 @@ head_of "${FWD[@]}" "$B/sign-in" | grep -qi '^set-cookie' && fail "a signed-out 
 "$BIN/labd" --listen="127.0.0.1:$PORT" --socket="$WORK/other.sock" --public-url="$PUB" --data="$WORK/other" --maintainer=ci \
 	--sign-in="$WORK" --github-url=http://127.0.0.1:1 >/dev/null 2>&1 && fail "labd took a stand-in for GitHub behind the tunnel"
 
+# In Preview the lab takes no reports, and says which site is the live one.
+up=$(c -w '\n%{http_code}' -X POST "${FWD[@]}" -H 'Content-Type: application/json' -d '{}' "$B/api/v1/reports")
+[ "${up##*$'\n'}" = 403 ] || fail "an upload in Preview was not refused"
+grep -qF 'omarchy-m-testing.org is the live site' <<<"$up" || fail "the refusal of an upload in Preview"
+[ "$(code "${FWD[@]}" "$B/reports/1111111111111111aaaaaaaa")" = 404 ] || fail "a report that is not there"
+
 # Early data can be replayed.
 [ "$(code "${FWD[@]}" "${AUTH[@]}" -H 'Early-Data: 1' "$B/api/devices")" = 425 ] || fail "early data under the API"
 

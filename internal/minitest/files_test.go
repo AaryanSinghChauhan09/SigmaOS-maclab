@@ -157,6 +157,7 @@ func TestLabdsLaunchDaemon(t *testing.T) {
 		// account's own file, and the controller is on this machine.
 		"--oobd":            "http://" + shell(t, "OOBD_LISTEN"),
 		"--oobd-token-file": "/var/lab/secrets/oobd.token",
+		"--machine-id-key":  "/var/lab/secrets/machine-id-key",
 	} {
 		if got, ok := flags[flag]; !ok || got != want {
 			t.Errorf("%s is %q, want %q", flag, got, want)
