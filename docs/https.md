@@ -1,326 +1,185 @@
-# labd over HTTPS, without Tailscale
+# How the lab is reached
 
-labd can run as a plain HTTPS service. Maintainers use the web UI, `lab` and its MCP server over HTTPS. Macs reach labd with
-outbound requests only: check-in long polls, reports, uploads, and artifact downloads with resume. There are no WebSockets,
-and nothing connects *to* a Mac. Tailscale still works as before, but nothing here needs it.
+Omarchy Mac Lab answers at one address, **https://lab.omarchy-mac.org**, the Lab address. The public results, the site,
+`lab` and its MCP server, the Macs' agents, uploads and downloads all cross it. This guide says what that path is, what it
+allows, and what each program does to fit inside it.
 
-The main deployment is a Kubernetes workload at **https://maclab.chonkbase.net**, labd's own origin on the cluster that serves
-chonkbase.net. `https://chonkbase.net/maclab` remains a supported compatibility layout. A reverse proxy or labd's own TLS work
-too (see [Other ways to serve HTTPS](#other-ways-to-serve-https)).
+## One path
 
-## labd's flags for HTTPS
+- The Lab address reaches the mini through one Cloudflare tunnel. `cloudflared` on the mini dials out; no port is open at
+  home, and the home address is never published.
+- There is no second path for Macs or for big files, and nothing needs Tailscale. The lab's own sign-in is the only gate.
+- Everyone dials labd: browsers, `lab`, the agents on the Macs, the Builder. Macs make outbound requests only (check-in
+  long polls, reports, uploads, downloads with resume); nothing connects *to* a Mac. labd dials the Out-of-band
+  controller on the mini itself, which never crosses the tunnel.
+- The edge sets two limits that everything below works inside: a response with no body byte for 125 s is cut (headers do
+  not count), and a request body over 100 MB is refused.
+
+## What labd listens on
+
+labd serves no TLS and listens on its own machine only.
 
 | flag | what it does |
 |---|---|
-| `--public-url https://host[:port][/path]` | The one external URL. labd serves everything under its path, removing the path exactly once, and builds browser and enrollment URLs from it. Without it, labd serves at `/` |
-| `--trusted-proxy CIDR[,CIDR]` | The only peers whose `X-Forwarded-Proto`/`X-Forwarded-Host` labd reads. Those headers must match `--public-url`, or labd answers 421. They are never identity. Refused together with `--tailscale` |
-| `--tls-cert FILE --tls-key FILE` | labd serves TLS itself (1.2+, HTTP/2) and re-reads the files when they change |
-| `--allow-plain-http` | Allows plain HTTP on a non-loopback `--listen`. Use it behind a proxy inside a private network. Without it, a non-loopback `--listen` without TLS is refused |
+| `--listen 127.0.0.1:7770` | The loopback port, for callers on the mini: the Builder, break-glass, the mini's own scripts. An address beyond the machine is refused at start |
+| `--socket PATH` | The tunnel's Unix socket, which `cloudflared` dials. It is made for the account labd runs as alone, and it is the only place the edge's `CF-Connecting-IP` is believed. Needs `--public-url` |
+| `--public-url https://lab.omarchy-mac.org` | The Lab address. Every link labd builds names it |
+| `--alias maclab.omarchy.org` | The Alias, the one other name the tunnel carries |
+| `--preview` | The lab is in Preview: answering at the Lab address, closed, before it opens. Every answer tells crawlers not to index it |
 
-`X-Forwarded-Prefix` is never read. A request outside the `--public-url` path gets 404, and so does `/maclabx` for `/maclab`.
-A non-canonical path under the prefix (`//`, `/./`, `/../`) is 404 too, and any redirect labd makes keeps the prefix.
+`GET /healthz` answers 200 `ok` with no credentials.
 
-`GET <prefix>/healthz` answers 200 `ok` with no credentials, for health checks. A request from a `--trusted-proxy` address must
-still name the public origin in `X-Forwarded-Proto`/`X-Forwarded-Host`, or it gets 421; the manifests' probes always send both.
+## Two names, and no other
 
-## Kubernetes at maclab.chonkbase.net
+- Through the socket labd knows exactly two names. The Lab address is served. Any third name gets 421 with a line naming
+  the Lab address.
+- **The Alias**, `maclab.omarchy.org`: a page request, `/install` included, gets a 308 to the same path and query at the Lab
+  address. Anything under `/api/` is refused: `Omarchy Mac Lab is at https://lab.omarchy-mac.org: use that address`. No
+  cookie is set, no credential is read, no sign-in starts, and the lab never prints the Alias. `lab login` at the Alias
+  fails plainly and stores nothing.
+- At the loopback port labd answers to `localhost` or a loopback address. To ask through the socket by hand, name the Lab
+  address: `curl --unix-socket PATH http://lab.omarchy-mac.org/healthz`.
+- A request under `/api/` sent as early data (`Early-Data: 1`) gets 425, so nothing that changes the lab is replayed.
 
-The manifests are in `deploy/k8s/`:
-- `base/` is the deployment at **https://maclab.chonkbase.net**, served at `/`.
-- `path-prefix/` is the compatibility layout at `https://chonkbase.net/maclab` (see [Origin and trust](#origin-and-trust)).
-- `terms/` supplies your own terms text.
+## Long calls
 
-They follow the cluster's existing conventions (the chonkbase and slopblender namespaces on the same LKE cluster):
-- ingress-nginx;
-- cert-manager's `letsencrypt-production` ClusterIssuer (DNS-01 through the Linode webhook);
-- `linode-block-storage-retain`;
-- images in `ghcr.io/iconidentify` with the `ghcr-secret` pull secret.
+Nothing stays silent through the tunnel.
 
-### DNS: straight to the ingress, no CDN proxy
-- `maclab.chonkbase.net` needs an A (and AAAA, if the ingress has one) record in the chonkbase.net zone, pointing at the
-  ingress-nginx LoadBalancer address. That is the same address `api.chonkbase.net` and `app.chonkbase.net` use; the zone is
-  on Linode DNS, as the DNS-01 issuer needs.
-- Keep it a plain DNS record. **Don't put a proxying CDN in front of it.** A synchronous `lab exec` can be silent for up to
-  about an hour (3630 s), and the event stream, console and long polls stay open. Common CDN proxies cut an idle request far
-  sooner (often after 100 s).
-- If a proxy must sit in front, its read timeout must exceed 3700 s and it must not buffer streams. Otherwise `lab exec` fails at
-  the proxy while the command keeps running on the Mac.
-- The Ingress's own timeouts (3700 s) already cover this.
+- A held response sends a Keepalive at once and then every 30 s. The event stream (`/api/stream`) keeps its own 15 s.
+- `lab exec` and `lab installed freeze-entry` are answered as a stream (`application/x-ndjson`): Keepalives, then the
+  result as the last line. An error after the first byte is in the body.
+- A job wait is one call of at most 50 s, which labd ends early when the job has more to show. `lab wait`, `lab run` and
+  the MCP tools ask again until the job is done.
+- A followed build log is polled from an offset (`/api/builds/{id}/log?offset=N&wait=50`).
+- A cut `lab exec` is never sent again: `lab` says `connection lost; the command may still be running`. A command
+  already started on the Mac runs to its own end. Work that must survive a cut goes in a job.
 
-### Origin and trust
-- On `maclab.chonkbase.net`, the UI's token storage (`localStorage`) belongs to labd's origin alone. Pages on chonkbase.net and
-  its other subdomains can't read it. That is why it is the default.
-- The `path-prefix/` layout serves labd at `https://chonkbase.net/maclab`. A path is not an origin: the token then lives in the
-  storage of the whole origin `https://chonkbase.net`, and any script served from any path there can read it, call labd's API
-  with it, or frame `/maclab`.
-- So use that layout only when every app on chonkbase.net is trusted as much as labd. Today that means:
-  - the chonkbase frontend at `/`;
-  - slopblender at `/slopblender` until it is removed. It serves other people's uploads on that origin, under its own
-    allow-list, `nosniff` and `sandbox` CSP (its README, "Security notes").
+## Big files
 
-### What the manifests set
-- **One writer.** SQLite (WAL mode) on a ReadWriteOnce volume means `replicas: 1` and `strategy: Recreate`. A rollout stops the
-  old pod before the new one starts, so two labds never open the same data. Never scale it above 1.
-- **State:** one PVC at `/data` (60 Gi). It holds:
-  - `labd.db` with its `-wal` and `-shm`;
-  - the `artifacts/` store (capped by `--artifact-budget-gb`, 20 GiB by default);
-  - `jobs/ builds/ frozen/ baselines/ screens/ serial/ audit/`;
-  - `admin.token` and `builder.token`.
-- **Pod:**
-  - uid/gid 10001, `fsGroup` 10001 (the volume is the pod user's, not root's);
-  - a read-only root filesystem, all capabilities dropped, the RuntimeDefault seccomp profile;
-  - no service-account token;
-  - no hostPath, and nothing from i9beef.
-- **labd's args:** `--listen=0.0.0.0:7770 --allow-plain-http --data=/data --public-url=https://maclab.chonkbase.net --trusted-proxy=<CIDR> --maintainer=chris --omt-publish`
-  (`path-prefix/` changes `--public-url` to `https://chonkbase.net/maclab`; that patch replaces argument index 3, so `--omt-publish` stays after `--maintainer`).
-  Once these manifests are deployed, eligible baseline jobs upload automatically. An ordinary known-good `lab run` remains manual. Volunteer consent, package identity, and the candidate refusal are unchanged. `--omt-every` is absent, so there is no scheduled reboot and no backfill of stored reports. `deploy/labd.service` does not pass the flag.
-  Plain HTTP stays inside the cluster, from the ingress controller only; TLS ends at the Ingress.
-- **Ingress:**
-  - host `maclab.chonkbase.net`, path `/` (`path-prefix/`: host `chonkbase.net`, path `/maclab`), passed through **unchanged**: no
-    rewrite-target, no snippet;
-  - `proxy-read-timeout`/`proxy-send-timeout` 3700 s (`lab exec` is synchronous for up to 3630 s);
-  - `proxy-buffering off` (the event stream, serial console and build log are streamed);
-  - `proxy-request-buffering off`, `proxy-body-size 4g`.
-- **NetworkPolicy:**
-  - in: only from the `ingress-nginx` namespace;
-  - out: DNS, and public port 443 (git for GitHub refs, ntfy, omarchy-m-testing.org);
-  - nothing private.
-- **No Secret in the manifests.** The tokens are made in `/data` on the first start, or come with migrated data. labd logs only the
-  token file's *path* (`log in with lab login <url> "$(cat /data/admin.token)"`), never a token.
+- An upload goes in numbered parts of 32 MiB; anything smaller is one request. Each part is tried up to 8 times. A
+  SHA-256 closes the upload, and labd stores the file only if it is the one named. Cut, the same command resumes: it
+  asks which parts labd holds and sends the rest. An upload left unfinished is deleted after 24 hours.
+- labd refuses any single body over 90 MB, and no client sends a body without `Content-Length`.
+- How many parts go at once is labd's `--parts-at-once`, 1 or 4, set from a measurement taken outside the house.
+- Downloads come from the mini through the tunnel, resume with range requests, and are checked against the SHA-256 the
+  lab recorded. They are never cached at the edge.
 
-### Before the first apply: two values to set
-1. **The image, by digest.**
-   - Publish a commit on main with `gh workflow run publish.yml -f commit=<full sha>` (Actions > publish > Run workflow). It:
-     - builds that commit for linux/amd64 and runs the image smoke at both URLs;
-     - pushes a tag of that run's own, `ghcr.io/chriskearney/maclab:<full sha>-<run id>-<run attempt>`, so no run pushes over another's
-       (there's no bare-sha or moving tag);
-     - reads it back and prints `ghcr.io/chriskearney/maclab@sha256:<digest>` in the job summary.
-   - Pin that digest, not a tag:
-     `cd deploy/k8s/base && kustomize edit set image maclab=ghcr.io/chriskearney/maclab@sha256:<digest>`, or put `digest:` in place
-     of `newTag` in its `images:` entry.
-   - **Pull secret:** a public package needs none, so remove the Deployment's `imagePullSecrets`. A private one needs a pull secret named
-     `ghcr-secret` in the `maclab` namespace whose token can read `ghcr.io/chriskearney/maclab`. Check that access before you rely on it.
-2. **The trusted proxy.** `--trusted-proxy` must name the addresses the ingress-nginx controller's pods connect *from*: the
-   cluster's pod network.
-   - Find it with `kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'` and `kubectl -n ingress-nginx get pods -o wide`.
-   - The shipped value, `SET-INGRESS-NGINX-POD-CIDR`, is deliberately not a CIDR, so labd refuses to start until it is set.
-   - The NetworkPolicy keeps every other pod in that range away from labd, so trusting the range trusts only the controller.
+## Who a request is from
 
-- **Probes:** readiness and liveness on `/healthz` (`/maclab/healthz` for `path-prefix/`). Each names the public origin in
-  `X-Forwarded-Proto`/`X-Forwarded-Host`, which labd needs if the probe's source address falls inside `--trusted-proxy`.
+- A person is their GitHub sign-in on the site, or a Lab token in `lab`. A Mac is its device secret; the Builder has a
+  token of its own; a Join command carries a one-time enrollment token. A forwarded header or a source address is never
+  who a request is from.
+- labd refuses any request but GET, HEAD and OPTIONS whose `Origin` names another host, and every form carries a token
+  of the session, so another site's page cannot act for a signed-in person.
+- Every request is logged with its address, the person or Mac, and the edge's ray id. The caller log is kept 30 days. The
+  secret in a report's deletion link never appears in it.
+- Refused credentials are counted by address: past 10 in 10 minutes, further bad ones get 429 for 15 minutes and the
+  owner is told once. A valid credential always passes.
 
-Render with `kubectl kustomize deploy/k8s/base` (or `deploy/k8s/path-prefix`) and check it. `deploy/k8s/test_manifests.py` runs the same checks offline.
-Apply in this order:
-1. the DNS record (above), then namespace, PVC, Certificate;
-2. wait for `certificate/maclab-tls` to be Ready;
-3. Service, NetworkPolicy, Ingress, Deployment.
+## What a client does
 
-### Terms, and inviting a Mac
-- A Mac's owner accepts labd's terms before anything is installed. Their version is the sha256 of the exact text, and labd records
-  the accepted version and the time with the Mac.
-  - The text is `internal/web/texts/terms.txt`, shipped with the Lab release and served at `/terms`: a change of terms reaches the lab by a Deploy.
-  - A changed text gets a new sha256. labd refuses an enrollment that accepted any other version.
-- The person who lends a Mac makes its **Join command** on "Lend a Mac", signed in; a Maintainer runs `lab enroll <name>` for a Lab-owned Mac. Either is one line.
-  - It holds a one-time activation token, `enr_…`, valid for 1 h. The token travels only in an `Authorization` header, never in a URL,
-    and is in no process's arguments: curl reads that header on stdin (`-H @-`), and setup reads the token on stdin too.
-  - The command starts with a space, so shells that skip such lines (bash with `HISTCONTROL=ignorespace`) leave it out of history.
-  - It downloads lab-agent over https, checks its sha256, and runs `sudo lab-agent setup --server https://maclab.chonkbase.net --token-stdin`.
-  - Where the UI or `lab enroll` can't make the one-liner, they show the fallback: `printf '%s\n' '<token>' | sudo ./lab-agent setup --token-stdin …`.
-- `lab-agent setup` shows the terms and needs a typed `yes` on the terminal **before it changes anything**.
-  - Without a terminal it stops, unless `--accept-terms <sha256>` names the exact current terms (unattended runs by a Maintainer).
-- The token is used up by the first enrollment and bound to that Mac's activation key; another Mac with the token gets 403.
-  - If setup is interrupted, re-running it on the same Mac works until its first check-in, and only while labd keeps running: the
-    activation state is in labd's memory.
-  - After a labd restart, `lab forget <name>` and send a new invite.
-  - The Mac keeps its activation key in `/var/lib/maclab`, renamed into place. The rename is atomic, but the file isn't flushed to
-    disk first, so a power cut right after setup may lose it; then the same remedy applies.
-- `lab enroll <name> --revoke` withdraws an unused invite.
-
-### The container
-The image (`Dockerfile` at the repo root) holds `labd`, plus `lab-agent-linux-arm64` next to it, which labd hands to invited Macs.
-
-What labd itself runs or reads at run time:
-
-| need | why | in the image |
+| client | names itself | plain http or a private CA, for development only |
 |---|---|---|
-| `git` | resolving a build's source ref (`git ls-remote`, `internal/server/sources.go`) | yes, plus outbound 443 to GitHub |
-| IANA time zones | Availability windows (`internal/window`) | built into labd (`-tags timetzdata`), and `tzdata` |
-| CA certificates | ntfy, publishing omarchy-m-test reports, GitHub | yes |
-| `sh` | only for `--notify-cmd` | debian's `/bin/sh`; the pod sets no `--notify-cmd` |
-| `tailscale` | only for `--tailscale` | not installed; the pod never uses it |
-| Omarchy themes | the UI's palette, read from the controller user's home | not present; the UI uses its default palette |
+| `lab`, `lab mcp` | `User-Agent: lab/<release>`. A `lab` that does not name itself is refused: "This `lab` was not built for Omarchy Mac Lab", with the install line. One older than the lab's minimum release is refused in one line with the install line | `lab login <url> --allow-plain-http`, `--ca-file F` (both saved with the login), or `MACLAB_ALLOW_PLAIN_HTTP=1`, `MACLAB_CA_FILE` |
+| `lab-agent` | its own number and the Lab release it came from, at every check-in | `setup … --allow-plain-http`, `--ca-file F` (kept in `agent.json`) |
+| `lab-builder` | by its builder token | `--allow-plain-http`, `--ca-file F` |
+| `omarchy-m-test` | `User-Agent`, with its release | `--site` names another address |
 
-There is no hostPath and no service account. labd never runs the Mac-side tools (systemctl, pacman, mkinitcpio and so on); those
-belong to lab-agent on the Macs.
+Every client:
 
-### What stays local
-- **oobd** (on the M5: USB reset and serial console for the Macs) is called *by* labd at `http://<M5 LAN address>:7780`.
-  - A pod in the cloud has no route to it, so those Macs run without hard reset or serial (tier 1).
-  - Keep oobd private, and don't expose it or its token to make the cloud reach it. Only a private route (a VPN to the M5's
-    network) brings it back.
-- **lab-builder** polls labd outbound. It needs `--server https://maclab.chonkbase.net` and `--token-file` with a token from
-  `lab builder add` (README, "Builders"), plus `--ca-file` for a private CA.
-- **The Macs** need outbound https to chonkbase.net, and **NTP** (see [The clock](#the-clock-comes-before-the-certificate)).
-- Nothing else of i9beef is needed. The desktop `--notify-cmd` hook isn't set in the pod; use `--ntfy`.
+- verifies TLS against the system roots, plus a private CA if you give one. None can turn verification off;
+- follows no redirect: a 3xx answer is an error, so a token never goes anywhere it was not sent;
+- sends plain `http://` only to a literal loopback address or `localhost`, unless told otherwise as above;
+- ignores `http_proxy` and `https_proxy`, and refuses an address with credentials in it;
+- reports a challenge or an error page from the edge as one plain line with the status and the ray id, never the page.
 
-## Moving labd from i9beef (and back)
+`lab` keeps one login, for the address it was saved for. `MACLAB_URL` and `MACLAB_TOKEN` given together reach another
+address for one call: a labd under development, a rehearsal host, the owner's break-glass on the mini. `MACLAB_URL`
+alone, naming another address, is refused.
 
-Move only from a stopped, consistent state. Never run the old and new labd at the same time.
+The Python tools in `tools/bt2/`, `scripts/boot-test/` and `scripts/workflow/` came with maclab and carry their own copy
+of this policy (`tools/bt2/bt2/labhttp.py`; a test fails if a copy drifts). They do not read `lab`'s login, and they
+read `lab exec` in its silent form, which only the loopback port gives: they run on the mini.
 
-1. **Drain.** No running or queued jobs, and no leases: `lab status`.
-2. **Point the agents first.**
-   - Each Mac needs the new lab-agent binary (it understands https, `--ca-file` and the plain-http policy).
-   - Re-point it with **`lab-agent move`**, which changes the labd URL and nothing else. Run it **in a terminal on the Mac or over
-     SSH**, never through `lab exec`:
-     `sudo lab-agent move --server https://maclab.chonkbase.net [--ca-file <pem>] [--allow-plain-http] [--no-check]`.
-   - Run from inside lab-agent's own service (that is what `lab exec` does), `move` refuses before it changes anything. Restarting
-     lab-agent there would cut off the answer.
-   - Unless `--no-check` is given, `move` first asks the new labd, with the Mac's own device secret, whether it knows this Mac as
-     the same kind of Mac (`GET /api/agent/enrollment`). Otherwise it stops with "Nothing was changed".
-   - It then replaces only `server`, `server_ca` and `allow_plain_http` in agent.json:
-     - `server_ca` is removed without `--ca-file`;
-     - every other field stays;
-     - the write is one fsynced rename;
-     - it restarts only `lab-agent.service`.
+## Joining a Mac
 
-     The Mac keeps its enrollment (ID and secret), its GUI settings and its recovery state.
-   - What `move` answers:
-     - **Refused, ending "Nothing was changed":** run inside lab-agent's service, the new labd doesn't know this Mac, or the URL or
-       CA is refused. agent.json is as it was.
-     - **"agent.json was not changed: …":** writing the new file failed before it replaced the old one. agent.json is as it was.
-     - **"…/agent.json was replaced, but syncing its directory failed, so a power cut could undo it: … lab-agent was not
-       restarted":** agent.json already names the new labd, but lab-agent still runs with the old one. Fix the cause, then
-       `systemctl restart lab-agent.service`, or run `move` again.
-     - **"lab-agent restarted; the move is done when this Mac checks in to …":** done on the Mac. The move counts once the check-in
-       happens.
-   - **Before the cutover** the new labd isn't answering yet, so use `--no-check`. The URL policy and the CA are still checked, and
-     the agent keeps retrying until the new labd answers.
-   - **After the cutover**, use the checked form, without `--no-check`.
-   - This needs a shell on every Mac: SSH from a Maintainer's machine, or someone at the Mac. Check that you have one before step 3.
-   - Don't use `lab-agent setup` for this. `setup` with a different `--server` and no token refuses and points to `move`, because
-     a setup run also redoes the bootloader, known-good, watchdog, journal and getty setup, which a move of labd must not touch.
-   - The agents then keep retrying until the new labd answers.
-   - Check each Mac's `/etc/maclab/agent.json` afterwards: same `device_id`, new `server`, and an `allow_plain_http` key.
-   - A Mac has moved only when it **checks in to the new labd** (`lab status` there, step 6). Before that, a staged move is just
-     agent.json on the Mac.
-   - If you are unsure whether `move` ran, read agent.json on the Mac. Don't simply run it again.
-3. **Stop labd on i9beef.** Run `systemctl --user disable --now labd`, then check that no labd process is left and port 7770 is closed.
-4. **Snapshot.**
-   - Stopped, the database is closed. Run `sqlite3 ~/.local/share/maclab/labd.db 'PRAGMA wal_checkpoint(TRUNCATE)'` anyway.
-   - Copy the **whole** data dir (`labd.db`, any `-wal`/`-shm`, every directory, both tokens) to a dated archive.
-   - Keep that archive untouched: it is the rollback.
-5. **Seed the PVC.**
-   - Scale the Deployment to 0 and confirm no maclab pod exists.
-   - Start a one-off pod as uid 10001 with the PVC mounted, and refuse to continue if `/data/labd.db` already exists.
-   - Untar the archive into `/data`, then delete the one-off pod.
-6. **Start** (scale to 1).
-   - Artifact grants are memory-only and start empty. That is expected: bt2 asks for a new grant each run.
-   - Check every Mac's check-in in `lab status`, then run `lab login https://maclab.chonkbase.net "<token>"` on each Maintainer machine.
+- The person who lends a Mac makes its **Join command** on "Lend a Mac", signed in; a Maintainer runs `lab enroll <name>`
+  for a Lab-owned Mac. Either is one line, good for one Mac, once, for 1 hour.
+- The line holds a one-time enrollment token, `enr_…`. The token travels only in an `Authorization` header, never in an
+  address, and is in no process's arguments: curl reads that header on stdin (`-H @-`), and setup reads the token on
+  stdin too. The line starts with a space, so a shell that skips such lines leaves it out of its history.
+- It downloads lab-agent from the lab, checks it against the release key pinned in the line's own script, and runs
+  `sudo lab-agent setup --server https://lab.omarchy-mac.org --token-stdin`.
+- `lab-agent setup` runs its pre-checks, then shows the terms and needs a typed `yes` on the terminal before it changes
+  anything or tells the lab anything about the Mac. Without a terminal it stops, unless `--accept-terms <sha256>` names
+  the exact terms read at `/terms`. The lab records the acceptance with the person, the Mac, the time and that sha256.
+- The token is used up by the first enrollment and bound to that Mac; another Mac with a copy is refused. A setup that
+  stopped half way can run again on the same Mac until its first check-in.
+- `lab enroll <name> --revoke`, or Cancel on the page, withdraws an unused Join command.
+- `sudo lab-agent update`, at the Mac, takes a newer agent from the lab. An agent with a bad signature, or one older
+  than the agent installed, is refused. Nothing pushes an agent to a Volunteer's Mac; a Maintainer updates a Lab-owned
+  Mac's while it is idle with `lab agent-update <mac>`.
 
-**Rollback**:
-1. Scale the Deployment to 0 and confirm the pod is gone.
-2. Restore data on i9beef: either copy `/data` back (to keep what happened since), or use the untouched archive from step 4.
-3. Re-point the agents to the old URL with `lab-agent move`, in a terminal on each Mac or over SSH, as in step 2 (never `setup`, and
-   never through `lab exec`). That URL is plain HTTP to a non-loopback address, so it takes the explicit opt-in:
-   `sudo lab-agent move --server http://<i9beef tailnet address>:7770 --allow-plain-http`. Add `--no-check` if labd on i9beef isn't
-   answering yet. A Mac is back when it checks in there. Likewise run `lab login http://… "<token>" --allow-plain-http`.
-4. Start labd on i9beef with `--allow-plain-http` on its tailnet `--listen`.
+## If the Lab address ever changes
 
-Nothing falls back to plain HTTP by itself: every client or agent set up for https refuses it until told explicitly.
+`lab-agent move` is only for a change of the Lab address. A Mac joins another lab with that lab's Join command, never
+with `move`.
 
-## Clients: certificates and plain HTTP
+- `sudo lab-agent move --server <the new Lab address>`, in a terminal on the Mac or over SSH, never through `lab exec`:
+  run from inside lab-agent's own service it refuses before it changes anything.
+- Unless `--no-check` is given, `move` first asks the new address, with the Mac's own device secret, whether it knows
+  this Mac as the same kind of Mac. Otherwise it stops with "Nothing was changed".
+- It replaces only `server`, `server_ca` and `allow_plain_http` in `/etc/maclab/agent.json`, in one fsynced rename, and
+  restarts only `lab-agent.service`. The Mac keeps its enrollment, its GUI settings and its recovery state.
+- A Mac has moved when it checks in at the new address (`lab status`).
 
-Every client verifies TLS against the system roots, plus a private CA if you give one. None can turn verification off.
+## While the lab is Dark
 
-None follows a redirect: a 3xx answer is an error, so a token never goes anywhere it wasn't sent.
+When Cloudflare, the tunnel or the home link is gone, the lab is Dark for everyone, Maintainers included. There is no
+second way in.
 
-Plain `http://` is allowed only to a literal loopback address (127.0.0.0/8, ::1) or `localhost`, unless explicitly enabled.
-There is no hostname or private-range guessing: `.local`, `.ts.net`, single-label names and RFC 1918 addresses all need the opt-in.
+- `lab` says "Omarchy Mac Lab cannot be reached right now." and that no reset is possible until it returns.
+- `omarchy-m-test` still runs in full on any Mac. Only the upload waits: "Your report is saved at `<path>`." and "Upload it
+  later: omarchy-m-test --upload `<path>`".
+- The Macs' agents keep retrying and report when the lab returns. A Lab boot comes back to the Known-good kernel by
+  itself, lab or no lab.
+- A visitor gets a stale copy of a public page for up to a day, or the edge's own error page.
 
-| client | private CA | plain http to a non-loopback host |
-|---|---|---|
-| `lab`, MCP | `lab login <url> <token> --ca-file F`, or `MACLAB_CA_FILE` | `lab login … --allow-plain-http` (saved), or `MACLAB_ALLOW_PLAIN_HTTP=1` |
-| lab-agent | `setup … --ca-file F` (the PEM is kept in agent.json as `server_ca`) | `setup … --allow-plain-http`. An agent.json without the key, from an older lab-agent, keeps plain http, with a warning, only when its own server URL is plain http to a non-loopback host |
-| lab-builder | `--ca-file F` | `--allow-plain-http` |
-| bt2, `scripts/` tools | `MACLAB_CA_FILE`, or `"ca_file"` in client.json | `MACLAB_ALLOW_PLAIN_HTTP=1`, or `"allow_plain_http": true` in client.json |
-| bt2 on the Mac (`target/preflight.py fetch`) | agent.json `server_ca` | agent.json `allow_plain_http`, by the same rule as lab-agent |
+## What may be cached
 
-Every client also ignores `http_proxy`/`https_proxy` and connects to labd directly, and refuses a labd URL with credentials in it
-(`https://user:pass@…`).
+labd states a policy on every response; the default is `no-store`.
 
-Their policy is one block of code, `tools/bt2/bt2/labhttp.py`. Each of these carries a byte-for-byte copy, and a test fails if any
-copy drifts:
-- `scripts/boot-test/runtime.py`;
-- `scripts/workflow/m1/controller.py`;
-- `tools/bt2/target/preflight.py`.
+- A public page or export, for a visitor with no session: cached at the edge, fresh for 60 s, then served stale while the
+  edge refreshes, for up to a day. A browser always revalidates.
+- Anything rendered for a session: `private, no-store`.
+- `/install`: public, 5 minutes. Fingerprinted assets: public, one year.
+- `/api/*` is never cached, the exports under `/api/v1/` excepted. Artifacts say `private` themselves.
 
-A labd URL with a path (`https://chonkbase.net/maclab`, the `path-prefix/` layout) works everywhere too: every API path is appended to it.
+## A labd of your own
 
-**Pinned sources.** Four Python files are pinned by sha256 elsewhere and are unchanged:
-- `scripts/boot-test/frozen-controller-ea3.py` and its identical copy in `scripts/workflow/m1/`;
-- `scripts/workflow/m1/retention-core/mirror_reuse.py`;
-- `retain-controller.py`.
-
-They are covered as follows:
-- `scripts/boot-test/runtime.py`, the live `lab boot-test` runner, installs the policy as urllib's default opener before it loads
-  the frozen SDK. The SDK's own calls then use it; `scripts/boot-test/test_https_runtime.py` drives them.
-- Its earlier qualification was over plain HTTP and doesn't cover this transport.
-- The M1 cohort helpers and the M5 retention scripts that load those files themselves keep their old behaviour: system roots
-  (or `SSL_CERT_FILE`), redirects followed, plain http allowed.
-  - Use them only against a loopback or tailnet labd.
-  - Moving them needs a new, recorded revision of their pins.
-
-**bt2 and artifact grants.** A Mac fetches from labd only what it is allowed to. Before the target's `fetch` step, bt2 makes one
-explicit, journaled `grant-artifacts` step:
-- `POST /api/devices/<name>/artifact-grants` for exactly that run's artifact shas, with a TTL of 2700 s (the fetch step's 1800 s, with margin);
-- after `fetch` it revokes them (an empty list);
-- a failed fetch leaves the grant to run out;
-- a new run grants again in its own step; nothing extends a grant quietly.
-
-## Other ways to serve HTTPS
-
-**Caddy** (the simplest proxy): its defaults already pass the Host header through, have no read timeout, and flush streams and
-unknown-length responses immediately.
+```sh
+labd --sign-in <folder>                  # loopback only: http://127.0.0.1:7770
+labd break-glass --account-id <id> <your-handle>
+lab login http://127.0.0.1:7770          # replaces the saved login; or keep it and give MACLAB_URL with MACLAB_TOKEN
+lab-agent sim --server http://127.0.0.1:7770 --token <enrollment token>
 ```
-maclab.example.org {
-	reverse_proxy 127.0.0.1:7770
-}
-```
-labd then runs with `--listen 127.0.0.1:7770 --public-url https://maclab.example.org --trusted-proxy 127.0.0.1/32`.
 
-For a path on a shared host, match exactly the prefix and use `handle`, not `handle_path`, so the path reaches labd unchanged:
-`@maclab path /maclab /maclab/*` and `handle @maclab { reverse_proxy 127.0.0.1:7770 }`, with `--public-url https://example.org/maclab`.
-
-**nginx.** Its defaults break labd, so all of this is needed:
-```
-location / {                               # or location /maclab for a path on a shared host
-	proxy_pass http://127.0.0.1:7770;          # no URI part: the path passes through unchanged
-	proxy_http_version 1.1;
-	proxy_set_header Host $host;               # the default, $proxy_host, makes every browser change a 403
-	proxy_set_header X-Forwarded-Host $host;
-	proxy_set_header X-Forwarded-Proto $scheme;
-	proxy_read_timeout 3700s;                  # lab exec: up to 3630 s with no bytes
-	proxy_send_timeout 3700s;
-	proxy_buffering off;                       # event stream, serial console, build log
-	proxy_request_buffering off;
-	client_max_body_size 4g;                   # the default 1m refuses every artifact
-}
-```
-Don't put `X-Forwarded-Prefix` or a rewrite here.
-
-**labd's own TLS**, with no proxy: `labd --listen 0.0.0.0:443 --tls-cert /etc/maclab/tls.crt --tls-key /etc/maclab/tls.key --public-url https://labd.example.org`.
-labd re-reads the files when your ACME client renews them. No `--trusted-proxy` is needed.
+`tools/fake-github` stands in for GitHub at a loopback address (`labd --github-url`), for sign-in without the real one.
+The tunnel, the zone and the edge's settings are scripts in `scripts/cloud/` and `scripts/mini/`; a labd of your own
+needs none of them.
 
 ## Operational limits
 
 ### The clock comes before the certificate
-- After a reboot a Mac's clock can start in 1976 until NTP corrects it, about 25 s later. Until then every TLS certificate looks
-  not yet valid, so the agent's check-ins fail.
+
+- After a reboot a Mac's clock can start in 1976 until NTP corrects it, about 25 s later. Until then every TLS certificate
+  looks not yet valid, so the agent's check-ins fail.
 - The agent logs that it is a clock problem, retries every 5 s, and gets through once the clock is right.
-- A Lab boot has twice its boot timeout to reach labd (12 min by default). Those deadlines are absolute times, so a clock in the
-  past doesn't fire them early.
-- What this needs is NTP reachable from the Macs. A Mac whose clock never comes right can't reach an https labd at all.
+- A Lab boot has twice its boot timeout to reach labd (12 min by default). Those deadlines are absolute times, so a clock
+  in the past doesn't fire them early.
+- What this needs is NTP reachable from the Macs. A Mac whose clock never comes right can't reach the lab at all.
 
 ### Long requests
-- `lab exec` is synchronous, up to its `timeout_sec` (at most 3600 s, plus 30). Any proxy in front needs a read timeout above that.
+
+- `lab exec` runs up to its `--timeout` (120 s unless given, at most an hour). Its answer is held with Keepalives for as long as it runs.
 - Job waits are asked in calls of at most 50 s.

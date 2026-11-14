@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by 0005
 ---
 
 # labd is an ordinary HTTPS service; Macs join by a one-time invite

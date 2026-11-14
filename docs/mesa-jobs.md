@@ -1,6 +1,6 @@
 # First-class Mesa jobs
 
-A staged Mesa job runs exact uploaded split packages in its own private prefix on the selected Mac and test kernel. The compositor and other desktop processes continue using installed Mesa. Results are private diagnostics about the staged providers on that boot; they do not qualify the installed desktop or promote an OMT reference.
+In Omarchy Mac Lab a staged Mesa job runs exact uploaded split packages in its own private prefix on the selected Mac and test kernel. The compositor and other desktop processes continue using installed Mesa. Results are private diagnostics about the staged providers on that boot; they do not qualify the installed desktop or promote an OMT reference.
 
 ## Admission and operator inputs
 

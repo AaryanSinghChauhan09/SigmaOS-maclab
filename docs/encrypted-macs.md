@@ -2,7 +2,7 @@
 
 ## Why preflight refuses them
 
-Every lab job reboots the Mac, often several times, with no one at it. If the
+Every job of Omarchy Mac Lab reboots the Mac, often several times, with no one at it. If the
 root volume is LUKS-encrypted, each of those boots stops at the disk passphrase
 prompt and waits, and the job fails as a boot that never came back. So
 `lab-agent setup` and `lab-agent preflight` refuse a Mac whose root (or
@@ -104,7 +104,7 @@ encrypting first boot passes only after that reboot.
 `omarchy-apple-silicon-boot-check` reports the `rd.luks.key=` while this is
 enabled ("still has rd.luks.key= after provisioning"); that is expected. On
 the first hardware run (chriskearney/maclab#38) preflight accepted both
-encrypted Macs with no change to maclab, and their Lab boots unlocked
+encrypted Macs with no change to the lab's code, and their Lab boots unlocked
 unattended.
 
 `status` reports each piece: the key slots, the key file and which slot it

@@ -6,6 +6,8 @@ status: accepted
 
 A Volunteer's Mac must not reach any other Mac, a Volunteer's or Lab-owned. Today any tailnet peer, a Volunteer's Mac included, is a viewer of the whole fleet: device records with other Volunteers' contacts and notice topics, every job file, saved screens, the event stream, and the live journal of Lab-owned Macs. We decided that labd resolves exactly one caller per request (Maintainer by token, a person by an untagged tailnet login, a Mac by its device secret, the builder) and that one module answers, for every route, whether that caller may see or act on a given Mac, job, job file, screen, artifact or event. Only Maintainers see the whole fleet; a Volunteer sees only their own Macs while they stay enrolled; a Mac sees only itself and the artifacts its own job was sent; a tagged tailnet peer without a token sees nothing.
 
+Since Omarchy Mac Lab (ADR 0005 and the spec's "People and access"): a person is no longer a tailnet login or a holder of a Maintainer's token. A person signs in with GitHub and is an Admin, a Maintainer, an M team member or an External volunteer, and a Lab token does what its person may do. The decision stands: one caller per request, and one place that answers what that caller may see.
+
 ## Considered Options
 
 - **Fence it at the network only** (tag Volunteer Macs and fence them with tailnet ACLs, or take them off the tailnet behind an agent-only TLS listener). Rejected as the primary fix: it leaves the Volunteer's other devices as fleet-wide viewers, and labd would still hand out everything to whatever reaches it. Either may follow as a second layer.

@@ -5,7 +5,7 @@ Status: proposal. Only part of what it relies on is verified on hardware, with a
 
 ## Why
 
-A lab job today boots a test kernel next to the known-good one, in the same install. Three kinds of
+A job of Omarchy Mac Lab today boots a test kernel next to the known-good one, in the same install. Three kinds of
 change can't be tested that way:
 
 - **Device trees.** m1n1 on the ESP hands the kernel its device tree, so a kernel that needs new
@@ -66,8 +66,6 @@ selection is spent.
   `systemd.watchdog_sec=0`) and feed it only while each step is within its budget. m1n1 disables the
   watchdog and U-Boot feeds it while it or Limine waits, so a B stuck in m1n1, U-Boot or Limine (one
   of the things B is for) needs an out-of-band reset or a person.
-- **Tailscale.** A and B are separate tailnet nodes; copying `/var/lib/tailscale` between them
-  duplicates the node key.
 
 ## Testing plan
 

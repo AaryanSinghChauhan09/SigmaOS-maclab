@@ -119,9 +119,9 @@ AI agents get the same operations over MCP (`lab mcp`).
 A test boot's command line starts from the known-good kernel's and adds the Lab
 boot parameters (`panic=10`, `watchdog.open_timeout=N` and the Lab boot marker
 `maclab.lab_boot=1`) and `maclab.job=<id>`. It keeps `quiet`, `splash` and `loglevel=`, so the Mac boots
-the way its user's boots do; dmesg and the journal record every level anyway. On a Mac
-with a serial console, or with `lab run --verbose-boot`, it drops them instead and adds
-`loglevel=7` (and the serial console). `lab run --cmdline-base default` starts from the distro's stock
+the way its user's boots do; dmesg and the journal record every level anyway. With
+`lab run --verbose-boot` it drops them instead and adds `loglevel=7`.
+`lab run --cmdline-base default` starts from the distro's stock
 command line (`KERNEL_CMDLINE[default]` in `/etc/default/limine`) instead, to show a
 kernel needs no bring-up parameters. `--cmdline-base '<cmdline>'` takes a literal
 one. `--cmdline-strip 'asahi.* dcpext_*'` drops matching parameters, and `--cmdline`
@@ -180,7 +180,7 @@ How a Lease ends decides what happens to its holder's work:
 | Released by the holder | finishes | canceled and cut |
 | Runs out with the holder's job running | the Lease is extended until that job ends, no further | canceled and cut at the original end |
 | Runs out with nothing running | | canceled and cut |
-| Ended by a Maintainer (`lab release <device> --force`, or End Lease on People), the holder leaving the M team or being Blocked, "End all access" | canceled as `lab cancel` does; the Mac returns to its Known-good kernel | canceled and cut |
+| Ended by a Maintainer (`lab release <device> --force --why "…"`, or End Lease on People), the holder leaving the M team or being Blocked, "End all access" | canceled as `lab cancel` does; the Mac returns to its Known-good kernel | canceled and cut |
 | Window end, Pause, lowered Access level on a Volunteer's Mac | stopped by `lab-agent` | stay queued |
 
 Every `lab exec`, and every refused attempt, is in the Exec record: the person
@@ -199,7 +199,9 @@ Every Lease taken, renewed, extended, released, expired and ended is in the
 Mac's Lease record (`GET /api/devices/<device>/leases`, for whoever sees the
 Mac) with the handle the person had then, and on the person's row on People.
 The Lab group gets a line for a Lease taken, released, expired or ended, none
-for a renewal or an extension.
+for a renewal or an extension. `lab status` shows when each Lease ends, and
+`lab status <device>` how the last one on a free Mac ended: who ended it and
+why.
 
 ## Lab boots come back by themselves
 
@@ -302,7 +304,7 @@ journal that labd collects can end well before the crash: journald syncs to disk
 every 5 minutes by default, and at once only after a critical message. labd's
 job events, which name each test as labd starts it, show where a boot crashed.
 
-On a tier 1 Mac a test boot recovers from hangs without a controller Mac, once Linux runs.
+On a tier 1 Mac a test boot recovers from hangs without the Out-of-band controller, once Linux runs.
 U-Boot leaves `apple_wdt` running into Linux (it feeds it itself while it or Limine waits,
 so a Mac sitting at a U-Boot prompt or the Limine menu is not reset). A test boot's
 command line adds `systemd.watchdog_sec=0 watchdog.open_timeout=N`: systemd, in the
@@ -356,25 +358,43 @@ is stopped (`systemctl stop lab-agent`).
 
 ## Setup
 
+Omarchy Mac Lab answers at `https://lab.omarchy-mac.org`, the Lab address.
+The site is for everyone; `lab` is for the M team and Maintainers.
+
 ```sh
-make                                 # binaries in bin/
-labd --sign-in <folder>              # <folder>/admins names the Admins by GitHub account id
-labd break-glass --account-id <id> <your-handle>   # on the server: prints a Lab token for you, once
-lab login http://127.0.0.1:7770      # asks for that token; it is never an argument
-lab enroll m1air --label "MacBook Air M1, left desk"   # prints the one-liner that joins the Mac
+curl -fsSL https://lab.omarchy-mac.org/install/lab | bash   # the latest Lab release, into ~/.local/bin/lab, no root
+lab login https://lab.omarchy-mac.org    # asks for a Lab token; it is never an argument
+lab status
 ```
 
-To serve the lab over the internet, with no Tailscale, see
-[HTTPS without Tailscale](#https-without-tailscale).
+The install line checks what it downloads against the pinned release key, and
+running it again updates `lab`. It never replaces a `lab` that is not Omarchy
+Mac Lab's: a person who also works in maclab's own lab keeps that build under
+a name they choose. `lab version` prints its release and the lab's. The lab
+refuses a `lab` older than its minimum release in one line, with the install
+line, and `lab status` and `lab login` add a line when the lab runs a newer
+release.
+
+`lab` keeps one login, in its own file `maclab/omarchy-mac-lab.json` under
+your config directory, and never reads or writes `maclab/client.json`. A
+command always goes to the saved login. `MACLAB_URL` and `MACLAB_TOKEN` given
+together reach another address for one call; `MACLAB_URL` alone, naming
+another address, is refused, so a saved token only goes to the address it was
+saved for. While the lab cannot be reached `lab` says so in one line, and
+that no reset is possible until it returns; it never prints an error page.
 
 A person signs in with GitHub and makes their own Lab tokens on their own
 page, up to 10: each is shown once (labd keeps only its hash), lasts 30 days,
 90 days or 1 year unused, or never expires, and does what its person may do
 at that moment. Jobs and Promotions record the person whose token asked.
-There is no admin token: an `admin.token` file left by an older labd is
-ignored, and so are the Maintainer tokens (`mnt_...`) an older labd made.
-`labd break-glass`, run on the server as the account labd runs as, mints a
-Lab token for a named person when nothing else gets in.
+There is no admin token and no Maintainer token: Maintainer is a mark on
+People. `labd break-glass`, run on the server as the account labd runs as,
+mints a Lab token for a named person when nothing else gets in.
+
+Some things are done on the site only, and `lab` has no command for them:
+People, Requests to lend, Invites, Block, "End all access", revoking another
+person's token, a Configuration override, Pause, Limit, making and renewing a
+Lab token, and Hide, Show and Delete of a report.
 
 `labd import` carries the old site's reports into the lab, once, on the
 server (`scripts/cutover/import-reports` runs it whole). `labd import dump
@@ -397,11 +417,21 @@ honoured. `--dry-run` says what it would do and changes nothing.
 prompt and runs the import and its three checks on an emptied `reports.db`,
 while the lab is in Preview.
 
-labd listens on `127.0.0.1:7770` unless told otherwise. Plain http on any other
-address, such as `--listen <tailnet-ip>:7770` for Macs over Tailscale, needs
-`--allow-plain-http`: tokens and device secrets then cross that network in the
-clear. Otherwise give labd a certificate or put it behind an https proxy (see
-[HTTPS without Tailscale](#https-without-tailscale)). Remote links are slow, so
+To run a lab of your own while developing:
+
+```sh
+make                                 # binaries in bin/
+labd --sign-in <folder>              # <folder>/admins names the Admins by GitHub account id
+labd break-glass --account-id <id> <your-handle>   # prints a Lab token for you, once
+lab login http://127.0.0.1:7770      # asks for that token
+lab enroll m1air --label "MacBook Air M1, left desk"   # prints the Join command for a Lab-owned Mac
+```
+
+labd listens on its own machine only: a loopback port (`127.0.0.1:7770`
+unless `--listen` names another) and, on the mini, the Unix socket the tunnel
+dials (`--socket`, with `--public-url` naming the Lab address). It serves no
+TLS and listens on no other network address;
+[docs/https.md](docs/https.md) says how the lab is reached. Remote links are slow, so
 the timeouts that assume a LAN are flags: `--boot-timeout`, `--offline-after`,
 `--alive-window`, `--quiet-grace` and `--stage-timeout` (defaults are sized for
 remote Macs). Artifact downloads resume with HTTP range requests after a dropped
@@ -414,15 +444,15 @@ a `setup` that stopped half way can run again on the same Mac with the same
 token until the Mac first checks in, while labd keeps running. Once lab-agent
 has started and checked in (which uses the token up), finish with `sudo
 lab-agent setup` and no token. Another Mac holding a copy of the token gets
-nothing. After a labd restart, or once the token has expired, `lab forget
-<name>` and make a new one. `lab enroll <name>
---revoke` withdraws a token.
+nothing. Once the token has expired (1 hour), make a new one with `lab
+enroll <name>`, after `lab remove <name>` if the Mac is listed already. `lab
+enroll <name> --revoke` withdraws a token.
 
-On the Mac, `lab enroll`'s one-liner (also in the web UI) downloads lab-agent,
-checks its sha256 and runs `setup`, handing it the token on stdin. By hand:
+On the Mac, the Join command downloads lab-agent from the lab, checks it and
+runs `setup`, handing it the token on stdin. By hand:
 
 ```sh
-printf '%s\n' enr_... | sudo ./lab-agent setup --server https://<labd> --token-stdin --gui-user <you> --autologin
+printf '%s\n' enr_... | sudo ./lab-agent setup --server https://lab.omarchy-mac.org --token-stdin --gui-user <you> --autologin
 ```
 
 With a token, `setup` is what the Join command runs on the Mac, in this
@@ -469,7 +499,7 @@ Join command (a legacy install from a checkout). It is `omarchy-m-test`'s
 rule, read from files, since the pre-checks run nothing
 (`TestHowASystemIsRecognisedAsOmarchy`).
 
-The one-liner holds the token, so keep it private; the token stays out of
+The Join command holds the token, so keep it private; the token stays out of
 URLs, labd's log and the arguments of the curl and sudo it starts.
 
 `setup` makes these changes. Each one is idempotent and backed up:
@@ -532,8 +562,8 @@ comes back on that kernel, so it must be the bootloader's default entry.
 To take a Mac out of the lab, `sudo lab-agent uninstall` undoes every change `setup` made. First it
 tells labd the Mac is leaving: labd cancels the Mac's running and queued jobs, saying why, lists it as
 `left`, and from then on neither resets it nor asks for hands, as it otherwise would once the agent
-stops mid-job. If labd can't be reached, uninstall goes on, and says so and what to run on the
-controller instead (`lab cancel <job>`, then `lab forget <device>`). Then it stops the agent. If
+stops mid-job. If labd can't be reached, uninstall goes on, and says so and what a Maintainer runs
+instead (`lab remove <device>`). Then it stops the agent. If
 that fails, or uninstall is interrupted (Ctrl-C) before it, nothing else is changed, and while the
 agent runs on, uninstall tells labd the Mac stays after all: labd puts it back in the pool (its
 canceled jobs stay canceled). But `systemctl disable --now` can fail, or die of a Ctrl-C, while
@@ -544,7 +574,7 @@ uninstall says so: `lab reset <device>` puts a Lab-owned Mac that left back in t
 a Hard reset, as for any Mac the lab has a Sighting of (a Mac that wedged
 mid-uninstall, say). Only labd's own recovery leaves a Mac that left alone. Don't `lab reset` a Mac
 whose uninstall finished: it brings back a Mac with no agent, which then goes through recovery,
-Hard resets and all, and ends in a call for hands. Use `lab forget` for it instead. Once the
+Hard resets and all, and ends in a call for hands. Use `lab remove` for it instead. Once the
 agent is stopped, uninstall disables and removes it and the lab's other units
 (`maclab-lab-boot-deadlines`, `-session` and `-lock`, as `leave` does), then its config (with the device secret), clears a lab one-shot, removes the
 maclab block from `limine.conf` (or restores `custom.cfg` from its backup), the staged kernels and
@@ -556,46 +586,22 @@ it off: a Limine binary on the ESP with the file's checksum enrolled would not b
 came out, and with `ENABLE_ENROLL_LIMINE_CONFIG=yes` any Limine update could enroll one mid-uninstall.
 Without `--force`, it refuses while a job is in flight or the bootloader can't be found; with it, a
 bootloader it can't find is left alone, and so is `/var/lib/maclab`. `--dry-run` prints each action,
-or the refusal, without taking it. labd still lists the Mac afterwards:
-`lab forget <device>` on the controller drops it (its jobs stay), so it can enroll again under the
-same name. It refuses a Mac with a job running or queued (jobs a lease set aside count: end the
-lease with `lab release <device> --force` so they run, or cancel them), and, unless given `--force`, one that
-someone else holds a lease on (forgetting it would end their lease and cut their `lab shell`) or
-whose agent still checks in and never said it was leaving. Forgetting a Mac labd doesn't know is done
-already: `lab forget` says so and exits 0.
+or the refusal, without taking it. labd still lists the Mac afterwards, as `left`, holding its name:
+`lab remove <device>` ends its enrollment and Retires its record at once, so the name is free to
+enroll again. Its jobs, the lab's copy of its Audit log and its record stay as history. `lab forget`
+is retired: `lab remove` leaves nothing for it to do.
 
 ### A Volunteer's Mac
 
 A Mac is Lab-owned or a Volunteer's for as long as it stays enrolled; the
-enrollment token decides which, and changing it means enrolling again.
+Join command decides which, and changing it means enrolling again. A
+Volunteer's Mac is lent by its own Volunteer, signed in, from "Lend a Mac" on
+the site (see [Volunteer a Mac](#volunteer-a-mac)). `lab enroll` makes Join
+commands for Lab-owned Macs only, and nobody enrolls a Mac in another
+person's name.
 
-```sh
-lab enroll ada-mbp --volunteer "Ada Lovelace" --contact ada@example.org --login ada@github
-```
-
-Either flag without the other is refused. `--login` (optional) links the
-Volunteer's tailnet login to the Mac when it enrolls (`volunteer_login` on
-`POST /api/enroll-tokens`), so with `--tailscale` that Volunteer sees their
-Mac in labd as if they had volunteered it themselves (see
-[Tailscale](#tailscale)); without it, a Mac enrolled this way is seen only by
-Maintainers. `lab device ada-mbp --login ada@github` links an enrolled
-Volunteer's Mac later, and `lab device ada-mbp --unlink` unlinks it
-(`volunteer_login` on `PATCH /api/devices/{name}`, `""` to unlink). The login
-must look like one, `user@github` or an email, lowercased; labd refuses
-anything else, and anything that looks like a secret (`enr_`, `adm_`, `dev_`,
-`bld_`, `mnt_`, `tskey-`, or a long run of hex), since whoever holds that
-login sees the Mac's jobs and screens. Only a Volunteer's Mac is linked, and
-not one a person volunteered with `./volunteer`, which is theirs already.
-Linked Macs don't count toward the person's own limit of 3 volunteered Macs:
-that limit keeps one person from filling the lab, and a Maintainer chose to
-let these in. Forgetting a Mac drops its link with it. A link shows the
-person everything of the Mac's current enrollment, not only what happens
-after it: linking the Mac to a different person shows them its saved
-screens, its job history and their files, and the Volunteer's name, contact
-and ntfy topic on its record. Link only the Volunteer's own login; to hand a
-Mac to someone else, `lab forget` it and enroll it again. Unlinking, and any
-long wait (`/api/jobs/{id}/wait`) or live journal read under way, take
-effect at once. labd gives the Mac its own
+The Mac is its Volunteer's: they see it on My Macs with its jobs, its screens
+and its records, and see nobody else's Mac. labd gives the Mac its own
 unguessable ntfy topic when it enrolls (on the server `--ntfy` posts to), and
 `setup` prints it with a QR code to subscribe from a phone. On a Volunteer's
 Mac `setup` refuses `--autologin` and `--stay-awake`. Setup and every
@@ -618,7 +624,7 @@ sudo lab-agent pause --until 2026-11-03  # closed until that date begins
 sudo lab-agent open --until 22:00        # open now until 22:00, whatever the schedule says
 ```
 
-These take effect at once and work with labd or the tailnet down; check-ins
+These take effect at once and work with the lab out of reach; check-ins
 carry them to labd, which has no API to change them. lab-agent refuses any lab
 command outside the window, and the job records the refusal. labd starts a job
 on a Volunteer's Mac only inside its window, on AC power, and when the job's
@@ -627,7 +633,7 @@ expected length fits in what is left of the window; until then the job stays
 hard ceiling is the window's end if that comes before the job's end.
 
 At the window's end, or on `pause`, lab-agent stops the job itself, on its own
-clock and with labd or the tailnet down too: staging stops where it is, and a
+clock and with the lab out of reach too: staging stops where it is, and a
 Lab boot (one that hasn't reached labd yet included) reboots to the Known-good
 kernel within a second or two. The job ends `incomplete`, not failed, and labd
 queues it again as a new job for a later window. A lease on a Volunteer's Mac
@@ -776,13 +782,15 @@ window and the Access level; and the one command that removes the last
 three, `sudo lab-agent uninstall`. Only a Volunteer's Mac has `leave`; a Lab-owned Mac's enrollment is
 ended by the Maintainers.
 
-`lab remove` (`POST /api/devices/{name}/end-enrollment`) takes the Mac out of labd at once:
-its device secret is refused from that moment, whether or not the Mac checks in
-again, and a job on it ends `incomplete` and is not retried. The Volunteer
+`lab remove` (`POST /api/devices/{name}/end-enrollment`) ends any Mac, Lab-owned or a
+Volunteer's, and Retires its record at once: the record is kept as history and leaves the
+fleet, the name is free, its device secret is refused from that moment, whether or not the
+Mac checks in again, and a job on it ends `incomplete` and is not retried. The Volunteer
 is told on the Mac's own ntfy topic and, at its next check-in, on the desktop,
 which Maintainer ended it. At that check-in lab-agent does what `leave` does
-and appends the Maintainer to the Audit log. To enroll the Mac again, a
-Maintainer makes a new token (`lab enroll`); the Mac's Kind follows that token.
+and appends the Maintainer to the Audit log. To enroll the Mac again it Joins
+again: a Volunteer's with a new Join command from the site, a Lab-owned one
+with `lab enroll`.
 
 This is not `lab-agent uninstall` (see [Setup](#setup) above), which stays as
 it was: the full teardown of a Mac set up for the lab. labd lists the Mac as
@@ -823,9 +831,6 @@ Volunteer runs `publish on`, whatever `--omt-publish` or a job's `--publish`
 asks; `lab publish` is refused too. Turning it off again leaves the reports
 already published up. Each `publish on` lists the deletion link of every
 report published so far and not deleted since.
-
-A Mac enrolled with `./volunteer` (see [Volunteer a Mac](#volunteer-a-mac)) is a
-Volunteer's too, named and reached by the tailnet login that ran it.
 
 ### The mini's set-up and its check
 
@@ -1019,7 +1024,7 @@ times and no reason, address or path; it is never cached.
   an argument. That socket takes a line and nothing else; the tunnel's has no
   such route. The line is also written to `/var/lab/log/notify.log`.
 
-## Live data: stream, screen, logs, shell
+## Live data: stream, screen, logs
 
 Everything a UI needs is on the API. The web UI uses it now, and a TUI can use it later.
 
@@ -1030,8 +1035,8 @@ Volunteer) and the Exec record. An M team member has Live only under their own L
 otherwise told who holds the Mac and until when; a Volunteer's Live of their own Mac is view only.
 The page has no serial console.
 
-- `GET /api/stream`: server-sent events for `device`, `job`, `serial`, `kevent` and `screen` (`?device=` limits it to one Mac).
-  A Mac's `kevent` and `screen` events reach an M team member only under their own Lease; `serial` only Maintainers.
+- `GET /api/stream`: server-sent events for `device`, `job`, `kevent` and `screen` (`?device=` limits it to one Mac).
+  A Mac's `kevent` and `screen` events reach an M team member only under their own Lease.
 - `POST /api/devices/{n}/screenshot`, `GET .../screen`, `.../screens`: captures come from the display
   controller via `ffmpeg kmsgrab`. That works from the moment the display driver loads (boot splash,
   text console, emergency shell, login screen, desktop), with `grim` as a fallback. Jobs capture
@@ -1051,12 +1056,12 @@ lab build https://github.com/AsahiLinux/linux/pull/123 --device m1air
 lab build https://github.com/AsahiLinux/linux/pull/123 --config ./my.config   # one build for every Mac
 ```
 
-Agents do the same with `lab_run(source=...)`, `lab_build` and `lab_build_status`, and use `lab_exec`
+Agents do the same with `lab_run(source=...)`, `lab_build` and `lab_build_log`, and use `lab_exec`
 instead of ssh. labd resolves repo, branch (`/tree/...`), commit and PR URLs (or `git-url#ref`) to
 a commit with `git ls-remote`. It keys the build on that commit, the target Mac's running
 `/proc/config.gz` and the kbuild recipe, and reuses an identical earlier build.
 
-`lab-builder` runs on the controller Mac as a root LaunchDaemon. Root is needed because macOS Local
+`lab-builder` runs on the mini as a root LaunchDaemon. Root is needed because macOS Local
 Network privacy blocks user processes. It runs `builder/kbuild` in an Apple `container` micro-VM
 (`builder/Containerfile`: Debian, gcc, clang, LLD, Rust 1.93.1, bindgen), started in the user's
 session. A config with `CONFIG_CC_IS_CLANG=y` (linux-aurora's: clang 18 + LLD) is built with
@@ -1086,7 +1091,7 @@ Deploy the matching builder image and controller together; older builder outputs
 cannot satisfy the new recipe. Existing builds retain their original identity.
 No new archive proves compatibility with an older build, or proves a module loads.
 
-A controller without Apple `container` can build with Docker instead (Colima, Docker Desktop):
+A builder host without Apple `container` can build with Docker instead (Colima, Docker Desktop):
 `lab-builder --runtime docker [--context colima]`, with the same `kbuild` image and `/cache`
 volume layout. labd sees no difference: progress, logs and reuse of earlier builds work the same.
 Colima shares only paths under `$HOME` into its VM and a bind mount of anything else is silently
@@ -1106,7 +1111,8 @@ Docker volumes have no size cap of their own: the cache is bounded only by what 
 
 Measured on a base M5 (10 cores, VM with 16 GB) with aurora's config: first build 9 minutes;
 rebuild of a warm tree about 40 seconds. Progress (stage, object count, ETA) and the log stream
-live on `/api/stream` (`build`, `buildlog`) and `/api/builds/{id}/log?follow=1`.
+live on `/api/stream` (`build`, `buildlog`); `lab build-log <build> -f` follows the log by asking
+`/api/builds/{id}/log?offset=N&wait=50` again from where it stopped, each call at most 50 s.
 
 ### The Builder
 
@@ -1238,7 +1244,7 @@ makes (`linux-aurora`, `linux-aurora-headers`, ...) plus the PKGBUILD as built. 
 the recipe's own files: the PKGBUILD, its local sources, and install/changelog files. makepkg
 downloads the rest. `--commit` repoints `_commit` (the PKGBUILD must download from that repository),
 `--pkgrel` sets pkgrel, and either one refreshes the checksums with `updpkgsums`. Agents use
-`lab_package`, then `lab_build_status`, then `lab_run(build_id=...)`.
+`lab_package`, then `lab_build_log`, then `lab_run(build_id=...)`.
 
 The builder is `builder/pkg`. It is Arch Linux ARM, the release machine's `/etc/makepkg.conf`
 verbatim, and `maclab.conf` with the one difference: packages are `.pkg.tar.zst`. ccache stays
@@ -1325,9 +1331,9 @@ outcome but `pass` is a failure.
 
 Each job records its Mac as it was when the job was submitted: its chip family, whether it was a
 volunteer's, and whether labd ran `omarchy-m-test` in its jobs. The gate judges the job by that,
-so what the Mac became since (or another Mac enrolled under its name after `lab forget`) doesn't
+so what the Mac became since (or another Mac enrolled under its name after `lab remove`) doesn't
 change the verdict; a job from before labd recorded it is judged by the Mac as it is now. A Mac
-labd no longer has (`lab forget`) doesn't count: its runs are listed as not counted, "device gone",
+the lab no longer has (`lab remove`) doesn't count: its runs are listed as not counted, "device gone",
 under their family, or under the report when the job didn't record its family.
 
 Each Mac fails when it failed on the kernel and never passed, passes when it passed and never
@@ -1344,8 +1350,8 @@ that couldn't stage never hides another result. A family's result is decided in 
    kernel: the gate stays shut, and the report gives the job's reason to fix before running it again;
 5. **untested** when none of its Macs has a result, including when it has no Mac in the lab.
 
-Volunteers' Macs (enrolled with `./volunteer`, see [Volunteer a Mac](#volunteer-a-mac)) run agents
-the lab doesn't control, so they count only with `--volunteers`; otherwise the report lists them
+Volunteers' Macs (see [Volunteer a Mac](#volunteer-a-mac)) run agents the lab never updates
+from its side, so they count only with `--volunteers`; otherwise the report lists them
 and their runs apart. A staging problem on one Mac doesn't hide a pass or a failure on another.
 The gate is open only when every required family passed. `lab gate` exits 3 when it is shut.
 
@@ -1361,7 +1367,7 @@ who set it aside, why and when), and every `lab gate` after that, release script
 aside as `--exclude` would, without being asked. The report lists each such job of the kernel in
 `exclusions`, with who, why and when, and the summary names them; a run it sets aside that would
 have counted is in its family's `not_counted`, marked `excluded`, with the mark as `exclusion`.
-`lab job` shows the mark too. It takes a Maintainer's token and a reason, and only a finished job; the
+`lab job` shows the mark too. It is a Maintainer's and takes a reason, and only a finished job; the
 person is the Maintainer whose token asked. `lab exclude <job> --clear` takes it off, and
 the job counts again. It is for a failure the lab caused, never for one of the kernel's that would
 keep a release back. Jobs from before labd kept the mark have none, and count as before. The API is
@@ -1405,21 +1411,40 @@ proposes how it could.
 
 ## For AI agents
 
-```sh
-claude mcp add maclab -- lab mcp
-```
+`lab mcp` is an MCP server on standard input and output: give your agent the
+command `lab mcp`. It acts as the person whose login `lab` holds, and the lab
+records what it does under their name.
 
-Tools: `lab_devices`, `lab_device`, `lab_run`, `lab_wait`, `lab_job`, `lab_jobs`,
-`lab_log`, `lab_screenshot`, `lab_baseline`, `lab_crashtest`, `lab_lease`,
-`lab_release`, `lab_reset`, `lab_exec`, `lab_cancel`, `lab_retry`, `lab_build`,
-`lab_build_status`, `lab_package`, `lab_publish`, `lab_gate` and `lab_exclude`. A device in `needs_hands` is waiting for a
-person. Tell the user; don't retry. Take `lab_lease` before a series of jobs
-that must not interleave with others' (benchmarks). A Mac someone else leases
-is theirs until the lease ends: wait, or use another Mac.
+Its tools follow the commands one for one, each named after its command:
+`lab_status`, `lab_enroll`, `lab_remove`, `lab_device`, `lab_baseline`,
+`lab_crashtest`, `lab_run`, `lab_jobs`, `lab_job`, `lab_wait`, `lab_cancel`,
+`lab_logs`, `lab_retry`, `lab_publish`, `lab_gate`, `lab_exclude`,
+`lab_lease`, `lab_release`, `lab_exec`, `lab_reset`, `lab_oob`, `lab_audit`,
+`lab_upload`, `lab_build`, `lab_package`, `lab_builds`, `lab_build_log`,
+`lab_build_get`, `lab_installed_list`, `lab_installed_status`,
+`lab_installed_freeze_manifest`, `lab_installed_freeze_entry`,
+`lab_installed_verdict`, `lab_installed_promote`, `lab_agent_update`,
+`lab_builder_add`, `lab_builder_remove`, `lab_builder_list` and
+`lab_version`. Four commands have no tool: `login` (the Lab token is typed by
+its person and never handed to an agent), `mcp` itself, and `pack` and
+`boot-test`, which work on files of your own machine and ask the lab nothing.
 
-A lab is worth describing to its agents once: which Macs you have, which one has
-serial, what they must not touch. Write that in a short Markdown file and hand it
-to them with a prompt.
+- A tool never answers with a token. `lab_enroll` and `lab_builder_add` write
+  the Join command and the builder's token into a new file you name, and say
+  only where it is.
+- `lab_installed_verdict` and `lab_installed_promote` first answer with what
+  the lab is about to do, warnings included, and do it only when called again
+  with `confirm`: the verdict is a person's.
+- `lab_exec` needs your own Lease (`lab_lease`), and its text is kept in the
+  Exec record for 12 months: never put a secret in a command.
+- A Mac in `needs_hands` is waiting for a person. Tell the user; don't retry.
+- Take `lab_lease` before a series of jobs that must not interleave with
+  others' (benchmarks). A Mac someone else leases is theirs until the Lease
+  ends: wait, or use another Mac.
+
+A lab is worth describing to its agents once: which Macs you may use and what
+they must not touch. Write that in a short Markdown file and hand it to them
+with a prompt.
 
 ## Verified on hardware
 
@@ -1445,9 +1470,6 @@ emergency mode.
 
 ## Not yet verified on hardware
 
-- The serial console from an M3 host. A USB 2.0 cable (no SBU wires) carried no serial data either
-  way, so it is still open whether serial mode works from an M3 host with a SuperSpeed cable. Reset
-  needs only CC.
 - `lab installed freeze-entry` on a real Mac: the identity check sent outside
   a job, and its observation coming back. labd sends no Install operation, so
   lab-agent's install path stays unproven on hardware.
@@ -1499,161 +1521,41 @@ An unused Join command stops with the access of whoever made it: "End all
 access" and a Block cancel every one the person made, and the loss of the
 Maintainer role those for Lab-owned Macs.
 
-## Phones
+## Where the lab answers
 
-Open `http://<labd-host>:7770` and enter your Maintainer token; the UI keeps
-it. Every change needs a Maintainer's token, whatever network it comes from;
-with `--tailscale`, a Volunteer on the tailnet sees their own Macs without one
-(see [Tailscale](#tailscale)). On a phone the UI
-switches to a bottom tab bar and can be added to the home screen.
+Everything crosses one address, `https://lab.omarchy-mac.org`, the Lab
+address: the public results, the site, `lab`, the Macs' agents, uploads and
+downloads. It reaches the mini through one tunnel. No port is open at home,
+there is no second way in, and nothing needs Tailscale.
+[docs/https.md](docs/https.md) is the guide: what the path allows, how long
+calls and big files cross it, and what a client checks.
 
-A browser on the tailnet carries its access to every page it opens, so labd
-refuses (403) any request but GET, HEAD and OPTIONS whose `Origin`
-names another host or port than the `Host` it was sent to, or that comes with
-`Sec-Fetch-Site: cross-site` or `same-site` and no matching `Origin`. Another
-site's page can't run commands on the Macs, and labd's own UI, served from
-the address it calls, works as before. The lab CLI, agents, builders and
-curl send neither header and aren't affected. A proxy in front of labd must
-pass on the `Host` the browser asked for.
-
-A page can get past that check by DNS rebinding: its site points the page's
-own name at labd's address once the page is open, and then the page and labd
-are one origin to the browser. So access that comes with no token, from a
-tailnet login, counts only on a request that asked for labd by
-one of its own names: an IP address, `localhost`, this machine's host name
-(short, fully qualified and under `.local`) and, with `--tailscale`, its
-MagicDNS name. Any other name gets a 403 that names it, for GETs too, since a
-page could read the lab as well; the UI shows why and asks for the token. If
-browsers reach labd by another name, a DNS alias say, run labd with
-`--allow-host labd.lan` (repeatable, or a comma-separated list). The token,
-device secrets and the builder token work by any name, so the lab CLI, agents,
-builders and scripts with a token don't care.
-
-## HTTPS without Tailscale
-
-labd can run as an ordinary HTTPS service on a host of its own, such as
-`https://maclab.chonkbase.net` in Kubernetes behind ingress-nginx. Maintainers
-use the UI, `lab` and MCP over HTTPS; Macs reach labd with outbound requests
-only (long-poll check-ins, reports, uploads, artifact downloads), and nothing
-connects to a Mac. [docs/https.md](docs/https.md) has the deployment, the
-manifests in `deploy/k8s/`, moving labd from one host to another and back, and
-proxy settings.
-
-- **TLS:** `--tls-cert`/`--tls-key` serve TLS 1.2+ and re-read renewed files;
-  or listen on loopback (or, in a pod, with `--allow-plain-http`) behind an
-  https proxy.
-- **One public URL:** `--public-url https://maclab.example.com`. labd can also
-  live under a path of a shared host (`--public-url https://example.com/maclab`):
-  it serves everything under the prefix, removes it once, and answers 404
-  outside it; the proxy passes the path on unchanged. See the next point first.
-- **Proxies:** `--trusted-proxy <CIDRs>`. Only those peers may send
-  `X-Forwarded-Proto`/`X-Forwarded-Host`, and those must name the public URL,
-  or labd answers 421. They are never anyone's identity. It doesn't go with
-  `--tailscale`, and no relayed request ever counts as a tailnet viewer.
-- **Browsers:** a change must come from labd's own origin, scheme, host and
-  port. API answers, Mac uploads included, are sandboxed so an uploaded page
-  can't run in labd's origin, and HSTS is sent over https. A prefix is not an
-  origin: on a host shared with other apps, every script they serve can read
-  the token the UI keeps. That is why labd gets a host of its own; share a host
-  only with apps trusted as much as labd.
-- **Clients** (`lab`, MCP, lab-agent, lab-builder): https is verified against
-  the system's roots plus an optional private CA (`--ca-file`,
-  `MACLAB_CA_FILE`); verification can't be turned off. Redirects and proxies
-  from the environment are not followed. Plain `http://` reaches loopback only
-  unless allowed on purpose (`--allow-plain-http`, `MACLAB_ALLOW_PLAIN_HTTP=1`).
-  An agent.json from before this keeps its plain http with a warning; the next
-  `setup` records the choice. When labd moves, `sudo lab-agent move --server
-  <new URL>` points an enrolled Mac at it: it asks the new labd, with the Mac's
-  own secret, whether it knows the Mac, rewrites only labd's address, CA and
-  plain-http choice in agent.json, and restarts lab-agent; nothing else on the
-  Mac changes. (`setup` refuses to move an enrolled Mac.)
-- **Macs fetch only what their job needs:** a Mac downloads an artifact only
-  if a command for its running job named it, until that job ends, or if a
-  Maintainer granted it explicitly for a while
-  (`POST /api/devices/<name>/artifact-grants`, which bt2 uses). It adds files
-  only to its running job, up to 1 GiB each. A job runs only on the enrollment
-  it was submitted for.
-- **Probes:** `GET <prefix>/healthz` answers `ok` to anyone.
-- **The clock:** right after a reboot a Mac's clock can be decades behind until
-  NTP sets it, and labd's certificate looks not valid yet. lab-agent says so,
-  keeps trying with verification on, and gets through once the time is right.
-- **Out-of-band control** (oobd on the controller Mac) stays on the lab's
-  private network: labd calls it, so a labd in the cloud has none (tier 1)
-  unless given a private route to it. Never expose oobd publicly.
-
-## Tailscale
-
-Lab Macs and labd can live on a tailnet: the maintainer's own tailnet while
-developing, and a separate tailnet for the Omarchy project before anyone else
-joins. Nothing in maclab holds a Tailscale API key; a maintainer does the
-tailnet side by hand.
-
-```sh
-labd --listen <labd tailnet IP>:7770 --allow-plain-http --tailscale
-```
-
-Tailnet traffic is encrypted by WireGuard, but labd can't tell that from the
-address, so plain http there still needs `--allow-plain-http` (and clients
-their own opt-in, or an https URL).
-
-With `--tailscale`, labd asks the local tailscaled who each tailnet peer is
-(`tailscale whois`; answers are cached for a minute, failed lookups for 5
-seconds). Each request is scoped to what its caller may see. A Maintainer's
-token sees the whole lab. A person on the tailnet without one sees only the
-Macs they volunteered (see [Volunteer a Mac](#volunteer-a-mac)) and those a
-Maintainer linked to their login (see [A Volunteer's
-Mac](#a-volunteers-mac)), while those
-stay enrolled: their records, jobs, job files, logs and saved screens,
-including the console output in each job's logs, and their events on
-`/api/stream`, which leaves out the live console lines. Any other Mac answers 404, as if it weren't
-there. Builds, builders, Installed run status and the lab's capabilities
-(`/api/recovery`, `/api/mesa`) are Maintainers' only and answer 403.
-Volunteering a Mac (`POST /api/volunteer`) stays open to any person on the
-tailnet. Tagged devices, lab Macs under `tag:maclab` and the labd host among
-them, get nothing without a token (401); a Mac reaches labd with its own
-device secret on `/api/agent/*`. Anything that changes the
-lab, the console itself (`lab shell`), the Mac's stored serial log and new
-screenshots need a Maintainer's token and answer 403 without one, and device
-views never carry the controller's token. A Maintainer's token works from
-anywhere, on the tailnet or off it, for the UI, `lab` and scripts.
-
-`lab-agent setup` no longer joins a tailnet: its `--tailscale-authkey-file`,
-`--tailscale-authkey` and `--tailscale-hostname` flags are gone. A Mac reaches
-the lab at the Lab address, over https.
-
-A minimal policy: Macs reach only labd, admins reach labd and SSH into the
-Macs as root, and the rest of the tailnet reaches labd to volunteer a Mac
-and see their own.
-
-```hujson
-{
-  "groups": {"group:maclab-admins": ["alice@github", "bob@github"]},
-  "tagOwners": {
-    "tag:maclab":            ["group:maclab-admins"],
-    "tag:maclab-controller": ["group:maclab-admins"], // the labd host
-  },
-  "grants": [
-    {"src": ["tag:maclab"], "dst": ["tag:maclab-controller"], "ip": ["tcp:7770"]},
-    {"src": ["autogroup:member"], "dst": ["tag:maclab-controller"], "ip": ["tcp:7770"]},
-    {"src": ["group:maclab-admins"], "dst": ["tag:maclab"], "ip": ["tcp:22"]},
-  ],
-  "ssh": [
-    {"action": "accept", "src": ["group:maclab-admins"], "dst": ["tag:maclab"], "users": ["root"]},
-  ],
-}
-```
-
-Use `"action": "check"` to make admins re-authenticate before SSH. Tailscale's
-free Personal plan may limit Tailscale SSH (unconfirmed; check the plan before
-counting on it).
+- **Who you are** is your GitHub sign-in on the site and a Lab token in `lab`;
+  a Mac has its device secret, the Builder its own token. Where a request
+  comes from is never who it is from.
+- **One name.** Through the tunnel labd answers only as the Lab address.
+  `maclab.omarchy.org` is an Alias: a page opened there lands on the same page
+  at the Lab address, anything under `/api/` is refused with a line naming the
+  Lab address, and the lab never prints the Alias. Any other name gets 421.
+- **Other sites' pages** cannot act for you: labd refuses (403) any request
+  but GET, HEAD and OPTIONS whose `Origin` names another host than the one it
+  was sent to, or that comes marked cross-site with no matching `Origin`, and
+  every form carries a token of your session.
+- **While Dark** (the tunnel, Cloudflare or the home link gone) the lab is out
+  of reach for everyone, Maintainers included. `lab` and `omarchy-m-test` say
+  "Omarchy Mac Lab cannot be reached right now." and never print an error
+  page; a test still runs in full and its report waits (`omarchy-m-test
+  --upload <path>` sends it later); Macs keep retrying. No reset is possible
+  until the lab returns.
+- **`/status`** says how the lab is, to anyone.
 
 ## License
 
 MIT; see [LICENSE](LICENSE). The interface bundles third-party files under their own
 licenses: JetBrains Mono (SIL OFL 1.1) and the Omarchy logo (MIT). See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). maclab isn't an official Omarchy
-or Asahi Linux project, and it isn't affiliated with Apple.
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Omarchy Mac Lab isn't an official
+Asahi Linux project, and it isn't affiliated with Apple.
 
 ## Artifact package boot-test workflow
 
-`lab boot-test` accepts an exact reviewed device profile/catalog and kernel, Mesa and boot-setup artifacts, compiles the finite workflow, then invokes the real local runner with plan-bound authorization. Recovery mode is explicit (`network-only` or `serial-assisted`); pending device adapters are refused. See [the command, source-review contract and limits](docs/artifact-boot-test.md). `make boot-test-dist BOOT_TEST_OUT=/owned/new-prefix` builds a relocatable local command/resource prefix without installing services or contacting a Mac. Device owner/compiler closures and per-run artifact/authorization data remain explicit reviewed inputs; this does not claim every historical prototype is packaged or portable.
+`lab boot-test` accepts an exact reviewed device profile/catalog and kernel, Mesa and boot-setup artifacts, compiles the finite workflow, then invokes the real local runner with plan-bound authorization. Recovery mode is explicit and is `network-only` (the lab refuses `serial-assisted`: it has no serial console); pending device adapters are refused. See [the command, source-review contract and limits](docs/artifact-boot-test.md). `make boot-test-dist BOOT_TEST_OUT=/owned/new-prefix` builds a relocatable local command/resource prefix without installing services or contacting a Mac. Device owner/compiler closures and per-run artifact/authorization data remain explicit reviewed inputs; this does not claim every historical prototype is packaged or portable.

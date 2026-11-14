@@ -1,6 +1,6 @@
 # Test reviewed kernel, Mesa and boot artifacts
 
-`lab boot-test` is a local artifact-to-workflow frontend. It inspects exact input files, compiles a reviewed device adapter, and invokes the actual `lab-workflow` runner with a plan-bound authorization. It does not install or restart a controller service. The controller must already advertise explicit job and transaction recovery-mode isolation.
+`lab boot-test` is a local artifact-to-workflow frontend of Omarchy Mac Lab's `lab`. It inspects exact input files, compiles a reviewed device adapter, and invokes the actual `lab-workflow` runner with a plan-bound authorization. It does not install or restart a controller service. The controller must already advertise explicit job and transaction recovery-mode isolation.
 
 ## Build an isolated command prefix
 
@@ -32,7 +32,9 @@ lab boot-test --catalog-descriptor catalog.pin.json --profile PROFILE_ID \
   --packet /var/lib/maclab/rc7-DEVICE-UNIQUE --out NEW_PRIVATE_DIRECTORY --compile
 ```
 
-A request contains an explicit device, `recovery_mode` (`network-only` or `serial-assisted`), and an exact `artifacts` map from profile slot names to local files. The equivalent named flags are `--kernel`, `--kernel-headers`, repeated `--mesa-package name=path`, `--bootloader`, and `--artifact name=path`; their roles come from the selected profile. A boot-setup package and a raw Stage2 artifact are different slot kinds. Supplying one never proves execution of the other.
+A request contains an explicit device, `recovery_mode`, and an exact `artifacts` map from profile slot names to local files. The equivalent named flags are `--kernel`, `--kernel-headers`, repeated `--mesa-package name=path`, `--bootloader`, and `--artifact name=path`; their roles come from the selected profile. A boot-setup package and a raw Stage2 artifact are different slot kinds. Supplying one never proves execution of the other.
+
+The recovery mode is `network-only`. The request format still knows `serial-assisted`, which the lab refuses: the serial console is not part of Omarchy Mac Lab.
 
 Preparation makes no API or target calls. It hashes the actual files and safely scans bounded archive metadata without extracting or executing package scripts. It checks exact package name/version/architecture and optional selected kernel Image, config and native-provider payload hashes. Malformed paths, duplicates, wrong versions, unexpected special entries, changed files or incomplete reviewed payloads are refused. Source metadata does not prove a running kernel, firmware or GPU driver. Actual child stdout/stderr and failure records stay private and bounded.
 
@@ -47,7 +49,7 @@ lab boot-test --prepared NEW_PRIVATE_DIRECTORY --execute \
 
 The existing authorization must bind the exact final Plan and allowed scopes. A single command may also prepare then execute if it already has an authorization matching the resulting Plan. There is no interactive permission prompt or blind retry.
 
-Before any target helper the frontend verifies advertised mode isolation and the actual ordinary idle device/model/original kernel, acquires or renews only its reviewed holder's lease, explicitly selects the requested recovery transaction, and reads it back. Network-only makes no OOB readiness claim. Serial-assisted additionally requires an actual connected route. Physical/manual recovery facts are never fabricated. An ambiguous state-changing response is retained and observed, not automatically repeated.
+Before any target helper the frontend verifies advertised mode isolation and the actual ordinary idle device/model/original kernel, acquires or renews only its reviewed holder's lease, explicitly selects the requested recovery transaction, and reads it back. Network-only makes no OOB readiness claim. Physical/manual recovery facts are never fabricated. An ambiguous state-changing response is retained and observed, not automatically repeated.
 
 The runner retains finite phase outcomes, source/artifact identity and genuine failure/cancellation evidence. Its owned process group, logs, waits and total runtime are bounded. State defaults to `~/.local/share/maclab/workflows/TRANSACTION`; volatile filesystems are refused and actual fsync/readback is checked. An I/O failure stops the operation; the command does not repair a filesystem or assert prior errors are fixed.
 
