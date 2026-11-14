@@ -183,12 +183,13 @@ local_mac() {
   "$LAB_CMD" baseline "$MAC" > "$WORK/baseline.log" 2>&1 || fail "the simulated Mac's baseline: $(plain "$WORK/baseline.log")"
 }
 
-# logged_in: the saved login reaches a lab. Under --lab it must be the Lab
-# address's: lab says which lab it is logged in to.
+# logged_in: the saved login is for the address the test runs through. lab
+# itself says so: given the address alone, it refuses to send a saved Lab
+# token anywhere else.
 logged_in() {
   command -v "$LAB_CMD" >/dev/null 2>&1 || fail "no lab command: install it with curl -fsSL $ADDRESS/install/lab | bash, then lab login $ADDRESS"
-  "$LAB_CMD" status > "$WORK/status.out" 2> "$WORK/status.err" \
-    || fail "lab is not logged in to Omarchy Mac Lab: $(plain "$WORK/status.err")"
+  MACLAB_URL="$ADDRESS" "$LAB_CMD" status > "$WORK/status.out" 2> "$WORK/status.err" \
+    || fail "lab is not logged in to Omarchy Mac Lab at $ADDRESS: $(plain "$WORK/status.err")"
 }
 
 # transfer_job: a job on the Mac that leaves the download's file among its

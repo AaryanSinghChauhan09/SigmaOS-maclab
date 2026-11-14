@@ -503,7 +503,17 @@ func (l *madeUpLab) api(token, method, path, body string) string {
 // owner is the environment of the owner's own run through the Lab address,
 // which here is the labd on loopback.
 func (l *madeUpLab) owner(address string) []string {
-	return append(l.env(l.ownerHome), "LAB_ADDRESS="+address, "LAB_COMMAND="+filepath.Join(l.bin, "lab"))
+	home := l.ownerHome
+	if address != l.url {
+		// The same lab behind another address: the owner logs in there.
+		home = l.t.TempDir()
+		token, code := run(l.t, l.env(home), "", "/bin/sh", "-c", `"$0" break-glass --data="$1" --account-id=1001 owner 2>/dev/null`, filepath.Join(l.bin, "labd"), filepath.Join(l.root, "var", "lab", "data"))
+		if code != 0 {
+			l.t.Fatalf("break-glass: %s", token)
+		}
+		l.lab(home, token, "login", address)
+	}
+	return append(l.env(home), "LAB_ADDRESS="+address, "LAB_COMMAND="+filepath.Join(l.bin, "lab"))
 }
 
 // transferJob is the owner's side of the download: --prepare runs the job
@@ -604,6 +614,14 @@ func TestFD15SwitchesTheTunnelMeasuresBothAndPutsItBack(t *testing.T) {
 	chosen := setting(t, protocolLine, routes)
 	if (chosen == "http2") != strings.Contains(record, "- HTTP/2: ") || (chosen == "quic") != strings.Contains(record, "- QUIC stays: ") {
 		t.Errorf("deploy says %s and the record says otherwise:\n%s", chosen, record)
+	}
+
+	// A login for another lab than the one the test runs through: nothing
+	// is measured and the mini is asked nothing.
+	env, state = l.mini(l.url)
+	env = append(env, "LAB_ADDRESS=http://127.0.0.1:9")
+	if out, code := run(t, env, "", frontDoor(t, "fd15-transport"), "--lab", "--mini", "owner@mini", "--job", job); code == 0 || calls(t, state)[0] != "" || !strings.Contains(out, "not logged in to Omarchy Mac Lab at http://127.0.0.1:9") {
+		t.Errorf("a login for another address: exit %d, calls %v\n%s", code, calls(t, state), out)
 	}
 
 	// A tunnel that does not come up under HTTP/2 ends the run, and the
