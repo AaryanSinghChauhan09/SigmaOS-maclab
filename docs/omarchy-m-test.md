@@ -1,4 +1,6 @@
-# omarchy-m-testing
+# omarchy-m-test
+
+This page came with omarchy-m-testing and still describes it as it ran at omarchy-m-testing.org.
 
 Test every hardware feature of your Apple Silicon Mac under Omarchy, and share the results at [omarchy-m-testing.org](https://omarchy-m-testing.org).
 

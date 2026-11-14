@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Issues for this repo live as GitHub issues on `omacom/omarchy-maclab`, the only tracker. Use the `gh` CLI for all operations.
 
 ## Conventions
 

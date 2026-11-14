@@ -15,3 +15,21 @@ dist/
 
 # esprotation tests whose /tmp is tmpfs keep their archives here
 /internal/esprotation/.test-*/
+
+# Reports written by local runs of omarchy-m-test
+omarchy-m-test-report.json
+
+# A virtualenv for the Python tests
+/.venv/
+
+# The Rails reference
+/site/.bundle/
+/site/vendor/bundle/
+/site/log/*
+!/site/log/.keep
+/site/tmp/*
+!/site/tmp/.keep
+/site/storage/
+/site/config/master.key
+/site/config/credentials/*.key
+/site/.env*
