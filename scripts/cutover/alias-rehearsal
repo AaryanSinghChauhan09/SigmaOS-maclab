@@ -36,6 +36,10 @@
 #                         were entered, for the record ("nothing")
 #   --name LABEL          the throwaway label (alias-rehearsal)
 #   --issue-minutes N     how long to wait for the certificate (30)
+#   --settle-minutes N    how long the name stays up before its record goes,
+#                         counted from the mini taking it: labd looks at its
+#                         Alias as it starts and every 15 minutes, and tells
+#                         "Agents" only of an Alias it has seen active (16)
 #   --lapse-minutes N     how long to wait for the hostname to lapse (90)
 #   --alert-minutes N     how long after the record went labd may take to
 #                         tell "Agents": two looks, 15 minutes apart (45)
@@ -51,7 +55,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/front-door/lib.sh"
 # shellcheck source=scripts/cutover/visitor.sh
 . "$here/visitor.sh"
-usage() { sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,51p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 OLD_DOMAIN="omarchy-m-testing.org"
 CLOUD="$REPO/scripts/cloud"
@@ -61,6 +65,7 @@ token_file=""
 charged=""
 agents=""
 issue_minutes=30
+settle_minutes=16
 lapse_minutes=90
 alert_minutes=45
 every=30
@@ -69,7 +74,7 @@ fd_options "$@"
 set -- ${REST[@]+"${REST[@]}"}
 while (( $# )); do
   case "$1" in
-    --name | --token-file | --charged | --agents-line | --issue-minutes | --lapse-minutes | --alert-minutes | --every | --cloud | --fd13)
+    --name | --token-file | --charged | --agents-line | --issue-minutes | --settle-minutes | --lapse-minutes | --alert-minutes | --every | --cloud | --fd13)
       (( $# >= 2 )) || fail "$1 needs a value. Nothing was done."
       case "$1" in
         --name) label="$2" ;;
@@ -77,6 +82,7 @@ while (( $# )); do
         --charged) charged="$2" ;;
         --agents-line) agents="$2" ;;
         --issue-minutes) issue_minutes="$2" ;;
+        --settle-minutes) settle_minutes="$2" ;;
         --lapse-minutes) lapse_minutes="$2" ;;
         --alert-minutes) alert_minutes="$2" ;;
         --every) every="$2" ;;
@@ -90,7 +96,7 @@ while (( $# )); do
   shift
 done
 [[ $label =~ ^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$ && $label != www ]] || fail "--name $label is not a throwaway label, such as alias-rehearsal"
-for n in "$issue_minutes" "$lapse_minutes" "$alert_minutes" "$every"; do
+for n in "$issue_minutes" "$settle_minutes" "$lapse_minutes" "$alert_minutes" "$every"; do
   [[ $n =~ ^[0-9]{1,4}$ ]] || fail "\"$n\" is not a number of minutes"
 done
 (( every >= 1 )) || fail "--every takes at least 1 second"
@@ -117,7 +123,7 @@ $ME: dry run. Started with --lab by the owner, it would:
        no answer carries a cookie
        https://$THIRD: 404 at the tunnel
        $FD13 --lab: the Front door's test 13, still green on the Lab address
-  5. $CLOUD/rehearsal-record.sh --apply --remove: the name stops resolving; within $lapse_minutes minutes Cloudflare lets the hostname lapse; within $alert_minutes minutes "Agents" gets "The Alias is no longer active", which the owner confirms
+  5. once the name has been up $settle_minutes minutes, $CLOUD/rehearsal-record.sh --apply --remove: the name stops resolving; within $lapse_minutes minutes Cloudflare lets the hostname lapse; within $alert_minutes minutes "Agents" gets "The Alias is no longer active", which the owner confirms
   6. $CLOUD/alias.sh --apply --remove for both names, and ssh -t MINI sudo $MINI_SCRIPTS/rehearsal-alias deployed
   7. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-alias-rehearsal.md
 With --local it would start labd on this machine with the Alias $NAME and ask it on its socket: the forward, the refusal, no cookie, a third name refused.
@@ -384,6 +390,7 @@ fi
 # 3 and 4. The mini takes the name, and the name is asked.
 if (( issued )); then
   switched=1
+  taken="$(date +%s)"
   if mini_alias "$NAME" && lab_answers; then
     rec "the mini: the tunnel routes $NAME and labd was started with it as its Alias; the lab answers again at $LAB_URL"
     [[ -n $EDGE ]] || rec "TLS: curl verified the certificate of $NAME on every request below"
@@ -419,6 +426,11 @@ fi
 
 # 5. The record goes: the name stops resolving, the hostname lapses, the alert.
 if (( issued && switched )); then
+  left=$(( settle_minutes * 60 - ($(date +%s) - taken) ))
+  if (( left > 0 )); then
+    say "leaving the name up $((left / 60)) min $((left % 60)) s more, so that labd has looked at its Alias while it was active"
+    sleep "$left"
+  fi
   if cloud rehearsal-record.sh --apply --remove --name "$NAME" && cloud rehearsal-record.sh --apply --remove --name "$THIRD"; then
     removed="$(date +%s)"
     gone=0

@@ -80,7 +80,7 @@ func TestTheRehearsalsAndTheRecordingsDryRunsSendNothing(t *testing.T) {
 		"alias-rehearsal": {[]string{"--cloud", stubs}, []string{
 			"alias.sh --apply --name " + rehearsal, "rehearsal-record.sh --apply --name " + rehearsal, "nothing but the CNAME in place",
 			"rehearsal-alias " + rehearsal, "308 to the same path and query at " + labURL, plainLine, "fails and stores nothing", "no answer carries a cookie",
-			"https://" + third + ": 404 at the tunnel", "fd13-cache --lab", "lets the hostname lapse", "\"Agents\" gets \"The Alias is no longer active\"",
+			"https://" + third + ": 404 at the tunnel", "fd13-cache --lab", "once the name has been up 16 minutes", "lets the hostname lapse", "\"Agents\" gets \"The Alias is no longer active\"",
 			"alias.sh --apply --remove", "rehearsal-alias deployed", "alias-rehearsal.md",
 		}},
 		"dark-recordings": {nil, []string{
@@ -324,7 +324,7 @@ func (p *played) calls() string { return read(p.t, filepath.Join(p.state, "calls
 func (p *played) rehearse(args ...string) (out string, code int, record string) {
 	p.t.Helper()
 	all := append([]string{"--lab", "--mini", "owner@mini.example", "--token-file", filepath.Join(p.state, "token"), "--cloud", p.cloud,
-		"--fd13", filepath.Join(p.stubs, "fd13"), "--records", p.records, "--every", "1", "--alert-minutes", "0", "--issue-minutes", "1", "--lapse-minutes", "1"}, args...)
+		"--fd13", filepath.Join(p.stubs, "fd13"), "--records", p.records, "--every", "1", "--alert-minutes", "0", "--issue-minutes", "1", "--settle-minutes", "0", "--lapse-minutes", "1"}, args...)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
