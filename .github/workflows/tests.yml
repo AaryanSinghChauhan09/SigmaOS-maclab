@@ -223,3 +223,10 @@ jobs:
         env:
           LAB_TEST_POSTGRES: postgres://postgres:postgres@localhost:5432/omarchy_m_testing_test?sslmode=disable
         run: go test -count=1 -run TestTheReaderReadsARealPostgres ./internal/oldsite/pg
+      # The one verdict on the port: green here, and site/ and this job's Rails
+      # steps can be deleted. It runs every part again, in one go.
+      - name: The parity gate
+        working-directory: .
+        env:
+          LAB_TEST_POSTGRES: postgres://postgres:postgres@localhost:5432/omarchy_m_testing_test?sslmode=disable
+        run: scripts/parity-gate

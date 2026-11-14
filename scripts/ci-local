@@ -127,7 +127,7 @@ step_installer() {
   fi
   run "installer" env PATH="$gnu$PATH" installer/test.sh
   run "Lab release files" env PATH="$gnu$PATH" release/check.sh
-  run "release smoke against a labd started here, open" env PATH="$gnu$PATH" release/smoke-local.sh
+  run "release smoke against a labd started here, open" away env PATH="$gnu$PATH" release/smoke-local.sh
 }
 
 step_catalogue() {

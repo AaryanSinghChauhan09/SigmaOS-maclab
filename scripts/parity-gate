@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# The parity gate: what must be green before site/, the Rails reference, and
+# its CI job are deleted.
+#
+#   scripts/parity-gate
+#
+# 1. The table of the old site's 224 test cases names a Go test or a section
+#    of the spec for each (docs/acceptance/rails-cases.md).
+# 2. The Go tests that replaced them pass, with the corpus they share with
+#    the old site: the report rules, the 11 production reports and their
+#    builds, the public pages, the exports, Reports for Maintainers, /install.
+# 3. Rails itself judges, counts and renders that corpus, and the port
+#    agrees: verdicts, counts, the pinned elements of each page, the exports.
+#    Needs Postgres running and the Ruby of site/.ruby-version.
+# 4. The import of the old site's reports reads its three tables from the
+#    Postgres Rails made and from the committed SQL that takes over once
+#    site/ is gone. Needs the import (internal/oldsite) and Postgres.
+# 5. installer/test.sh, and release/smoke.sh against a labd started here.
+#
+# Exit status: 0 when every part ran and passed, 1 when one failed, 2 when
+# none failed and one could not run on this machine. Only 0 judges the
+# port: the tests workflow's "Rails reference" job runs this with everything
+# it needs. A part that cannot run is named, never counted as passed.
+set -uo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
+LOGS="$(mktemp -d "${TMPDIR:-/tmp}/parity-gate.XXXXXX")"
+N=0
+FAILED=0
+NOT_RUN=0
+
+run() {
+  local label="$1" log start=$SECONDS
+  shift
+  N=$((N + 1))
+  log="$LOGS/$N.log"
+  if "$@" >"$log" 2>&1; then
+    printf 'ok       %-78s %4ss\n' "$label" $((SECONDS - start))
+  else
+    FAILED=$((FAILED + 1))
+    printf 'FAIL     %-78s %4ss  %s\n' "$label" $((SECONDS - start)) "$log"
+    tail -n 40 "$log" | sed 's/^/           /'
+  fi
+}
+not_run() { NOT_RUN=$((NOT_RUN + 1)); printf 'not run  %-78s %s\n' "$1" "$2"; }
+in_dir() { ( cd "$1" && shift && "$@" ); }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Nothing started here reads or writes the files of whoever runs this.
+AWAY="$LOGS/home"
+mkdir -p "$AWAY"
+GO_FOLDERS=()
+for name in GOCACHE GOMODCACHE GOPATH GOENV; do GO_FOLDERS+=("$name=$(go env "$name")"); done
+away() {
+  env -u MACLAB_URL -u MACLAB_TOKEN -u MACLAB_BUILDER_TOKEN "${GO_FOLDERS[@]}" HOME="$AWAY" \
+    XDG_CONFIG_HOME="$AWAY/.config" XDG_STATE_HOME="$AWAY/.local/state" \
+    XDG_DATA_HOME="$AWAY/.local/share" XDG_CACHE_HOME="$AWAY/.cache" "$@"
+}
+
+if [[ ! -d site ]]; then
+  echo "parity-gate: site/ is gone: the gate was for deleting it" >&2
+  exit 2
+fi
+
+# 1 and 2.
+run "the 224 Rails cases: each held by a Go test that exists, or dropped by the spec" go test -count=1 -run TestEveryRailsCaseIsHeldOrDropped ./internal/repotest
+run "the port's tests: report rules, pages, exports, Reports for Maintainers, /install" away go test -count=1 -timeout 40m ./internal/reports ./internal/web ./internal/server ./internal/repotest ./installer
+run "the 11 production reports give their expected builds" go test -count=1 -run 'TestEveryOldReportIsOnTheBuildTheCLIDerives|TestEveryOldReportShowsTheBuildItWasOnAsTheCLIDerivesIt' ./internal/reports ./internal/server
+
+# 3.
+postgres=0
+if have pg_isready && pg_isready -q 2>/dev/null; then postgres=1; fi
+want_ruby="$(tr -d 'ruby-\n' < site/.ruby-version)"
+if (( postgres )) && have ruby && [[ "$(ruby -e 'print RUBY_VERSION')" == "$want_ruby" ]]; then
+  parity="$LOGS/report-parity"
+  pages="$LOGS/page-parity"
+  run "the port writes the corpus of reports both will judge" env REPORT_PARITY_DIR="$parity" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
+  run "the port writes the seeded corpus both will count and render" env PAGE_PARITY_DIR="$pages" go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
+  run "Rails: prepare the test database" in_dir site env RAILS_ENV=test bin/rails db:test:prepare
+  run "Rails: its own tests, judging, counting and rendering the corpus" in_dir site env RAILS_ENV=test REPORT_PARITY_DIR="$parity" PAGE_PARITY_DIR="$pages" bin/rails test
+  run "the port and Rails judge the corpus alike" env REPORT_PARITY_VERDICTS="$parity/rails-verdicts.jsonl" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
+  run "the port and Rails count the corpus alike" env PAGE_PARITY_AGGREGATION="$pages/rails-aggregation.json" go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
+  run "the port's pages pin what Rails' pages pin, and its exports are Rails'" env PAGE_PARITY_DIR="$pages" go test -count=1 -run 'TestThePagesPinWhatTheOldSitesPin|TestTheExportsAreTheOldSites' ./internal/server
+else
+  not_run "Rails judges, counts and renders the corpus, and the port agrees" "needs Postgres running and Ruby $want_ruby"
+fi
+
+# 4. The import's fixture: the committed SQL of the old site's three tables.
+fixture=internal/oldsite/pg/testdata/old-site.sql.gz
+if [[ ! -f $fixture ]]; then
+  not_run "the import reads the old site's three tables" "no $fixture: the import is not in this tree yet"
+else
+  run "the import's own tests, on the tables the committed SQL makes" away go test -count=1 ./internal/oldsite/...
+  if (( postgres )) && [[ -n ${LAB_TEST_POSTGRES:-} ]]; then
+    run "the import reads the three tables from the Postgres Rails made" env LAB_TEST_POSTGRES_SCHEMA=rails go test -count=1 -run TestTheReaderReadsARealPostgres ./internal/oldsite/pg
+    run "the import reads the three tables the committed SQL makes" go test -count=1 -run TestTheReaderReadsARealPostgres ./internal/oldsite/pg
+  else
+    not_run "the import reads a real Postgres: Rails' tables, then the committed SQL's" "needs Postgres running and LAB_TEST_POSTGRES naming a database"
+  fi
+fi
+
+# 5.
+gnu=""
+if [[ "$(uname -s)" != Linux ]]; then
+  for d in coreutils gnu-tar gnu-sed; do
+    [[ -d "/opt/homebrew/opt/$d/libexec/gnubin" ]] && gnu="/opt/homebrew/opt/$d/libexec/gnubin:$gnu"
+  done
+fi
+run "installer/test.sh" away env PATH="$gnu$PATH" installer/test.sh
+run "release/smoke.sh against a labd started here, open: install, upload, see, delete" away env PATH="$gnu$PATH" release/smoke-local.sh
+
+echo
+if (( FAILED )); then
+  echo "parity gate: RED, $FAILED failed. site/ stays. Logs: $LOGS"
+  exit 1
+fi
+if (( NOT_RUN )); then
+  echo "parity gate: NOT JUDGED, $NOT_RUN could not run on this machine and nothing that ran failed. site/ stays until every part has run green. Logs: $LOGS"
+  exit 2
+fi
+echo "parity gate: GREEN. The port passes its acceptance corpus: site/ and the Rails reference job can be deleted."
