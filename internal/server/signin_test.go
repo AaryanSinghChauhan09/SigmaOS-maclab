@@ -827,3 +827,63 @@ func TestSignInFilesAreReadAsTheSpecSaysSecretsAre(t *testing.T) {
 		}
 	}
 }
+
+// A form is judged by the session as it is when its body has come. Whoever
+// holds a stolen session and keeps a form open, its body unsent, changes
+// nothing by sending the body after the session was ended or its person
+// lost the role the form takes.
+func TestAFormHeldOpenAcrossACutChangesNothing(t *testing.T) {
+	for name, c := range map[string]struct {
+		cut    func(owner, ravi *browser)
+		status int
+	}{
+		"End all access": {func(owner, _ *browser) {
+			owner.did(personPath(maintainerID, "end-all-access"), "sure", "yes")
+		}, http.StatusSeeOther},
+		"Sign out everywhere": {func(_, ravi *browser) {
+			if w := ravi.form("/me/sign-out-everywhere", "sure", "yes"); w.Code != http.StatusSeeOther {
+				t.Fatalf("Sign out everywhere: %d %s", w.Code, w.Body)
+			}
+		}, http.StatusSeeOther},
+		"no longer a Maintainer": {func(owner, _ *browser) {
+			owner.did(personPath(maintainerID, "maintainer/remove"), "sure", "yes")
+		}, http.StatusNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, _ := lendLab(t)
+			l.t = t
+			owner, thief, ravi := l.signedIn(ownerID), l.signedIn(maintainerID), l.signedIn(maintainerID)
+			l.signedIn(graceID)
+			block := thief.heldForm(personPath(graceID, "block"), "sure", "yes", "reason", "held past the cut")
+			join := thief.heldForm("/lend/join-command", "model", lendModelID, "name", "held-mac")
+			c.cut(owner, ravi)
+			w := block()
+			if w.Code != c.status || (w.Code == http.StatusSeeOther && w.Header().Get("Location") != "/sign-in") {
+				t.Errorf("the People action's answer: %d to %q, want %d", w.Code, w.Header().Get("Location"), c.status)
+			}
+			if l.who(graceID).Blocked {
+				t.Errorf("a form sent after the cut Blocked a person")
+			}
+			if n := l.count(`SELECT count(*) FROM people_record WHERE note = 'held past the cut'`); n != 0 {
+				t.Errorf("the People record has %d lines for an action that was refused", n)
+			}
+			w = join()
+			if strings.Contains(w.Body.String(), "enr_") {
+				t.Errorf("a form sent after the cut shows a Join command")
+			}
+			if n := l.count(`SELECT count(*) FROM tokens WHERE name = 'held-mac'`); n != 0 && name != "no longer a Maintainer" {
+				t.Errorf("a form sent after the cut made %d Join commands", n)
+			}
+		})
+	}
+}
+
+// A slow form of a session that is still there does what it asks.
+func TestAHeldFormOfALiveSessionActs(t *testing.T) {
+	l := rolesLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(graceID)
+	if w := ravi.heldForm(personPath(graceID, "block"), "sure", "yes")(); w.Code != http.StatusSeeOther || !l.who(graceID).Blocked {
+		t.Errorf("a slow form of a live session: %d %s", w.Code, refusalIn(w.Body.String()))
+	}
+}

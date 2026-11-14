@@ -237,6 +237,10 @@ func (s *Server) hSignOut(w http.ResponseWriter, r *http.Request) {
 // CSRF token, in X-CSRF-Token or a form's csrf_token field; otherwise it
 // answers w and reports false. A request with its own credential in
 // Authorization is not the browser session's: the cookie is not read for it.
+//
+// A form is read whole before the session is looked up: a body held back is
+// then judged by the session and the person as they are when the body has
+// come, so a form let in before a cut does nothing after it.
 func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin string) (*http.Request, bool) {
 	if r.Header.Get("Authorization") != "" {
 		return r, true
@@ -245,24 +249,34 @@ func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin s
 	if err != nil || c.Value == "" {
 		return r, true
 	}
+	changes, form, read := true, false, false
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		changes = false
+	default:
+		if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "application/x-www-form-urlencoded" {
+			form = true
+			r.Body = http.MaxBytesReader(w, r.Body, formMax)
+			read = r.ParseForm() == nil
+		}
+	}
 	si := s.sessionOf(c.Value)
 	if si == nil {
 		return r, true
 	}
 	noteCaller(r, "person:"+si.Handle)
-	switch r.Method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
-	default:
+	if changes {
 		if !ownPage(r, origin) {
 			httpErr(w, 403, "refused: a signed-in browser changes things only from the lab's own pages at %s", origin)
 			return r, false
 		}
+		if form && !read {
+			httpErr(w, 400, "refused: the form could not be read, or is longer than the lab takes")
+			return r, false
+		}
 		token := r.Header.Get("X-CSRF-Token")
-		if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); token == "" && mt == "application/x-www-form-urlencoded" {
-			r.Body = http.MaxBytesReader(w, r.Body, formMax)
-			if r.ParseForm() == nil {
-				token = r.PostForm.Get("csrf_token")
-			}
+		if token == "" && form {
+			token = r.PostForm.Get("csrf_token")
 		}
 		if subtle.ConstantTimeCompare([]byte(token), []byte(si.csrf)) != 1 {
 			httpErr(w, 403, "refused: this page is out of date. Open it again and retry")
