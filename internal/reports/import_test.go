@@ -550,3 +550,23 @@ func TestAnOldDeletionLinkDeletesItsReportAndKeepsItsDigest(t *testing.T) {
 		}
 	}
 }
+
+// A handle that passed from one account to another: each Mac's reports are
+// the account that Mac is signed in as.
+func TestAReportsAccountIsTheOneItsOwnMacIsSignedInAs(t *testing.T) {
+	c := oldSite(t)
+	key := railsMachineIDKey(t, paritySecretKeyBase)
+	c.Bindings = append(c.Bindings, oldsite.TesterBinding{ID: 9, MachineID: oldsitetest.MachineID(key, "c"), GitHubLogin: "maralcbr", GitHubID: 8888,
+		CreatedAt: c.Bindings[0].CreatedAt, UpdatedAt: c.Bindings[0].UpdatedAt})
+	login := "maralcbr"
+	c.Report(t, oldsitetest.Hidden).TesterLogin = &login
+	d := newDesk(t)
+	if _, err := d.store.Carry(context.Background(), dumped(t, c)); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]int64{oldsitetest.Verified: 1001, oldsitetest.Hidden: 8888} {
+		if report, err := d.store.Report(id); err != nil || report.AccountID != want || report.Handle != "maralcbr" {
+			t.Errorf("%s: account %d, want %d (%v)", id, report.AccountID, want, err)
+		}
+	}
+}

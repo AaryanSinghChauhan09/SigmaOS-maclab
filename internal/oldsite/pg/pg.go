@@ -114,6 +114,7 @@ func Open(address string) (*Postgres, error) {
 		return nil, notOne
 	}
 	if !local {
+		// The modes that give none were refused above; this holds whatever the client makes of the rest.
 		if cfg.TLSConfig == nil {
 			return nil, sayf("the address turns TLS off: beyond this machine the old site's Postgres is read over TLS only")
 		}

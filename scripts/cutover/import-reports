@@ -1,0 +1,60 @@
+#!/bin/bash
+# The import of the old site's reports, on the mini, as the account labd
+# runs as (spec section 5; the Cutover's steps 11, 21 and 22):
+#
+#   import-reports [--data DIR] --machine-id-key FILE --public-key FILE DUMP
+#
+#   1. labd import dump: reads the old site's Postgres into DUMP. It asks
+#      for the Postgres address at its own prompt and does not show it.
+#      Skipped when DUMP is already there: the import then needs no Postgres.
+#   2. labd import load: fills an empty reports.db from DUMP.
+#   3. The three checks: the row counts; one Mac's machine id recomputed
+#      from its Machine public key (--public-key) under the machine-id key
+#      (--machine-id-key); a deletion link the old site issued, asked for
+#      at a prompt, deletes its report.
+#
+# It stops at the first step that fails. The Postgres address is no
+# argument of this script and none of labd's: an argument it does not know
+# is refused and never repeated.
+#
+# LABD names the labd to run (default: the Deployed one).
+
+set -euo pipefail
+
+labd="${LABD:-/usr/local/lab/current/bin/labd}"
+data=/var/lab/data
+key=""
+public=""
+dump=""
+
+usage() {
+  sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --data) [ $# -ge 2 ] || usage; data="$2"; shift 2 ;;
+    --machine-id-key) [ $# -ge 2 ] || usage; key="$2"; shift 2 ;;
+    --public-key) [ $# -ge 2 ] || usage; public="$2"; shift 2 ;;
+    -*) echo "import-reports: an option it does not take. Nothing was done." >&2; usage ;;
+    *)
+      if [ -n "$dump" ]; then
+        echo "import-reports: one dump file, and nothing else. Nothing was done." >&2
+        usage
+      fi
+      dump="$1"; shift ;;
+  esac
+done
+[ -n "$dump" ] && [ -n "$key" ] && [ -n "$public" ] || usage
+
+if [ -e "$dump" ]; then
+  echo "import-reports: $dump is there: the old site is not read again."
+else
+  "$labd" import dump --to "$dump"
+fi
+"$labd" import load --from "$dump" --data "$data"
+"$labd" import check counts --from "$dump" --data "$data"
+"$labd" import check machine-id --machine-id-key "$key" --public-key "$public" --data "$data"
+"$labd" import check deletion-link --data "$data"
+echo "import-reports: the import and its three checks passed."

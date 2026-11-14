@@ -362,6 +362,14 @@ ignored, and so are the Maintainer tokens (`mnt_...`) an older labd made.
 `labd break-glass`, run on the server as the account labd runs as, mints a
 Lab token for a named person when nothing else gets in.
 
+`labd import` carries the old site's reports into the lab, once, on the
+server (`scripts/cutover/import-reports` runs it whole). `labd import dump
+--to FILE` reads the old site's Postgres into one file: it asks for the
+Postgres address at a prompt and does not show it, and takes it from no
+argument, variable or file. `labd import load --from FILE` fills an empty
+`reports.db` from that file alone, and `labd import check` runs the three
+checks the copy is accepted by.
+
 labd listens on `127.0.0.1:7770` unless told otherwise. Plain http on any other
 address, such as `--listen <tailnet-ip>:7770` for Macs over Tailscale, needs
 `--allow-plain-http`: tokens and device secrets then cross that network in the

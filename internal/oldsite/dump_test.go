@@ -253,3 +253,29 @@ func TestADumpWhoseRowsAreNotTheSourcesCountIsRefused(t *testing.T) {
 		t.Error("the dump was kept")
 	}
 }
+
+// taking is a source during whose read another run takes the dump's name.
+type taking struct {
+	*tables
+	path string
+}
+
+func (s taking) Read(ctx context.Context, sink Sink) (Counts, error) {
+	if err := os.WriteFile(s.path, []byte("another run's dump"), 0o600); err != nil {
+		return Counts{}, err
+	}
+	return s.tables.Read(ctx, sink)
+}
+
+func TestADumpDoesNotTakeANameTakenWhileItWasWritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-site.dump")
+	if _, err := WriteDump(context.Background(), path, taking{sample(t), path}, taken); err == nil {
+		t.Fatal("the dump took the name")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "another run's dump" {
+		t.Errorf("the other run's file was replaced: %q", got)
+	}
+	if _, err := os.Stat(path + ".part"); !os.IsNotExist(err) {
+		t.Error("the part file is still there")
+	}
+}

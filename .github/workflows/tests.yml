@@ -208,3 +208,16 @@ jobs:
         env:
           PAGE_PARITY_DIR: ${{ runner.temp }}/page-parity
         run: go test -count=1 -run 'TestThePagesPinWhatTheOldSitesPin|TestTheExportsAreTheOldSites' ./internal/server
+      # The import of the old site's reports, against the tables Rails made and
+      # then against the committed SQL, which takes over when site/ is deleted.
+      - name: The import reads the three tables from the Postgres Rails made
+        working-directory: .
+        env:
+          LAB_TEST_POSTGRES: postgres://postgres:postgres@localhost:5432/omarchy_m_testing_test?sslmode=disable
+          LAB_TEST_POSTGRES_SCHEMA: rails
+        run: go test -count=1 -run TestTheReaderReadsARealPostgres ./internal/oldsite/pg
+      - name: The import reads the three tables the committed SQL makes
+        working-directory: .
+        env:
+          LAB_TEST_POSTGRES: postgres://postgres:postgres@localhost:5432/omarchy_m_testing_test?sslmode=disable
+        run: go test -count=1 -run TestTheReaderReadsARealPostgres ./internal/oldsite/pg

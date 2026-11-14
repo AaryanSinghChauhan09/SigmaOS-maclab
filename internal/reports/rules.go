@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strings"
 
 	"github.com/omacom/omarchy-maclab/catalogue"
 	"github.com/omacom/omarchy-maclab/schema"
@@ -61,8 +62,12 @@ func (r *Rules) SchemaErrors(document any) []string { return r.schema.Errors(doc
 func (r *Rules) MachineID(key MachineKey) string { return MachineID(r.machineIDKey, key) }
 
 // MachineIDOf is the machine id of a Mac's Machine public key, written as
-// the Mac writes it: "ssh-ed25519" and the key in base64.
+// the Mac writes it: "ssh-ed25519" and the key in base64, with or without
+// the comment a .pub file ends in.
 func (r *Rules) MachineIDOf(publicKey string) (string, error) {
+	if fields := strings.Fields(publicKey); len(fields) > 2 {
+		publicKey = fields[0] + " " + fields[1]
+	}
 	key, err := parsePublicKey(publicKey)
 	if err != nil {
 		return "", errors.New("that is not a Machine public key: one reads ssh-ed25519 AAAA...")
