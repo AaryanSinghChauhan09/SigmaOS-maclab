@@ -59,7 +59,15 @@ case "$1" in
         *)
           sleep 1.2
           rm -f "$GATE/vm"
-          { echo "==> fetch https://github.com/o/linux-aurora 0123"; [[ $outcome == fetch ]] || printf '==> checkout\n==> configure\n==> build (10 cpus)\n'; echo "$(cat "$GATE/says.$outcome" 2>/dev/null || echo 'make: *** Error 2')"; } > "$GATE/log.$id"
+          {
+            case "$outcome" in
+              stale) ;;
+              fetch) echo "==> fetch https://github.com/o/linux-aurora 0123" ;;
+              config) printf '==> fetch https://github.com/o/linux-aurora 0123\n==> checkout\n==> configure\n' ;;
+              *) printf '==> fetch https://github.com/o/linux-aurora 0123\n==> checkout\n==> configure\n==> build (10 cpus)\n' ;;
+            esac
+            cat "$GATE/says.$outcome" 2>/dev/null || echo 'make: *** Error 2'
+          } > "$GATE/log.$id"
           echo "$id  failed  src" > "$GATE/row.$id" ;;
       esac
     ) > /dev/null 2>&1 &
@@ -90,7 +98,7 @@ const gatePsStub = `#!/bin/bash
 [[ -f $GATE/vm ]] || { echo "  4096 /sbin/launchd"; exit 0; }
 cores="$(cat "$GATE/vm.cores" 2>/dev/null || sed -n 's/.*<string>--cpus<\/string><string>\([0-9]*\)<.*/\1/p' "$LAB_SYSROOT/Library/LaunchDaemons/org.omarchy-mac.lab.builder.plist")"
 echo "  4096 /sbin/launchd"
-echo "  9000 /usr/local/bin/container run --rm --name maclab-$(cat "$GATE/vm") --cpus $cores --memory 16G -v maclab-cache:/cache -e URL=https://github.com/o/r -v /tmp/io:/io maclab-kbuild:1"
+echo "  9000 /usr/local/bin/container run --rm --name maclab-$(cat "$GATE/vm") --cpus $cores --memory 16G -v maclab-cache:/cache -e URL=https://github.com/o/r -v /usr/local/lab/io/b1/in:/in -v /usr/local/lab/io/b1/io:/io maclab-kbuild:1"
 echo "$(cat "$GATE/vm_kb") /System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"
 `
 
@@ -124,6 +132,7 @@ case "$1" in
     case "$1 $2" in
       "volume delete" | "volume create") [[ ! -f $GATE/volume.fails ]] ;;
       "volume inspect") printf '[{"name":"%s","source":"%s"}]\n' "$3" "$GATE/$3.img" ;;
+      "image inspect") [[ ! -f $GATE/no.$3 ]] ;;
       *) exit 64 ;;
     esac ;;
   *) exit 64 ;;
@@ -251,6 +260,7 @@ func newGate(t *testing.T) *gate {
 		filepath.Join(mini, "usr/local/lab/container-user"):                            me.Username + "\n",
 		filepath.Join(mini, "Library/LaunchDaemons/org.omarchy-mac.lab.builder.plist"): "    <string>--cpus</string><string>10</string>\n",
 		filepath.Join(mini, "var/lab/data/artifacts/keep"):                             "",
+		filepath.Join(mini, "usr/local/lab/io/keep"):                                   "",
 	}
 	for path, text := range files {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -421,22 +431,35 @@ func TestMissedAtSixCoresTheGateTestStopsForTheOwner(t *testing.T) {
 	}
 }
 
-// A build that fails is a failed run too: the package build breaks at 10
-// cores and is built at 8.
-func TestAFailedBuildDropsTheCoresToo(t *testing.T) {
+// A build that breaks while compiling is a failed run too, and the run's
+// other builds are not asked for: the same again at 8 cores.
+func TestABuildThatBreaksWhileCompilingDropsTheCoresToo(t *testing.T) {
 	t.Parallel()
-	g := newGate(t)
-	g.set("outcome.10.3", "oom\n")
-	g.set("says.oom", "clang: error: unable to execute command: Killed\n")
-	out, code := g.run()
-	if code != 0 || g.cores() != "8" {
-		t.Fatalf("exit %d, deploy/builder-cpus %s\n%s", code, g.cores(), out)
-	}
-	wants(t, "the record", g.record(),
-		"the package build (build b1115-000003-abcd): failed after ", "in its build stage",
-		"missed at 10 (failed: see the record). It runs again at 8 cores a build.", "At 8 cores a build:", "Result: pass")
-	if files, _ := filepath.Glob(filepath.Join(g.records, "*network*")); len(files) != 0 {
-		t.Errorf("a build that failed while compiling was taken for a network failure: %v", files)
+	for name, c := range map[string]struct {
+		outcome, says string
+		kernels       int
+	}{
+		"the package build":     {"outcome.10.3", "the package build (build b1115-000003-abcd): failed after ", 4},
+		"the cold kernel build": {"outcome.10.1", "the cold kernel build (build b1115-000001-abcd): failed after ", 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			g := newGate(t)
+			g.set(c.outcome, "oom\n")
+			g.set("says.oom", "clang: error: unable to execute command: Killed\n")
+			out, code := g.run()
+			if code != 0 || g.cores() != "8" {
+				t.Fatalf("exit %d, deploy/builder-cpus %s\n%s", code, g.cores(), out)
+			}
+			wants(t, "the record", g.record(), c.says, "in its build stage",
+				"missed at 10 (failed: see the record). It runs again at 8 cores a build.", "At 8 cores a build:", "Result: pass")
+			if calls := g.calls("calls"); strings.Count(calls, "lab build ") != c.kernels || strings.Count(calls, "lab package ") != c.kernels/2 {
+				t.Errorf("after a failed build the run's other builds were asked for, or the next run's were not:\n%s", calls)
+			}
+			if files, _ := filepath.Glob(filepath.Join(g.records, "*network*")); len(files) != 0 {
+				t.Errorf("a build that failed while compiling was taken for a network failure: %v", files)
+			}
+		})
 	}
 }
 
@@ -524,7 +547,13 @@ func TestWhatCannotBeMeasuredDecidesNothing(t *testing.T) {
 		"the cold cache":      {func(g *gate) { g.set("volume.fails", "") }, "the mini did not get ready for the builds at 10 cores"},
 		"the watch gone":      {func(g *gate) { g.set("watch.dies", "") }, "the watch on the mini ended while the cold kernel build ran"},
 		"other cores":         {func(g *gate) { g.set("vm.cores", "4\n") }, "the Builder gave the cold kernel build 4 cores, not 10"},
-		"a refused build":     {func(g *gate) { g.set("refuse", "M team builds are not open yet") }, "the cold kernel build could not be asked for: lab: M team builds are not open yet"},
+		"an image missing":    {func(g *gate) { g.set("no.maclab-pkgbuild:1", "") }, "the mini did not get ready for the builds at 10 cores"},
+		"a stale image": {func(g *gate) {
+			g.set("outcome.10.1", "stale\n")
+			g.set("says.stale", "kbuild: /in/config: No such file or directory\n")
+		}, "the cold kernel build (build b1115-000001-abcd) failed after "},
+		"a refused config": {func(g *gate) { g.set("outcome.10.2", "config\n") }, "the warm rebuild (build b1115-000002-abcd) failed after "},
+		"a refused build":  {func(g *gate) { g.set("refuse", "M team builds are not open yet") }, "the cold kernel build could not be asked for: lab: M team builds are not open yet"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

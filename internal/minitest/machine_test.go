@@ -104,6 +104,10 @@ const machinePsStub = `#!/bin/bash
 s="$STUB_STATE/machine"
 if [[ "$*" == "-o user= -p "* ]]; then
   cat "$s/user.$4" 2>/dev/null || exit 1
+elif [[ -f $s/ps.once ]]; then
+  # One look that sees something else than the next.
+  cat "$s/ps.once"
+  rm -f "$s/ps.once"
 else
   cat "$s/ps" 2>/dev/null || printf '/sbin/launchd\n/usr/local/lab/current/bin/labd --listen 127.0.0.1:7770 --oobd-token-file /var/lab/secrets/oobd.token\n'
 fi

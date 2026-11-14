@@ -45,7 +45,7 @@ const vmProcess = "/System/Library/Frameworks/Virtualization.framework/Versions/
 // building is the process list while the Builder's VM for build id is up,
 // its processes holding the given kB.
 func building(id, cores string, kb ...int) string {
-	text := "  4096 /sbin/launchd\n  9000 /usr/local/bin/container run --rm --name maclab-" + id + " --cpus " + cores + " --memory 16G -v maclab-cache:/cache -e URL=https://github.com/o/r -v /tmp/io:/io maclab-kbuild:1\n"
+	text := "  4096 /sbin/launchd\n  9000 /usr/local/bin/container run --rm --name maclab-" + id + " --cpus " + cores + " --memory 16G -v maclab-cache:/cache -e URL=https://github.com/o/r -v /usr/local/lab/io/b/in:/in -v /usr/local/lab/io/b/io:/io maclab-kbuild:1\n"
 	for _, n := range kb {
 		text += fmt.Sprintf("%d %s\n", n, vmProcess)
 	}
@@ -63,7 +63,10 @@ func watchedMini(t *testing.T) *mini {
 	m.ok("setup", "--release-key", k.signers)
 	m.ok("setup", "--container-user", account(t))
 	m.builderBuild("v0.2.0")
-	m.ok("setup", "--builder-token", tokenFile(t, madeUpToken+"\n", 0o600))
+	m.ok("setup", "--builder-rootfs", rootfs(t), "--builder-token", tokenFile(t, madeUpToken+"\n", 0o600))
+	if !exists(filepath.Join(filepath.Dir(m.root), "state", "loaded."+builderLabel)) {
+		t.Fatal("the set-up did not start the Builder")
+	}
 	write(t, filepath.Join(m.tools, "vm_stat"), watchVMStat, 0o755)
 	write(t, filepath.Join(m.tools, "pfctl"), watchPfctl, 0o755)
 	write(t, filepath.Join(m.tree, "scripts", "mini", "page-times"), watchPageTimes, 0o755)
@@ -174,7 +177,10 @@ func TestTheBuildWatchGivesTheCoresEmptiesTheCacheAndWatchesEachBuild(t *testing
 	m.set("ps", building("b1115-000001-abcd", "8", 5000000, 1000000))
 	until(t, "the first page times", said("page-times"))
 	m.set("ps", building("b1115-000001-abcd", "8", 7000000, 1500000))
-	time.Sleep(1200 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
+	// One look that finds no VM ends no build.
+	m.set("ps.once", idle)
+	time.Sleep(600 * time.Millisecond)
 	m.set("ps", building("b1115-000001-abcd", "8", 2000000))
 	time.Sleep(600 * time.Millisecond)
 	m.set("ps", building("b1115-000002-abcd", "8", 3000000))
@@ -260,6 +266,31 @@ func TestTheBuildWatchGivesTheCoresEmptiesTheCacheAndWatchesEachBuild(t *testing
 	}
 	if calls := m.calls(); strings.Contains(calls, "bootstrap") || strings.Contains(calls, "volume delete") || strings.Contains(calls, "volume create") {
 		t.Errorf("without --cold and at its cores the watch changed something:\n%s", calls)
+	}
+
+	// A set-up that leaves the Builder its cores: no build is waited for.
+	real := read(t, filepath.Join(m.tree, "scripts", "mini", "setup"))
+	write(t, filepath.Join(m.tree, "scripts", "mini", "setup"), "#!/bin/bash\necho 'setup: nothing to change'\n", 0o755)
+	if out := m.refused("build-watch", "--cpus", "6", "--builds", "1", "--wait", "1"); !strings.Contains(out, "the Builder does not run with 6 cores a build after the set-up") || strings.Contains(out, "@gate ready") {
+		t.Errorf("with a set-up that changed nothing it said:\n%s", out)
+	}
+	write(t, filepath.Join(m.tree, "scripts", "mini", "setup"), real, 0o755)
+
+	// What lab-builder builds with is looked for too: its scratch folder
+	// and its two images.
+	os.Remove(m.state("image.maclab-kbuild:1"))
+	if out := m.refused("build-watch", "--cpus", "8", "--builds", "1", "--wait", "1"); !strings.Contains(out, "the Builder's image maclab-kbuild:1 is not there") || strings.Contains(out, "@gate ready") {
+		t.Errorf("with an image missing it said:\n%s", out)
+	}
+	m.touch("image.maclab-kbuild:1")
+	if err := os.Rename(m.path("usr/local/lab/io"), m.path("usr/local/lab/io.away")); err != nil {
+		t.Fatal(err)
+	}
+	if out := m.refused("build-watch", "--cpus", "8", "--builds", "1", "--wait", "1"); !strings.Contains(out, "the Builder's scratch folder") || strings.Contains(out, "@gate ready") {
+		t.Errorf("with no scratch folder it said:\n%s", out)
+	}
+	if err := os.Rename(m.path("usr/local/lab/io.away"), m.path("usr/local/lab/io")); err != nil {
+		t.Fatal(err)
 	}
 
 	// What the test reads at its end is read before the first build: a

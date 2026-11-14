@@ -29,7 +29,9 @@
 # volume stays inside its size. If not, the same again at 8 cores a build,
 # then at 6 (front-door/settle cores holds the rule). The cores that passed
 # are written in deploy/builder-cpus. When 6 does not pass either it stops
-# for the owner with status 3, and nothing is written.
+# for the owner with status 3, and nothing is written. Only a build that
+# broke while compiling counts as a failed run: one that failed before that
+# ends the test with status 1 and nothing decided.
 #
 # A build that cannot reach the internet, as container's VMs once could
 # not, stops the run at once with status 3: fewer cores do not mend that.
@@ -56,7 +58,7 @@
 set -euo pipefail
 # shellcheck source=scripts/cutover/front-door/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/front-door/lib.sh"
-usage() { sed -n '2,55p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,57p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 RESULTS_NAME=builder-gate.results
 # How often labd is asked for a build's state, how long the mini may take
@@ -314,7 +316,14 @@ build() {
       await "build $k end id=$id " 60 || true
       network_stop "$k" "$id" "$title" "$stage"
     fi
-    rec "$title (build $id): $state after $seconds s, in its ${stage:-first} stage"
+    # Fewer cores can mend a build that broke while compiling or packing,
+    # and nothing else: not a source it could not check out, a config it
+    # refused or an image that cannot read its input.
+    case "$stage" in
+      build | package) ;;
+      *) give_up "$title (build $id) $state after $seconds s in its ${stage:-first} stage, before it compiled anything: fewer cores do not mend that, so nothing was decided. lab build-log $id says why. A build that could not read its input was built by an image older than the Deployed build: delete the Builder's two images on the mini and run the set-up there" ;;
+    esac
+    rec "$title (build $id): $state after $seconds s, in its $stage stage"
     return 0
   fi
 
@@ -324,7 +333,7 @@ build() {
   [[ "$(said "build $k begin " cpus)" == "$CORES" ]] || give_up "the Builder gave $title $(said "build $k begin " cpus) cores, not $CORES"
   row="$("$LAB_CMD" builds 2> /dev/null | awk -v id="$id" '$1 == id && !seen { print $NF; seen = 1 }' || true)"
   labd_time=""
-  [[ ! $row =~ ^[0-9hms.]+$ ]] || labd_time=", $row by labd's"
+  [[ ! $row =~ ^([0-9]+h)?([0-9]+m)?[0-9]+(\.[0-9]+)?s$ ]] || labd_time=", $row by labd's"
   peak="$(said "build $k end " vm_peak_kb)"
   if [[ $peak =~ ^[1-9][0-9]*$ ]]; then
     peak="the VM's process held $(gb "$peak") GB at most"
@@ -438,7 +447,11 @@ while :; do
       ;;
     4)
       rec "$(sed -n 's/^settle: not settled: //p' "$WORK/settle")"
-      if [[ $n == 10 ]]; then n=8; else n=6; fi
+      case "$n" in
+        10) n=8 ;;
+        8) n=6 ;;
+        *) give_up "the rule asked for another run after the one at 6 cores" ;;
+      esac
       ;;
     3)
       rec "$(sed -n 's/^settle: STOP: /STOPPED: /p' "$WORK/settle")"
