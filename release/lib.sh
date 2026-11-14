@@ -22,6 +22,14 @@ gnu_tools() {
 # pack PARENT NAME EPOCH: PARENT/NAME as a tarball on stdout, the same bytes every time.
 pack() { tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$3" -C "$1" -cf - "$2" | gzip -9n; }
 
+# sha256: the checksum of standard input.
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | awk '{ print $1 }'
+}
+
+# macho_arm64 FILE: whether FILE is a program for macOS on arm64.
+macho_arm64() { [[ "$(od -An -tx1 -N8 "$1" 2>/dev/null | tr -d ' \n')" == cffaedfe0c000001 ]]; }
+
 # release_key FILE: the key of an allowed_signers file, as "type base64".
 release_key() { awk '!/^#/ && NF { print $(NF-1), $NF; exit }' "$1"; }
 

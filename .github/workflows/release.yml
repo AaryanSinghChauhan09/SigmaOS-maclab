@@ -4,6 +4,8 @@ name: Release
 # Release candidate. The tag is the one number, stamped into omarchy-m-test,
 # lab and labd.
 #
+# "reset-tool" builds the mini's reset tool on macOS, from the source
+# deploy/pins names, and nothing else; no other file is built there.
 # "build" tests and builds every file with no secret. "publish" runs in the
 # environment "release" (the owner as required reviewer, v* tags only), so it
 # waits for the owner's approval: only then is the release key read, lab-agent
@@ -22,8 +24,23 @@ permissions:
   contents: read
 
 jobs:
+  reset-tool:
+    name: Build the reset tool
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build omacom/macvdmtool at its pinned commit and checksum
+        run: release/reset-tool.sh "$RUNNER_TEMP/reset-tool"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reset-tool
+          path: ${{ runner.temp }}/reset-tool/macvdmtool
+          if-no-files-found: error
+
   build:
     name: Build
+    needs: reset-tool
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -53,8 +70,14 @@ jobs:
           echo "OMARCHY_GPU_BINARY_DIR=$RUNNER_TEMP/gpu-benchmark" >> "$GITHUB_ENV"
       - name: Check every file of a Lab release
         run: release/check.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: reset-tool
+          path: ${{ runner.temp }}/reset-tool
       - name: Build
-        run: LAB_RELEASE="$GITHUB_REF_NAME" release/build.sh dist
+        run: LAB_RELEASE="$GITHUB_REF_NAME" RESET_TOOL="$RUNNER_TEMP/reset-tool/macvdmtool" release/build.sh dist
+      - name: The bundle carries the reset tool
+        run: tar -tzf dist/lab-server-darwin-arm64.tar.gz | grep -qx lab-server/bin/macvdmtool
       - name: One file, so the modes survive
         run: tar -cf lab-release.tar -C dist .
       - uses: actions/upload-artifact@v4

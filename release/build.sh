@@ -18,12 +18,17 @@
 # RELEASE_ALLOWED_SIGNERS is the allowed_signers file whose key lab-agent
 # carries (default: release/allowed_signers, the release key).
 #
+# RESET_TOOL is the reset tool as release/reset-tool.sh built it on macOS;
+# it goes into the bundle as bin/macvdmtool. Without it the bundle has none
+# and its Out-of-band controller refuses every reset: the release workflow
+# always gives one.
+#
 # The tarball unpacks with bin/, the omarchy_m_test package (the feature
 # catalogue bundled as omarchy_m_test/catalogue.json, Asahi's reference kernel
 # config as omarchy_m_test/asahi-kernel/, omarchy-mac's check scripts under
 # omarchy_m_test/vendor/, the on-screen video check under
 # omarchy_m_test/testcard/) and VERSION. The bundle holds bin/ (labd, oobd and
-# lab-builder for the mini, the lab-agent handed to Macs), builder/, deploy/,
+# lab-builder for the mini, the reset tool, the lab-agent handed to Macs), builder/, deploy/,
 # scripts/mini/, VERSION (the tag) and NOTES (the fixed lines of this
 # number's release notes, from release/notes/X.Y.Z.txt). release/check.sh
 # checks a built one. Signing happens separately (release/sign.sh), so this
@@ -41,6 +46,10 @@ tag="${LAB_RELEASE:-}"
 if [[ -n $tag ]]; then
   [[ $tag =~ $RELEASE_TAG ]] || die "$tag is not a Lab release's tag (vX.Y.Z or vX.Y.Z-rc.N)"
   version="${tag#v}"
+fi
+tool="${RESET_TOOL:-}"
+if [[ -n $tool ]]; then
+  macho_arm64 "$tool" || die "RESET_TOOL ($tool) is not a program for macOS on arm64"
 fi
 signers="${RELEASE_ALLOWED_SIGNERS:-$repo/release/allowed_signers}"
 key="$(release_key "$signers")"
@@ -94,6 +103,11 @@ rm -rf "$out/.stage"
 server="$out/.stage/lab-server"
 mkdir -p "$server"
 make -s -C "$repo" release-binaries RELEASE_OUT="$out" LAB_RELEASE="${tag:-dev}" RELEASE_KEY="$key"
+if [[ -n $tool ]]; then
+  install -m 0755 "$tool" "$server/bin/macvdmtool"
+else
+  echo "release/build.sh: no RESET_TOOL: this bundle has no reset tool" >&2
+fi
 printf '%s\n' "${tag:-dev}" > "$server/VERSION"
 cat "$repo/release/notes/${version%%-rc.*}.txt" 2>/dev/null > "$server/NOTES" || true
 install -m 0644 "$repo/LICENSE" "$repo/THIRD_PARTY_NOTICES.md" "$server/"

@@ -23,9 +23,26 @@ func TestReleaseWorkflow(t *testing.T) {
 	if strings.Contains(wf, "self-hosted") {
 		t.Error("a self-hosted runner")
 	}
-	for _, m := range regexp.MustCompile(`runs-on: *(.*)`).FindAllStringSubmatch(wf, -1) {
+	// One macOS runner builds only the reset tool; one arm64 Linux runner
+	// builds every other file.
+	tool, rest, ok := strings.Cut(wf, "\n  build:\n")
+	if !ok || !strings.Contains(tool, "\n  reset-tool:\n") {
+		t.Fatal("no reset-tool job before the build job")
+	}
+	if runs := regexp.MustCompile(`runs-on: *(.*)`).FindAllStringSubmatch(tool, -1); len(runs) != 1 || runs[0][1] != "macos-15" {
+		t.Errorf("the reset tool is built on %v, want one macOS runner", runs)
+	}
+	if steps := regexp.MustCompile(`(?m)^ +run: *(.*)$`).FindAllStringSubmatch(tool, -1); len(steps) != 1 || steps[0][1] != `release/reset-tool.sh "$RUNNER_TEMP/reset-tool"` {
+		t.Errorf("the macOS runner runs %v: it builds only the reset tool", steps)
+	}
+	for _, s := range []string{"setup-go", "setup-python", "release/build.sh", "make ", "brew "} {
+		if strings.Contains(tool, s) {
+			t.Errorf("the reset-tool job has %q: the macOS runner builds only the reset tool", s)
+		}
+	}
+	for _, m := range regexp.MustCompile(`runs-on: *(.*)`).FindAllStringSubmatch(rest, -1) {
 		if m[1] != "ubuntu-24.04-arm" {
-			t.Errorf("runs-on %s: one arm64 Linux runner builds every file", m[1])
+			t.Errorf("runs-on %s: one arm64 Linux runner builds every file but the reset tool", m[1])
 		}
 	}
 	for _, m := range regexp.MustCompile(`secrets\.(\w+)`).FindAllStringSubmatch(wf, -1) {
@@ -45,7 +62,9 @@ func TestReleaseWorkflow(t *testing.T) {
 	}
 	for _, s := range []string{
 		"release/check.sh",
-		`LAB_RELEASE="$GITHUB_REF_NAME" release/build.sh`,
+		`LAB_RELEASE="$GITHUB_REF_NAME" RESET_TOOL="$RUNNER_TEMP/reset-tool/macvdmtool" release/build.sh`,
+		"    needs: reset-tool\n",
+		"grep -qx lab-server/bin/macvdmtool",
 		`git merge-base --is-ancestor HEAD origin/main`,
 	} {
 		if !strings.Contains(build, s) {

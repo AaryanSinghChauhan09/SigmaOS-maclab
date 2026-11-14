@@ -11,9 +11,11 @@
 #     unpacked;
 #   - lab is there for macOS arm64, Linux arm64 and Linux x86-64 and says the tag;
 #   - the server bundle holds labd, oobd and lab-builder for the mini, the
-#     lab-agent handed to Macs with its own signature and the release key
-#     pinned inside it, and the builder/, deploy/ and scripts/mini/ files,
-#     and none of the commands that are not shipped;
+#     reset tool it was given, byte for byte, the lab-agent handed to Macs
+#     with its own signature and the release key pinned inside it, and the
+#     builder/, deploy/ and scripts/mini/ files, and none of the commands
+#     that are not shipped; a reset tool that is no macOS arm64 program is
+#     refused before anything is built;
 #   - every file has a signature the release key verifies, a changed file or a
 #     file signed by another key is refused, and a tag that is not a Lab
 #     release's is refused before anything is built.
@@ -39,7 +41,14 @@ for bad in v7.8 7.8.9 v7.8.9-rc v7.8.9-beta.1 "v7.8.9-rc.1 " latest; do
 done
 [[ ! -e $t/refused/lab-linux-arm64 ]] || fail "a refused tag still built something"
 
-LAB_RELEASE="$tag" RELEASE_ALLOWED_SIGNERS="$t/allowed_signers" "$repo/release/build.sh" "$t/dist" >/dev/null
+# The reset tool is built on macOS alone; what stands in for it here has a
+# macOS arm64 program's first bytes and nothing else.
+printf '\xcf\xfa\xed\xfe\x0c\x00\x00\x01 not the reset tool\n' > "$t/macvdmtool"
+printf '#!/bin/sh\n' > "$t/script"
+if LAB_RELEASE="$tag" RESET_TOOL="$t/script" "$repo/release/build.sh" "$t/refused" >/dev/null 2>&1; then fail "took a script for the reset tool"; fi
+[[ ! -e $t/refused/lab-linux-arm64 ]] || fail "a refused reset tool still built something"
+
+LAB_RELEASE="$tag" RELEASE_ALLOWED_SIGNERS="$t/allowed_signers" RESET_TOOL="$t/macvdmtool" "$repo/release/build.sh" "$t/dist" >/dev/null
 for f in "${RELEASE_FILES[@]}"; do
   [[ -s $t/dist/$f ]] || fail "the build left no $f"
 done
@@ -141,6 +150,8 @@ bundle_check() { # bundle_check DIR: the unpacked bundle under DIR
     [[ -x $s/bin/$f ]] || fail "the bundle has no executable bin/$f"
     [[ "$(platform "$s/bin/$f")" == "darwin arm64" ]] || fail "the bundle's $f was built for $(platform "$s/bin/$f")"
   done
+  [[ -x $s/bin/macvdmtool ]] || fail "the bundle has no executable bin/macvdmtool"
+  cmp -s "$t/macvdmtool" "$s/bin/macvdmtool" || fail "the bundle's reset tool is not the one it was given"
   [[ -x $s/bin/lab-agent-linux-arm64 ]] || fail "the bundle has no executable bin/lab-agent-linux-arm64"
   [[ "$(platform "$s/bin/lab-agent-linux-arm64")" == "linux arm64" ]] || fail "the bundle's lab-agent was built for $(platform "$s/bin/lab-agent-linux-arm64")"
   stamped "$s/bin/labd" "$tag" || fail "labd doesn't carry $tag"
