@@ -19,9 +19,9 @@ import (
 //
 // An agent.json without allow_plain_http was written by a lab-agent from
 // before https support, every one of which talked plain http to labd. Such a
-// Mac keeps doing so, with a warning: lab-agent has no self-update, and a
-// new binary refusing the URL its Mac was set up with would leave the Mac
-// unreachable until someone ran setup at it. That is the one exception to
+// Mac keeps doing so, with a warning: a new binary refusing the URL its Mac
+// was set up with would leave the Mac unreachable until someone ran setup
+// at it. That is the one exception to
 // "plain http reaches loopback only"; setup turns it into an explicit choice.
 
 // transportPolicy is cfg's labhttp policy, and whether it allows plain http

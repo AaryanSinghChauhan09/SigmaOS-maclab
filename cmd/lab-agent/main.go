@@ -195,6 +195,9 @@ func main() {
 		if cfg, err = agent.LoadConfig(filepath.Join(dir, "agent.json")); err != nil {
 			break
 		}
+		// A simulated Mac never touches the lab-agent installed on the
+		// machine it runs on: its own is a file in its folder.
+		cfg.Self = &agent.Self{Path: filepath.Join(dir, "lab-agent"), Restart: func() error { return nil }}
 		log.Printf("simulated Mac enrolled as %s", cfg.Name)
 		err = agent.New(cfg, sim, nil).Run(ctx)
 	case "version":
