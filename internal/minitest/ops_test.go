@@ -481,6 +481,17 @@ func TestAMiniWithNoToolsYetHasNoHomebrewUpdate(t *testing.T) {
 	if out := m.ok("pending-updates"); out != "" {
 		t.Errorf("before the set-up:\n%s", out)
 	}
+	// A tool on the list that is not copied yet is the set-up's to bring.
+	h := m.withHomebrew()
+	write(t, m.path("usr/local/lab/tools/current/VERSIONS"), "cloudflared 2026.10.1\n", 0o644)
+	if out := m.ok("pending-updates"); out != "" {
+		t.Errorf("with one tool copied, and that one current:\n%s", out)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.asked) != 1 {
+		t.Errorf("Homebrew's list was asked for %v", h.asked)
+	}
 }
 
 // labd is started with the socket the scripts leave lines on, the folder

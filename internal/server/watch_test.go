@@ -114,10 +114,11 @@ func newOpsAt(t *testing.T, data string, clock *agent.FakeClock, m *machine, mod
 	return &opsLab{t: t, s: s, data: data, marks: marks, clock: clock, m: m, stop: cancel}
 }
 
-// healthy is a mini with nothing wrong: started an hour before labd.
+// healthy is a mini with nothing wrong: started an hour before labd, with
+// a daemon launchd had started seven times before labd first looked.
 func healthy() *machine {
 	return &machine{free: 60 << 30, total: 245 << 30, lab: 200,
-		mini: Mini{Boot: opsStart.Add(-time.Hour), Tunnel: "up", Litestream: "running", Starts: map[string]int{"cloudflared": 1, "litestream": 1, "signal-cli": 1}}}
+		mini: Mini{Boot: opsStart.Add(-time.Hour), Tunnel: "up", Litestream: "running", Starts: map[string]int{"cloudflared": 1, "litestream": 1, "signal-cli": 7}}}
 }
 
 func newOps(t *testing.T, mod func(*Config)) *opsLab {
@@ -958,6 +959,14 @@ func TestTheWeeklyDigestListsPendingUpdatesAndTheBackupAndDrillDates(t *testing.
 	again.s.digestIfDue(context.Background())
 	if got := again.digests(); len(got) != 1 {
 		t.Fatalf("%d digests in one week", len(got))
+	}
+	// Nor from a labd whose clock was set back to before the hour.
+	back := newOpsAt(t, o.data, agent.NewFakeClock(monday.Add(-time.Minute)), o.m, nil)
+	back.clock.Advance(time.Minute)
+	back.s.digestIfDue(context.Background())
+	back.stop()
+	if got := again.digests(); len(got) != 1 {
+		t.Fatalf("%d digests in one week after the clock went back", len(got))
 	}
 	// The next Monday, the next one.
 	again.clock.Advance(7 * 24 * time.Hour)
