@@ -48,7 +48,7 @@ start() { # start [labd flags]: labd on a new loopback port, with a new data dir
   port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
   site="http://127.0.0.1:$port"
   rm -rf "$t/data"
-  "$t/labd" --listen="127.0.0.1:$port" --data="$t/data" --machine-id-key="$t/machine-id-key" --omt-site= "$@" > "$t/labd.log" 2>&1 &
+  "$t/labd" --listen="127.0.0.1:$port" --data="$t/data" --machine-id-key="$t/machine-id-key" "$@" > "$t/labd.log" 2>&1 &
   pid=$!
   local _
   for _ in $(seq 60); do

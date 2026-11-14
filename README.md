@@ -772,8 +772,9 @@ itself.
 
 Publishing omarchy-m-test reports is off on a Volunteer's Mac until its
 Volunteer runs `publish on`, whatever `--omt-publish` or a job's `--publish`
-asks; `lab publish` is refused too. Each `publish on` lists the deletion link
-of every report published so far.
+asks; `lab publish` is refused too. Turning it off again leaves the reports
+already published up. Each `publish on` lists the deletion link of every
+report published so far and not deleted since.
 
 A Mac enrolled with `./volunteer` (see [Volunteer a Mac](#volunteer-a-mac)) is a
 Volunteer's too, named and reached by the tailnet login that ran it.
@@ -1101,19 +1102,35 @@ disruptive sections (lid, Wi-Fi reload) don't happen. The run takes 1 to 3 minut
   attended run again. Once the on-screen checks run again it means a locked or
   covered screen fails the run, so run Lab-owned Macs with `--autologin` or
   `--stay-awake`, and run it again if the screen was locked.
-- **Publishing:** `lab run <mac> --publish`, `lab publish <job>`, or the job page's
-  Publish button uploads the signed report to omarchy-m-testing.org. Only
-  known-good runs qualify, because the site names a report's build from the
-  installed packages, and those don't describe a lab kernel. The site's deletion
-  link stays in the job's `omt-published.json`. A Volunteer's Mac is published
-  only once its Volunteer opts in (see above).
+- **Publishing:** the lab publishes a run's signed report on its own public
+  pages, through the checks every upload meets (schema, signature, check ids,
+  evidence), handed over inside labd. The one signature is the Mac's Machine
+  key. Only a Known-good run on a packaged kernel qualifies, because a
+  report's build is named from the installed packages, and those don't
+  describe a test kernel; an Installed run is never published.
+  - **By itself** the lab publishes a run that became the Mac's Reference:
+    each baseline, and the scheduled refresh once a week.
+  - **By hand**: `lab run <mac> --publish`, `lab publish <job>`, or the job
+    page's Publish button, for a Maintainer on any job and an M team member
+    on their own.
+  - A Volunteer's Mac is published only while its Volunteer has publishing on
+    (see above), read at the moment of publishing. The deletion link of each
+    of its reports is kept for `lab-agent publish on` to list.
+  - The same report twice answers "Already uploaded" with the report's link.
+  - `lab job`, `lab jobs` and the job's page say what became of the report:
+    not published, published, hidden or deleted. After a delete the job says
+    who deleted it and when, and the lab does not publish that job again.
+  - Reports shows Maintainers how each report arrived: by the Mac's own tool,
+    or by the lab with the job and who asked. A lab run's public page says
+    "run by the lab" and names nobody.
+  - With Preview on, the lab publishes nothing.
 
 ```sh
-labd --omt-publish --omt-every 24h   # refresh each idle Mac's known-good report daily, and publish it
-labd --omt=false                     # don't add it to jobs
+labd                                 # publishes baselines and a weekly refresh by itself
+labd --omt-publish=false             # publish by hand only
+labd --omt-every 0                   # no scheduled refresh (it reboots the Mac)
+labd --omt=false                     # don't add omarchy-m-test to jobs
 ```
-
-The Kubernetes cloud manifests enable `--omt-publish`. Once deployed, eligible baseline jobs upload automatically. An ordinary known-good `lab run` remains manual. Volunteer consent, package identity, and the candidate refusal are unchanged. `--omt-every` is not set, so there is no scheduled reboot and no backfill of stored reports. `deploy/labd.service` does not pass the flag.
 
 ## Release packages from a PKGBUILD
 

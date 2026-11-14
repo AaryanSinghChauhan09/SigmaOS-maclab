@@ -39,7 +39,7 @@ trap cleanup EXIT
 mkdir "$WORK/sign-in"
 echo 1 >"$WORK/sign-in/admins"
 "$BIN/labd" --listen="127.0.0.1:$PORT" --socket="$SOCK" --data="$WORK/data" --public-url="$PUB" \
-	--alias="$ALIAS" --preview --sign-in="$WORK/sign-in" --omt-site= >"$LOG" 2>&1 &
+	--alias="$ALIAS" --preview --sign-in="$WORK/sign-in" >"$LOG" 2>&1 &
 PID=$!
 
 c() { curl -sS --max-time 20 "$@"; }
