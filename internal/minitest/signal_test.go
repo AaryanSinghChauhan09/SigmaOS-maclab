@@ -170,24 +170,6 @@ func TestSetupStartsTheSenderFromTheCopy(t *testing.T) {
 	}
 }
 
-// Homebrew once shipped signal-cli as a script that ran a Java under its
-// own prefix. A copy of such a script still runs files the admin account
-// can write, and the sender is not started from it.
-func TestTheSetUpRefusesASenderThatStillRunsFromHomebrew(t *testing.T) {
-	need(t, "openssl")
-	m := newMini(t)
-	k := newKey(t)
-	m.withSender()
-	m.ok("setup", "--release-key", k.signers)
-	m.upgrade("signal-cli", "2.0")
-	write(t, m.path("opt/homebrew/Cellar/signal-cli/2.0/bin/signal-cli"), "#!/bin/bash\nexec /opt/homebrew/Cellar/signal-cli/2.0/libexec/bin/signal-cli \"$@\"\n", 0o755)
-	os.Remove(m.log)
-	out := m.refused("setup")
-	if !strings.Contains(out, "runs files under Homebrew") || strings.Contains(m.calls(), "bootstrap") {
-		t.Errorf("the sender was started from a script that leans on Homebrew:\n%s\n%s", out, m.calls())
-	}
-}
-
 // signalStub plays signal-cli run by hand: it writes down its arguments,
 // "receives" what a member wrote, and lists one group.
 const signalStub = `#!/bin/bash

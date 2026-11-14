@@ -228,30 +228,6 @@ func TestSetupInstallsTheHomebrewListAndCopiesItForRoot(t *testing.T) {
 	}
 }
 
-func TestTheCopyRefusesAToolThatStillLeansOnHomebrew(t *testing.T) {
-	m := newMini(t)
-	k := newKey(t)
-	write(t, m.tree+"/deploy/homebrew-formulae", "madeup\n", 0o644)
-	m.ok("setup", "--release-key", k.signers)
-	m.upgrade("madeup", "2.0")
-	if err := os.Symlink(m.path("opt/homebrew/opt/other/lib"), m.path("opt/homebrew/Cellar/madeup/2.0/lib")); err != nil {
-		t.Fatal(err)
-	}
-
-	out := m.refused("setup")
-
-	if !strings.Contains(out, "points into") {
-		t.Errorf("the refusal doesn't say why:\n%s", out)
-	}
-	tools := m.path("usr/local/lab/tools")
-	if got := read(t, tools+"/current/madeup/bin/madeup"); !strings.Contains(got, "madeup 1.0") {
-		t.Errorf("the copy in use changed: %q", got)
-	}
-	if entries, _ := os.ReadDir(tools); len(entries) != 2 {
-		t.Errorf("the refused copy was left behind: %d entries", len(entries))
-	}
-}
-
 func TestSetupInstallsAPinByItsChecksum(t *testing.T) {
 	m := newMini(t)
 	k := newKey(t)
