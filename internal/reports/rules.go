@@ -55,6 +55,9 @@ type Refusal struct {
 	Status  int      `json:"-"`
 	Error   string   `json:"error"`
 	Details []string `json:"details,omitempty"`
+	// Held is the public id of the report the lab already holds, when the
+	// refusal is of a repeat: the answer names that report's link.
+	Held string `json:"-"`
 }
 
 // Judged is a report that passed every rule.
@@ -78,7 +81,7 @@ func (r *Rules) Judge(body []byte, installURL string) (*Judged, *Refusal) {
 		return nil, &Refusal{Status: http.StatusBadRequest, Error: "The report is not valid JSON."}
 	}
 	refuse := func(message string, details ...string) (*Judged, *Refusal) {
-		return nil, &Refusal{http.StatusUnprocessableEntity, message, details}
+		return nil, &Refusal{Status: http.StatusUnprocessableEntity, Error: message, Details: details}
 	}
 	upgrade := "Update omarchy-m-test (curl -fsSL " + installURL + " | bash) and run it again."
 	accepts := fmt.Sprint(SchemaVersion)

@@ -280,18 +280,22 @@ func TestASecondStartChangesNothing(t *testing.T) {
 }
 
 // reports.db holds reports and Mac sign-ins, each with account id and
-// handle, and nothing else.
+// handle, the digests of the reports it has stored, and nothing else. A
+// digest row is a fingerprint of a file: it names no Mac and no person.
 func TestWhatReportsDBHolds(t *testing.T) {
 	s, _ := openStore(t)
-	if got := strings.Join(s.tables(t), " "); got != "mac_sign_ins reports" {
+	if got := strings.Join(s.tables(t), " "); got != "mac_sign_ins report_digests reports" {
 		t.Errorf("tables: %s", got)
 	}
-	for _, table := range s.tables(t) {
+	for _, table := range []string{"mac_sign_ins", "reports"} {
 		cols := " " + strings.Join(s.list(t, `SELECT name FROM pragma_table_info(?)`, table), " ") + " "
 		for _, want := range []string{" account_id ", " handle ", " machine_id "} {
 			if !strings.Contains(cols, want) {
 				t.Errorf("%s has no%scolumn:%s", table, want, cols)
 			}
 		}
+	}
+	if got := strings.Join(s.list(t, `SELECT name FROM pragma_table_info('report_digests')`), " "); got != "id digest report_id created_at" {
+		t.Errorf("report_digests holds: %s", got)
 	}
 }
