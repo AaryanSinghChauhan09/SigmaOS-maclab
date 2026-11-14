@@ -2,7 +2,10 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -263,5 +266,34 @@ func TestTheCallerLogKeepsStreamsFlushing(t *testing.T) {
 	lines := s.callers.linesForTest(t)
 	if len(lines) != 1 || lines[0].Status != http.StatusAccepted || lines[0].Who != "mac:m2-max" {
 		t.Errorf("the stream's line: %+v", lines)
+	}
+}
+
+// A request that ends while labd is stopping is still logged, to the file
+// labd has open; no file is made then, so a late request can't bring a
+// removed data directory back.
+func TestAStoppingLabdMakesNoCallerLogFile(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	s, err := New(ctx, Config{DataDir: dir, FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret"}, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.Handler()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", labdAt+"/healthz", nil))
+	if n := len(s.callers.linesForTest(t)); n != 1 {
+		t.Fatalf("%d lines before labd stopped", n)
+	}
+	cancel()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", labdAt+"/healthz", nil))
+	if n := len(s.callers.linesForTest(t)); n != 2 {
+		t.Fatalf("%d lines after a request that ended while labd stopped, want 2", n)
+	}
+	if err := os.RemoveAll(s.callers.dir); err != nil {
+		t.Fatal(err)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", labdAt+"/healthz", nil))
+	if _, err := os.Stat(s.callers.dir); !os.IsNotExist(err) {
+		t.Errorf("a request after labd stopped wrote the caller log again: %v", err)
 	}
 }

@@ -41,24 +41,27 @@ type callerLine struct {
 	Agent  string    `json:"agent,omitempty"` // the caller's User-Agent
 }
 
-// callerLog writes the lines to one file for each UTC day under dir.
+// callerLog writes the lines to one file for each UTC day under dir. Once
+// labd is stopping it still writes the requests that end then to the file
+// it has open, and makes no new one.
 type callerLog struct {
-	dir string
-	log *log.Logger
+	dir     string
+	log     *log.Logger
+	stopped <-chan struct{}
 
 	mu  sync.Mutex
 	day string
 	f   *os.File
 }
 
-func openCallerLog(dir string, logger *log.Logger) (*callerLog, error) {
+func openCallerLog(dir string, logger *log.Logger, stopped <-chan struct{}) (*callerLog, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &callerLog{dir: dir, log: logger}, nil
+	return &callerLog{dir: dir, log: logger, stopped: stopped}, nil
 }
 
 func (l *callerLog) closeLocked() {
@@ -78,6 +81,11 @@ func (l *callerLog) write(line callerLine) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if day := line.Time.Format(callerLogDay); day != l.day {
+		select {
+		case <-l.stopped:
+			return
+		default:
+		}
 		l.closeLocked()
 		f, err := os.OpenFile(filepath.Join(l.dir, day+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
@@ -164,9 +172,6 @@ func (s *Server) callerLogLoop() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			s.callers.mu.Lock()
-			s.callers.closeLocked()
-			s.callers.mu.Unlock()
 			return
 		case <-t.C():
 			s.callers.prune(s.now())

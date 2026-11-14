@@ -222,7 +222,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 			return nil, err
 		}
 	}
-	callers, err := openCallerLog(filepath.Join(cfg.DataDir, "callers"), logger)
+	callers, err := openCallerLog(filepath.Join(cfg.DataDir, "callers"), logger, ctx.Done())
 	if err != nil {
 		return nil, err
 	}
