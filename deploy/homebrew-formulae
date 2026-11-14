@@ -4,3 +4,5 @@
 # only root can write. A LaunchDaemon file names the copy
 # (/usr/local/lab/tools/current/<formula>/bin/<tool>), never /opt/homebrew.
 # Versions follow Homebrew and change only in a Maintenance run.
+
+cloudflared   # the tunnel: deploy/org.omarchy-mac.lab.cloudflared.plist

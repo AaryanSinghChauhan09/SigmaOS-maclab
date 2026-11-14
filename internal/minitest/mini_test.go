@@ -24,8 +24,10 @@ const (
 	bundleName = "lab-server-darwin-arm64.tar.gz"
 	labdLabel  = "org.omarchy-mac.lab.labd"
 	oobdLabel  = "com.maclab.oobd"
-	signer     = "release@omarchy-m-testing.org"
-	namespace  = "omarchy-m-test-release"
+
+	cloudflaredLabel = "org.omarchy-mac.lab.cloudflared"
+	signer           = "release@omarchy-m-testing.org"
+	namespace        = "omarchy-m-test-release"
 )
 
 func repo(t *testing.T) string {
@@ -98,19 +100,17 @@ type mini struct {
 }
 
 // launchctl keeps one file for each loaded daemon: "loaded" for labd,
-// "loaded.<label>" for any other.
+// "loaded.<label>" for any other. The daemon is what the last argument names.
 const launchctlStub = `#!/bin/bash
 echo "launchctl $*" >> "$STUB_LOG"
-case "$1" in
-  bootstrap) label="$(basename "$3" .plist)" ;;
-  *) label="${2#system/}" ;;
-esac
+label="$(basename "${!#}" .plist)"
 state="$STUB_STATE/loaded"
 [[ $label == org.omarchy-mac.lab.labd ]] || state="$STUB_STATE/loaded.$label"
 case "$1" in
   print) [[ -f $state ]] || exit 113; echo "state = running" ;;
   bootout) rm -f "$state" ;;
   bootstrap) [[ -f $3 ]] || exit 5; cp "$3" "$state" ;;
+  kickstart) [[ -f $state ]] || exit 113 ;;
 esac
 `
 
@@ -188,6 +188,7 @@ func newMini(t *testing.T) *mini {
 	}
 	write(t, m.tree+"/deploy/"+oobdLabel+".plist", read(t, filepath.Join(repo(t), "deploy", oobdLabel+".plist")), 0o644)
 	write(t, m.tree+"/deploy/homebrew-formulae", "# none\n", 0o644)
+	write(t, m.tree+"/deploy/"+cloudflaredLabel+".plist", read(t, filepath.Join(repo(t), "deploy", cloudflaredLabel+".plist")), 0o644)
 	write(t, m.tree+"/deploy/pins", "# none\n", 0o644)
 	m.env = append(os.Environ(),
 		"LAB_SYSROOT="+m.root,
@@ -288,8 +289,9 @@ func (k key) sign(t *testing.T, file string) {
 // bundle writes a server bundle of tag into dir and signs it. Its labd is a
 // script that says its version; an unhealthy one says so in its text, which
 // the made-up labd below reads.
-func bundle(t *testing.T, k key, dir, tag string, healthy bool) {
+func bundle(t *testing.T, k key, dir, tag string, healthy bool, routes ...string) {
 	t.Helper()
+	routes = append(routes, "the first routes")
 	labd := "#!/bin/sh\n[ \"$1\" = --version ] && echo " + tag + "\n"
 	if !healthy {
 		labd += "# unhealthy\n"
@@ -301,6 +303,7 @@ func bundle(t *testing.T, k key, dir, tag string, healthy bool) {
 		{"lab-server/VERSION", tag + "\n", 0o644},
 		{"lab-server/bin/labd", labd, 0o755},
 		{"lab-server/deploy/" + labdLabel + ".plist", "<plist><!-- " + tag + " --></plist>\n", 0o664},
+		{"lab-server/deploy/cloudflared.yml", "# " + routes[0] + "\n", 0o644},
 	}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
@@ -380,6 +383,52 @@ func (m *mini) labd() {
 	unix.Start()
 	m.t.Cleanup(unix.Close)
 	m.env = append(m.env, "LAB_LOOPBACK="+strings.TrimPrefix(loop.URL, "http://"))
+}
+
+// door plays the Front door: the Lab address as the mini reaches it through
+// Cloudflare. It answers as labd does, until it is made dark.
+type door struct {
+	mu    sync.Mutex
+	asked int
+	dark  bool
+}
+
+func (d *door) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.asked
+}
+
+func (d *door) setDark(dark bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.dark = dark
+}
+
+func (m *mini) frontDoor() *door {
+	m.t.Helper()
+	d := &door{}
+	state := filepath.Join(filepath.Dir(m.root), "state", "loaded")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		d.mu.Lock()
+		d.asked++
+		dark := d.dark
+		d.mu.Unlock()
+		labd, err := os.ReadFile(m.path("usr/local/lab/current/bin/labd"))
+		if dark || !exists(state) || err != nil || bytes.Contains(labd, []byte("unhealthy")) || r.URL.Path != "/healthz" {
+			http.Error(w, "no", http.StatusBadGateway)
+			return
+		}
+		io.WriteString(w, "ok\n")
+	}))
+	m.t.Cleanup(srv.Close)
+	m.env = append(m.env, "LAB_FRONT_DOOR="+srv.URL)
+	return d
+}
+
+// tunnelLoaded reports whether cloudflared's LaunchDaemon is loaded.
+func (m *mini) tunnelLoaded() bool {
+	return exists(filepath.Join(filepath.Dir(m.root), "state", "loaded."+cloudflaredLabel))
 }
 
 // pinned puts k where the set-up pins the release key.

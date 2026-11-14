@@ -5,10 +5,12 @@
 #
 # Downloads the server bundle and its .sig, checks it against the release key
 # pinned on the mini, unpacks it beside the running build, switches to it,
-# restarts labd (never the mini) and verifies labd on this machine. When that
-# check fails it puts the previous build back by itself. The last three
-# builds are kept. It names an exact version: never "latest". It touches no
-# tool: those change in a Maintenance run. Needs only what macOS has.
+# restarts labd (never the mini) and verifies labd on this machine and, once
+# the tunnel is installed here, through the Front door. When that check fails
+# it puts the previous build back by itself. The last three builds are kept.
+# It names an exact version: never "latest". It touches no tool: those change
+# in a Maintenance run; the tunnel is restarted only when the build brings
+# other routes. Needs only what macOS has.
 #
 #   --dry-run   download and check the bundle, then say what would change
 #   --from URL  where the two files are, instead of that tag's GitHub Release:
@@ -19,7 +21,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/lib.sh
 . "$here/lib.sh"
 
-usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 from=""
 tag=""
@@ -56,22 +58,19 @@ running() {
   if [[ -L $LAB_CURRENT ]]; then basename "$(readlink "$LAB_CURRENT")"; fi
 }
 
-loaded() { launchctl print "system/$LABD_LABEL" >/dev/null 2>&1; }
+stop_labd() { stopped "$LABD_LABEL" || fail "labd did not stop (20 s): nothing was switched"; }
 
-stop_labd() {
-  local n
-  loaded || return 0
-  launchctl bootout "system/$LABD_LABEL" 2>/dev/null || true
-  for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    loaded || return 0
-    sleep 1
-  done
-  fail "labd did not stop ($n s): nothing was switched"
-}
+# The tunnel is installed on this machine once the set-up has put
+# cloudflared's LaunchDaemon file in place. Before that, as at the first
+# Deploy, the Front door does not answer and is not asked.
+tunnel_installed() { [[ -f $LAUNCHD_DIR/$CLOUDFLARED_LABEL.plist ]]; }
 
 # switch_to TAG: stop labd, point the mini at that build, start labd from it
-# under the build's own LaunchDaemon file.
+# under the build's own LaunchDaemon file. cloudflared reads its routes from
+# the build when it starts, so it is restarted when they are other routes.
 switch_to() {
+  local routes=0
+  if tunnel_installed && ! cmp -s "$LAB_CURRENT/deploy/cloudflared.yml" "$LAB_BUILDS/$1/deploy/cloudflared.yml"; then routes=1; fi
   stop_labd
   ln -sfn "builds/$1" "$LAB_CURRENT"
   touch "$LAB_BUILDS/$1"
@@ -80,22 +79,33 @@ switch_to() {
   chmod 0644 "$plist"
   launchctl enable "system/$LABD_LABEL" || true
   launchctl bootstrap system "$plist" || say "launchd did not take $plist"
+  if (( routes )) && loaded "$CLOUDFLARED_LABEL"; then
+    launchctl kickstart -k "system/$CLOUDFLARED_LABEL" || say "launchd did not restart the tunnel"
+    say "restarted the tunnel: the build of $1 has other routes"
+  fi
 }
 
-answers() { [[ "$(curl -fsS --max-time 5 "$@" 2>/dev/null)" == ok ]]; }
+answers() { [[ "$(curl -fsS --max-time 5 -A lab-deploy "$@" 2>/dev/null)" == ok ]]; }
 
-# verify: launchd runs labd, and it answers on its loopback port and on the
-# tunnel's socket. A binary that cannot run on this machine fails here.
+# through_the_front_door: labd answers at the Lab address, by way of
+# Cloudflare and the tunnel. True as well when no tunnel is installed here.
+through_the_front_door() { ! tunnel_installed || answers "$FRONT_DOOR/healthz"; }
+
+# verify: launchd runs labd, and it answers on its loopback port, on the
+# tunnel's socket and through the Front door. A binary that cannot run on
+# this machine fails here.
 verify() {
   local n
   for (( n = ${LAB_VERIFY_TRIES:-30}; n > 0; n-- )); do
-    if loaded && answers "http://$LABD_LISTEN/healthz" &&
-      answers --unix-socket "$LABD_SOCKET" -H 'X-Forwarded-Proto: https' "http://$LAB_HOST/healthz"; then
+    if loaded "$LABD_LABEL" && answers "http://$LABD_LISTEN/healthz" &&
+      answers --unix-socket "$LABD_SOCKET" -H 'X-Forwarded-Proto: https' "http://$LAB_HOST/healthz" &&
+      through_the_front_door; then
       return 0
     fi
     sleep 1
   done
-  loaded || say "launchd does not have $LABD_LABEL loaded"
+  loaded "$LABD_LABEL" || say "launchd does not have $LABD_LABEL loaded"
+  through_the_front_door || say "labd does not answer through the Front door ($FRONT_DOOR/healthz)"
   answers "http://$LABD_LISTEN/healthz" || say "labd does not answer at http://$LABD_LISTEN/healthz"
   answers --unix-socket "$LABD_SOCKET" -H 'X-Forwarded-Proto: https' "http://$LAB_HOST/healthz" || say "labd does not answer on $LABD_SOCKET"
   if [[ -f $LABD_LOG ]]; then
@@ -149,12 +159,24 @@ new="$stage/lab-server"
 [[ "$(<"$new/VERSION")" == "$tag" ]] || fail "the bundle is $(<"$new/VERSION"), not $tag: nothing was changed"
 [[ -x $new/bin/labd ]] || fail "the bundle has no bin/labd"
 [[ -f $new/deploy/$LABD_LABEL.plist ]] || fail "the bundle has no LaunchDaemon file for labd"
+[[ -f $new/deploy/cloudflared.yml ]] || fail "the bundle has no route file for the tunnel"
+
+if tunnel_installed; then
+  where="on its loopback port, on its socket and through the Front door"
+else
+  where="on its loopback port and its socket; the tunnel is not installed on this machine, so the Front door was not asked"
+fi
 
 if (( DRY )); then
   say "would unpack $tag to $LAB_BUILDS/$tag"
   say "would switch $LAB_CURRENT from ${previous:-nothing} to $tag"
   say "would restart $LABD_LABEL under $plist"
   say "would verify labd at http://$LABD_LISTEN/healthz and on $LABD_SOCKET, and put ${previous:-nothing} back if it does not answer"
+  if tunnel_installed; then
+    say "would verify labd through the Front door at $FRONT_DOOR/healthz as well"
+  else
+    say "would not ask the Front door: the tunnel is not installed on this machine"
+  fi
   exit 0
 fi
 
@@ -167,7 +189,7 @@ say "unpacked $tag to $LAB_BUILDS/$tag"
 switch_to "$tag"
 if verify; then
   prune
-  say "Deployed $tag: labd answers on its loopback port and its socket${previous:+; $previous is kept as the way back}"
+  say "Deployed $tag: labd answers $where${previous:+; $previous is kept as the way back}"
   exit 0
 fi
 

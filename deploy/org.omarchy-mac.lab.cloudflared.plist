@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- cloudflared on the mini, as the unprivileged lab account: the lab's one
+     tunnel. It runs from the copy of the Homebrew tools only root can write,
+     never from Homebrew's own folder, reads its routes from the Deployed build and
+     its credential from a file only lab reads. scripts/mini/setup installs
+     this file and starts it; nothing here is a secret. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.cloudflared</string>
+  <key>UserName</key><string>lab</string>
+  <key>GroupName</key><string>lab</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/tools/current/cloudflared/bin/cloudflared</string>
+    <string>tunnel</string>
+    <string>--config</string><string>/usr/local/lab/current/deploy/cloudflared.yml</string>
+    <string>--no-autoupdate</string>
+    <string>--metrics</string><string>127.0.0.1:20241</string>
+    <string>run</string>
+    <string>--token-file</string><string>/var/lab/secrets/cloudflared.token</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/lab</string>
+  <key>Umask</key><integer>63</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/var/lab/log/cloudflared.log</string>
+  <key>StandardErrorPath</key><string>/var/lab/log/cloudflared.log</string>
+</dict>
+</plist>

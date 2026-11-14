@@ -1,0 +1,22 @@
+# The routes of the lab's one tunnel. cloudflared on the mini reads this file
+# from the Deployed build (/usr/local/lab/current/deploy/cloudflared.yml).
+#
+# Two names reach labd, the Lab address and the Alias; any other name gets
+# 404 from cloudflared itself. Both go to the Unix socket only the lab
+# account can open, which is the one place labd believes CF-Connecting-IP.
+# cloudflared speaks HTTP/1.1 there.
+#
+# Neither the tunnel's id nor its credential is here: both are in the file
+# the LaunchDaemon names with --token-file, which only lab reads.
+
+originRequest:
+  # An idle connection to labd is dropped after 90 s; labd keeps its side
+  # open for 2 minutes, so labd never closes one cloudflared is about to use.
+  keepAliveTimeout: 90s
+
+ingress:
+  - hostname: lab.omarchy-mac.org
+    service: unix:/var/lab/run/labd.sock
+  - hostname: maclab.omarchy.org
+    service: unix:/var/lab/run/labd.sock
+  - service: http_status:404

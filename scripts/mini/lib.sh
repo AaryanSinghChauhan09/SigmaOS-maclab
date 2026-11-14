@@ -15,6 +15,8 @@ LABD_LISTEN="127.0.0.1:7770"
 OOBD_LABEL="com.maclab.oobd"
 OOBD_LISTEN="127.0.0.1:7780"
 RESET_TOOL_NAME="macvdmtool"
+CLOUDFLARED_LABEL="org.omarchy-mac.lab.cloudflared"
+FRONT_DOOR="https://$LAB_HOST"
 
 ROOT_OWNER=root
 ROOT_GROUP=wheel
@@ -29,6 +31,7 @@ if [[ -n $SYSROOT ]]; then
   ROOT_OWNER="$(id -un)" ROOT_GROUP="$(id -gn)" LAB_OWNER="$(id -un)" LAB_GROUP="$(id -gn)"
   LABD_LISTEN="${LAB_LOOPBACK:-$LABD_LISTEN}"
   OOBD_LISTEN="${LAB_OOBD_LOOPBACK:-$OOBD_LISTEN}"
+  FRONT_DOOR="${LAB_FRONT_DOOR:-$FRONT_DOOR}"
 else
   PATH=/usr/bin:/bin:/usr/sbin:/sbin
   export PATH
@@ -50,6 +53,8 @@ LAB_HOME="$SYSROOT/var/lab"
 LABD_SOCKET="$LAB_HOME/run/labd.sock"
 LABD_LOG="$LAB_HOME/log/labd.log"
 LABD_OOBD_TOKEN="$LAB_HOME/secrets/oobd.token"
+# The tunnel's credential, as cloudflared reads it with --token-file.
+TUNNEL_TOKEN="$LAB_HOME/secrets/cloudflared.token"
 LAUNCHD_DIR="$SYSROOT/Library/LaunchDaemons"
 OOBD_PLIST="$LAUNCHD_DIR/$OOBD_LABEL.plist"
 BREW_PREFIX="$SYSROOT/opt/homebrew"
@@ -77,6 +82,21 @@ change() {
 
 need_root() {
   [[ -n $SYSROOT || "$(id -u)" == 0 ]] || fail "run it with sudo"
+}
+
+# loaded LABEL: whether launchd has that daemon.
+loaded() { launchctl print "system/$1" >/dev/null 2>&1; }
+
+# stopped LABEL: boot the daemon out and wait until launchd has let it go.
+stopped() {
+  local n
+  loaded "$1" || return 0
+  launchctl bootout "system/$1" 2>/dev/null || true
+  for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    loaded "$1" || return 0
+    sleep 1
+  done
+  return 1
 }
 
 # owner_of PATH: the account PATH belongs to.

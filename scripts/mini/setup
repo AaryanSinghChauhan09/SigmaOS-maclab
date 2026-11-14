@@ -1,21 +1,26 @@
 #!/bin/bash
 # Set the mini up for the lab:
 #
-#   sudo scripts/mini/setup [--dry-run] [--release-key FILE]
+#   sudo scripts/mini/setup [--dry-run] [--release-key FILE] [--tunnel-credential FILE]
 #
 # Makes the lab account and its folders, pins the release key, installs the
 # Homebrew formulae deploy/homebrew-formulae names and what deploy/pins
 # names, and copies the Homebrew tools into a folder only root can write,
 # which is where every daemon runs them from. Makes the Out-of-band
 # controller's token, installs the controller's LaunchDaemon file and, once
-# a build is Deployed, starts it. Safe to run again: it changes only what is
-# not yet as it should be. It never starts labd: Deploy does. Needs only
-# what macOS has, and Homebrew for its own formulae.
+# a build is Deployed, starts it. Starts the tunnel once it has a credential
+# and a Deployed build to read its routes from. Safe to run again: it
+# changes only what is not yet as it should be. It never starts labd: Deploy
+# does. Needs only what macOS has, and Homebrew for its own formulae.
 #
 #   --dry-run           say what would change, and change nothing
 #   --release-key FILE  the allowed_signers file Deploy checks a bundle
 #                       against: release/allowed_signers of the repository.
 #                       Needed the first time; later it replaces the pin.
+#   --tunnel-credential FILE
+#                       the tunnel's credential, as scripts/cloud/tunnel.sh
+#                       wrote it. It is put where only the lab account reads
+#                       it, and FILE is removed. Needed once.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,14 +28,16 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
+credential=""
 while (( $# )); do
   case "$1" in
     --dry-run) DRY=1 ;;
     --release-key) [[ $# -ge 2 ]] || usage; key="$2"; shift ;;
+    --tunnel-credential) [[ $# -ge 2 ]] || usage; credential="$2"; shift ;;
     *) usage ;;
   esac
   shift
@@ -42,6 +49,17 @@ if [[ -n $key ]]; then
   grep -Eq "^$RELEASE_SIGNER .*(ssh-|ecdsa-|sk-)[a-z0-9@.-]+ AAAA" "$key" || fail "$key holds no key for $RELEASE_SIGNER: it is not an allowed_signers file of the release key"
 elif [[ ! -s $LAB_SIGNERS ]]; then
   fail "no release key is pinned yet: give --release-key FILE (release/allowed_signers of the repository, or the .allowed_signers file beside a local Release candidate)"
+fi
+
+if [[ -n $credential ]]; then
+  [[ -f $credential ]] || fail "no file $credential"
+  case "$(looks "$credential")" in
+    -r--------\ * | -rw-------\ *) ;;
+    *) fail "$credential can be read by others: whoever has the tunnel's credential can receive the lab's traffic. Make the tunnel again" ;;
+  esac
+  if [[ "$(wc -l < "$credential" | tr -d ' ')" -gt 1 ]] || ! grep -Eq '^[A-Za-z0-9+/]{40,}={0,2}$' "$credential"; then
+    fail "$credential is not a tunnel credential: one line of base64, as scripts/cloud/tunnel.sh writes it"
+  fi
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/lab-setup.XXXXXX")"
@@ -171,6 +189,7 @@ formulae() { sed -e 's/#.*//' "$deploy/homebrew-formulae" | awk 'NF { print $1 }
 
 KEG_NAMES=()
 KEG_PATHS=()
+TOOLS_COPIED=0
 
 # The daemons run the Homebrew tools from a copy only root can write, never
 # from the prefix, which the admin account can write. The copy this one
@@ -209,6 +228,7 @@ copy_tools() {
   for name in $names; do
     if ! keg="$(cd "$(brew_as_owner --prefix "$name")" 2>/dev/null && pwd -P)"; then
       (( DRY )) || fail "$name is not installed in $BREW_PREFIX"
+      TOOLS_COPIED=1
       change "copy the Homebrew tools into a new folder under $LAB_TOOLS that only $ROOT_OWNER can write" true
       return 0
     fi
@@ -217,6 +237,7 @@ copy_tools() {
     manifest+="$name $(basename "$keg")"$'\n'
   done
   if [[ -f $LAB_TOOLS/current/VERSIONS && "$(<"$LAB_TOOLS/current/VERSIONS")"$'\n' == "$manifest" ]]; then return 0; fi
+  TOOLS_COPIED=1
   change "copy the Homebrew tools into a new folder under $LAB_TOOLS that only $ROOT_OWNER can write: $(tr '\n' ' ' <<<"$manifest")" new_copy "$manifest"
 }
 
@@ -351,6 +372,58 @@ controller() {
   fi
 }
 
+# The tunnel. Its credential is the right to receive the lab's traffic: it
+# sits where only the lab account reads it and is never printed. cloudflared
+# runs from the root-owned copy, under the lab's own LaunchDaemon file, and
+# reads its routes from the Deployed build.
+
+install_credential() {
+  rm -f "$TUNNEL_TOKEN.new"
+  (umask 077; cat "$credential" > "$TUNNEL_TOKEN.new")
+  chown "$LAB_OWNER:$LAB_GROUP" "$TUNNEL_TOKEN.new"
+  chmod 0400 "$TUNNEL_TOKEN.new"
+  mv -f "$TUNNEL_TOKEN.new" "$TUNNEL_TOKEN"
+  rm -f "$credential"
+}
+
+start_tunnel() {
+  local plist="$LAUNCHD_DIR/$CLOUDFLARED_LABEL.plist"
+  stopped "$CLOUDFLARED_LABEL" || fail "the tunnel did not stop (20 s)"
+  cp "$deploy/$CLOUDFLARED_LABEL.plist" "$plist"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$plist"
+  chmod 0644 "$plist"
+  launchctl enable "system/$CLOUDFLARED_LABEL" || true
+  launchctl bootstrap system "$plist" || fail "launchd did not take $plist"
+}
+
+tunnel() {
+  local plist="$LAUNCHD_DIR/$CLOUDFLARED_LABEL.plist" restart=0 have=0
+  formulae | grep -qx cloudflared || return 0
+  [[ ! -s $TUNNEL_TOKEN ]] || have=1
+  if [[ -n $credential ]]; then
+    if (( have )) && cmp -s "$credential" "$TUNNEL_TOKEN"; then
+      change "remove $credential: the tunnel's credential is already at $TUNNEL_TOKEN" rm -f "$credential"
+    else
+      change "put the tunnel's credential at $TUNNEL_TOKEN, which only $LAB_OWNER reads, and remove $credential" install_credential
+      have=1 restart=1
+    fi
+  fi
+  if (( ! have )); then
+    say "the tunnel is not started: it has no credential yet (--tunnel-credential FILE, which scripts/cloud/tunnel.sh writes)"
+    return 0
+  fi
+  if [[ ! -f $LAB_CURRENT/deploy/cloudflared.yml ]]; then
+    say "the tunnel is not started: no build is Deployed yet for it to read its routes from. Deploy, then run the set-up again"
+    return 0
+  fi
+  if (( ! DRY )) && [[ ! -x $LAB_TOOLS/current/cloudflared/bin/cloudflared ]]; then
+    fail "cloudflared is not in $LAB_TOOLS/current: the tunnel was not started"
+  fi
+  if (( TOOLS_COPIED )) || ! cmp -s "$deploy/$CLOUDFLARED_LABEL.plist" "$plist" || ! loaded "$CLOUDFLARED_LABEL"; then restart=1; fi
+  (( restart )) || return 0
+  change "start the tunnel ($CLOUDFLARED_LABEL) under $plist" start_tunnel
+}
+
 account
 folders
 release_key
@@ -358,6 +431,7 @@ homebrew
 pins
 oobd_token
 controller
+tunnel
 
 if (( CHANGES == 0 )); then
   say "nothing to change"
