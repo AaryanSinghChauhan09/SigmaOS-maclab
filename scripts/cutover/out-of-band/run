@@ -1,0 +1,73 @@
+#!/bin/bash
+# The Out-of-band wiring's eight tests, one after another, or what they have
+# said so far (spec section 16, Ready item 2).
+#
+#   run [--dry-run | --local | --lab --mini USER@HOST] [--only N,N...] [options of the tests]
+#   run --results [--records DIR]
+#
+# With no option every test says its steps and nothing is sent. A run stops
+# at the first test that does not pass: exit 1 for a failure, exit 3 for a
+# test that stopped for the owner. --lab resets real Macs and asks for the
+# owner's hand at the cables: start it only with both Lab-owned Macs joined
+# and somebody at the mini.
+#
+#   --only N,N...  just these tests, such as --only 2 or --only 3,6
+#   --results      read docs/acceptance/out-of-band.results (or the one in
+#                  --records DIR): one line for each of the eight, and exit 0
+#                  only when all eight say pass. This is what the Ready
+#                  list reads
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ME="$(basename "$0")"
+usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+names=(- oob01-tool oob02-bad-rid oob03-two-at-once oob04-sighting oob05-hung oob06-auto-unlock oob07-restart oob08-refusals)
+titles=(- "the pinned --rid tool on all three ports" "a bad RID refused twice" "two resets at the same moment" "Sighting" "a truly hung M1 Pro brought back" "the M2 Max with auto-unlock, three Hard resets" "Sightings rebuild after an Unlock and a planned restart" "refusals: no Sighting, the controller stopped")
+only="1,2,3,4,5,6,7,8"
+results=0
+records=""
+pass=()
+args=("$@")
+i=0
+while (( i < ${#args[@]} )); do
+  case "${args[i]}" in
+    --only) only="${args[i + 1]:-}"; i=$((i + 1)) ;;
+    --results) results=1 ;;
+    --records) records="${args[i + 1]:-}"; pass+=(--records "$records"); i=$((i + 1)) ;;
+    -h|--help) usage ;;
+    *) pass+=("${args[i]}") ;;
+  esac
+  i=$((i + 1))
+done
+[[ $only =~ ^[1-8](,[1-8])*$ ]] || { echo "$ME: --only takes numbers from 1 to 8, such as 3,6" >&2; exit 2; }
+
+if (( results )); then
+  file="${records:-$here/../../../docs/acceptance}/out-of-band.results"
+  green=1
+  for n in 1 2 3 4 5 6 7 8; do
+    line="$(grep "^0$n " "$file" 2>/dev/null | tail -n 1 || true)"
+    if [[ -z $line ]]; then
+      echo "OOB $n: not run        ${titles[n]}"
+      green=0
+      continue
+    fi
+    read -r _ result day record <<<"$line"
+    printf 'OOB %s: %-7s %s  %s (%s)\n' "$n" "$result" "$day" "${titles[n]}" "$record"
+    [[ $result == pass ]] || green=0
+  done
+  if (( green )); then
+    echo "$ME: Ready item 2 is green: all eight passed"
+    exit 0
+  fi
+  echo "$ME: Ready item 2 is not green"
+  exit 1
+fi
+
+for n in ${only//,/ }; do
+  code=0
+  "$here/${names[n]}" ${pass[@]+"${pass[@]}"} || code=$?
+  if (( code != 0 )); then
+    echo "$ME: test $n (${names[n]}) ended with exit $code; the tests after it were not started" >&2
+    exit "$code"
+  fi
+done

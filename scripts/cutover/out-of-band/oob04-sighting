@@ -1,0 +1,159 @@
+#!/bin/bash
+# Out-of-band wiring's test 4: Sighting. Each Mac sighted on each port after
+# a move; two cables swapped and the resets follow the Macs; how the plug
+# count and connection id move across a reset, a shutdown and a cable pull;
+# the product id read on a hung and on a powered-off Mac (spec section 16,
+# Ready item 2; section 7 "Sighting"; section 17).
+#
+#   oob04-sighting [--dry-run | --local | --lab --mini USER@HOST]
+#                  [--m1 NAME] [--m2 NAME] [--within SECONDS] [--records DIR]
+#
+# Four cable positions cover the six pairs of Mac and port: (M1 left, M2
+# middle), (M1 right, M2 middle), swapped to (M1 middle, M2 right), then
+# (M1 middle, M2 left). A Mac that shows no name (a USB 2 cable, a kernel
+# with no Thunderbolt) cannot be sighted: it is placed by a Proving reset
+# and the record says so. After the swap each Mac gets one Hard reset and
+# the other must keep its boot id.
+#
+# Then, on the M1 Pro's port, the mini's own reading of the port is taken
+# before and after a Hard reset, a shutdown, a power-on, a cable pulled and
+# put back, and a hang.
+#
+# The rule the lab runs on is that the plug count stays through a restart
+# and moves with an unplug. If the readings say otherwise the test ends as
+# "stopped" (exit 3): the spec's answer is then a controller that watches
+# the ports continuously, which is one more slice of work before Ready.
+set -euo pipefail
+# shellcheck source=scripts/cutover/out-of-band/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+oob_options "$@"
+no_rest
+POSITIONS="left:middle right:middle middle:right middle:left"
+HANG="Hang the $M1 with its watchdog off, at the Mac, as root. One way: systemctl stop lab-agent; then sysctl kernel.panic=0; then echo 1 > /proc/sys/kernel/sysrq; echo c > /proc/sysrq-trigger."
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, and on the mini over SSH, it would:
+  for each of four cable positions ($M1:$M2 on $POSITIONS):
+  1. STOP, by hand: put the two cables on those ports of the mini
+  2. wait for the lab to place each Mac on its new port (lab oob)
+     expects: "sighted on the PORT port" within 90 s, unaided; a Mac that shows no name is placed by a Proving reset, and the record says which
+  after the third position, where the two cables were swapped:
+  3. ask: lab reset $M1, then lab reset $M2
+     expects: each Mac restarts for its own reset, through its new port, and the other keeps its boot id
+  then, on the port of $M1, reading the mini's ports ($MINI_SCRIPTS/ports --seen) before and after each:
+  4. ask: lab reset $M1
+     expects: the plug count and the connection id are recorded; the rule needs the plug count unchanged
+  5. STOP, by hand: shut $M1 down; read the port; then a reset powers it on
+     expects: whether the product id is read on a powered-off Mac; the plug count unchanged
+  6. STOP, by hand: pull the cable of $M1 out of the mini, count to five, put it back in the same port
+     expects: the plug count moved
+  7. STOP, by hand: $HANG Read the port; then a reset brings it back
+     expects: whether the product id is read on a hung Mac
+  8. judge: do the plug count and connection id tell an unplug from a restart?
+     expects: yes. If not: Result: stopped, exit 3, and the reason
+  9. write docs/acceptance/$(today)-out-of-band-04.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent and nothing was reset.
+PLAN
+  exit 0
+fi
+
+begin 04 "Sighting: each Mac on each port, a swap, the plug count and connection id across a reset, a shutdown and a pull, the product id on a hung and a powered-off Mac"
+
+n=0
+for position in $POSITIONS; do
+  n=$((n + 1))
+  p1="${position%%:*}"
+  p2="${position##*:}"
+  hands "Cable position $n of 4: the $M1 on the $(echo "$p1" | tr '[:lower:]' '[:upper:]') rear port of the mini, the $M2 on the $(echo "$p2" | tr '[:lower:]' '[:upper:]') one (facing its back). Both Macs stay up."
+  ! playing || play_cables "$p1" "$p2"
+  is_placed "$M1" "$p1" || place "$M1" "$p1"
+  is_placed "$M2" "$p2" || place "$M2" "$p2"
+  rec "position $n: $M1 is $(cable_of "$M1"), $M2 is $(cable_of "$M2")"
+  if (( n == 3 )); then
+    other="$(boot_of "$M2")"
+    hard_reset "$M1" "after the swap, $M1"
+    [[ "$(boot_of "$M2")" == "$other" ]] || give_up "after the swap the reset of $M1 restarted $M2"
+    is_placed "$M2" "$p2" || place "$M2" "$p2"
+    other="$(boot_of "$M1")"
+    hard_reset "$M2" "after the swap, $M2"
+    [[ "$(boot_of "$M1")" == "$other" ]] || give_up "after the swap the reset of $M2 restarted $M1"
+    rec "the two cables swapped: each reset followed its Mac, and the other Mac kept its boot id"
+  fi
+done
+
+port="$p1"
+val() { seen_of "$WORK/$1" "$port" "$2"; }
+# moved FROM TO WHAT: one line of the record for what the port did.
+moved() {
+  local conn=unchanged
+  [[ "$(val "$1" connection)" == "$(val "$2" connection)" ]] || conn=changed
+  rec "$3: plug count $(val "$1" plugs) -> $(val "$2" plugs), connection id $conn, connected $(val "$2" connected), product id $(val "$2" product)"
+}
+same() { [[ "$(val "$1" "$3")" == "$(val "$2" "$3")" ]]; }
+# back WHAT: a reset that must bring the M1 back, a Proving reset when the
+# lab holds no Sighting of it any more.
+back() {
+  local boot how="a Hard reset"
+  boot="$(boot_of "$M1")"
+  T0="$(date +%s)"
+  reset "$M1"
+  if (( RESET_CODE != 0 )); then
+    rec "$1: the lab held no Sighting any more ($(plain "$WORK/reset.out")); a Proving reset of the $port port instead"
+    how="a Proving reset"
+    reset "$M1" --prove "$port"
+    (( RESET_CODE == 0 )) || give_up "$1: the reset did not bring $M1 back: $(plain "$WORK/reset.out")"
+  fi
+  wait_back "$M1" "$boot"
+  rec "$1: $M1 back by $how in $BACK_SECONDS s"
+}
+problems=""
+
+is_placed "$M1" "$port" || place "$M1" "$port"
+mini_seen "$WORK/s0"
+rec "the $port port with $M1 up: product id $(val s0 product), plug count $(val s0 plugs)"
+hard_reset "$M1" "a Hard reset"
+mini_seen "$WORK/s1"
+moved s0 s1 "across a Hard reset"
+
+boot="$(boot_of "$M1")"
+hands "Shut the $M1 down: at the Mac, sudo systemctl poweroff. Wait until it is off (screen dark, no fan)."
+! playing || fake silence "mac=$M1"
+mini_seen "$WORK/s2"
+moved s1 s2 "with the Mac powered off"
+[[ "$(val s2 product)" == "$(val s0 product)" ]] || problems="$problems the product id is not read on a powered-off Mac ($(val s2 product)), so a Hard reset cannot power one on;"
+back "power-on"
+mini_seen "$WORK/s3"
+moved s1 s3 "across a shutdown and a power-on"
+
+wait_until "$(if playing; then echo 25; else echo 90; fi)" is_placed "$M1" "$port" || place "$M1" "$port"
+hands "Pull the cable of the $M1 out of the mini's $(echo "$port" | tr '[:lower:]' '[:upper:]') port, count to five, and put it back in the same port."
+if playing; then
+  fake unplug "port=$port"
+  fake plug "port=$port" "mac=$M1"
+fi
+mini_seen "$WORK/s4"
+moved s3 s4 "across a cable pulled and put back"
+wait_until "$(if playing; then echo 25; else echo 90; fi)" resighted "$M1" "$port" "$(val s4 plugs)" || place "$M1" "$port"
+rec "after the pull the lab placed $M1 again: $(cable_of "$M1")"
+
+hands "$HANG The screen must freeze and stay frozen."
+! playing || fake silence "mac=$M1"
+sleep "$(if playing; then echo 1; else echo 30; fi)"
+mini_seen "$WORK/s5"
+moved s4 s5 "with the Mac hung"
+[[ "$(val s5 product)" == "$(val s0 product)" ]] || problems="$problems the product id is not read on a hung Mac ($(val s5 product)), so a Hard reset cannot bring one back;"
+back "the hung Mac"
+
+if same s0 s1 plugs && same s1 s3 plugs && ! same s3 s4 plugs; then
+  rec "the plug count stayed through a Hard reset and through a shutdown and power-on, and moved with the pull: it tells an unplug from a restart"
+elif same s0 s1 connection && same s1 s3 connection && ! same s3 s4 connection; then
+  stopped "the plug count does not tell an unplug from a restart, the connection id does (it stayed through the restarts and changed with the pull). The lab compares the plug count: comparing the connection id instead is a change to labd and the controller, to make before Ready"
+else
+  stopped "neither the plug count nor the connection id tells an unplug from a restart. The spec's answer is a controller that watches the ports continuously, which is one more slice"
+fi
+[[ -z $problems ]] || give_up "${problems%;}"
+rec "the product id was read on the powered-off Mac and on the hung Mac"
+passed

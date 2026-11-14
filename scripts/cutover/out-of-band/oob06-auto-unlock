@@ -1,0 +1,57 @@
+#!/bin/bash
+# Out-of-band wiring's test 6: the M2 Max with auto-unlock: three Hard
+# resets, back with no passphrase, timed (spec section 16, Ready item 2;
+# section 7 "Encrypted Macs: no remote unlock").
+#
+#   oob06-auto-unlock [--dry-run | --local | --lab --mini USER@HOST] [--m2-port PORT]
+#                     [--m2 NAME] [--within SECONDS] [--records DIR]
+#
+# Nobody touches the M2 Max while this runs: a Mac that waits at its
+# passphrase does not return, and the test fails on --within. A reset is a
+# Hard reset while the lab has a Sighting of the Mac; when it shows no name
+# and --m2-port names its port, each reset is a Proving reset of that port.
+set -euo pipefail
+# shellcheck source=scripts/cutover/out-of-band/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+oob_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
+  0. nobody touches the $M2's keyboard from here on
+  1. three times: ask lab reset $M2 (while it shows no name: lab reset $M2 --prove PORT, the port --m2-port names)
+     expects: sent; $M2 back on a new boot and ready within $WITHIN s, with no passphrase typed; each time is recorded
+  2. write docs/acceptance/$(today)-out-of-band-06.md and its line in docs/acceptance/$RESULTS_NAME
+No cable is touched. Nothing was sent and nothing was reset.
+PLAN
+  exit 0
+fi
+
+begin 06 "the M2 Max with auto-unlock: three Hard resets, back with no passphrase, timed"
+rec "nobody is at the $M2: a Mac that stops at its passphrase does not return, and fails this test"
+times=""
+for n in 1 2 3; do
+  boot="$(boot_of "$M2")"
+  [[ -n $boot ]] || give_up "the lab has no boot id for $M2: is it up?"
+  wait_until "$(if playing; then echo 5; else echo 45; fi)" is_placed "$M2" || true
+  T0="$(date +%s)"
+  if is_placed "$M2"; then
+    port="$(port_of "$M2")"
+    reset "$M2"
+    how="Hard reset"
+  else
+    port="$M2_PORT"
+    [[ -n $port ]] || give_up "reset $n of 3: the lab cannot place $M2 ($(cable_of "$M2")). If it shows no name, name its port with --m2-port"
+    reset "$M2" --prove "$port"
+    how="Proving reset"
+  fi
+  (( RESET_CODE == 0 )) || give_up "reset $n of 3: the $how of $M2 was refused: $(plain "$WORK/reset.out")"
+  wait_back "$M2" "$boot"
+  rec "reset $n of 3, a $how through the $port port: back on a new boot and ready, unattended, $BACK_SECONDS s after it was asked"
+  times="$times $BACK_SECONDS"
+done
+rec "the three returns, in seconds:$times"
+passed

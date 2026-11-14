@@ -1,0 +1,117 @@
+#!/bin/bash
+# Out-of-band wiring's test 3: two resets asked at the same moment for two
+# Macs run one after the other, each Mac reset once (spec section 16, Ready
+# item 2; section 7 "One Out-of-band controller").
+#
+#   oob03-two-at-once [--dry-run | --local | --lab --mini USER@HOST] [--m1-port PORT] [--m2-port PORT]
+#                     [--m1 NAME] [--m2 NAME] [--within SECONDS] [--records DIR]
+#
+# Both Macs must be placed: sighted, or placed here by a Proving reset of the
+# port --m1-port or --m2-port names (for a Mac that shows no name). Then
+# lab reset is started for both in the same instant. Each must be sent, each
+# Mac must return on one new boot and stay on it, and the controller must
+# have run the reset tool twice, once for each port, the second run after
+# the first had ended. No cable is touched.
+set -euo pipefail
+# shellcheck source=scripts/cutover/out-of-band/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+oob_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
+  1. see that the lab places $M1 and $M2 (lab oob), each on a port of its own
+     expects: both sighted; a Mac that shows no name is placed by a Proving reset of the port --m1-port or --m2-port names
+  2. start in the same instant: lab reset $M1 and lab reset $M2
+     expects: both are sent, each through its own port
+  3. wait for both Macs
+     expects: each back on a new boot within $WITHIN s, and still on that boot 30 s later: each was reset once
+  4. read the controller's log on the mini ($OOBD_LOG)
+     expects: two runs of the reset tool, one for each port, the second begun after the first ended
+  5. write docs/acceptance/$(today)-out-of-band-03.md and its line in docs/acceptance/$RESULTS_NAME
+No cable is touched. Nothing was sent and nothing was reset.
+PLAN
+  exit 0
+fi
+
+begin 03 "two resets asked at the same moment for two Macs run one after the other, each Mac reset once"
+placed "$M1"; port1="$PORT"
+placed "$M2"; port2="$PORT"
+[[ $port1 != "$port2" ]] || give_up "the lab places both Macs on the $port1 port"
+rec "$M1 is placed on the $port1 port and $M2 on the $port2 port"
+boot1="$(boot_of "$M1")"
+boot2="$(boot_of "$M2")"
+before=0
+if playing; then
+  before="$(fake_resets)"
+else
+  # shellcheck disable=SC2029
+  before="$(ssh "$MINI" grep -c "'RID [0-9]* reboot'" "$OOBD_LOG" 2>/dev/null || true)"
+fi
+
+T0="$(date +%s)"
+"$LAB_CMD" reset "$M1" > "$WORK/reset1.out" 2>&1 &
+pid1=$!
+"$LAB_CMD" reset "$M2" > "$WORK/reset2.out" 2>&1 &
+pid2=$!
+code1=0; code2=0
+wait "$pid1" || code1=$?
+wait "$pid2" || code2=$?
+(( code1 == 0 )) || give_up "the Hard reset of $M1, asked beside the other, was refused: $(plain "$WORK/reset1.out")"
+(( code2 == 0 )) || give_up "the Hard reset of $M2, asked beside the other, was refused: $(plain "$WORK/reset2.out")"
+rec "both asked at $(TZ=Australia/Brisbane date -r "$T0" '+%H:%M:%S' 2>/dev/null || date '+%H:%M:%S'): $(head -n 1 "$WORK/reset1.out" | sed 's/;.*//'); $(head -n 1 "$WORK/reset2.out" | sed 's/;.*//')"
+wait_back "$M1" "$boot1"; back1="$BACK_SECONDS"; new1="$(boot_of "$M1")"
+wait_back "$M2" "$boot2"; back2="$BACK_SECONDS"; new2="$(boot_of "$M2")"
+rec "$M1 back on a new boot after $back1 s, $M2 after $back2 s"
+sleep "$(if playing; then echo 3; else echo 30; fi)"
+[[ "$(boot_of "$M1")" == "$new1" && "$(boot_of "$M2")" == "$new2" ]] || give_up "a Mac restarted a second time: one of them was reset more than once"
+rec "each Mac is still on the boot it came back on: each was reset once"
+
+if playing; then
+  curl -fsS --max-time 20 "$FAKE/resets" | tail -n +"$((before + 1))" > "$WORK/runs"
+else
+  # shellcheck disable=SC2029
+  ssh "$MINI" grep "'RID [0-9]* reboot'" "$OOBD_LOG" 2> "$WORK/ssh.err" | tail -n +"$((before + 1))" > "$WORK/runs" || true
+  if [[ ! -s $WORK/runs ]]; then
+    rec "the controller's log on the mini was not read ($(plain "$WORK/ssh.err")): that the two runs did not overlap rests on the controller's one lock (internal/oobd's own test) and on each Mac having restarted once"
+    passed
+  fi
+fi
+runs="$(grep -c . "$WORK/runs" || true)"
+[[ $runs == 2 ]] || give_up "the reset tool ran $runs times for two resets: $(tr '\n' ' ' < "$WORK/runs")"
+if playing; then
+  [[ "$(sed -n 's/.* port=\([a-z]*\) .*/\1/p' "$WORK/runs" | sort | tr '\n' ' ')" == "$(printf '%s\n%s\n' "$port1" "$port2" | sort | tr '\n' ' ')" ]] \
+    || give_up "the two runs were not one for each port: $(tr '\n' ' ' < "$WORK/runs")"
+  ended="$(sed -n '1s/.* ended=//p' "$WORK/runs")"
+  began="$(sed -n '2s/.* began=\([0-9]*\) .*/\1/p' "$WORK/runs")"
+  (( began >= ended )) || give_up "the second run of the reset tool began before the first had ended: $(tr '\n' ' ' < "$WORK/runs")"
+  rec "the reset tool ran twice, once for each port, the second run $((began - ended)) ms after the first ended"
+else
+  rids="$(sed -n 's/.*RID \([0-9]*\) reboot.*/\1/p' "$WORK/runs" | sort -u | grep -c . || true)"
+  [[ $rids == 2 ]] || give_up "the controller's two runs were not one for each port: $(tr '\n' ' ' < "$WORK/runs")"
+  rec "the controller's log has two runs of the reset tool, one for each port, each line written as its run ended: $(sed 's/: err=.*//' "$WORK/runs" | tr '\n' ';' | sed 's/;$//; s/;/; /')"
+fi
+
+if playing; then
+  # A second press for the same Mac while the first is on its way sends no
+  # second reset.
+  wait_until 25 is_placed "$M1" "$port1" || place "$M1" "$port1"
+  before="$(fake_resets)"
+  boot1="$(boot_of "$M1")"
+  T0="$(date +%s)"
+  "$LAB_CMD" reset "$M1" > "$WORK/reset1.out" 2>&1 &
+  pid1=$!
+  "$LAB_CMD" reset "$M1" > "$WORK/reset2.out" 2>&1 &
+  pid2=$!
+  code1=0; code2=0
+  wait "$pid1" || code1=$?
+  wait "$pid2" || code2=$?
+  (( (code1 == 0) != (code2 == 0) )) || give_up "two presses for $M1 at once: both were sent, or neither: $(plain "$WORK/reset1.out") / $(plain "$WORK/reset2.out")"
+  wait_back "$M1" "$boot1"
+  [[ "$(fake_resets)" == "$((before + 1))" ]] || give_up "two presses for $M1 at once sent $(( $(fake_resets) - before )) resets"
+  rec "two presses for $M1 at once: one reset was sent, the other press refused: $(cat "$WORK/reset1.out" "$WORK/reset2.out" | grep -v '^Hard reset sent' | head -n 1)"
+fi
+passed

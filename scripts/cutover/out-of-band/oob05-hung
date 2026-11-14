@@ -1,0 +1,78 @@
+#!/bin/bash
+# Out-of-band wiring's test 5: a truly hung M1 Pro (crashed, watchdog off)
+# brought back from the mini (spec section 16, Ready item 2; section 17
+# "Recovery of a truly hung Mac").
+#
+#   oob05-hung [--dry-run | --local | --lab --mini USER@HOST] [--m1-port PORT] [--hang-wait SECONDS]
+#              [--m1 NAME] [--within SECONDS] [--records DIR]
+#
+# The owner is at the M1 Pro and hangs it with nothing left that would bring
+# it back by itself. The test waits, to see that it stays down; reads what
+# the mini still sees on its port; then asks for one Hard reset and times
+# the Mac's return.
+#
+#   --hang-wait SECONDS  how long the Mac must stay down by itself before
+#                        the reset (default 90: a watchdog or a panic reboot
+#                        left on would have brought it back by then)
+set -euo pipefail
+# shellcheck source=scripts/cutover/out-of-band/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+oob_options "$@"
+hang_wait=""
+if (( ${#REST[@]} )); then
+  [[ ${REST[0]} == --hang-wait && ${#REST[@]} == 2 && ${REST[1]} =~ ^[1-9][0-9]*$ ]] || fail "an option it does not take: ${REST[0]}. Nothing was done."
+  hang_wait="${REST[1]}"
+fi
+if [[ -z $hang_wait ]]; then
+  if [[ $MODE == local ]]; then hang_wait=3; else hang_wait=90; fi
+fi
+HANG="Hang the $M1 with its watchdog off, at the Mac, as root. One way: systemctl stop lab-agent; then sysctl kernel.panic=0; then echo 1 > /proc/sys/kernel/sysrq; echo c > /proc/sysrq-trigger. The screen must freeze and stay frozen."
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, and on the mini over SSH, it would:
+  1. see that the lab places $M1 (lab oob $M1)
+     expects: sighted; if it shows no name, placed by a Proving reset of the port --m1-port names
+  2. STOP, by hand: $HANG
+  3. wait $hang_wait s
+     expects: $M1 is on the boot it was on: nothing brought it back by itself
+  4. read what the mini sees on its port ($MINI_SCRIPTS/ports --seen)
+     expects: still connected; whether the product id is still read is recorded
+  5. ask: lab reset $M1 (a Proving reset of the port if the Sighting did not outlive the hang)
+     expects: sent; $M1 back on a new boot and ready within $WITHIN s; the time is recorded
+  6. write docs/acceptance/$(today)-out-of-band-05.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent and nothing was reset.
+PLAN
+  exit 0
+fi
+
+begin 05 "a truly hung M1 Pro (crashed, watchdog off) brought back from the mini"
+placed "$M1"; port="$PORT"
+mini_seen "$WORK/before"
+boot="$(boot_of "$M1")"
+rec "$M1 is placed on the $port port, product id $(seen_of "$WORK/before" "$port" product), plug count $(seen_of "$WORK/before" "$port" plugs), on boot $boot"
+
+hands "$HANG"
+! playing || fake silence "mac=$M1"
+sleep "$hang_wait"
+[[ "$(boot_of "$M1")" == "$boot" ]] || give_up "$M1 came back by itself within $hang_wait s: its watchdog or its panic reboot was still on, so it was not truly hung"
+rec "hung: $hang_wait s later $M1 is still on boot $boot; the lab says $(state_of "$M1")"
+
+mini_seen "$WORK/hung"
+[[ "$(seen_of "$WORK/hung" "$port" connected)" == yes ]] || give_up "the mini no longer sees anything on the $port port: was the cable pulled?"
+rec "on the hung Mac the mini reads: product id $(seen_of "$WORK/hung" "$port" product), plug count $(seen_of "$WORK/hung" "$port" plugs) (before: $(seen_of "$WORK/before" "$port" plugs)), connection id $(if [[ "$(seen_of "$WORK/hung" "$port" connection)" == "$(seen_of "$WORK/before" "$port" connection)" ]]; then echo unchanged; else echo changed; fi); the port shows: $(shows "$port")"
+
+T0="$(date +%s)"
+reset "$M1"
+how="a Hard reset"
+if (( RESET_CODE != 0 )); then
+  rec "the Sighting did not outlive the hang ($(plain "$WORK/reset.out")); a Proving reset of the $port port instead"
+  how="a Proving reset"
+  reset "$M1" --prove "$port"
+  (( RESET_CODE == 0 )) || give_up "the reset did not bring $M1 back: $(plain "$WORK/reset.out")"
+fi
+wait_back "$M1" "$boot"
+rec "brought back from the mini by $how through the $port port: on a new boot and ready $BACK_SECONDS s after it was asked"
+passed

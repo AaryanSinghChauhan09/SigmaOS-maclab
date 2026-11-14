@@ -1,0 +1,54 @@
+#!/bin/bash
+# Out-of-band wiring's test 2: a bad RID is refused twice: by the tool
+# (missing, not a number, negative, no such port) and by the controller
+# (not in its list) (spec section 16, Ready item 2; section 7).
+#
+#   oob02-bad-rid [--dry-run | --local | --lab --mini USER@HOST] [--records DIR]
+#
+# It is the port check of the mini (scripts/mini/ports), read for its five
+# refusals. The one command the tool is ever given there is nop: nothing is
+# reset and no cable is touched.
+set -euo pipefail
+# shellcheck source=scripts/cutover/out-of-band/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+oob_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. On the mini over SSH it would:
+  1. run the port check: sudo $MINI_SCRIPTS/ports (the owner types the password)
+     expects, from the tool itself: refused with no RID, with --rid x, with --rid -1, and with a RID no port has
+     expects, from the controller: a RID outside 0, 1, 2 answered 400 before any tool runs
+     expects: no line says FAIL; "nothing was reset"
+  2. write docs/acceptance/$(today)-out-of-band-02.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent and nothing was reset.
+PLAN
+  exit 0
+fi
+
+begin 02 "a bad RID refused by the tool and by the controller"
+before=0
+! playing || before="$(fake_resets)"
+mini_port_check "$WORK/ports.out"
+
+if playing; then
+  rec "the tool's own refusals: not run here, where there is no reset tool; internal/minitest runs the port check against a made-up tool"
+else
+  for what in "no RID" "a RID that is not a number" "a negative RID" "a RID with no such port"; do
+    line="$(grep "^ok    $what" "$WORK/ports.out" | head -n 1)"
+    [[ -n $line ]] || give_up "the tool did not refuse $what: $(grep -F "$what" "$WORK/ports.out" | head -n 1)"
+    rec "the tool refuses ${line#ok    }"
+  done
+fi
+refused="$(grep -c '^ok    RID [^ ]* is refused' "$WORK/ports.out" || true)"
+(( refused >= 1 )) || give_up "the controller did not refuse a RID that is not in its list"
+while IFS= read -r line; do rec "the controller: ${line#ok    }"; done < <(grep '^ok    RID [^ ]* is refused' "$WORK/ports.out")
+! grep -q '^FAIL ' "$WORK/ports.out" || give_up "the port check failed: $(grep '^FAIL ' "$WORK/ports.out" | head -n 3 | tr '\n' ' ')"
+if playing; then
+  [[ "$(fake_resets)" == "$before" ]] || give_up "a reset was sent"
+fi
+rec "nothing was reset"
+passed

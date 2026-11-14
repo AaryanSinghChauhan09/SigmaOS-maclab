@@ -84,7 +84,10 @@ type mini struct {
 	// itself: one whose watchdog was left on.
 	encrypted string
 	watchdog  bool
-	ctx       context.Context
+	// sloppy is a reset tool that does not keep to its port: every cabled
+	// Mac restarts.
+	sloppy bool
+	ctx    context.Context
 }
 
 func newUUID() string {
@@ -151,6 +154,13 @@ func (m *mini) Run(_ context.Context, rid int, command string) (string, error) {
 		sim.PowerCycle()
 	}
 	m.mu.Lock()
+	if m.sloppy {
+		for _, other := range m.cables {
+			if s := m.sims[other.mac]; s != nil && s != sim {
+				go s.PowerCycle()
+			}
+		}
+	}
 	delete(m.silent, c.mac)
 	if m.replug && m.cables[rid] == c {
 		m.plugs[rid]++
@@ -394,12 +404,13 @@ func main() {
 	replug := flag.Bool("reset-counts-as-plug", false, "a reset moves the port's plug count and connection id, as a pull would")
 	encrypted := flag.String("encrypted", "", "a Mac that stops at its passphrase after every reset: no auto-unlock")
 	watchdog := flag.Bool("watchdog", false, "a hung Mac comes back by itself after a second: its watchdog was left on")
+	sloppy := flag.Bool("reset-disturbs-all", false, "a reset restarts every cabled Mac, not only the one on its port")
 	flag.Parse()
 	if *files == "" || flag.NArg() != 0 {
 		log.Fatal("usage: fake-mini --files DIR")
 	}
 	m := &mini{dir: *files, cables: map[int]*cable{}, plugs: map[int]int{1: 27, 0: 42, 2: 40}, sims: map[string]*agent.Sim{},
-		silent: map[string]bool{}, between: map[int]bool{}, toolFor: *toolFor, replug: *replug, encrypted: *encrypted, watchdog: *watchdog, ctx: context.Background()}
+		silent: map[string]bool{}, between: map[int]bool{}, toolFor: *toolFor, replug: *replug, encrypted: *encrypted, watchdog: *watchdog, sloppy: *sloppy, ctx: context.Background()}
 
 	secret := make([]byte, 32)
 	rand.Read(secret)

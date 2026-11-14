@@ -974,6 +974,19 @@ starts the controller once a build is Deployed. `sudo scripts/mini/ports`
 checks all three ports with no reset: what the mini sees, the tool's answer,
 the controller's, and that a bad RID is refused by both.
 
+**The eight tests of this wiring** (Ready item 2) are
+`scripts/cutover/out-of-band/oob01-tool` to `oob08-refusals`, with `run`
+around them. With no option a test says its steps and what each expects and
+sends nothing. `--local` runs it against a labd on loopback and a made-up
+mini (`tools/fake-mini`: the controller's own code over made-up ports, with
+simulated Macs on its cables), which proves the script and the lab's rules,
+not the hardware. `--lab --mini USER@HOST` runs it through the Lab address
+on the real ports: it resets real Macs, stops wherever a cable or a hand is
+needed, and writes `docs/acceptance/YYYY-MM-DD-out-of-band-NN.md` and its
+line in `docs/acceptance/out-of-band.results`. `run --results` is green when
+all eight say pass. `scripts/mini/ports --seen` is what the tests read on
+the mini: one line a port, no root, no tool.
+
 ### The Signal sender on the mini
 
 labd tells two Signal groups what happens, a line for each event: the Lab

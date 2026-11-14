@@ -1,0 +1,110 @@
+#!/bin/bash
+# Out-of-band wiring's test 1: the pinned --rid tool on all three ports:
+# status, three resets, power-on from shutdown, a second cabled Mac
+# undisturbed (spec section 16, Ready item 2; section 7 "Ports", "Tool").
+#
+#   oob01-tool [--dry-run | --local | --lab --mini USER@HOST] [--ports "right left middle"]
+#              [--m1 NAME] [--m2 NAME] [--within SECONDS] [--records DIR]
+#
+# The M1 Pro's cable goes on each of the mini's rear ports in turn while the
+# M2 Max stays cabled to another one. On each port: the port check (the tool's
+# own answer through the Out-of-band controller, with no reset), three Hard
+# resets through the lab, then the Mac is shut down and a reset must power it
+# on. The M2 Max must be on the same boot at the end of each port as at its
+# start. Twelve resets of the M1 Pro in all; none of the M2 Max.
+#
+#   --ports LIST   the ports, in the order the cable visits them (default:
+#                  right, where the M1 Pro is today, then left, then middle)
+set -euo pipefail
+# shellcheck source=scripts/cutover/out-of-band/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+oob_options "$@"
+ports="right left middle"
+if (( ${#REST[@]} )); then
+  [[ ${REST[0]} == --ports && ${#REST[@]} == 2 ]] || fail "an option it does not take: ${REST[0]}. Nothing was done."
+  ports="${REST[1]}"
+fi
+for port in $ports; do
+  [[ $port == left || $port == middle || $port == right ]] || fail "--ports: $port is not left, middle or right"
+done
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, and on the mini over SSH, it would:
+  1. read the reset tool's SHA-256 on the mini and its line in deploy/pins
+     expects: the tool the Deployed build brought, at $MINI_TOOL
+  then, for each port in turn ($ports):
+  2. STOP, by hand: put the $M1's cable on that port; the $M2 stays cabled to another port (moved first if it is on that one)
+  3. wait for the lab to place $M1 on that port by its name (lab oob $M1)
+     expects: "sighted on the PORT port" within 90 s; a Mac that shows no name is placed by a Proving reset
+  4. run the port check on the mini: sudo $MINI_SCRIPTS/ports (the owner types the password)
+     expects: the tool answers on the connected port, no line says FAIL, nothing was reset
+  5. ask three times: lab reset $M1
+     expects: each is sent through that port; $M1 is back on a new boot within $WITHIN s; $M2 keeps its boot id
+  6. STOP, by hand: shut $M1 down (at the Mac: sudo systemctl poweroff) and wait until it is off
+  7. ask: lab reset $M1 (a Proving reset of the port if the Sighting did not outlive the shutdown)
+     expects: $M1 powers on and is back within $WITHIN s; $M2 keeps its boot id
+  8. write docs/acceptance/$(today)-out-of-band-01.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent and nothing was reset.
+PLAN
+  exit 0
+fi
+
+begin 01 "the pinned --rid tool on all three ports: status, three resets, power-on from shutdown, a second cabled Mac undisturbed"
+
+if playing; then
+  rec "the reset tool: made up here; its pin is checked where a build is made (release/reset-tool.sh)"
+else
+  # shellcheck disable=SC2029
+  sum="$(ssh "$MINI" shasum -a 256 "$MINI_TOOL" 2> "$WORK/ssh.err" | cut -d' ' -f1)"
+  [[ $sum =~ ^[0-9a-f]{64}$ ]] || give_up "the reset tool was not read at $MINI_TOOL on the mini: $(plain "$WORK/ssh.err")"
+  rec "the reset tool on the mini: $MINI_TOOL, sha256 $sum; its pin in deploy/pins: $(grep '^macvdmtool ' "$REPO/deploy/pins" | cut -d' ' -f1-3)"
+fi
+
+for port in $ports; do
+  hands "Put the $M1's cable on the $(echo "$port" | tr '[:lower:]' '[:upper:]') rear port of the mini (facing its back). The $M2 stays cabled to another port: if it is on that one, move it to a free port first."
+  if playing; then
+    other=middle
+    [[ $port != middle ]] || other=left
+    play_cables "$port" "$other"
+  fi
+  place "$M1" "$port"
+  bystander="$(boot_of "$M2")"
+  [[ -n $bystander ]] || give_up "the lab has no boot id for $M2: it must be up, and cabled to another port"
+
+  mini_port_check "$WORK/ports.out"
+  mini_seen "$WORK/seen"
+  rid="$(seen_of "$WORK/seen" "$port" rid)"
+  ! grep -q '^FAIL ' "$WORK/ports.out" || give_up "the port check failed on the mini: $(grep '^FAIL ' "$WORK/ports.out" | head -n 3 | tr '\n' ' ')"
+  answer="$(grep "^ok    RID $rid: {" "$WORK/ports.out" | head -n 1)"
+  [[ $answer == *'"connected":true'* && $answer == *'"tool":'* && $answer != *'"tool_failed":true'* ]] \
+    || give_up "$port port (RID $rid): the tool gave no answer for a connected port through the controller: ${answer:-nothing}"
+  rec "$port port (RID $rid), status: ${answer#ok    }"
+
+  for n in 1 2 3; do
+    wait_until "$(if playing; then echo 25; else echo 90; fi)" is_placed "$M1" "$port" || place "$M1" "$port"
+    hard_reset "$M1" "$port port, reset $n of 3"
+    [[ "$(boot_of "$M2")" == "$bystander" ]] || give_up "$M2 restarted while $M1 was reset on the $port port: a second cabled Mac was disturbed"
+  done
+
+  wait_until "$(if playing; then echo 25; else echo 90; fi)" is_placed "$M1" "$port" || place "$M1" "$port"
+  boot="$(boot_of "$M1")"
+  hands "Shut the $M1 down: at the Mac, sudo systemctl poweroff. Wait until it is off (screen dark, no fan)."
+  ! playing || fake silence "mac=$M1"
+  T0="$(date +%s)"
+  reset "$M1"
+  how="a Hard reset"
+  if (( RESET_CODE != 0 )); then
+    rec "$port port, power-on: the Sighting did not outlive the shutdown ($(plain "$WORK/reset.out")); a Proving reset of the port instead"
+    how="a Proving reset"
+    reset "$M1" --prove "$port"
+    (( RESET_CODE == 0 )) || give_up "$port port: the reset did not power $M1 on: $(plain "$WORK/reset.out")"
+  fi
+  wait_back "$M1" "$boot"
+  rec "$port port, power-on from shutdown by $how: back on a new boot and ready $BACK_SECONDS s after it was asked"
+  [[ "$(boot_of "$M2")" == "$bystander" ]] || give_up "$M2 restarted while $M1 was powered on from the $port port"
+  rec "$port port: $M2 kept its boot id through all four ($bystander)"
+done
+passed

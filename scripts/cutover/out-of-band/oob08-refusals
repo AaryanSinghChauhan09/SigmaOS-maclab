@@ -1,0 +1,152 @@
+#!/bin/bash
+# Out-of-band wiring's test 8: refusals. A Mac with no Sighting is refused a
+# Hard reset; with the controller stopped a reset is refused, and /status
+# and "Agents" say so (spec section 16, Ready item 2; section 7 "With no
+# Sighting", "While Dark").
+#
+#   oob08-refusals [--dry-run | --local | --lab --mini USER@HOST] [--volunteers-mac NAME] [--m2-port PORT]
+#                  [--m1 NAME] [--m2 NAME] [--records DIR]
+#
+# First the M1 Pro's cable is pulled: the lab must drop its Sighting, refuse
+# the reset with the reason and leave the Mac on its boot. Then the
+# controller is stopped on the mini: a reset of the other Mac is refused
+# with the reason, /status shows the controller as not answering, and after
+# two minutes "Agents" is told; started again, both say so. No reset is
+# sent by this test unless a Mac that shows no name has to be placed first.
+#
+#   --volunteers-mac NAME  also ask for a Hard reset and a Proving reset of
+#                          this Volunteer's Mac: both must be refused. With
+#                          no such Mac in the lab the record says it was
+#                          not run here (the Volunteer's checks ran it)
+set -euo pipefail
+# shellcheck source=scripts/cutover/out-of-band/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+oob_options "$@"
+volunteers=""
+if (( ${#REST[@]} )); then
+  [[ ${REST[0]} == --volunteers-mac && ${#REST[@]} == 2 && ${REST[1]} =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail "an option it does not take: ${REST[0]}. Nothing was done."
+  volunteers="${REST[1]}"
+fi
+TROUBLE="The Out-of-band controller on the mini is not healthy"
+RECOVERED="The Out-of-band controller on the mini answers again."
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, and on the mini over SSH, it would:
+  1. STOP, by hand: pull the cable of $M1 out of the mini
+  2. wait for the lab to drop its Sighting (lab oob $M1), then ask: lab reset $M1
+     expects: refused, "no Hard reset was sent" with the reason; $M1 keeps its boot id
+  3. STOP, by hand: put the cable back; wait for the lab to place $M1 again
+  4. with --volunteers-mac NAME, ask: lab reset NAME, and lab reset NAME --prove left
+     expects: both refused: "the lab never sends a Volunteer's Mac a Hard reset"
+  5. see that the lab places $M2, then stop the controller on the mini: sudo launchctl bootout system/$OOBD_LABEL (the owner types the password)
+  6. ask: lab reset $M2
+     expects: refused, "the Out-of-band controller is not healthy"; $M2 keeps its boot id; lab oob $M2 says it has no Hard reset
+  7. read $ADDRESS/status, for up to 90 s
+     expects: "Out-of-band controller: not answering since ..."
+  8. wait 4 minutes, then ask the owner whether "Agents" got: $TROUBLE ...
+     expects: yes
+  9. start the controller again: sudo launchctl bootstrap system $OOBD_PLIST
+     expects: /status says "answering" within 90 s; lab oob says healthy; "Agents" gets: $RECOVERED
+ 10. write docs/acceptance/$(today)-out-of-band-08.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent and nothing was reset.
+PLAN
+  exit 0
+fi
+
+begin 08 "refusals: a Mac with no Sighting, and the controller stopped (/status and \"Agents\")"
+# agents_has TEXT: the made-up lab's own record of its lines for "Agents".
+# shellcheck disable=SC2329
+agents_has() { [[ -n "$(sqlite3 "file:$LOCAL_DATA/labd.db?mode=ro" "SELECT 1 FROM lines WHERE channel = 'agents' AND instr(text, '$1') > 0 LIMIT 1" 2>/dev/null)" ]]; }
+# never MAC WHAT ARGS...: a reset that must be refused with every piece of
+# REASONS (one a line), sending nothing and leaving the Mac on its boot.
+never() {
+  local mac="$1" what="$2" boot sent=0 piece
+  shift 2
+  boot="$(boot_of "$mac")"
+  ! playing || sent="$(fake_resets)"
+  reset "$mac" "$@"
+  (( RESET_CODE != 0 )) || give_up "$what: the reset was sent: $(plain "$WORK/reset.out")"
+  while IFS= read -r piece; do
+    said "$piece" || give_up "$what: refused, but not saying \"$piece\": $(plain "$WORK/reset.out")"
+  done <<<"$REASONS"
+  sleep "$(if playing; then echo 2; else echo 20; fi)"
+  [[ "$(boot_of "$mac")" == "$boot" ]] || give_up "$what: $mac restarted all the same"
+  if playing; then
+    [[ "$(fake_resets)" == "$sent" ]] || give_up "$what: the reset tool ran all the same"
+  fi
+  rec "$what: refused, and $mac kept its boot id: $(plain "$WORK/reset.out")"
+}
+
+placed "$M1"; port="$PORT"
+hands "Pull the cable of the $M1 out of the mini's $(echo "$port" | tr '[:lower:]' '[:upper:]') port and leave it out."
+! playing || fake unplug "port=$port"
+wait_until 90 is_unplaced "$M1" || give_up "with its cable pulled the lab still places $M1: $(cable_of "$M1")"
+rec "with its cable pulled, $M1 is: $(cable_of "$M1")"
+REASONS="no Hard reset was sent"
+never "$M1" "a Mac with no Sighting"
+hands "Put the cable of the $M1 back into the mini's $(echo "$port" | tr '[:lower:]' '[:upper:]') port."
+! playing || fake plug "port=$port" "mac=$M1"
+place "$M1" "$port"
+
+if playing; then
+  # The port changes between labd's look and the controller's: the
+  # controller's own look, under its lock, refuses.
+  # shellcheck disable=SC2034
+  for try in 1 2 3; do
+    wait_until 25 is_placed "$M1" "$port" || place "$M1" "$port"
+    fake between "port=$port"
+    reset "$M1"
+    ! said "no reset was sent" || break
+  done
+  if (( RESET_CODE == 0 )) || ! said "no reset was sent" || ! said "The Sighting of $M1 is dropped"; then
+    give_up "the port changed between the lab's look and the reset: not refused by the controller: $(plain "$WORK/reset.out")"
+  fi
+  rec "the port changed between the lab's look and the reset: refused by the controller under its lock: $(plain "$WORK/reset.out")"
+  volunteers=loaner
+  [[ -e $BIN/lab-agent-linux-arm64 ]] || fail "no lab-agent-linux-arm64 in $BIN: labd makes no Join command for a Volunteer's Mac without it; run make all"
+  fake volunteer "lab=$ADDRESS" "name=$volunteers" "account=1001"
+  fake plug "port=left" "mac=$volunteers"
+  sleep 16
+fi
+if [[ -n $volunteers ]]; then
+  "$LAB_CMD" oob "$volunteers" 2>/dev/null | grep -q "a Volunteer's Mac" || give_up "$volunteers is not a Volunteer's Mac of this lab: $("$LAB_CMD" oob "$volunteers" 2>&1 | head -n 1)"
+  REASONS="the lab never sends a Volunteer's Mac a Hard reset"
+  never "$volunteers" "a Hard reset of a Volunteer's Mac"
+  never "$volunteers" "a Proving reset aimed at a Volunteer's Mac" --prove left
+else
+  rec "a Volunteer's Mac: not run here, the lab has none now (--volunteers-mac names one); the Volunteer's checks ran it on the M2 Max before it Joined as $M2"
+fi
+
+placed "$M2"
+status_says "Out-of-band controller" "answering" || give_up "before the controller is stopped /status says of it: $(status_part "Out-of-band controller")"
+mini_controller stop
+rec "the controller is stopped on the mini"
+REASONS="$(printf 'no Hard reset was sent\nthe Out-of-band controller is not healthy')"
+never "$M2" "a Hard reset with the controller stopped"
+"$LAB_CMD" oob "$M2" 2>/dev/null | grep -q '^  hard reset:  none: ' || give_up "with the controller stopped lab oob $M2 still shows a Hard reset: $("$LAB_CMD" oob "$M2" 2>&1 | sed -n 3p)"
+rec "lab oob $M2: $("$LAB_CMD" oob "$M2" 2>/dev/null | sed -n 's/^  hard reset:  *//p')"
+wait_until 90 status_says "Out-of-band controller" "not answering since*" || give_up "/status does not say the controller is not answering: $(status_part "Out-of-band controller")"
+rec "/status: Out-of-band controller: $(status_part "Out-of-band controller")"
+if playing; then
+  wait_until 240 agents_has "$TROUBLE" || give_up "\"Agents\" was not told within 4 minutes"
+else
+  say "waiting 4 minutes: \"Agents\" is told once the controller has been wrong for 2"
+  sleep 240
+  confirm "Did \"Agents\" (Signal) get a line that begins: $TROUBLE?" || give_up "\"Agents\" was not told that the controller is not healthy"
+fi
+rec "\"Agents\" was told: $TROUBLE"
+
+mini_controller start
+wait_until 90 status_says "Out-of-band controller" "answering" || give_up "started again, /status still says of the controller: $(status_part "Out-of-band controller")"
+wait_until 60 eval "\"$LAB_CMD\" oob \"$M2\" 2>/dev/null | grep -q '^  controller:  *healthy'" || give_up "started again, the lab does not say the controller is healthy"
+rec "the controller started again: /status says $(status_part "Out-of-band controller"), lab oob says healthy"
+if playing; then
+  wait_until 90 agents_has "$RECOVERED" || give_up "\"Agents\" was not told that the controller answers again"
+else
+  confirm "Did \"Agents\" get: $RECOVERED" || give_up "\"Agents\" was not told that the controller answers again"
+fi
+rec "\"Agents\" was told: $RECOVERED"
+passed
