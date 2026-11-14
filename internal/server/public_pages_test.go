@@ -1030,6 +1030,10 @@ func TestARunOnAnImageNamingItsSetIsOfferedByTheSetsName(t *testing.T) {
 }
 
 // The public pages need reports.db alone: they render with labd.db gone.
+// laterPages are the public pages that came after the first four, on the
+// production reports: each must do what those do.
+var laterPages = []string{"/reports", "/reports?gen=m1&confirmed=1", "/reports/" + m3ID, "/gaps", "/aurora", "/benchmarks", "/candidates", "/data"}
+
 func TestEachPublicPageRendersWithLabdDBAbsent(t *testing.T) {
 	l := newPublicLab(t, nil)
 	l.production()
@@ -1043,7 +1047,7 @@ func TestEachPublicPageRendersWithLabdDBAbsent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, target := range []string{"/", "/matrix", "/matrix?group=build", "/matrix?group=release&gen=m1", "/models", "/models/j613", "/features", "/features/gpu"} {
+	for _, target := range append([]string{"/", "/matrix", "/matrix?group=build", "/matrix?group=release&gen=m1", "/models", "/models/j613", "/features", "/features/gpu"}, laterPages...) {
 		page := l.page(target)
 		if page.count(t, "main") != 1 || page.count(t, "footer.site-footer") != 1 {
 			t.Errorf("%s is not a whole page", target)
@@ -1057,7 +1061,7 @@ func TestThePublicPagesPolicyIsHostBasedAndTheyCarryNothingInline(t *testing.T) 
 	l := newPublicLab(t, nil)
 	l.production()
 	l.exec(`UPDATE reports SET verified = 1, handle = 'maralcbr', account_id = 5 WHERE public_id = ?`, m3ID)
-	for _, target := range []string{"/", "/matrix", "/matrix?group=build", "/models", "/models/j613", "/features", "/features/gpu"} {
+	for _, target := range append([]string{"/", "/matrix", "/matrix?group=build", "/models", "/models/j613", "/features", "/features/gpu"}, laterPages...) {
 		w := l.do("GET", target, "")
 		csp := w.Header().Get("Content-Security-Policy")
 		if csp != web.CSP || !strings.Contains(csp, "script-src 'self'") || !strings.Contains(csp, "style-src 'self'") {
@@ -1096,7 +1100,7 @@ func TestThePublicPagesPolicyIsHostBasedAndTheyCarryNothingInline(t *testing.T) 
 		t.Errorf("the bring-up table says %q", got)
 	}
 	for _, words := range []string{"tester run", "a tester", "Tester"} {
-		for _, target := range []string{"/matrix?group=build", "/models", "/models/j613", "/features"} {
+		for _, target := range append([]string{"/matrix?group=build", "/models", "/models/j613", "/features"}, laterPages...) {
 			if strings.Contains(l.do("GET", target, "").Body.String(), words) {
 				t.Errorf("%s still says %q", target, words)
 			}
@@ -1107,7 +1111,7 @@ func TestThePublicPagesPolicyIsHostBasedAndTheyCarryNothingInline(t *testing.T) 
 func TestInPreviewThePublicPagesCarryTheBanner(t *testing.T) {
 	l := newPublicLab(t, func(c *Config) { c.Preview = true })
 	l.add(goldenDoc(t, "m2-max-image2"), "a")
-	for _, target := range []string{"/", "/matrix", "/models", "/models/j416c", "/features", "/features/gpu"} {
+	for _, target := range []string{"/", "/matrix", "/models", "/models/j416c", "/features", "/features/gpu", "/reports", "/gaps", "/aurora", "/benchmarks", "/candidates", "/data"} {
 		if l.page(target).count(t, "p.preview-banner") != 1 {
 			t.Errorf("%s has no Preview banner", target)
 		}

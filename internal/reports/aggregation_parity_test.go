@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -72,8 +74,172 @@ func seededCorpus(t testing.TB) ([]*Report, []seeded) {
 			add(doc, now.Add(-time.Duration(3-index)*time.Hour+time.Duration(n)*time.Second), machine, true)
 		}
 	}
-	add(parse(t, read(t, filepath.Join(goldenDir, "benchmarks", "m2-max-converged.json"))), now.Add(-30*time.Minute), "demo-a", true)
+	benchmark := func() *Object {
+		return parse(t, read(t, filepath.Join(goldenDir, "benchmarks", "m2-max-converged.json")))
+	}
+	add(benchmark(), now.Add(-30*time.Minute), "demo-a", true)
+
+	// Past the seeds, what the later pages count: runs on images that name
+	// their candidate set (two failing on a regression, one waiting, one
+	// passing), a second machine's benchmark
+	// scores, and a storage score with its SSD's capacity.
+	onSet := func(doc *Object, set string) *Object {
+		system := asObject(member(doc, "system"))
+		system.set("candidate_set", set)
+		system.set("image", obj("format", "1", "platform", "apple-silicon", "candidate_set", set, "image_profile", "test", "built", "2026-10-05T01:02:03Z"))
+		return doc
+	}
+	working := func(outcomes ...string) *Object {
+		doc := golden(t, "m2-max-converged")
+		for _, item := range member(doc, "checks").([]any) {
+			if c := asObject(item); text(member(c, "classification", "outcome")) == "fails" {
+				c.set("status", "pass")
+				asObject(member(c, "classification")).set("outcome", "works")
+			}
+		}
+		for i := 0; i+1 < len(outcomes); i += 2 {
+			c := check(t, doc, outcomes[i])
+			c.set("status", "fail")
+			asObject(member(c, "classification")).set("outcome", outcomes[i+1])
+		}
+		return doc
+	}
+	scaled := func(percent int64) *Object {
+		doc := benchmark()
+		for _, item := range member(doc, "checks").([]any) {
+			if value, ok := member(asObject(item), "score", "value").(*big.Int); ok {
+				asObject(member(asObject(item), "score")).set("value", new(big.Int).Div(new(big.Int).Mul(value, big.NewInt(percent)), big.NewInt(100)))
+			}
+		}
+		return doc
+	}
+	add(onSet(working(), "edge-demo"), now.Add(-25*time.Minute), "demo-a", true)
+	add(onSet(golden(t, "m2-max-converged"), "edge-demo"), now.Add(-24*time.Minute), "demo-c", false)
+	add(onSet(working("gpu.driver", "fails", "gpu.vulkan", "fails"), "edge-demo"), now.Add(-23*time.Minute), "demo-b", true)
+	add(onSet(working("gpu.driver", "fails", "gpu.vulkan", "fails"), "edge-failing"), now.Add(-22*time.Minute), "demo-b", true)
+	add(onSet(golden(t, "m2-max-converged"), "edge-waiting"), now.Add(-21*time.Minute), "demo-c", false)
+	add(onSet(working(), "edge-passing"), now.Add(-21*time.Minute+time.Second), "demo-a", true)
+	add(scaled(110), now.Add(-20*time.Minute), "demo-c", false)
+	storage := scaled(90)
+	asObject(member(storage, "machine")).set("storage", "1TB")
+	storage.set("checks", append(member(storage, "checks").([]any), obj("id", "benchmark.storage", "kind", "automatic", "status", "pass", "evidence", []any{"sequential read: 3000 MB/s"},
+		"classification", obj("outcome", "works", "feature", "nvme", "layer", "asahi", "expected", obj("asahi", "upstream")),
+		"score", obj("value", big.NewInt(3000), "unit", "MBps", "tool", "fio 3.38", "suite", big.NewInt(1)))))
+	add(storage, now.Add(-19*time.Minute), "demo-d", false)
 	return list, entries
+}
+
+// seededReports is how many reports the corpus holds.
+const seededReports = 25
+
+// The exports both sides write: the same list as AggregationDump::EXPORTS.
+var parityExports = []struct {
+	file  string
+	query [][2]string
+}{
+	{"reports.json", [][2]string{{"model", "j613"}}}, {"reports.json", [][2]string{{"gen", "m1"}, {"tool", "0.1.8"}, {"confirmed", "1"}}}, {"reports.json", [][2]string{{"set", "edge-demo"}}},
+	{"reports.csv", nil}, {"reports.csv", [][2]string{{"confirmed", "1"}, {"runs", "tester"}}},
+	{"checks.csv", nil}, {"checks.csv", [][2]string{{"model", "j416c"}, {"state", "regression"}}}, {"checks.csv", [][2]string{{"layer", "aurora"}, {"confirmed", "1"}, {"state", "gap"}}},
+	{"matrix.json", nil}, {"matrix.json", [][2]string{{"group", "release"}}}, {"matrix.json", [][2]string{{"group", "model"}}},
+	{"matrix.json", [][2]string{{"group", "model"}, {"confirmed", "1"}, {"gen", "m2"}}}, {"matrix.json", [][2]string{{"layer", "asahi"}, {"state", "works"}}},
+	{"benchmarks.json", nil}, {"aurora.json", nil},
+}
+
+var reGeneratedAt = regexp.MustCompile(`"generated_at":"[^"]*"`)
+
+// dumpExports is each export as it is served, less the time it was made;
+// reports.json as data, the others as their text.
+func dumpExports(t testing.TB, p *Published) map[string]any {
+	urlFor := func(run *Run) string { return "http://www.example.com/reports/" + run.PublicID }
+	timeless := func(export []byte) string {
+		return reGeneratedAt.ReplaceAllString(string(export), `"generated_at":"-"`)
+	}
+	at := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	out := map[string]any{}
+	for _, export := range parityExports {
+		name, query := export.file, url.Values{}
+		for _, pair := range export.query {
+			name += " " + pair[0] + "=" + pair[1]
+			query.Set(pair[0], pair[1])
+		}
+		switch export.file {
+		case "reports.json":
+			var body map[string]any
+			decode(t, p.ReportsJSON(p.Filter(query, ListKeys), urlFor, at), &body)
+			delete(body, "generated_at")
+			out[name] = body
+		case "reports.csv":
+			out[name] = string(p.ReportsCSV(p.Filter(query, ListKeys), urlFor))
+		case "checks.csv":
+			out[name] = string(p.ChecksCSV(p.Filter(query, nil)))
+		case "matrix.json":
+			out[name] = timeless(p.MatrixJSON(query.Get("group"), p.Filter(query, nil), at))
+		case "benchmarks.json":
+			out[name] = timeless(p.BenchmarksJSON(nil, at))
+		case "aurora.json":
+			out[name] = timeless(p.AuroraJSON(urlFor, at))
+		}
+	}
+	return out
+}
+
+func dumpGaps(p *Published) map[string]any {
+	gaps := p.Gaps()
+	reported := map[string]any{}
+	for _, outcome := range ReportedOutcomes {
+		list := []any{}
+		for _, gap := range gaps.Reported(outcome) {
+			list = append(list, map[string]any{"feature": gap.Feature, "soc": gap.SoC, "chip": gap.Chip, "runs": publicIDs(gap.Runs), "machines": gap.Machines(), "models": gap.Models()})
+		}
+		reported[outcome] = list
+	}
+	unclaimed := []any{}
+	for _, hardware := range gaps.UnclaimedHardware() {
+		chips := []any{}
+		for _, chip := range hardware.Chips() {
+			chips = append(chips, []any{chip[0], chip[1]})
+		}
+		unclaimed = append(unclaimed, map[string]any{"compatible": hardware.Compatible, "outcome": hardware.Outcome, "feature": hardware.Feature, "runs": publicIDs(hardware.Runs),
+			"machines": hardware.Machines(), "models": hardware.Models(), "chips": chips})
+	}
+	catalogue := func(found []CatalogueGap) []any {
+		list := []any{}
+		for _, gap := range found {
+			list = append(list, []any{id(gap.Feature), gap.Chips})
+		}
+		return list
+	}
+	return map[string]any{"reported": reported, "unclaimed": unclaimed, "missing": catalogue(gaps.MissingInAurora()), "unverified": catalogue(gaps.UnverifiedInAurora())}
+}
+
+func dumpCandidates(p *Published) map[string]any {
+	findings := func(found []Finding) []any {
+		list := []any{}
+		for _, finding := range found {
+			list = append(list, []any{finding.Row.Configuration.Label(), id(finding.Feature), finding.Cell.State()})
+		}
+		return list
+	}
+	names, sets := []string{}, []any{}
+	for _, set := range p.CandidateSets() {
+		names = append(names, set.Name)
+		rows, models := []any{}, []any{}
+		for _, row := range set.TestedRows() {
+			rows = append(rows, row.Configuration.Label())
+			known := false
+			for _, model := range models {
+				known = known || model == row.ModelName
+			}
+			if !known {
+				models = append(models, row.ModelName)
+			}
+		}
+		sets = append(sets, map[string]any{"name": set.Name, "runs": publicIDs(set.Runs), "tester_runs": len(set.VerifiedRuns()), "latest": set.Latest().PublicID,
+			"verdict": set.Verdict(), "failures": findings(set.Failures()), "regressions": len(set.Regressions()), "partials": findings(set.Partials()),
+			"tested_rows": rows, "models": models, "found": publicIDs(p.CandidateSet(set.Name).Runs), "matched": publicIDs(set.MatchedBy())})
+	}
+	sort.Strings(names)
+	return map[string]any{"names": names, "sets": sets}
 }
 
 // The views both sides count: the same list as AggregationDump::VIEWS.
@@ -158,7 +324,7 @@ func dumpOptions(options *Options, keys []string) map[string]any {
 	return out
 }
 
-func aggregationDump(p *Published) map[string]any {
+func aggregationDump(t testing.TB, p *Published) map[string]any {
 	runs := []any{}
 	for _, run := range p.Runs() {
 		counts := func(confirmed bool) map[string]any {
@@ -229,7 +395,12 @@ func aggregationDump(p *Published) map[string]any {
 		}
 		regressions = append(regressions, entry)
 	}
+	builds := []any{}
+	for _, on := range RunsByBuild(p.Runs()) {
+		builds = append(builds, []any{on.Build.Words(), publicIDs(on.Runs)})
+	}
 	return map[string]any{"runs": runs, "matrices": matrices, "history": history, "lineup": lineup, "regressions": regressions,
+		"exports": dumpExports(t, p), "gaps": dumpGaps(p), "candidates": dumpCandidates(p), "builds": builds,
 		"options": map[string]any{"all": dumpOptions(p.Options(nil), FilterKeys),
 			"features model=j416c": dumpOptions(p.Options(p.Filter(url.Values{"model": {"j416c"}}, FeatureKeys)), FeatureKeys)}}
 }
@@ -245,7 +416,8 @@ func differences(path string, old, ours any, out *[]string) {
 	if len(*out) >= 40 {
 		return
 	}
-	if s, ok := old.(string); ok {
+	// The exports keep the old site's words: what reads them must keep working.
+	if s, ok := old.(string); ok && !strings.HasPrefix(path, ".exports") {
 		old = oldWords.Replace(s)
 	}
 	if old == nil {
@@ -303,7 +475,7 @@ func TestTheCountsAreTheOldSites(t *testing.T) {
 	p := NewPublished(testCatalogue(t), list)
 	// Through JSON, so both sides are read alike.
 	var ours any
-	text, err := json.MarshalIndent(aggregationDump(p), "", "  ")
+	text, err := json.MarshalIndent(aggregationDump(t, p), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,8 +512,10 @@ func TestTheCountsAreTheOldSites(t *testing.T) {
 	decode(t, data, &old)
 	runs, _ := old["runs"].([]any)
 	views, _ := old["matrices"].(map[string]any)
-	if len(runs) != len(list) || len(list) != 17 || len(views) != len(parityViews) {
-		t.Fatalf("the old site counted %d reports in %d views; the corpus has %d reports, want 17, in %d views", len(runs), len(views), len(list), len(parityViews))
+	exports, _ := old["exports"].(map[string]any)
+	if len(runs) != len(list) || len(list) != seededReports || len(views) != len(parityViews) || len(exports) != len(parityExports) {
+		t.Fatalf("the old site counted %d reports in %d views and wrote %d exports; the corpus has %d reports, want %d, in %d views, with %d exports",
+			len(runs), len(views), len(exports), len(list), seededReports, len(parityViews), len(parityExports))
 	}
 	var differ []string
 	differences("", any(old), ours, &differ)

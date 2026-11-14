@@ -62,7 +62,7 @@ func texts(list []string) []any {
 // rubyFloat prints a number as Ruby's Float#to_s does: "3136.5", "3000.0",
 // "1.0e+16".
 func rubyFloat(f float64) string {
-	if abs := math.Abs(f); abs != 0 && (abs >= 1e16 || abs < 1e-4) {
+	if abs := math.Abs(f); abs != 0 && (abs >= 1e15 || abs < 1e-4) {
 		mantissa, exponent, _ := strings.Cut(strconv.FormatFloat(f, 'e', -1, 64), "e")
 		if !strings.Contains(mantissa, ".") {
 			mantissa += ".0"

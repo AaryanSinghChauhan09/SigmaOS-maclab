@@ -1,6 +1,7 @@
 # What the public pages count, as plain data: the builds, the matrix in each
 # grouping and under each filter, the bring-up table, the filter bar's
-# choices and the open regressions. The Go port writes the same from the same
+# choices, the open regressions, the kernel gaps, the candidate sets and the
+# exports as they are served (less the time they were made). The Go port writes the same from the same
 # reports (internal/reports/aggregation_parity_test.go) and the two are
 # compared. Used by page_parity_test.rb, and without Rails by the harness
 # that loads the models alone.
@@ -19,9 +20,27 @@ module AggregationDump
     [ "build", { "release" => "4.0.0-alpha", "stack" => "converged" } ], [ "build", { "stack" => "mx-mac" } ], [ "model", { "model" => "j999" } ]
   ].freeze
 
+  # The exports compared: a file and its parameters. reports.json is compared
+  # as data (Postgres keeps a report's members in its own order), the others
+  # byte for byte.
+  EXPORTS = [
+    [ "reports.json", { "model" => "j613" } ], [ "reports.json", { "gen" => "m1", "tool" => "0.1.8", "confirmed" => "1" } ], [ "reports.json", { "set" => "edge-demo" } ],
+    [ "reports.csv", {} ], [ "reports.csv", { "confirmed" => "1", "runs" => "tester" } ],
+    [ "checks.csv", {} ], [ "checks.csv", { "model" => "j416c", "state" => "regression" } ], [ "checks.csv", { "layer" => "aurora", "confirmed" => "1", "state" => "gap" } ],
+    [ "matrix.json", {} ], [ "matrix.json", { "group" => "release" } ], [ "matrix.json", { "group" => "model" } ],
+    [ "matrix.json", { "group" => "model", "confirmed" => "1", "gen" => "m2" } ], [ "matrix.json", { "layer" => "asahi", "state" => "works" } ],
+    [ "benchmarks.json", {} ], [ "aurora.json", {} ]
+  ].freeze
+  BASE = "http://www.example.com".freeze
+
   def self.dump
     reports = Report.visible.to_a
+    ordered = reports.sort_by(&:upload_order)
     {
+      "exports" => EXPORTS.to_h { |file, params| [ name(file, params), export(file, params) ] },
+      "gaps" => gaps(ordered),
+      "candidates" => candidates,
+      "builds" => Build.runs(reports).map { |build, runs| [ build.words, runs.map(&:public_id) ] },
       "runs" => reports.sort_by(&:upload_order).map { |report| run(report) },
       "matrices" => VIEWS.to_h { |group, params| [ name(group, params), matrix(reports, group, params) ] },
       "history" => VIEWS.select { |group, _| group == "model" }.to_h { |group, params| [ name(group, params), history(reports, params) ] },
@@ -30,6 +49,59 @@ module AggregationDump
                      "features model=j416c" => options(FilterOptions.new(reports, filter: ReportFilter.new({ "model" => "j416c" }, keys: ReportFilter::FEATURE_KEYS)), ReportFilter::FEATURE_KEYS) },
       "regressions" => Regressions.open(reports).map do |open|
         { "feature" => open.feature_id, "board" => open.board, "stack" => open.stack, "runs" => open.reports.map(&:public_id), "pass" => open.pass&.public_id }
+      end
+    }
+  end
+
+  # An export as ExportsController and Api::V1::ReportsController compose it.
+  def self.export(file, params)
+    url_for = ->(report) { "#{BASE}/reports/#{report.public_id}" }
+    timeless = ->(export) { export.to_json.sub(/"generated_at":"[^"]*"/, '"generated_at":"-"') }
+    list = ReportFilter.new(params, keys: ReportFilter::LIST_KEYS)
+    case file
+    when "reports.json" then JSON.parse(DataExport.json(url_for, list).to_json).except("generated_at")
+    when "reports.csv" then DataExport.reports_csv(url_for, list)
+    when "checks.csv" then DataExport.checks_csv(ReportFilter.new(params))
+    when "matrix.json"
+      filter = ReportFilter.new(params)
+      by_model = params["group"] == "model"
+      matrix = CompatibilityMatrix.visible(by_build: params["group"] != "release", by_model:, filter:)
+      json = filter.any? || by_model ? { filters: filter.values, runs: matrix.runs_count, **matrix.as_json } : matrix.as_json
+      timeless.({ license: DataExport::LICENSE, generated_at: Time.current.utc.iso8601, **(by_model ? json.merge(group: "model") : json) })
+    when "benchmarks.json" then timeless.({ license: DataExport::LICENSE, generated_at: Time.current.utc.iso8601, **BenchmarkScores.visible.as_json })
+    when "aurora.json"
+      timeless.({ license: DataExport::LICENSE, note: DataExport::ASAHI_NOTE, generated_at: Time.current.utc.iso8601, **AuroraSupport.visible.as_json(url_for) })
+    end
+  end
+
+  def self.gaps(reports)
+    gaps = KernelGaps.new(reports)
+    catalogue = ->(list) { list.map { |gap| [ gap.feature["id"], gap.chips ] } }
+    {
+      "reported" => KernelGaps::REPORTED_OUTCOMES.to_h do |outcome|
+        [ outcome, gaps.reported(outcome).map do |gap|
+          { "feature" => gap.feature_id, "soc" => gap.soc, "chip" => gap.chip, "runs" => gap.reports.map(&:public_id), "machines" => gap.machines, "models" => gap.models }
+        end ]
+      end,
+      "unclaimed" => gaps.unclaimed_hardware.map do |hardware|
+        { "compatible" => hardware.compatible, "outcome" => hardware.outcome, "feature" => hardware.feature_id, "runs" => hardware.reports.map(&:public_id),
+          "machines" => hardware.machines, "models" => hardware.models, "chips" => hardware.chips }
+      end,
+      "missing" => catalogue.(gaps.missing_in_aurora), "unverified" => catalogue.(gaps.unverified_in_aurora)
+    }
+  end
+
+  # Each candidate set as CandidateSet's three queries find it, and how it stands.
+  def self.candidates
+    finding = ->(found) { [ found.row.configuration.label, found.feature["id"], found.cell.state ] }
+    {
+      "names" => CandidateSet.names.to_a.sort,
+      "sets" => CandidateSet.all.map do |set|
+        { "name" => set.name, "runs" => set.reports.sort_by(&:upload_order).map(&:public_id), "tester_runs" => set.tester_reports.size, "latest" => set.latest.public_id,
+          "verdict" => set.verdict, "failures" => set.failures.map(&finding), "regressions" => set.regressions.size, "partials" => set.partials.map(&finding),
+          "tested_rows" => set.tested_rows.map { |row| row.configuration.label }, "models" => set.tested_rows.map(&:model_name).uniq,
+          "found" => CandidateSet.find(set.name).reports.sort_by(&:upload_order).map(&:public_id),
+          "matched" => Report.visible.to_a.select { |report| report.build&.matched_set == set.name }.sort_by(&:upload_order).map(&:public_id) }
       end
     }
   end

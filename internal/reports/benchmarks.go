@@ -1,6 +1,7 @@
 package reports
 
 import (
+	"math"
 	"math/big"
 	"sort"
 	"strings"
@@ -357,15 +358,8 @@ func Share(value any, best float64) string {
 
 // roundTo rounds half away from zero, as Ruby's Float#round does.
 func roundTo(f float64, places int) float64 {
-	scale := 1.0
-	for i := 0; i < places; i++ {
-		scale *= 10
-	}
-	scaled := f * scale
-	if scaled < 0 {
-		return -float64(int64(-scaled+0.5)) / scale
-	}
-	return float64(int64(scaled+0.5)) / scale
+	scale := math.Pow(10, float64(places))
+	return math.Round(f*scale) / scale
 }
 
 // JSON is the comparison as the export carries it.
