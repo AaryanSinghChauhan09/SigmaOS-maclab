@@ -1,7 +1,7 @@
 #!/bin/bash
 # pkgbuild: build the packages of one PKGBUILD recipe with makepkg.
 #
-# In:  /io/recipe.tar (a recipe directory: PKGBUILD plus its local sources)
+# In:  /in/recipe.tar (a recipe directory: PKGBUILD plus its local sources)
 #      optional env SRC_REPO + SRC_SHA (point the recipe's _commit at this commit)
 #      and PKGREL (set pkgrel); either one refreshes the source checksums.
 # Out: /io/out/*.pkg.tar.zst and the PKGBUILD as built, /io/release (kernel
@@ -19,7 +19,7 @@ step() { echo "==> $*"; echo "@@stage ${1%% *}"; }
 fail() { echo "error: $*"; exit 1; }
 
 step "recipe"
-tar -C "$W/recipe" -xf /io/recipe.tar
+tar -C "$W/recipe" -xf /in/recipe.tar
 cd "$W/recipe"
 [ -f PKGBUILD ] || fail "the recipe has no PKGBUILD at its top level"
 if [ -n "${SRC_SHA:-}" ]; then

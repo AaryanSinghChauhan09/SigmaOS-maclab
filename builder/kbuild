@@ -1,7 +1,7 @@
 #!/bin/bash
 # kbuild: fetch one commit, build it with a given config, emit a maclab kernel artifact.
 #
-# In:  URL, SHA, LABVER (release suffix) env; /io/config (a .config, e.g. from the target's /proc/config.gz)
+# In:  URL, SHA, LABVER (release suffix) env; /in/config (a .config, e.g. from the target's /proc/config.gz)
 # Out: /io/out/{kernel,module-build}.tar.zst, /io/release, /io/kernel
 # Keeps /cache bounded: one shared git store, one reused worktree, two build dirs, capped ccache.
 set -euo pipefail
@@ -92,17 +92,17 @@ git clean -q -f -d -x
 unset GIT_DIR GIT_WORK_TREE
 cd $C/src
 
-cfghash=$(sha256sum /io/config | cut -c1-12)
+cfghash=$(sha256sum /in/config | cut -c1-12)
 O=$C/build/$cfghash
 mkdir -p "$O"
 touch "$O/.last-used"
 make_room
-cp /io/config "$O/.config"
+cp /in/config "$O/.config"
 ./scripts/config --file "$O/.config" --set-str LOCALVERSION "$LABVER" -d LOCALVERSION_AUTO
 cp "$O/.config" "$O/.config.in"
 # The kernel Makefile picks the toolchain from LLVM=1, not from the config: follow the config.
 mk=(make -s O="$O")
-if [ "$(toolchain_for /io/config)" = llvm ]; then
+if [ "$(toolchain_for /in/config)" = llvm ]; then
   mk+=(LLVM=1)
   echo "toolchain: llvm ($(clang --version | head -1), ld.lld), because the config has CONFIG_CC_IS_CLANG=y"
 else

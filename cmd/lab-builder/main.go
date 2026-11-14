@@ -7,6 +7,11 @@
 // boot and again whenever it finds it stopped. A build's source is public,
 // so the Builder holds no credential but its own token, in a file only the
 // account it runs as (root) can read.
+//
+// On the mini it runs as root and the build VMs run under another account,
+// so it writes only below its scratch folder, which is root's: a build's
+// input goes into a folder that account can only read, and the one folder
+// handed to that account is read back with no link followed.
 package main
 
 import (
@@ -66,7 +71,8 @@ type builder struct {
 	pkgImage, pkgVolume string // package builds (makepkg on Arch Linux ARM); empty image: kernel builds only
 	cpus, mem           string
 	pkgJobs             string // OMARCHY_BUILD_JOBS for package builds
-	io                  string
+	io                  string // the scratch folder
+	ownIO               bool   // it is the default in lab-builder's own home, which lab-builder makes
 	runtime             string // "container" (Apple container) or "docker"
 	docker              string // the docker CLI
 	dockerContext       string // its --context, if any
@@ -96,7 +102,7 @@ func configure(args []string, out io.Writer) (*builder, error) {
 	fl.StringVar(&b.pkgVolume, "pkg-volume", "maclab-pkgcache", "package build volume, "+packageVolumeSize+": room for a whole kernel tree (container volume create -s "+packageVolumeSize+" maclab-pkgcache)")
 	fl.StringVar(&b.cpus, "cpus", buildCores[0], "cores a build gets: "+strings.Join(buildCores, ", then ")+" if the Builder's gate test fails; every build gets "+buildMemory)
 	pkgJobs := fl.String("pkg-jobs", "", "parallel jobs for package builds, given to the recipe as OMARCHY_BUILD_JOBS (default: --cpus)")
-	fl.StringVar(&b.io, "io", "", "scratch dir for inputs and the artifact; emptied after each build (default ~/maclab/io of the container user)")
+	fl.StringVar(&b.io, "io", "", "scratch folder for a build's input and outputs, emptied after each build: a folder only the account lab-builder runs as can write, and no link (default ~/maclab/io; with --as-user "+miniScratch+", which the mini's set-up makes)")
 	as := fl.String("as-user", "", "run container as this user, in their session. Lets lab-builder run as a root daemon, which macOS Local Network privacy does not block")
 	fl.StringVar(&b.runtime, "runtime", "container", "what runs the builds: container (Apple container) or docker (Colima, Docker Desktop)")
 	fl.StringVar(&b.docker, "docker", "docker", "the docker CLI, with --runtime docker")
@@ -159,10 +165,17 @@ func configure(args []string, out io.Writer) (*builder, error) {
 		if err != nil {
 			return nil, err
 		}
-		b.asUser, home = u, u.HomeDir
+		b.asUser = u
 	}
-	if b.io == "" {
-		b.io = filepath.Join(home, "maclab", "io")
+	switch {
+	case b.io != "":
+	case b.asUser != nil:
+		b.io = miniScratch
+	default:
+		b.io, b.ownIO = filepath.Join(home, "maclab", "io"), true
+	}
+	if !filepath.IsAbs(b.io) {
+		return nil, fmt.Errorf("--io %s: the scratch folder is named by its whole path", b.io)
 	}
 	return b, nil
 }
@@ -177,6 +190,14 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if b.ownIO {
+		os.MkdirAll(b.io, 0o755)
+	}
+	if s, err := openScratch(b.io); err != nil {
+		log.Fatal(err)
+	} else {
+		s.Close()
+	}
 	b.whoami(ctx)
 	log.Printf("lab-builder %s: %s, image %s, volume %s (%s), %s cpus, %s, build VMs %s-*", b.host, b.runtime, b.image, b.volume, kernelVolumeSize, b.cpus, b.mem, b.prefix)
 	kinds := "kernel"
@@ -284,18 +305,19 @@ func (b *builder) whoami(ctx context.Context) {
 	}
 }
 
-// buildVM runs image with the cache volume on /cache and dir as /io, its
-// output to out, and returns kbuild's error. Apple container shares dir
-// itself. Docker (Colima) shares only paths under $HOME into its VM, and a
-// bind mount of anything else is silently empty, so /io is copied in before
-// the build and back out after it.
-func (b *builder) buildVM(ctx context.Context, name, image, volume, dir string, env []string, out io.Writer) error {
+// buildVM runs image with the cache volume on /cache, the build's input
+// folder as /in and its output folder as /io, its output to out, and returns
+// kbuild's error. Apple container shares the two folders itself. Docker
+// (Colima) shares only paths under $HOME into its VM, and a bind mount of
+// anything else is silently empty, so /in and /io are copied in before the
+// build and /io back out after it.
+func (b *builder) buildVM(ctx context.Context, name, image, volume, in, dir string, env []string, out io.Writer) error {
 	args := []string{"--name", name, "--cpus", b.cpus, "--memory", b.mem, "-v", volume + ":/cache"}
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}
 	if b.runtime != "docker" {
-		cmd := b.container(ctx, append(append([]string{"run", "--rm"}, args...), "-v", dir+":/io", image)...)
+		cmd := b.container(ctx, append(append([]string{"run", "--rm"}, args...), "-v", in+":/in", "-v", dir+":/io", image)...)
 		return b.stream(cmd, out)
 	}
 	defer b.container(context.Background(), "rm", "--force", name).Run()
@@ -308,7 +330,10 @@ func (b *builder) buildVM(ctx context.Context, name, image, volume, dir string, 
 	if err := step("creating the build container", append(append([]string{"create"}, args...), image)...); err != nil {
 		return err
 	}
-	if err := step("copying the inputs in", "cp", dir+"/.", name+":/io"); err != nil {
+	if err := step("copying the inputs in", "cp", in+"/.", name+":/in"); err != nil {
+		return err
+	}
+	if err := step("making /io", "cp", dir+"/.", name+":/io"); err != nil {
 		return err
 	}
 	if err := b.stream(b.container(ctx, "start", "--attach", name), out); err != nil {
@@ -325,14 +350,6 @@ func (b *builder) stream(cmd *exec.Cmd, out io.Writer) error {
 		return fmt.Errorf("starting the build VM: %w", err)
 	}
 	return cmd.Wait()
-}
-
-func (b *builder) chown(path string) {
-	if b.asUser != nil {
-		uid, _ := strconv.Atoi(b.asUser.Uid)
-		gid, _ := strconv.Atoi(b.asUser.Gid)
-		os.Chown(path, uid, gid)
-	}
 }
 
 func sleep(ctx context.Context, d time.Duration) {
@@ -366,7 +383,9 @@ func (b *builder) call(ctx context.Context, method, path string, body any, out a
 	return resp.StatusCode, nil
 }
 
-func (b *builder) download(ctx context.Context, sha, dst string) error {
+// download writes a build's input into its input folder, under a name
+// nothing has yet.
+func (b *builder) download(ctx context.Context, sha string, w *work, name string) error {
 	req, _ := http.NewRequestWithContext(ctx, "GET", b.server+"/api/builder/artifacts/"+sha, nil)
 	req.Header.Set("Authorization", "Bearer "+b.token)
 	resp, err := b.http.Do(req)
@@ -377,13 +396,15 @@ func (b *builder) download(ctx context.Context, sha, dst string) error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("config %s: %s", sha, resp.Status)
 	}
-	f, err := os.Create(dst)
+	f, err := w.dir.OpenFile("in/"+name, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
+		return fmt.Errorf("the build's input was not written: %w", err)
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	return f.Close()
 }
 
 // upload sends one output for build: in one request up to 32 MiB, in
@@ -403,11 +424,6 @@ func (b *builder) run(ctx context.Context, a api.BuildAssignment) {
 	bd := a.Build
 	log.Printf("build %s (%s): %s %s", bd.ID, orStr(bd.Kind, "kernel"), bd.Source.Repo, bd.Source.SHA)
 	t0 := time.Now()
-	dir := filepath.Join(b.io, bd.ID)
-	os.RemoveAll(dir)
-	os.MkdirAll(dir, 0o755)
-	defer os.RemoveAll(dir) // nothing accumulates on the host
-	b.chown(dir)
 
 	// Lines go to labd in batches; a cancel from labd stops the container.
 	var mu sync.Mutex
@@ -473,11 +489,20 @@ func (b *builder) run(ctx context.Context, a api.BuildAssignment) {
 	} else {
 		push(fmt.Sprintf("builder %s: %s @ %s", b.host, bd.Source.Repo, bd.Source.SHA))
 	}
-	if err := b.download(ctx, inputSHA, filepath.Join(dir, input)); err != nil {
+	w, err := b.work(bd.ID)
+	if err != nil {
 		result.Error = err.Error()
 		return
 	}
-	b.chown(filepath.Join(dir, input))
+	defer w.Close() // nothing accumulates on the host
+	if err := b.download(ctx, inputSHA, w, input); err != nil {
+		result.Error = err.Error()
+		return
+	}
+	if err := w.still(); err != nil {
+		result.Error = err.Error()
+		return
+	}
 	vm := b.prefix + "-" + bd.ID
 	pr, pw := io.Pipe()
 	scanned := make(chan struct{})
@@ -494,7 +519,7 @@ func (b *builder) run(ctx context.Context, a api.BuildAssignment) {
 		}
 		io.Copy(io.Discard, pr)
 	}()
-	err := b.buildVM(bctx, vm, image, volume, dir, env, pw)
+	err = b.buildVM(bctx, vm, image, volume, filepath.Join(w.path, "in"), filepath.Join(w.path, "io"), env, pw)
 	pw.Close()
 	<-scanned
 	if bctx.Err() != nil {
@@ -514,20 +539,177 @@ func (b *builder) run(ctx context.Context, a api.BuildAssignment) {
 		result.Error = err.Error()
 		return
 	}
-	b.collect(ctx, bd, dir, pkg, &result, push)
-}
-
-// collect reads what a finished build left in its scratch dir and uploads
-// it. kbuild always writes the release; pkgbuild writes one only when a
-// package holds a kernel, so a package build without one (Mesa, m1n1)
-// reports none.
-func (b *builder) collect(ctx context.Context, bd api.Build, dir string, pkg bool, result *api.BuildResult, push func(string)) {
-	out, err := openOutputs(dir)
+	out, err := w.outputs()
 	if err != nil {
 		result.Error = err.Error()
 		return
 	}
 	defer out.Close()
+	b.collect(ctx, bd, out, pkg, &result, push)
+}
+
+// miniScratch is the scratch folder on the mini: root's, and outside every
+// home. The mini's set-up makes it (BUILDER_IO in scripts/mini/lib.sh).
+const miniScratch = "/usr/local/lab/io"
+
+// openScratch opens the scratch folder, which must be lab-builder's own: a
+// folder and no link, that only the account lab-builder runs as can write,
+// as is every folder above it. What another account could write, or swap
+// for a link, root would write through.
+func openScratch(path string) (*os.Root, error) {
+	st, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, fmt.Errorf("the Builder's scratch folder %s is not there: the mini's set-up makes it, and elsewhere whoever runs lab-builder does", path)
+	case err != nil:
+		return nil, err
+	case st.Mode()&fs.ModeSymlink != 0:
+		to, _ := os.Readlink(path)
+		return nil, fmt.Errorf("%s is a symbolic link (to %s), and the Builder's scratch folder is a folder of its own: nothing was written through it", path, to)
+	case !st.IsDir():
+		return nil, fmt.Errorf("the Builder's scratch folder %s is no folder (%s)", path, st.Mode().Type())
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	for dir := real; ; dir = filepath.Dir(dir) {
+		st, err := os.Lstat(dir)
+		if err != nil {
+			return nil, err
+		}
+		sys, ok := st.Sys().(*syscall.Stat_t)
+		if !ok {
+			return nil, fmt.Errorf("the owner of %s cannot be read", dir)
+		}
+		others := st.Mode().Perm()&0o022 != 0 && (dir == real || st.Mode()&fs.ModeSticky == 0)
+		if (sys.Uid != 0 && int(sys.Uid) != os.Geteuid()) || others {
+			return nil, fmt.Errorf("the Builder's scratch folder %s is not lab-builder's alone: %s (%s) can be written by another account, which could put a link where lab-builder writes", path, dir, st.Mode())
+		}
+		if dir == filepath.Dir(dir) {
+			break
+		}
+	}
+	return os.OpenRoot(real)
+}
+
+var reBuildID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
+// work is one build's folder in the scratch folder, lab-builder's own like
+// the scratch folder itself. Its in/ holds the build's input, which the
+// account the build VM runs under can read and not change. Its io/ is that
+// account's, the one folder the VM writes: the outputs come back in it.
+type work struct {
+	scratch, dir *os.Root
+	id, path     string
+}
+
+// work makes the folder of build id, in place of what an earlier build of
+// that id left.
+func (b *builder) work(id string) (*work, error) {
+	if !reBuildID.MatchString(id) {
+		return nil, fmt.Errorf("%q is no build's id", id)
+	}
+	s, err := openScratch(b.io)
+	if err != nil {
+		return nil, err
+	}
+	w := &work{scratch: s, id: id, path: filepath.Join(s.Name(), id)}
+	if st, err := s.Lstat(id); err == nil && st.Mode()&fs.ModeSymlink != 0 {
+		s.Close()
+		return nil, fmt.Errorf("%s is a symbolic link, and nothing the Builder makes in its scratch folder is one: nothing was written through it", w.path)
+	}
+	if err := s.RemoveAll(id); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if err := s.Mkdir(id, 0o755); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if w.dir, err = s.OpenRoot(id); err != nil {
+		w.Close()
+		return nil, err
+	}
+	if err := b.folders(w.dir); err != nil {
+		w.Close()
+		return nil, err
+	}
+	return w, nil
+}
+
+// folders makes in/ and io/ in a build's folder and hands io/, itself and
+// never what a link there names, to the account the VM runs under.
+func (b *builder) folders(dir *os.Root) error {
+	if err := dir.Mkdir("in", 0o755); err != nil {
+		return err
+	}
+	if err := dir.Mkdir("io", 0o700); err != nil {
+		return err
+	}
+	if b.asUser == nil {
+		return nil
+	}
+	uid, err := strconv.Atoi(b.asUser.Uid)
+	if err != nil {
+		return err
+	}
+	gid, err := strconv.Atoi(b.asUser.Gid)
+	if err != nil {
+		return err
+	}
+	return dir.Lchown("io", uid, gid)
+}
+
+// still is whether the build's folder is the one work made: a folder moved
+// away, with something else under its name, is not handed to a VM.
+func (w *work) still() error {
+	at, err := w.scratch.Lstat(w.id)
+	if err != nil {
+		return err
+	}
+	made, err := w.dir.Stat(".")
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(at, made) {
+		return fmt.Errorf("%s is not the folder the Builder made for this build (%s): the build was not started", w.path, at.Mode().Type())
+	}
+	return nil
+}
+
+// outputs opens io/ as the build left it.
+func (w *work) outputs() (*outputs, error) {
+	st, err := w.dir.Lstat("io")
+	if err != nil {
+		return nil, err
+	}
+	if !st.IsDir() {
+		return nil, fmt.Errorf("the build's output folder is no folder (%s)", st.Mode().Type())
+	}
+	r, err := w.dir.OpenRoot("io")
+	if err != nil {
+		return nil, err
+	}
+	return &outputs{r}, nil
+}
+
+// Close removes the build's folder, if it is still the one work made.
+func (w *work) Close() {
+	if w.dir != nil {
+		if w.still() == nil {
+			w.scratch.RemoveAll(w.id)
+		}
+		w.dir.Close()
+	}
+	w.scratch.Close()
+}
+
+// collect reads what a finished build left in its output folder and uploads
+// it. kbuild always writes the release; pkgbuild writes one only when a
+// package holds a kernel, so a package build without one (Mesa, m1n1)
+// reports none.
+func (b *builder) collect(ctx context.Context, bd api.Build, out *outputs, pkg bool, result *api.BuildResult, push func(string)) {
 	rel, err := out.small("release")
 	switch {
 	case err == nil:
@@ -580,19 +762,11 @@ func (b *builder) uploadPackages(ctx context.Context, bd api.Build, out *outputs
 	}
 }
 
-// outputs is a build's scratch dir as lab-builder reads what the build left
+// outputs is a build's output folder as lab-builder reads what the build left
 // there. The build VM shares that dir, so any name in it may be a link the VM
 // made to a file of this host: every output is resolved inside the dir
 // (os.Root), never through a symlink, and only as a regular file.
 type outputs struct{ root *os.Root }
-
-func openOutputs(dir string) (*outputs, error) {
-	r, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, err
-	}
-	return &outputs{r}, nil
-}
 
 func (o *outputs) Close() error { return o.root.Close() }
 

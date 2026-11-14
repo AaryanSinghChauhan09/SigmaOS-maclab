@@ -289,6 +289,15 @@ func TestOutputsReadNoLinks(t *testing.T) {
 	}
 }
 
+// openOutputs opens dir as a build's output folder.
+func openOutputs(dir string) (*outputs, error) {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &outputs{r}, nil
+}
+
 // fakeLabd records every upload a builder makes.
 type fakeLabd struct {
 	mu   sync.Mutex
@@ -333,7 +342,7 @@ func TestCollect(t *testing.T) {
 	host := t.TempDir()
 	marker := filepath.Join(host, "token")
 	os.WriteFile(marker, []byte("HOST-ONLY-MARKER"), 0o600)
-	scratch := func(files map[string]string, links map[string]string) string {
+	scratch := func(files map[string]string, links map[string]string) *outputs {
 		d := t.TempDir()
 		for name, content := range files {
 			os.MkdirAll(filepath.Dir(filepath.Join(d, name)), 0o755)
@@ -343,7 +352,12 @@ func TestCollect(t *testing.T) {
 			os.MkdirAll(filepath.Dir(filepath.Join(d, name)), 0o755)
 			os.Symlink(target, filepath.Join(d, name))
 		}
-		return d
+		out, err := openOutputs(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { out.Close() })
+		return out
 	}
 	bd := api.Build{ID: "b1031-120000-abcd", Kind: api.BuildPackage}
 	push := func(string) {}
@@ -603,22 +617,21 @@ func TestUploadKernelAndModuleInputs(t *testing.T) {
 }
 
 // fakeDocker is a docker CLI that logs each call and keeps one container's
-// /io in a directory: cp copies in and out of it, and start runs a pretend
-// kbuild there, which fails when the config says "fail".
+// /in and /io in two directories: cp copies in and out of them, and start
+// runs a pretend kbuild there, which fails when the config says "fail".
 const fakeDocker = `#!/bin/sh
 state=$(dirname "$0")/state
 echo "$*" >> "$state/calls"
 [ "$1" = --context ] && shift 2
 case "$1" in
-create) mkdir -p "$state/io" ;;
 cp)
   case "$2" in
   *:/io/.) cp -R "$state/io/." "$3" ;;
-  *) cp -R "$2" "$state/io-in" && cp -R "$state/io-in/." "$state/io" ;;
+  *) to=$state/${3#*:/}; mkdir -p "$to" && cp -R "$2" "$to" ;;
   esac ;;
 start)
   echo "kbuild: building"
-  grep -q fail "$state/io/config" && { echo "kbuild: failed" >&2; exit 3; }
+  grep -q fail "$state/in/config" && { echo "kbuild: failed" >&2; exit 3; }
   echo 7.2.0-lab-x > "$state/io/release"
   echo kernel > "$state/io/kernel.tar.zst" ;;
 esac
@@ -646,15 +659,15 @@ func calls(t *testing.T, state string) []string {
 	return strings.Split(strings.TrimSpace(string(b)), "\n")
 }
 
-// With --runtime docker, /io is copied into the container and back out, never
-// bind-mounted: Colima shares only $HOME into its VM, and a bind mount of
-// anything else is silently empty (malik-na/maclab#45).
+// With --runtime docker, /in is copied into the container and /io back out,
+// never bind-mounted: Colima shares only $HOME into its VM, and a bind mount
+// of anything else is silently empty (malik-na/maclab#45).
 func TestDockerBuildCopiesIOInAndOut(t *testing.T) {
 	b, state := dockerBuilder(t)
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "config"), []byte("CONFIG_ARM64=y\n"), 0o644)
+	in, dir := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(in, "config"), []byte("CONFIG_ARM64=y\n"), 0o644)
 	var out bytes.Buffer
-	if err := b.buildVM(context.Background(), "maclab-b1", "maclab-kbuild:1", "maclab-cache", dir, []string{"URL=u", "SHA=s"}, &out); err != nil {
+	if err := b.buildVM(context.Background(), "maclab-b1", "maclab-kbuild:1", "maclab-cache", in, dir, []string{"URL=u", "SHA=s"}, &out); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	if rel, _ := os.ReadFile(filepath.Join(dir, "release")); strings.TrimSpace(string(rel)) != "7.2.0-lab-x" {
@@ -668,6 +681,7 @@ func TestDockerBuildCopiesIOInAndOut(t *testing.T) {
 	}
 	want := []string{
 		"--context colima create --name maclab-b1 --cpus 12 --memory 24G -v maclab-cache:/cache -e URL=u -e SHA=s maclab-kbuild:1",
+		"--context colima cp " + in + "/. maclab-b1:/in",
 		"--context colima cp " + dir + "/. maclab-b1:/io",
 		"--context colima start --attach maclab-b1",
 		"--context colima cp maclab-b1:/io/. " + dir,
@@ -682,10 +696,10 @@ func TestDockerBuildCopiesIOInAndOut(t *testing.T) {
 func TestDockerBuildFailureRemovesTheContainer(t *testing.T) {
 	b, state := dockerBuilder(t)
 	b.dockerContext = ""
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "config"), []byte("fail\n"), 0o644)
+	in, dir := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(in, "config"), []byte("fail\n"), 0o644)
 	var out bytes.Buffer
-	err := b.buildVM(context.Background(), "maclab-b2", "maclab-kbuild:1", "maclab-cache", dir, nil, &out)
+	err := b.buildVM(context.Background(), "maclab-b2", "maclab-kbuild:1", "maclab-cache", in, dir, nil, &out)
 	if !errors.As(err, new(*exec.ExitError)) {
 		t.Fatalf("err %v, want kbuild's exit status", err)
 	}

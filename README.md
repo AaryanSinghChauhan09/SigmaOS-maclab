@@ -1065,8 +1065,12 @@ session. A config with `CONFIG_CC_IS_CLANG=y` (linux-aurora's: clang 18 + LLD) i
 any `CC_IS_*`, `LD_IS_*` or `AS_IS_*` change. All
 state is one size-capped volume (`container volume create -s 40G maclab-cache`): one shared
 depth-1 git store, one reused worktree, at most two build dirs, and an 8 GB ccache. The host scratch
-dir is emptied after every build. labd's artifact store is garbage-collected to a budget
-(`--artifact-budget-gb`, default 20).
+folder (`--io`) is emptied after every build. On the mini `lab-builder` runs as root and the VMs
+under another account, so the scratch folder is root's (`/usr/local/lab/io`, made by the set-up) and
+`lab-builder` refuses one that another account can write or that is a link: a build's input is in a
+folder the VM reads as `/in`, and the one folder the VM writes, `/io`, is read back with no link
+followed. An image built before this reads its input from `/io`: rebuild it. labd's artifact store is
+garbage-collected to a budget (`--artifact-budget-gb`, default 20).
 
 Future `kbuild-2` builds also publish `module-build.tar.zst` as a named output.
 `lab build-get <build-id> -o ./build` fetches it through the existing artifact store.
@@ -1086,7 +1090,8 @@ A controller without Apple `container` can build with Docker instead (Colima, Do
 `lab-builder --runtime docker [--context colima]`, with the same `kbuild` image and `/cache`
 volume layout. labd sees no difference: progress, logs and reuse of earlier builds work the same.
 Colima shares only paths under `$HOME` into its VM and a bind mount of anything else is silently
-empty, so `/io` is copied into each build's container and back out with `docker cp`, never mounted.
+empty, so a build's input (`/in`) is copied into its container and its outputs (`/io`) back out with
+`docker cp`, never mounted.
 
 ```sh
 docker build -f builder/Containerfile -t maclab-kbuild:1 builder/   # -f: the file is not named Dockerfile
