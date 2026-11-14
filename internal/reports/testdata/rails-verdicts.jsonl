@@ -1,0 +1,220 @@
+{"case":"canonical/001-key-order","canonical":"{\"\":5,\"10\":12,\"9\":13,\"B\":3,\"a\":2,\"a b\":10,\"a\\\"\":11,\"aa\":4,\"b\":1,\"z\":7,\"é\":6,\"￿\":9,\"💻\":8}"}
+{"case":"canonical/002-nested","canonical":"{\"a\":{\"c\":{\"b\":{\"a\":\"deep\"}}},\"z\":[{\"a\":{},\"b\":[]},[[1,[2,{\"x\":[true,false],\"y\":null}]]]]}"}
+{"case":"canonical/003-whitespace","canonical":"{\"a\":[1,2],\"b\":\"c d\"}"}
+{"case":"canonical/004-integers","canonical":"[0,0,1,-1,9007199254740993,18446744073709551616,-340282366920938463463374607431768211456,1000000000000000000000000000000000000000000]"}
+{"case":"canonical/005-escapes","canonical":"[\"\\\"\",\"\\\\\",\"/\",\"\\b\\f\\n\\r\\t\",\"\\u0000\\u0001\\u001f\",\"éé\",\"  \",\"😀😀\",\"<>&<>&'\",\"�﻿\"]"}
+{"case":"canonical/006-scalars-string","canonical":"\"a\""}
+{"case":"canonical/007-scalars-integer","canonical":"12"}
+{"case":"canonical/008-scalars-null","canonical":"null"}
+{"case":"canonical/009-scalars-true","canonical":"true"}
+{"case":"canonical/010-empty-object","canonical":"{}"}
+{"case":"canonical/011-empty-array","canonical":"[]"}
+{"case":"canonical/012-float","invalid":"the report has a value a signed report can't have (Float)"}
+{"case":"canonical/013-float-exponent","invalid":"the report has a value a signed report can't have (Float)"}
+{"case":"canonical/014-float-negative-zero","invalid":"the report has a value a signed report can't have (Float)"}
+{"case":"canonical/015-float-first-of-two-problems","invalid":"the report has a value a signed report can't have (Float)"}
+{"case":"canonical/016-not-json-member-twice","not_json":true}
+{"case":"canonical/017-not-json-member-twice-escaped","not_json":true}
+{"case":"canonical/018-not-json-comment-line","not_json":true}
+{"case":"canonical/019-not-json-comment-block","not_json":true}
+{"case":"canonical/020-not-json-trailing-comma-array","not_json":true}
+{"case":"canonical/021-not-json-trailing-comma-object","not_json":true}
+{"case":"canonical/022-not-json-lone-high-surrogate","not_json":true}
+{"case":"canonical/023-not-json-lone-low-surrogate","not_json":true}
+{"case":"canonical/024-not-json-high-surrogate-twice","not_json":true}
+{"case":"canonical/025-not-json-surrogates-swapped","not_json":true}
+{"case":"canonical/026-not-json-control-character","not_json":true}
+{"case":"canonical/027-not-json-byte-order-mark","not_json":true}
+{"case":"canonical/028-not-json-leading-zero","not_json":true}
+{"case":"canonical/029-not-json-plus","not_json":true}
+{"case":"canonical/030-not-json-bare-fraction","not_json":true}
+{"case":"canonical/031-not-json-open-fraction","not_json":true}
+{"case":"canonical/032-not-json-open-exponent","not_json":true}
+{"case":"canonical/033-not-json-minus","not_json":true}
+{"case":"canonical/034-not-json-nan","not_json":true}
+{"case":"canonical/035-not-json-infinity","not_json":true}
+{"case":"canonical/036-not-json-two-documents","not_json":true}
+{"case":"canonical/037-not-json-form-feed","not_json":true}
+{"case":"canonical/038-not-json-single-quotes","not_json":true}
+{"case":"canonical/039-not-json-bare-key","not_json":true}
+{"case":"canonical/040-not-json-unknown-escape","not_json":true}
+{"case":"canonical/041-not-json-short-escape","not_json":true}
+{"case":"canonical/042-not-json-literal-case","not_json":true}
+{"case":"canonical/043-not-json-literal-cut","not_json":true}
+{"case":"canonical/044-not-json-empty","not_json":true}
+{"case":"canonical/045-not-json-only-whitespace","not_json":true}
+{"case":"canonical/046-not-json-unclosed","not_json":true}
+{"case":"canonical/047-not-json-missing-colon","not_json":true}
+{"case":"canonical/048-not-json-missing-comma","not_json":true}
+{"case":"canonical/049-depth-100-arrays","canonical":"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"}
+{"case":"canonical/050-depth-101-arrays","not_json":true}
+{"case":"canonical/051-depth-101-arrays-innermost-empty","canonical":"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"}
+{"case":"canonical/052-depth-102-arrays-innermost-empty","not_json":true}
+{"case":"canonical/053-depth-100-objects","canonical":"{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}"}
+{"case":"canonical/054-depth-101-objects","not_json":true}
+{"case":"canonical/055-depth-mixed-100","canonical":"[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":[{\"a\":null}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]"}
+{"case":"canonical/056-depth-mixed-101","not_json":true}
+{"case":"canonical/057-depth-siblings","canonical":"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],0]"}
+{"case":"keys/001-test-machine-a","machine_id":"key:fdf447fc1bd499944fe2"}
+{"case":"keys/002-test-machine-b","machine_id":"key:c304e82cb13ec6520177"}
+{"case":"keys/003-cli-fixture","machine_id":"key:2b91cc19290a39e7e0df"}
+{"case":"reports/001-golden-unsigned-m1-pro-converged-fresh","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
+{"case":"reports/002-golden-m1-pro-converged-fresh","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"95118244be6c67aa8ffbec0372e3febf0a9c2722b592df567a35c3406064dff0"}
+{"case":"reports/003-golden-unsigned-m1-pro-converged","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
+{"case":"reports/004-golden-m1-pro-converged","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"4132ee9e79a57634fa3cc6971d349e8ce6bf04f9a4b89b7bbe3f86a70f04a636"}
+{"case":"reports/005-golden-unsigned-m1-pro-mx-mac","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
+{"case":"reports/006-golden-m1-pro-mx-mac","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"6d059d417f6e9ce7fa4aaa2ba328d6a7885ea9a5a9860edab3b77c2d0b6b2c2b"}
+{"case":"reports/007-golden-unsigned-m2-max-converged","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
+{"case":"reports/008-golden-m2-max-converged","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"1a863aa8ca8688f01d3758a354859e7d742c07659988e92f0bcdc0a5be2083de"}
+{"case":"reports/009-golden-unsigned-m2-max-image2","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
+{"case":"reports/010-golden-m2-max-image2","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
+{"case":"reports/011-golden-unsigned-m2-max-converged","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
+{"case":"reports/012-golden-m2-max-converged","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"372878f2626f873f5e89a887c3b3baad9cfbf1731c85d3203516dda6fe4a6c4f"}
+{"case":"reports/013-cli-signed-m2-max-image2-awkward-kernel","status":201,"machine_id":"key:2b91cc19290a39e7e0df","canonical_sha256":"30d0f063a8d262f0331115699f5ad0f6d83cc662cbc07f2f6a46b5631e95a85a"}
+{"case":"reports/014-cli-signed-m2-max-image2","status":201,"machine_id":"key:2b91cc19290a39e7e0df","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
+{"case":"reports/015-machine-b","status":201,"machine_id":"key:c304e82cb13ec6520177","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
+{"case":"reports/016-large-integers","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"7ebca6f21c82b056812153e2a6c8bdf30c2bb15f31a7201d4c5a8e674964525a"}
+{"case":"reports/017-awkward-text","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"845b9a81c4a7dcf3e233f02a066f5b8a42c06396a7b40b388a365a09c511161e"}
+{"case":"reports/018-evidence-64-kib","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"2a908a4b15cc354639d2607d85b82746099295861be2d8e6d279af9b66b97da0"}
+{"case":"reports/019-model-120-characters","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"9b6293c061fd290a0913b74f1981d0e7ba4c4e45ba1013600130e77f7c7c67b8"}
+{"case":"reports/020-unattended","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"90b593c8dc9d6a21b5f23a096581fa1e14ff842254487d586f9b404adfabc8df"}
+{"case":"reports/021-sha256-signature","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
+{"case":"reports/022-reserved-signed","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
+{"case":"reports/023-not-json-empty","status":400}
+{"case":"reports/024-not-json-cut","status":400}
+{"case":"reports/025-not-json-comment","status":400}
+{"case":"reports/026-not-json-member-twice","status":400}
+{"case":"reports/027-not-json-trailing-comma","status":400}
+{"case":"reports/028-not-json-lone-surrogate","status":400}
+{"case":"reports/029-not-json-control-character","status":400}
+{"case":"reports/030-not-json-byte-order-mark","status":400}
+{"case":"reports/031-not-json-too-deep","status":400}
+{"case":"reports/032-outdated-0","status":422,"error":"This report uses report schema v0, which is outdated: the site accepts v1. Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["schema_version 0 is older than 1"]}
+{"case":"reports/033-outdated-unsigned","status":422,"error":"This report uses report schema v0, which is outdated: the site accepts v1. Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["schema_version 0 is older than 1"]}
+{"case":"reports/034-outdated-negative","status":422,"error":"This report uses report schema v-3, which is outdated: the site accepts v1. Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["schema_version -3 is older than 1"]}
+{"case":"reports/035-outdated-and-nothing-else","status":422,"error":"This report uses report schema v0, which is outdated: the site accepts v1. Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["schema_version 0 is older than 1"]}
+{"case":"reports/036-unsigned-and-wrong","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
+{"case":"reports/037-unsigned-empty-object","status":422,"error":"This report isn't signed with its Mac's key, which the site requires. omarchy-m-test signs every report by itself (it needs ssh-keygen, from openssh). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["signature is missing"]}
+{"case":"reports/038-schema-root-array","status":422,"error":"The report does not match report schema v1.","details":["value at root is not an object"]}
+{"case":"reports/039-schema-root-string","status":422,"error":"The report does not match report schema v1.","details":["value at root is not an object"]}
+{"case":"reports/040-schema-root-number","status":422,"error":"The report does not match report schema v1.","details":["value at root is not an object"]}
+{"case":"reports/041-schema-root-null","status":422,"error":"The report does not match report schema v1.","details":["value at root is not an object"]}
+{"case":"reports/042-schema-root-true","status":422,"error":"The report does not match report schema v1.","details":["value at root is not an object"]}
+{"case":"reports/043-schema-newer-version","status":422,"error":"The report does not match report schema v1.","details":["value at `/schema_version` is not: 1"]}
+{"case":"reports/044-schema-version-string","status":422,"error":"The report does not match report schema v1.","details":["value at `/schema_version` is not: 1"]}
+{"case":"reports/045-schema-version-fraction","status":422,"error":"The report does not match report schema v1.","details":["value at `/schema_version` is not: 1"]}
+{"case":"reports/046-schema-missing-two","status":422,"error":"The report does not match report schema v1.","details":["object at root is missing required properties: machine, checks"]}
+{"case":"reports/047-schema-missing-nested","status":422,"error":"The report does not match report schema v1.","details":["object at `/machine` is missing required properties: board, arch"]}
+{"case":"reports/048-schema-unknown-members","status":422,"error":"The report does not match report schema v1.","details":["object property at `/` is a disallowed additional property","object property at `/a~1b~0c` is a disallowed additional property","object property at `/serial` is a disallowed additional property"]}
+{"case":"reports/049-schema-unknown-members-in-document-order","status":422,"error":"The report does not match report schema v1.","details":["object property at `/zeta` is a disallowed additional property","object property at `/alpha` is a disallowed additional property"]}
+{"case":"reports/050-schema-unknown-nested","status":422,"error":"The report does not match report schema v1.","details":["object property at `/machine/serial` is a disallowed additional property","object property at `/checks/3/note` is a disallowed additional property"]}
+{"case":"reports/051-schema-const-tool","status":422,"error":"The report does not match report schema v1.","details":["value at `/tool/name` is not: omarchy-m-test"]}
+{"case":"reports/052-schema-const-arch","status":422,"error":"The report does not match report schema v1.","details":["value at `/machine/arch` is not: aarch64"]}
+{"case":"reports/053-schema-const-unattended","status":422,"error":"The report does not match report schema v1.","details":["value at `/unattended` is not: true"]}
+{"case":"reports/054-schema-const-answered","status":422,"error":"The report does not match report schema v1.","details":["value at `/checks/0/answered_by_default` is not: true"]}
+{"case":"reports/055-schema-type-integer","status":422,"error":"The report does not match report schema v1.","details":["value at `/consent_version` is not an integer"]}
+{"case":"reports/056-schema-type-fraction","status":422,"error":"The report does not match report schema v1.","details":["value at `/consent_version` is not an integer"]}
+{"case":"reports/057-schema-type-object","status":422,"error":"The report does not match report schema v1.","details":["value at `/machine` is not an object"]}
+{"case":"reports/058-schema-type-array","status":422,"error":"The report does not match report schema v1.","details":["value at `/checks` is not an array"]}
+{"case":"reports/059-schema-type-string","status":422,"error":"The report does not match report schema v1.","details":["value at `/machine/model` is not a string","value at `/checks/0/evidence/1` is not a string"]}
+{"case":"reports/060-schema-type-null","status":422,"error":"The report does not match report schema v1.","details":["value at `/system/packages` is not an array"]}
+{"case":"reports/061-schema-type-bool","status":422,"error":"The report does not match report schema v1.","details":["value at `/machine/kernel` is not a string"]}
+{"case":"reports/062-schema-minimum","status":422,"error":"The report does not match report schema v1.","details":["number at `/consent_version` is less than: 1","number at `/inventory/nodes/2/count` is less than: 1"]}
+{"case":"reports/063-schema-score","status":422,"error":"The report does not match report schema v1.","details":["number at `/checks/0/score/value` is greater than: 1000000000","value at `/checks/0/score/unit` is not one of: [\"points\", \"fps\", \"MBps\", \"ops\"]","string at `/checks/0/score/tool` does not match pattern: ^[A-Za-z0-9][A-Za-z0-9 ._+~:()-]{0,79}$","number at `/checks/0/score/suite` is less than: 1"]}
+{"case":"reports/064-schema-score-negative","status":422,"error":"The report does not match report schema v1.","details":["number at `/checks/0/score/value` is less than: 0","object property at `/checks/0/score/run` is a disallowed additional property"]}
+{"case":"reports/065-schema-pattern","status":422,"error":"The report does not match report schema v1.","details":["string at `/machine/board` does not match pattern: ^j[0-9]{3}[a-z]{0,2}$","string at `/machine/soc` does not match pattern: ^t[0-9]{4}$","string at `/machine/chip` does not match pattern: ^((M|A)[0-9]+( Pro| Max| Ultra)?|unknown)$"]}
+{"case":"reports/066-schema-pattern-second-line","status":422,"error":"The report does not match report schema v1.","details":["string at `/system/distro` does not match pattern: ^[a-z0-9][a-z0-9._-]{0,39}$"]}
+{"case":"reports/067-schema-pattern-version","status":422,"error":"The report does not match report schema v1.","details":["string at `/tool/version` does not match pattern: ^[0-9]+\\.[0-9]+\\.[0-9]+([.+-][0-9A-Za-z.+-]+)?$"]}
+{"case":"reports/068-schema-max-length","status":422,"error":"The report does not match report schema v1.","details":["string length at `/machine/model` is greater than: 120"]}
+{"case":"reports/069-schema-min-length","status":422,"error":"The report does not match report schema v1.","details":["string length at `/machine/kernel` is less than: 1"]}
+{"case":"reports/070-schema-max-length-kernel","status":422,"error":"The report does not match report schema v1.","details":["string length at `/machine/kernel` is greater than: 100"]}
+{"case":"reports/071-schema-enum","status":422,"error":"The report does not match report schema v1.","details":["value at `/machine/storage` is not one of: [\"256GB\", \"512GB\", \"1TB\", \"2TB\", \"4TB\", \"8TB\"]","value at `/system/stack` is not one of: [\"converged\", \"mx-mac\", \"legacy-omarchy-mac\", \"reference\"]","value at `/checks/1/status` is not one of: [\"pass\", \"fail\", \"skip\"]"]}
+{"case":"reports/072-schema-enum-expected","status":422,"error":"The report does not match report schema v1.","details":["value at `/checks/2/classification/expected/asahi` is not one of: [\"upstream\", \"linux-asahi\", \"yes\", \"wip\", \"tba\", \"no\", \"out-of-tree\", \"see-notes\", \"absent\"]","object property at `/checks/2/classification/expected/linux` is a disallowed additional property"]}
+{"case":"reports/073-schema-min-items","status":422,"error":"The report does not match report schema v1.","details":["array size at `/checks` is less than: 1"]}
+{"case":"reports/074-schema-max-items","status":422,"error":"The report does not match report schema v1.","details":["array size at `/checks/0/evidence` is greater than: 50"]}
+{"case":"reports/075-schema-evidence-line-length","status":422,"error":"The report does not match report schema v1.","details":["string length at `/checks/5/evidence/0` is greater than: 500"]}
+{"case":"reports/076-schema-check-shape","status":422,"error":"The report does not match report schema v1.","details":["string at `/checks/4/id` does not match pattern: ^[a-z][a-z0-9-]*(\\.[a-z0-9-]+)+$","value at `/checks/4/kind` is not one of: [\"automatic\", \"human\"]","object property at `/checks/4/extra` is a disallowed additional property","object at `/checks/4` is missing required properties: status, evidence, classification"]}
+{"case":"reports/077-schema-check-not-object","status":422,"error":"The report does not match report schema v1.","details":["value at `/checks/0` is not an object","value at `/checks/1` is not an object"]}
+{"case":"reports/078-schema-many","status":422,"error":"The report does not match report schema v1.","details":["number at `/catalogue_version` is less than: 1","string at `/machine/soc` does not match pattern: ^t[0-9]{4}$","string at `/system/distro` does not match pattern: ^[a-z0-9][a-z0-9._-]{0,39}$","object property at `/zzz` is a disallowed additional property","object at root is missing required properties: tool"]}
+{"case":"reports/079-schema-signature-string","status":422,"error":"The report does not match report schema v1.","details":["value at `/signature` is not an object"]}
+{"case":"reports/080-schema-signature-empty","status":422,"error":"The report does not match report schema v1.","details":["object at `/signature` is missing required properties: public_key, signature"]}
+{"case":"reports/081-schema-signature-extra","status":422,"error":"The report does not match report schema v1.","details":["object property at `/signature/comment` is a disallowed additional property"]}
+{"case":"reports/082-schema-public-key-comment","status":422,"error":"The report does not match report schema v1.","details":["string at `/signature/public_key` does not match pattern: ^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$"]}
+{"case":"reports/083-schema-public-key-rsa","status":422,"error":"The report does not match report schema v1.","details":["string at `/signature/public_key` does not match pattern: ^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$"]}
+{"case":"reports/084-schema-armor-not-base64","status":422,"error":"The report does not match report schema v1.","details":["string at `/signature/signature` does not match pattern: ^-----BEGIN SSH SIGNATURE-----\\n[A-Za-z0-9+/=\\n]+\\n-----END SSH SIGNATURE-----$"]}
+{"case":"reports/085-schema-armor-trailing-line","status":422,"error":"The report does not match report schema v1.","details":["string at `/signature/signature` does not match pattern: ^-----BEGIN SSH SIGNATURE-----\\n[A-Za-z0-9+/=\\n]+\\n-----END SSH SIGNATURE-----$"]}
+{"case":"reports/086-schema-armor-too-long","status":422,"error":"The report does not match report schema v1.","details":["string length at `/signature/signature` is greater than: 1000"]}
+{"case":"reports/087-schema-then-signature-float","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: the report has a value a signed report can't have (Float)"]}
+{"case":"reports/088-schema-then-signature-exponent","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: the report has a value a signed report can't have (Float)"]}
+{"case":"reports/089-schema-version-float","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: the report has a value a signed report can't have (Float)"]}
+{"case":"reports/090-signature-status-changed","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/091-signature-kernel-changed","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/092-signature-catalogue-changed","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/093-signature-member-added","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/094-signature-other-key","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it was made with a different key than the report's public_key"]}
+{"case":"reports/095-signature-other-namespace","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't a report signature (namespace)"]}
+{"case":"reports/096-signature-cut-short","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it is cut short"]}
+{"case":"reports/097-signature-cut-in-magic","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it is cut short"]}
+{"case":"reports/098-signature-cut-in-version","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it is cut short"]}
+{"case":"reports/099-signature-trailing-bytes","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it has trailing bytes"]}
+{"case":"reports/100-signature-armor-bad-base64","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't an armored SSH signature"]}
+{"case":"reports/101-signature-armor-padding-bits","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't an armored SSH signature"]}
+{"case":"reports/102-signature-armor-only-newlines","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it is cut short"]}
+{"case":"reports/103-signature-armor-one-line","status":201,"machine_id":"key:fdf447fc1bd499944fe2","canonical_sha256":"d5e470a71770728aa1e72304f0225c107cd1f94f54b95e8bb0a5194bd7d9680f"}
+{"case":"reports/104-signature-sign-in-namespace","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't a report signature (namespace)"]}
+{"case":"reports/105-signature-unknown-hash","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it uses an unknown hash (md5)"]}
+{"case":"reports/106-signature-not-sshsig","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't an SSH signature"]}
+{"case":"reports/107-signature-version-2","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't an SSH signature"]}
+{"case":"reports/108-signature-rsa-inside","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it isn't an ed25519 signature"]}
+{"case":"reports/109-signature-inner-trailing-bytes","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it has trailing bytes"]}
+{"case":"reports/110-signature-63-bytes","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/111-signature-65-bytes","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/112-signature-zeroes","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/113-signature-empty","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/114-signature-hash-changed-after","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/115-signature-reserved-changed-after","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/116-signature-public-key-cut-short","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it is cut short"]}
+{"case":"reports/117-unknown-check-id","status":422,"error":"The report has checks this site doesn't know (feature catalogue v18). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["unknown check id made.up"]}
+{"case":"reports/118-unknown-check-ids","status":422,"error":"The report has checks this site doesn't know (feature catalogue v18). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["unknown check id zz.last","unknown check id made.up"]}
+{"case":"reports/119-evidence-too-much","status":422,"error":"The report's evidence must be text and at most 64 KiB.","details":["evidence is 75000 bytes; a report carries at most 65536"]}
+{"case":"reports/120-evidence-one-byte-too-much","status":422,"error":"The report's evidence must be text and at most 64 KiB.","details":["evidence is 65537 bytes; a report carries at most 65536"]}
+{"case":"reports/121-evidence-counted-in-bytes","status":422,"error":"The report's evidence must be text and at most 64 KiB.","details":["evidence is 65540 bytes; a report carries at most 65536"]}
+{"case":"reports/122-evidence-not-text-nul","status":422,"error":"The report's evidence must be text and at most 64 KiB.","details":["evidence line 2 is not text"]}
+{"case":"reports/123-evidence-not-text-newline","status":422,"error":"The report's evidence must be text and at most 64 KiB.","details":["evidence line 2 is not text"]}
+{"case":"reports/124-evidence-not-text-replacement","status":422,"error":"The report's evidence must be text and at most 64 KiB.","details":["evidence line 2 is not text"]}
+{"case":"reports/125-evidence-not-text-escape","status":422,"error":"The report's evidence must be text and at most 64 KiB.","details":["evidence line 1 is not text","evidence line 3 is not text"]}
+{"case":"reports/126-evidence-ten-problems","status":422,"error":"The report's evidence must be text and at most 64 KiB.","details":["evidence is 75012 bytes; a report carries at most 65536","evidence line 1 is not text","evidence line 2 is not text","evidence line 3 is not text","evidence line 4 is not text","evidence line 5 is not text","evidence line 6 is not text","evidence line 7 is not text","evidence line 8 is not text","evidence line 9 is not text"]}
+{"case":"reports/127-unknown-check-id-before-evidence","status":422,"error":"The report has checks this site doesn't know (feature catalogue v18). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["unknown check id made.up"]}
+{"case":"reports/128-signature-before-unknown-check-id","status":422,"error":"The report's signature is not valid, so it was refused.","details":["signature: it doesn't match the report: the report was changed after it was signed"]}
+{"case":"reports/129-schema-before-signature","status":422,"error":"The report does not match report schema v1.","details":["string at `/machine/board` does not match pattern: ^j[0-9]{3}[a-z]{0,2}$"]}
+{"case":"signins/001-golden-tester-sign-in","valid":true,"machine_id":"key:2b91cc19290a39e7e0df"}
+{"case":"signins/002-golden-tester-sign-out","valid":true,"machine_id":"key:2b91cc19290a39e7e0df"}
+{"case":"signins/003-golden-tester-status","valid":true,"machine_id":"key:2b91cc19290a39e7e0df"}
+{"case":"signins/004-test-machine","valid":true,"machine_id":"key:fdf447fc1bd499944fe2"}
+{"case":"signins/005-changed","valid":false,"reason":"it doesn't match the report: the report was changed after it was signed"}
+{"case":"signins/006-member-added","valid":false,"reason":"it doesn't match the report: the report was changed after it was signed"}
+{"case":"signins/007-report-namespace","valid":false,"reason":"it isn't a sign-in signature (namespace)"}
+{"case":"signins/008-signature-string","valid":false,"reason":"it isn't a signature object"}
+{"case":"signins/009-signature-null","valid":false,"reason":"it isn't a signature object"}
+{"case":"signins/010-signature-array","valid":false,"reason":"it isn't a signature object"}
+{"case":"signins/011-signature-empty-object","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/012-public-key-missing","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/013-public-key-number","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/014-public-key-comment","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/015-public-key-spaced","valid":true,"machine_id":"key:fdf447fc1bd499944fe2"}
+{"case":"signins/016-public-key-rsa","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/017-public-key-not-base64","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/018-public-key-unpadded","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/019-public-key-type-inside","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/020-public-key-31-bytes","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/021-public-key-trailing-bytes","valid":false,"reason":"it has trailing bytes"}
+{"case":"signins/022-public-key-cut-short","valid":false,"reason":"it is cut short"}
+{"case":"signins/023-public-key-empty","valid":false,"reason":"its public_key isn't an ed25519 key"}
+{"case":"signins/024-armor-missing","valid":false,"reason":"it isn't an armored SSH signature"}
+{"case":"signins/025-armor-number","valid":false,"reason":"it isn't an armored SSH signature"}
+{"case":"signins/026-armor-carriage-returns","valid":false,"reason":"it isn't an armored SSH signature"}
+{"case":"signins/027-armor-trailing-newline","valid":false,"reason":"it isn't an armored SSH signature"}
+{"case":"signins/028-sha256","valid":true,"machine_id":"key:fdf447fc1bd499944fe2"}
+{"case":"signins/029-unknown-hash","valid":false,"reason":"it uses an unknown hash (sha1)"}
+{"case":"signins/030-other-key","valid":false,"reason":"it was made with a different key than the report's public_key"}
+{"case":"signins/031-float","valid":false,"reason":"the report has a value a signed report can't have (Float)"}
