@@ -4,8 +4,6 @@ package client
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +16,7 @@ import (
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/upload"
 )
 
 type Client struct {
@@ -32,7 +31,14 @@ type Client struct {
 	// http reaches loopback only: the token would cross the network in the
 	// clear. See labhttp.
 	AllowPlainHTTP bool `json:"allow_plain_http,omitempty"`
-	http           *http.Client
+	// Note is told what a transfer is doing when it is worth a line, such as
+	// an upload that resumes; nil says nothing.
+	Note func(format string, args ...any) `json:"-"`
+	http *http.Client
+	// Tests shorten these: the longest file sent in one request, and the
+	// wait before a retry.
+	partBytes int64
+	pause     func(ctx context.Context, n int) error
 }
 
 func ConfigPath() string {
@@ -270,29 +276,11 @@ func (c *Client) OOBStatus(ctx context.Context, name string) (map[string]any, er
 	return out, c.do(ctx, "GET", "/api/devices/"+url.PathEscape(name)+"/oob", nil, &out)
 }
 
-// Upload sends a file to labd's artifact store and returns its sha256.
+// Upload sends a file to labd's artifact store and returns its sha256: in
+// one request up to 32 MiB, in numbered parts beyond, which a later Upload
+// of the same file resumes.
 func (c *Client) Upload(ctx context.Context, path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	req, _ := http.NewRequestWithContext(ctx, "POST", c.URL+"/api/artifacts", f)
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	var out struct{ SHA256 string }
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("upload: %s", strings.TrimSpace(string(b)))
-	}
-	if err := json.Unmarshal(b, &out); err != nil {
-		return "", err
-	}
-	return out.SHA256, nil
+	return upload.Sender{Client: c.http, URL: c.URL + "/api/artifacts", Token: c.Token, PartBytes: c.partBytes, Pause: c.pause, Note: c.Note}.File(ctx, path)
 }
 
 func (c *Client) Submit(ctx context.Context, spec api.JobSpec) (*api.Job, error) {
@@ -488,33 +476,11 @@ func (c *Client) BuildLog(ctx context.Context, id string, follow bool, w io.Writ
 	return err
 }
 
-// BuildFile downloads one output of a package build into dst and returns its sha256.
+// BuildFile downloads one output of a package build into dst and returns
+// its sha256. A download that is cut goes on from where it stopped, in this
+// call or the next one for the same dst.
 func (c *Client) BuildFile(ctx context.Context, id, name, dst string) (string, error) {
-	req, _ := http.NewRequestWithContext(ctx, "GET", c.URL+"/api/builds/"+url.PathEscape(id)+"/files/"+url.PathEscape(name), nil)
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		m, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("%s: %s", name, strings.TrimSpace(string(m)))
-	}
-	f, err := os.Create(dst + ".part")
-	if err != nil {
-		return "", err
-	}
-	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
-		f.Close()
-		os.Remove(dst + ".part")
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), os.Rename(dst+".part", dst)
+	return c.fetch(ctx, "/api/builds/"+url.PathEscape(id)+"/files/"+url.PathEscape(name), name, dst)
 }
 
 // Installed sends one of the installed-release Maintainer requests

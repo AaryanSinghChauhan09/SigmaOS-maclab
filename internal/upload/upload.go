@@ -182,10 +182,15 @@ func (s Sender) pause(ctx context.Context, n int) error {
 	if s.Pause != nil {
 		return s.Pause(ctx, n)
 	}
+	return Backoff(ctx, n)
+}
+
+// Backoff waits before retry number n (from 1): one second, doubling to thirty.
+func Backoff(ctx context.Context, n int) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(min(time.Second<<(n-1), 30*time.Second)):
+	case <-time.After(min(time.Second<<min(n-1, 5), 30*time.Second)):
 		return nil
 	}
 }

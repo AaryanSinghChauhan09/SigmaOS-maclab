@@ -79,7 +79,7 @@ const usage = `lab: run kernels and tests on Omarchy Macs
   lab shell <device>                  shell over the serial link: works with the Mac's network down (Ctrl-] exits)
   lab serial <device> [-n 100] | lab oob <device>
   lab audit <device>                  labd's copy of a Volunteer's Mac's Audit log: every Maintainer action on it
-  lab upload <file>
+  lab upload <file>                   to the artifact store, in 32 MiB parts; cut, the same command resumes
   lab mcp                             MCP server on stdio, for AI agents
   lab version                         the Lab release this lab came from
 `
@@ -111,6 +111,7 @@ func main() {
 	default:
 		var c *client.Client
 		if c, err = client.Load(); err == nil {
+			c.Note = func(format string, args ...any) { fmt.Fprintf(os.Stderr, "lab: "+format+"\n", args...) }
 			err = dispatch(ctx, c, cmd, args)
 		}
 	}
