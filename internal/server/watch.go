@@ -231,7 +231,7 @@ func (s *Server) look(ctx context.Context) {
 	s.lookRestart(now, mini)
 	s.lookStarts(now, mini)
 	parts := []StatusPart{
-		{"Server", partOK, "up since " + whenDay(s.start) + s.releaseText()},
+		{"Server", partOK, "up since " + whenDated(s.start) + s.releaseText()},
 		s.lookTunnel(now, mini),
 		s.lookBuilder(now),
 		s.lookController(ctx, now),
@@ -244,7 +244,7 @@ func (s *Server) look(ctx context.Context) {
 	s.lookAlias(ctx, now)
 
 	w.statusMu.Lock()
-	w.status = Status{Looked: whenDay(now), Parts: parts}
+	w.status = Status{Looked: whenDated(now), Parts: parts}
 	w.statusMu.Unlock()
 	s.lines.setMark(markAlive, strconv.FormatInt(now.Unix(), 10))
 }
@@ -259,7 +259,7 @@ func (s *Server) releaseText() string {
 // statusNow is what labd last saw.
 func (s *Server) statusNow() Status {
 	if s.cfg.Watch == nil {
-		st := Status{Looked: whenDay(s.now()), Parts: []StatusPart{{"Server", partOK, "up since " + whenDay(s.start) + s.releaseText()}}}
+		st := Status{Looked: whenDated(s.now()), Parts: []StatusPart{{"Server", partOK, "up since " + whenDated(s.start) + s.releaseText()}}}
 		for _, name := range []string{"Tunnel", "Builder", "Out-of-band controller", "Last good backup", "Last Restore drill"} {
 			st.Parts = append(st.Parts, StatusPart{name, partNone, "not watched on this machine"})
 		}
@@ -287,9 +287,9 @@ func (s *Server) lookRestart(now time.Time, mini *Mini) {
 
 func (s *Server) lastRestart(mini *Mini) StatusPart {
 	if mini == nil || mini.Boot.IsZero() {
-		return StatusPart{"Last restart", partOK, "labd on " + whenDay(s.start)}
+		return StatusPart{"Last restart", partOK, "labd on " + whenDated(s.start)}
 	}
-	return StatusPart{"Last restart", partOK, "the mini on " + whenDay(mini.Boot)}
+	return StatusPart{"Last restart", partOK, "the mini on " + whenDated(mini.Boot)}
 }
 
 // lookStarts follows labd's own starts and those of the daemons launchd
@@ -359,7 +359,7 @@ func (s *Server) lookTunnel(now time.Time, mini *Mini) StatusPart {
 			return "The tunnel is connected again. It was disconnected for " + howLong(now.Sub(since)) + "."
 		})
 	if !since.IsZero() {
-		return StatusPart{name, partBad, "disconnected since " + whenDay(since)}
+		return StatusPart{name, partBad, "disconnected since " + whenDated(since)}
 	}
 	return StatusPart{name, partOK, "connected"}
 }
@@ -419,7 +419,7 @@ func (s *Server) lookBuilder(now time.Time) StatusPart {
 		fixed("The Builder is not healthy: it has not asked labd for work since "+when(last)+". Builds wait until it does."),
 		fixed("The Builder asks labd for work again."))
 	if !since.IsZero() {
-		return StatusPart{name, partBad, "not heard from since " + whenDay(last)}
+		return StatusPart{name, partBad, "not heard from since " + whenDated(last)}
 	}
 	return StatusPart{name, partOK, "asking for work"}
 }
@@ -445,7 +445,7 @@ func (s *Server) lookController(ctx context.Context, now time.Time) StatusPart {
 		fixed("The Out-of-band controller on the mini is not healthy: it does not answer as it should. No Mac gets a Hard reset until it does; jobs still run."),
 		fixed("The Out-of-band controller on the mini answers again."))
 	if !since.IsZero() {
-		return StatusPart{name, partBad, "not answering since " + whenDay(since)}
+		return StatusPart{name, partBad, "not answering since " + whenDated(since)}
 	}
 	return StatusPart{name, partOK, "answering"}
 }
@@ -476,11 +476,11 @@ func (s *Server) lookBackup(now time.Time) StatusPart {
 		return StatusPart{name, partNone, "none yet"}
 	}
 	age := now.Sub(at)
-	text := whenDay(at) + ", " + howLong(age) + " ago"
+	text := whenDated(at) + ", " + howLong(age) + " ago"
 	old := age > backupTooOld
 	s.judge(now, "backup", old, 0,
 		fixed("The last good nightly backup is from "+text+": older than 36 hours."),
-		fixed("The nightly backup ran again: the last good one is from "+whenDay(at)+"."))
+		fixed("The nightly backup ran again: the last good one is from "+whenDated(at)+"."))
 	if old {
 		return StatusPart{name, partBad, text + ": older than 36 hours"}
 	}
@@ -495,16 +495,16 @@ func (s *Server) lookDrill() StatusPart {
 	const name = "Last Restore drill"
 	at, ok := s.markTime("restore-drill.ok")
 	if _, failed, bad := s.lines.markAt("trouble:" + drillKey); bad {
-		text := "failed on " + whenDay(failed)
+		text := "failed on " + whenDated(failed)
 		if ok {
-			text += "; the last one that passed was on " + whenDay(at)
+			text += "; the last one that passed was on " + whenDated(at)
 		}
 		return StatusPart{name, partBad, text}
 	}
 	if !ok {
 		return StatusPart{name, partNone, "none yet"}
 	}
-	return StatusPart{name, partOK, "passed on " + whenDay(at)}
+	return StatusPart{name, partOK, "passed on " + whenDated(at)}
 }
 
 func (s *Server) disk() (free, total uint64, err error) {
@@ -626,13 +626,13 @@ func (s *Server) postWeeklyDigest(ctx context.Context, day time.Time) {
 	now := s.now()
 	b.WriteString("Last good backup: ")
 	if at, ok := s.markTime("backup.ok"); ok {
-		b.WriteString(whenDay(at) + ", " + howLong(now.Sub(at)) + " ago\n")
+		b.WriteString(whenDated(at) + ", " + howLong(now.Sub(at)) + " ago\n")
 	} else {
 		b.WriteString("none yet\n")
 	}
 	b.WriteString("Last good Restore drill: ")
 	if at, ok := s.markTime("restore-drill.ok"); ok {
-		b.WriteString(whenDay(at))
+		b.WriteString(whenDated(at))
 	} else {
 		b.WriteString("none yet")
 	}
@@ -641,8 +641,8 @@ func (s *Server) postWeeklyDigest(ctx context.Context, day time.Time) {
 
 // ---- how a line says a time ----
 
-// whenDay is a time with its day, for what may be weeks old: Sat 14 Nov 14:30 AEST.
-func whenDay(t time.Time) string { return t.In(brisbane).Format("Mon 2 Jan 15:04 MST") }
+// whenDated is a time with its day, for what may be weeks old: Sat 14 Nov 14:30 AEST.
+func whenDated(t time.Time) string { return t.In(brisbane).Format("Mon 2 Jan 15:04 MST") }
 
 func minutes(d time.Duration) string { return strconv.Itoa(int(d/time.Minute)) + " minutes" }
 
