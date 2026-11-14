@@ -1,0 +1,6 @@
+# The Homebrew formulae the lab's daemons on the mini come from, one a line.
+# scripts/mini/setup installs each as the account /opt/homebrew belongs to,
+# then copies it and what it needs to run into /usr/local/lab/tools, which
+# only root can write. A LaunchDaemon file names the copy
+# (/usr/local/lab/tools/current/<formula>/bin/<tool>), never /opt/homebrew.
+# Versions follow Homebrew and change only in a Maintenance run.

@@ -1,0 +1,5 @@
+# What the mini runs that Homebrew does not bring, pinned by version and
+# checksum. scripts/mini/setup and the Maintenance run download each, compare
+# the checksum and only then install it; a Deploy touches none.
+#
+#   name  version  sha256  url (https, a .pkg)

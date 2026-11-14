@@ -1,0 +1,276 @@
+#!/bin/bash
+# Set the mini up for the lab:
+#
+#   sudo scripts/mini/setup [--dry-run] [--release-key FILE]
+#
+# Makes the lab account and its folders, pins the release key, installs the
+# Homebrew formulae deploy/homebrew-formulae names and what deploy/pins
+# names, and copies the Homebrew tools into a folder only root can write,
+# which is where every daemon runs them from. Safe to run again: it changes
+# only what is not yet as it should be. It starts nothing: Deploy does.
+# Needs only what macOS has, and Homebrew for its own formulae.
+#
+#   --dry-run           say what would change, and change nothing
+#   --release-key FILE  the allowed_signers file Deploy checks a bundle
+#                       against: release/allowed_signers of the repository.
+#                       Needed the first time; later it replaces the pin.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+deploy="$(cd "$here/../.." && pwd)/deploy"
+
+usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+ACCOUNT=lab
+key=""
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --release-key) [[ $# -ge 2 ]] || usage; key="$2"; shift ;;
+    *) usage ;;
+  esac
+  shift
+done
+(( DRY )) || need_root
+[[ -f $deploy/homebrew-formulae && -f $deploy/pins ]] || fail "no deploy/ folder beside scripts/: run the set-up from an unpacked bundle or from the repository"
+if [[ -n $key ]]; then
+  [[ -f $key ]] || fail "no file $key"
+  grep -Eq "^$RELEASE_SIGNER .*(ssh-|ecdsa-|sk-)[a-z0-9@.-]+ AAAA" "$key" || fail "$key holds no key for $RELEASE_SIGNER: it is not an allowed_signers file of the release key"
+elif [[ ! -s $LAB_SIGNERS ]]; then
+  fail "no release key is pinned yet: give --release-key FILE (release/allowed_signers of the repository, or the .allowed_signers file beside a local Release candidate)"
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/lab-setup.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+# The lab account: no password, no shell, not at the login window, in no
+# group but its own. labd and the other unprivileged daemons run as it.
+
+dscl_value() { dscl . -read "$1" "$2" 2>/dev/null | awk '{ print $2 }' || true; }
+uid_taken() { dscl . -list /Users UniqueID | awk '{ print $NF }' | grep -qx "$1"; }
+
+free_id() {
+  local used id
+  used="$({ dscl . -list /Users UniqueID; dscl . -list /Groups PrimaryGroupID; } | awk '{ print $NF }')"
+  for (( id = 300; id < 500; id++ )); do
+    if ! grep -qx "$id" <<<"$used"; then
+      echo "$id"
+      return
+    fi
+  done
+  fail "no free id between 300 and 499 for the $ACCOUNT account"
+}
+
+make_group() {
+  dscl . -create "/Groups/$ACCOUNT"
+  dscl . -create "/Groups/$ACCOUNT" PrimaryGroupID "$1"
+  dscl . -create "/Groups/$ACCOUNT" RealName "Omarchy Mac Lab"
+  dscl . -create "/Groups/$ACCOUNT" Password '*'
+}
+
+make_user() {
+  dscl . -create "/Users/$ACCOUNT"
+  dscl . -create "/Users/$ACCOUNT" UniqueID "$1"
+  dscl . -create "/Users/$ACCOUNT" PrimaryGroupID "$2"
+  dscl . -create "/Users/$ACCOUNT" UserShell /usr/bin/false
+  dscl . -create "/Users/$ACCOUNT" NFSHomeDirectory /var/lab
+  dscl . -create "/Users/$ACCOUNT" RealName "Omarchy Mac Lab"
+  dscl . -create "/Users/$ACCOUNT" Password '*'
+  dscl . -create "/Users/$ACCOUNT" IsHidden 1
+}
+
+account() {
+  local gid uid
+  gid="$(dscl_value "/Groups/$ACCOUNT" PrimaryGroupID)"
+  uid="$(dscl_value "/Users/$ACCOUNT" UniqueID)"
+  if [[ -z $gid ]]; then
+    gid="$(free_id)"
+    change "make the group /Groups/$ACCOUNT ($gid)" make_group "$gid"
+  fi
+  if [[ -z $uid ]]; then
+    uid="$gid"
+    if uid_taken "$uid"; then uid="$(free_id)"; fi
+    change "make the account /Users/$ACCOUNT ($uid): no password, no shell, home /var/lab" make_user "$uid" "$gid"
+  fi
+}
+
+# shape KIND MODE: a mode as ls shows it, such as drwx------.
+shape() {
+  local out="$1" i
+  for (( i = 0; i < 3; i++ )); do
+    case "${2:i:1}" in
+      7) out+=rwx ;;
+      6) out+=rw- ;;
+      5) out+=r-x ;;
+      4) out+=r-- ;;
+      0) out+=--- ;;
+    esac
+  done
+  echo "$out"
+}
+
+make_folder() {
+  mkdir -p "$1"
+  chown "$2:$3" "$1"
+  chmod "$4" "$1"
+}
+
+# folder PATH OWNER GROUP MODE
+folder() {
+  [[ "$(looks "$1")" != "$(shape d "$4") $2:$3" ]] || return 0
+  change "make $1 ($2:$3, $4)" make_folder "$@"
+}
+
+folders() {
+  local d
+  for d in "$LAB_ROOT" "$LAB_BUILDS" "$LAB_TOOLS"; do
+    folder "$d" "$ROOT_OWNER" "$ROOT_GROUP" 755
+  done
+  for d in "$LAB_HOME" "$LAB_HOME/data" "$LAB_HOME/secrets" "$LAB_HOME/run" "$LAB_HOME/log"; do
+    folder "$d" "$LAB_OWNER" "$LAB_GROUP" 700
+  done
+}
+
+pin_key() {
+  cp "$key" "$LAB_SIGNERS"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$LAB_SIGNERS"
+  chmod 0644 "$LAB_SIGNERS"
+}
+
+release_key() {
+  [[ -n $key ]] || return 0
+  if [[ ! -s $LAB_SIGNERS ]]; then
+    change "pin the release key at $LAB_SIGNERS" pin_key
+  elif ! cmp -s "$key" "$LAB_SIGNERS"; then
+    change "replace the release key pinned at $LAB_SIGNERS: a bundle the old key signed will be refused" pin_key
+  elif [[ "$(looks "$LAB_SIGNERS")" != "$(shape - 644) $ROOT_OWNER:$ROOT_GROUP" ]]; then
+    change "give $LAB_SIGNERS back to $ROOT_OWNER" pin_key
+  fi
+}
+
+# Homebrew. brew runs as the account its prefix belongs to, is told to leave
+# itself and what is already installed alone, and is never asked to start a
+# service: every daemon has the lab's own LaunchDaemon file.
+
+BREW_OWNER=""
+BREW_ENV=(HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1)
+
+brew_as_owner() {
+  if [[ "$(id -un)" == "$BREW_OWNER" ]]; then
+    (cd / && env "${BREW_ENV[@]}" "$BREW_PREFIX/bin/brew" "$@")
+  else
+    (cd / && sudo -u "$BREW_OWNER" -H env "${BREW_ENV[@]}" "$BREW_PREFIX/bin/brew" "$@")
+  fi
+}
+
+formulae() { sed -e 's/#.*//' "$deploy/homebrew-formulae" | awk 'NF { print $1 }'; }
+
+KEG_NAMES=()
+KEG_PATHS=()
+
+# The daemons run the Homebrew tools from a copy only root can write, never
+# from the prefix, which the admin account can write. The copy this one
+# replaces is kept as the way back after a bad upgrade.
+new_copy() {
+  local new old link i d
+  new="$(mktemp -d "$LAB_TOOLS/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+  for (( i = 0; i < ${#KEG_NAMES[@]}; i++ )); do
+    cp -R "${KEG_PATHS[i]}" "$new/${KEG_NAMES[i]}"
+  done
+  link="$(find "$new" -type l \( -lname "$BREW_PREFIX/*" -o -lname '/opt/homebrew/*' \) -print | head -n 1)"
+  if [[ -n $link ]]; then
+    d="$(readlink "$link")"
+    rm -rf "$new"
+    fail "${link#"$new"/} points into Homebrew ($d): a daemon run from the copy would still run files the admin account can write. Nothing was changed"
+  fi
+  printf '%s' "$1" > "$new/VERSIONS"
+  chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$new"
+  chmod -R ug-s,go-w "$new"
+  chmod 0755 "$new"
+  old="$(readlink "$LAB_TOOLS/current" 2>/dev/null || true)"
+  if [[ -n $old ]]; then ln -sfn "$old" "$LAB_TOOLS/previous"; fi
+  ln -sfn "$(basename "$new")" "$LAB_TOOLS/current"
+  for d in "$LAB_TOOLS"/*; do
+    [[ ! -L $d ]] || continue
+    case "$(basename "$d")" in
+      "$(basename "$new")" | "$old") ;;
+      *) rm -rf "$d" ;;
+    esac
+  done
+}
+
+copy_tools() {
+  local names name keg manifest=""
+  names="$({ printf '%s\n' "$@"; for name in "$@"; do brew_as_owner deps "$name" || fail "brew could not say what $name needs to run"; done; } | sort -u)"
+  for name in $names; do
+    if ! keg="$(cd "$(brew_as_owner --prefix "$name")" 2>/dev/null && pwd -P)"; then
+      (( DRY )) || fail "$name is not installed in $BREW_PREFIX"
+      change "copy the Homebrew tools into a new folder under $LAB_TOOLS that only $ROOT_OWNER can write" true
+      return 0
+    fi
+    KEG_NAMES+=("$name")
+    KEG_PATHS+=("$keg")
+    manifest+="$name $(basename "$keg")"$'\n'
+  done
+  if [[ -f $LAB_TOOLS/current/VERSIONS && "$(<"$LAB_TOOLS/current/VERSIONS")"$'\n' == "$manifest" ]]; then return 0; fi
+  change "copy the Homebrew tools into a new folder under $LAB_TOOLS that only $ROOT_OWNER can write: $(tr '\n' ' ' <<<"$manifest")" new_copy "$manifest"
+}
+
+homebrew() {
+  local list f
+  list="$(formulae)"
+  [[ -n $list ]] || return 0
+  [[ -x $BREW_PREFIX/bin/brew ]] || fail "deploy/homebrew-formulae names tools, and there is no Homebrew at $BREW_PREFIX"
+  BREW_OWNER="$(owner_of "$BREW_PREFIX")"
+  [[ $BREW_OWNER != root ]] || fail "$BREW_PREFIX belongs to root: brew never runs as root"
+  [[ "$(id -u)" == 0 || "$(id -un)" == "$BREW_OWNER" ]] || fail "brew runs as $BREW_OWNER, the account $BREW_PREFIX belongs to: use sudo, or be $BREW_OWNER for a dry run"
+  for f in $list; do
+    if [[ -z "$(brew_as_owner list --versions "$f" 2>/dev/null)" ]]; then
+      change "install $f from Homebrew, as $BREW_OWNER" brew_as_owner install "$f"
+    fi
+  done
+  # shellcheck disable=SC2086
+  copy_tools $list
+}
+
+# What deploy/pins names comes from where the pin says, and is installed only
+# when its checksum is the pinned one.
+
+install_pin() {
+  local file="$work/${4##*/}"
+  fetch "$4" "$file" || fail "could not download $4"
+  [[ "$(shasum -a 256 "$file" | awk '{ print $1 }')" == "$3" ]] || fail "$1 $2: the download's checksum is not the pinned one: it was not installed"
+  case "$file" in
+    *.pkg) installer -pkg "$file" -target / ;;
+    *) fail "deploy/pins: $1 is no .pkg, and the set-up installs nothing else" ;;
+  esac
+  { grep -v "^$1 " "$LAB_ROOT/installed-pins" 2>/dev/null || true; echo "$1 $2 $3"; } > "$LAB_ROOT/installed-pins.new"
+  mv "$LAB_ROOT/installed-pins.new" "$LAB_ROOT/installed-pins"
+}
+
+pins() {
+  local name version sum url have
+  while read -r name version sum url <&3; do
+    [[ -n $name ]] || continue
+    [[ -n $url && ${#sum} == 64 ]] || fail "deploy/pins: the line of $name is not: name version sha256 url"
+    have="$(awk -v n="$name" '$1 == n { print $2, $3 }' "$LAB_ROOT/installed-pins" 2>/dev/null || true)"
+    [[ $have != "$version $sum" ]] || continue
+    change "install $name $version, which deploy/pins names" install_pin "$name" "$version" "$sum" "$url"
+  done 3< <(sed -e 's/#.*//' "$deploy/pins")
+}
+
+account
+folders
+release_key
+homebrew
+pins
+
+if (( CHANGES == 0 )); then
+  say "nothing to change"
+elif (( DRY )); then
+  say "$CHANGES changes would be made; nothing was changed"
+else
+  say "$CHANGES changes made"
+fi
