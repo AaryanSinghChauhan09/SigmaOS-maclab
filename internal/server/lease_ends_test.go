@@ -446,3 +446,46 @@ func TestAFailedSendNeverBlocksALease(t *testing.T) {
 	}
 	l.wantLeaseEvents("taken", "released")
 }
+
+// A Lease its Mac's window, a Pause or a lowered Access level ended cancels
+// no job of its holder's: what is queued stays queued, as it did before
+// Leases had endings.
+func TestALeaseItsWindowEndedLeavesItsHoldersJobsQueued(t *testing.T) {
+	l := newEndsLab(t)
+	l.takeLease("ada@laptop", 0)
+	l.sim.Sleep()
+	l.waitDevice(func(api.Device) bool { return !l.s.view(l.s.dev(l.name)).Alive })
+	queued := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-waits behavior=ok")})
+	l.waitJob(queued, func(j *api.Job) bool { return hasEvent(j, "waiting for sim-mac to be ready") })
+
+	v := l.s.dev(l.name)
+	v.mu.Lock()
+	v.leaseCut = "the Availability window closed"
+	v.mu.Unlock()
+	l.leaseRunsOutNow()
+	l.noLease("the window closed")
+	l.wantLeaseEvents("taken", "expired: the Availability window closed")
+	l.staysQueued(queued, time.Second, "the window's end cancels no job")
+	l.sim.Wake()
+	l.expect(l.jobAPI(queued, 60*time.Second), api.OutcomePass)
+}
+
+// An M team member's job starts only under their own Lease: one queued by
+// a Maintainer who is no Maintainer by the time the Mac is free is not run.
+func TestAJobStartsOnlyUnderItsPersonsOwnLeaseOnceTheyAreNoMaintainer(t *testing.T) {
+	l := newEndsLab(t)
+	joshua := l.addMaintainer(harnessToken, "joshua")
+	busy := l.longJobAs(testMaintainer{Name: harnessMaintainer, Token: harnessToken}, "7.2-busy", 3*time.Second)
+	queued := l.mustSubmitAs(joshua, api.JobSpec{Kernel: l.artifact("krel=7.2-later behavior=ok")})
+	if err := l.s.store.setMaintainer(testAccount("joshua"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.s.store.setMark(testAccount("joshua"), "m_team", true); err != nil {
+		t.Fatal(err)
+	}
+	l.expect(l.jobAPI(busy, 60*time.Second), api.OutcomePass)
+	l.wantCanceled(queued, "@joshua holds no Lease on sim-mac")
+	if j, _ := l.jobNow(queued); j.Result.Booted {
+		t.Fatalf("the job ran: %+v", j.Result)
+	}
+}

@@ -308,6 +308,8 @@ func TestPauseEndsALeaseOnAVolunteerMac(t *testing.T) {
 	l.mustVolunteer("pause")
 	paused := clock.Now()
 	l.leaseEndsBy(paused.Add(5*time.Second), "the Volunteer paused")
+	l.noLease("the Volunteer paused")
+	l.wantLeaseEvents("taken", "expired: the Availability window closed")
 }
 
 func TestLeaseOnALabOwnedMacKeepsItsTimeToLive(t *testing.T) {

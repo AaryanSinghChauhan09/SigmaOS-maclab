@@ -373,6 +373,8 @@ func TestLoweringTheAccessLevelEndsALeaseAtOnce(t *testing.T) {
 	l.takeLease("connor (homework)", time.Hour)
 	l.mustVolunteer("access", "qualification")
 	l.leaseEndsBy(clock.Now().Add(5*time.Second), "the Volunteer lowered the Access level")
+	l.noLease("the Volunteer lowered the Access level")
+	l.wantLeaseEvents("taken", "expired: its Volunteer lowered the Access level")
 }
 
 func TestLoweringTheAccessLevelEndsAScriptJobIncomplete(t *testing.T) {
