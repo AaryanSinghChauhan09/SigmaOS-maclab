@@ -2,64 +2,84 @@ package server
 
 import (
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/sqlitedb"
 )
 
-type store struct{ db *sql.DB }
+//go:embed migrations/*.sql
+var labdMigrations embed.FS
+
+// store is labd.db.
+type store struct{ db *sqlitedb.DB }
 
 func openStore(path string) (*store, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	db, err := sqlitedb.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`
-CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, secret_hash TEXT NOT NULL, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, name TEXT NOT NULL, label TEXT, model TEXT, expires INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, device TEXT NOT NULL, created INTEGER NOT NULL, state TEXT NOT NULL, data TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS jobs_device ON jobs(device, created);
-CREATE TABLE IF NOT EXISTS builds (id TEXT PRIMARY KEY, key TEXT NOT NULL, created INTEGER NOT NULL, state TEXT NOT NULL, data TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS builds_key ON builds(key, created);
-CREATE TABLE IF NOT EXISTS maintainers (name TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, added INTEGER NOT NULL, added_by TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS ended (secret_hash TEXT PRIMARY KEY, name TEXT NOT NULL, maintainer TEXT NOT NULL, at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS configs (device TEXT NOT NULL, kernel TEXT NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(device, kernel));
-CREATE TABLE IF NOT EXISTS builders (name TEXT PRIMARY KEY, gen TEXT UNIQUE NOT NULL, token_hash TEXT UNIQUE NOT NULL, kinds TEXT NOT NULL, added INTEGER NOT NULL, added_by TEXT NOT NULL);`)
+	migrations, err := fs.Sub(labdMigrations, "migrations")
+	if err == nil {
+		err = fromMaclab(db)
+	}
+	if err == nil {
+		err = db.Migrate(migrations)
+	}
 	if err != nil {
+		db.Close()
 		return nil, err
-	}
-	// Tokens from before these columns read as an admin's, for a lab Mac.
-	if err := addColumn(db, "tokens", "volunteer", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return nil, err
-	}
-	if err := addColumn(db, "tokens", "requester", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return nil, err
-	}
-	// A labd from before Volunteer enrollment has tokens without these, and
-	// one from before one-time activation without activated_by, or before a
-	// Maintainer could link a Volunteer's login without volunteer_login.
-	for _, col := range []string{"volunteer_name", "contact", "activated_by", "volunteer_login"} {
-		if err := addColumn(db, "tokens", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
-			return nil, err
-		}
 	}
 	return &store{db}, nil
 }
 
-// addColumn adds a column a table gained after labd first made it.
-func addColumn(db *sql.DB, table, col, def string) error {
-	var n int
-	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info(?) WHERE name=?`, table, col).Scan(&n); err != nil || n > 0 {
+// fromMaclab gives a labd.db from before numbered migrations the columns its
+// tokens table gained after maclab first made it. The first migration makes
+// whole tables and leaves one that is there as it finds it.
+func fromMaclab(db *sqlitedb.DB) error {
+	if v, err := db.Version(); err != nil || v > 0 {
 		return err
 	}
-	_, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + col + ` ` + def)
-	return err
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('tokens')`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	have := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		have[name] = true
+	}
+	if err := rows.Err(); err != nil || len(have) == 0 {
+		return err
+	}
+	// Tokens from before volunteer and requester read as an admin's, for a
+	// lab Mac. The rest came with Volunteer enrollment, one-time activation
+	// (activated_by) and a Maintainer linking a Volunteer's login.
+	for _, col := range []struct{ name, def string }{
+		{"volunteer", "INTEGER NOT NULL DEFAULT 0"},
+		{"requester", "TEXT NOT NULL DEFAULT ''"},
+		{"volunteer_name", "TEXT NOT NULL DEFAULT ''"},
+		{"contact", "TEXT NOT NULL DEFAULT ''"},
+		{"activated_by", "TEXT NOT NULL DEFAULT ''"},
+		{"volunteer_login", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if have[col.name] {
+			continue
+		}
+		if _, err := db.Exec(`ALTER TABLE tokens ADD COLUMN ` + col.name + ` ` + col.def); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *store) saveDevice(d *api.Device, secretHash string) error {
@@ -439,11 +459,22 @@ func (s *store) builders() ([]api.Builder, error) {
 // generation that ended; only, if set, deletes it only while it is that
 // generation. ok is false when nothing was deleted.
 func (s *store) removeBuilder(name, only string) (gen string, ok bool, err error) {
-	err = s.db.QueryRow(`DELETE FROM builders WHERE name=? AND (?='' OR gen=?) RETURNING gen`, name, only, only).Scan(&gen)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRow(`DELETE FROM builders WHERE name=? AND (?='' OR gen=?) RETURNING gen`, name, only, only).Scan(&gen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
-	return gen, err == nil, err
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return gen, true, nil
 }
 
 // removeMaintainer deletes a Maintainer, and with them their token, unless

@@ -32,6 +32,7 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/oob"
+	"github.com/omacom/omarchy-maclab/internal/reports"
 	"github.com/omacom/omarchy-maclab/internal/web"
 )
 
@@ -119,11 +120,12 @@ type Config struct {
 }
 
 type Server struct {
-	cfg   Config
-	store *store
-	log   *log.Logger
-	ctx   context.Context
-	start time.Time
+	cfg     Config
+	store   *store
+	reports *reports.Store
+	log     *log.Logger
+	ctx     context.Context
+	start   time.Time
 
 	mu          sync.Mutex
 	devs        map[string]*dev // by name
@@ -250,7 +252,11 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, hosts: hosts}
+	rep, err := reports.Open(filepath.Join(cfg.DataDir, "reports.db"))
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{cfg: cfg, store: st, reports: rep, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, hosts: hosts}
 	s.start = s.now()
 	if err := s.firstMaintainer(); err != nil {
 		return nil, err
