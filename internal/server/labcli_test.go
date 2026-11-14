@@ -57,7 +57,7 @@ func TestALabThatDoesNotNameItselfIsRefusedOnEveryCall(t *testing.T) {
 		path = rePathValue.ReplaceAllString(path, "x")
 		forLab := rt.pattern == "GET /api/auth"
 		switch rt.reach {
-		case maintainers, teamBuilds, people, macNamed, jobNamed, scoped:
+		case maintainers, team, teamBuilds, people, macNamed, jobNamed, scoped:
 			forLab = true
 		}
 		for _, token := range []string{"lab_adm_secret", "mnt_0000000000000000000000000000000000000000", ""} {
