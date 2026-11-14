@@ -2,6 +2,7 @@ package sqlitedb
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -381,5 +382,55 @@ func BenchmarkCommit(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// Every read connection is open from the start and stays: a reader that
+// opened the file later could find it gone and would make an empty one.
+func TestReadersOpenAtTheStartAndNeverMakeTheFile(t *testing.T) {
+	d, path := open(t)
+	if n := d.r.Stats().OpenConnections; n != readers {
+		t.Errorf("%d read connections open after Open, want %d", n, readers)
+	}
+	d.r.SetMaxIdleConns(0)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	if err := d.QueryRow(`SELECT count(*) FROM sqlite_master`).Scan(&n); err == nil {
+		t.Error("a reader opened a database that is not there")
+	}
+	if left, _ := filepath.Glob(path + "*"); len(left) != 0 {
+		t.Errorf("a reader made %v", left)
+	}
+}
+
+func TestAPathIsTakenAsItIs(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a b?c#d%20e&_pragma=x")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	for _, path := range []string{filepath.Join(dir, "whole.db"), "bare.db"} {
+		d, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.Exec(`CREATE TABLE t (n INTEGER)`); err != nil {
+			t.Error(err)
+		}
+		var n int
+		if err := d.QueryRow(`SELECT count(*) FROM t`).Scan(&n); err != nil {
+			t.Error(err)
+		}
+		d.Close()
+		if _, err := os.Stat(filepath.Join(dir, filepath.Base(path))); err != nil {
+			t.Error(err)
+		}
+	}
+	if all, _ := os.ReadDir(filepath.Dir(dir)); len(all) != 1 {
+		t.Errorf("files outside the folder: %v", all)
 	}
 }

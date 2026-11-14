@@ -4,7 +4,10 @@
 package sqlitedb
 
 import (
+	"context"
 	"database/sql"
+	"net/url"
+	"path/filepath"
 
 	_ "modernc.org/sqlite"
 )
@@ -22,7 +25,12 @@ type DB struct{ w, r *sql.DB }
 // only does something on macOS, where a plain fsync leaves the data in the
 // drive's cache: the mini has no battery.
 func Open(path string) (*DB, error) {
-	w, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=fullfsync(1)&_txlock=immediate")
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	file := (&url.URL{Scheme: "file", Path: abs}).String()
+	w, err := sql.Open("sqlite", file+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=fullfsync(1)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
@@ -32,14 +40,44 @@ func Open(path string) (*DB, error) {
 		w.Close()
 		return nil, err
 	}
-	r, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_query_only=1")
+	// mode=rw: a reader never makes the file.
+	r, err := sql.Open("sqlite", file+"?mode=rw&_pragma=busy_timeout(5000)&_query_only=1")
 	if err != nil {
 		w.Close()
 		return nil, err
 	}
 	r.SetMaxOpenConns(readers)
 	r.SetMaxIdleConns(readers)
-	return &DB{w, r}, nil
+	d := &DB{w, r}
+	if err := d.openReaders(); err != nil {
+		d.Close()
+		return nil, err
+	}
+	return d, nil
+}
+
+// openReaders opens every read connection and has it read the file. They
+// stay open, so none meets the file for the first time later.
+func (d *DB) openReaders() error {
+	ctx := context.Background()
+	var conns []*sql.Conn
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	for range readers {
+		c, err := d.r.Conn(ctx)
+		if err != nil {
+			return err
+		}
+		conns = append(conns, c)
+		var n int
+		if err := c.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master`).Scan(&n); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) Close() error {
