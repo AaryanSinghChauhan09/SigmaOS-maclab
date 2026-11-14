@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
@@ -65,16 +64,11 @@ func (v *dev) statusOOB(ctx context.Context) (string, error) {
 	e := v.useOOB(ctx, func(c oob.Controller, x context.Context) error { var e error; out, e = c.Status(x); return e })
 	return out, e
 }
-func (v *dev) writeOOB(ctx context.Context, b []byte) error {
-	return v.useOOB(ctx, func(c oob.Controller, x context.Context) error { return c.Write(x, b) })
-}
-func (v *dev) rawOOB(ctx context.Context, w io.Writer) error {
-	return v.useOOB(ctx, func(c oob.Controller, x context.Context) error { return c.Raw(x, w) })
-}
 
 // This policy survives a failed return and controller restart. An empty legacy
-// request inherits a network hold; only explicit validated serial-assisted may
-// re-enable a configured route. Nothing clears or rewrites Device.OOB.
+// request inherits a network hold, and nothing lifts one: the serial-assisted
+// mode, which did, is refused (see errNoConsole). Nothing clears or rewrites
+// Device.OOB.
 func (s *Server) beginJobRecoveryMode(ctx context.Context, v *dev, j *api.Job) error {
 	v.recoveryMu.Lock()
 	defer v.recoveryMu.Unlock()
@@ -100,6 +94,9 @@ func validateRecoveryTransaction(d api.Device, spec api.JobSpec) error {
 	return nil
 }
 func (s *Server) transitionRecoveryMode(ctx context.Context, v *dev, requested, transaction, holder, jobID string) error {
+	if requested == api.RecoverySerialAssisted {
+		return errNoConsole
+	}
 	if !api.ValidRecoveryMode(requested) {
 		return errors.New("stored job has invalid recovery_mode")
 	}
@@ -108,21 +105,6 @@ func (s *Server) transitionRecoveryMode(ctx context.Context, v *dev, requested, 
 	}
 	d := v.snapshot()
 	mode := effectiveRecoveryMode(requested, d.EffectiveRecoveryMode)
-	if requested == api.RecoverySerialAssisted {
-		if d.OOB == nil {
-			return errors.New("serial-assisted requested without a configured route")
-		}
-		ctl, e := s.cfg.OOBFactory(&d)
-		if e != nil {
-			return e
-		}
-		probe, cancel := context.WithTimeout(ctx, 10*time.Second)
-		status, e := ctl.Status(probe)
-		cancel()
-		if e != nil || strings.TrimSpace(status) == "" {
-			return fmt.Errorf("explicit serial-assisted route failed fresh status validation")
-		}
-	}
 	v.mu.Lock()
 	previous := v.d.EffectiveRecoveryMode
 	previousTransaction, previousHolder, previousJob := v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob
@@ -195,6 +177,10 @@ func (s *Server) hRecoveryMode(w http.ResponseWriter, r *http.Request) {
 	var extra any
 	if d.Decode(&extra) != io.EOF {
 		httpErr(w, 400, "extra recovery mode data")
+		return
+	}
+	if q.Mode == api.RecoverySerialAssisted {
+		s.hNoConsole(w, r)
 		return
 	}
 	if q.Mode == "" || !api.ValidRecoveryMode(q.Mode) || q.Holder == "" || !recoveryTransactionID.MatchString(q.Transaction) {

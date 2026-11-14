@@ -681,7 +681,7 @@ func (s *Server) routes() []route {
 		{"GET /healthz", anyone, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok\n") }},
 		{"POST /api/devices/{name}/recovery-mode", maintainers, s.hRecoveryMode},
 		{"GET /api/recovery", maintainers, func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w, api.RecoveryCapabilities{Schema: 1, Modes: []string{api.RecoveryNetworkOnly, api.RecoverySerialAssisted}, PerJobOOBIsolation: true, TransactionIsolation: true})
+			writeJSON(w, api.RecoveryCapabilities{Schema: 1, Modes: []string{api.RecoveryNetworkOnly}, PerJobOOBIsolation: true, TransactionIsolation: true})
 		}},
 		{"GET /api/mesa", maintainers, func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, api.MesaCapabilities{Schema: 1, Staged: true, OfficialGPU: false, AgentMin: mesaMinAgent})
@@ -695,7 +695,7 @@ func (s *Server) routes() []route {
 		{"DELETE /api/devices/{name}/lease", team, s.hRelease},
 		{"GET /api/devices/{name}/leases", macNamed, s.hLeaseRecord},
 		{"POST /api/devices/{name}/reset", team, s.hReset},
-		{"GET /api/devices/{name}/serial", maintainers, s.hSerial},
+		{"GET /api/devices/{name}/serial", team, s.hNoConsole},
 		{"GET /api/devices/{name}/oob", macNamed, s.hOOBStatus},
 		{"GET /api/stream", scoped, s.hStream},
 		{"POST /api/devices/{name}/screenshot", team, s.hScreenshot},
@@ -703,9 +703,9 @@ func (s *Server) routes() []route {
 		{"GET /api/devices/{name}/screens", macNamed, s.hScreens},
 		{"GET /api/devices/{name}/screens/{file}", macNamed, s.hScreen},
 		{"GET /api/devices/{name}/logs", macNamed, s.hLogs},
-		{"GET /api/devices/{name}/console", maintainers, s.hConsoleRaw},
-		{"POST /api/devices/{name}/console", maintainers, s.hConsoleWrite},
-		{"POST /api/devices/{name}/console/arm", maintainers, s.hConsoleArm},
+		{"GET /api/devices/{name}/console", team, s.hNoConsole},
+		{"POST /api/devices/{name}/console", team, s.hNoConsole},
+		{"POST /api/devices/{name}/console/arm", team, s.hNoConsole},
 		{"POST /api/agent/screen", ownMac, s.hAgentScreen},
 		{"POST /api/enroll-tokens", maintainers, s.hEnrollToken},
 		{"POST /api/volunteer", anyone, s.hVolunteerGone},
@@ -1322,7 +1322,7 @@ func (s *Server) hPatchDevice(w http.ResponseWriter, r *http.Request) {
 // it can enroll again under the same name. Its jobs stay in the history. A
 // Mac with a job running, queued, or unfinished in the store is refused. So,
 // unless ?force=1, is one someone other than ?holder= holds a lease on
-// (forgetting it would end the lease and cut their lab shell), and one whose
+// (forgetting it would end the lease and cut their lab exec), and one whose
 // agent still checks in.
 func (s *Server) hForgetDevice(w http.ResponseWriter, r *http.Request) {
 	v := s.devOr404(w, r)
@@ -1449,24 +1449,6 @@ func (s *Server) hReset(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(v.d.Name + " had left the lab (lab-agent uninstall); the reset puts it back in. "))
 	}
 	w.Write([]byte("recovery started; watch `lab status " + v.d.Name + "`\n"))
-}
-
-func (s *Server) hSerial(w http.ResponseWriter, r *http.Request) {
-	v := s.devOr404(w, r)
-	if v == nil {
-		return
-	}
-	n, _ := strconv.Atoi(r.URL.Query().Get("lines"))
-	if n <= 0 {
-		n = 100
-	}
-	b, _ := os.ReadFile(s.serialPath(v.d.Name))
-	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	w.Header().Set("Content-Type", "text/plain")
-	io.WriteString(w, strings.Join(lines, "\n")+"\n")
 }
 
 func (s *Server) hOOBStatus(w http.ResponseWriter, r *http.Request) {
@@ -1635,6 +1617,9 @@ func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...st
 	if v == nil {
 		return nil, 404, fmt.Errorf("no device %q", spec.Device)
 	}
+	if spec.RecoveryMode == api.RecoverySerialAssisted {
+		return nil, statusOf(errNoConsole), errNoConsole
+	}
 	if by.AccountID != 0 && !by.isMaintainer() {
 		if err := s.fence(v, by, fenceJobs); err != nil {
 			return nil, statusOf(err), err
@@ -1652,10 +1637,7 @@ func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...st
 		return nil, 409, err
 	}
 	if !api.ValidRecoveryMode(spec.RecoveryMode) {
-		return nil, 400, errors.New("recovery_mode must be network-only or serial-assisted")
-	}
-	if spec.RecoveryMode == api.RecoverySerialAssisted && v.snapshot().OOB == nil {
-		return nil, 409, errors.New("serial-assisted requested but no controller is configured")
+		return nil, 400, errors.New("recovery_mode must be network-only, or left out")
 	}
 	if spec.Config != "" {
 		if spec.Source == "" {

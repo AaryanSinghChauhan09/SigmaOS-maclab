@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
-	"github.com/omacom/omarchy-maclab/internal/oob"
 )
 
 type event struct {
@@ -361,92 +360,4 @@ func (r *jobRun) capture(label string) {
 	}
 	r.s.updateJob(r.j, func(j *api.Job) { j.Result.Logs = append(j.Result.Logs, res.Name) })
 	r.s.hub.publish("screen", r.j.Spec.Device, map[string]any{"device": r.j.Spec.Device, "job": r.j.ID, "name": res.Name, "time": res.Time})
-}
-
-// ---- console: an interactive shell over the out-of-band serial link ----
-
-func (s *Server) consoleCtl(w http.ResponseWriter, r *http.Request) (*dev, oob.Controller) {
-	v := s.devOr404(w, r)
-	if v == nil {
-		return nil, nil
-	}
-	v.mu.Lock()
-	ctl := v.effectiveOOBLocked()
-	v.mu.Unlock()
-	if ctl == nil {
-		httpErr(w, 409, "%s has no out-of-band controller, so there is no serial console", v.d.Name)
-		return nil, nil
-	}
-	// The console is a root shell, fenced by a Lease as lab exec is.
-	if err := s.fence(v, leaser(r), fenceExec); err != nil {
-		httpErr(w, statusOf(err), "%v", err)
-		return nil, nil
-	}
-	return v, ctl
-}
-
-// hConsoleRaw streams console bytes; it works whatever state the Mac's network is in.
-func (s *Server) hConsoleRaw(w http.ResponseWriter, r *http.Request) {
-	v, ctl := s.consoleCtl(w, r)
-	if ctl == nil {
-		return
-	}
-	fl, _ := w.(http.Flusher)
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Accel-Buffering", "no") // a reverse proxy passes it on as it comes
-	w.WriteHeader(200)
-	if fl != nil {
-		fl.Flush()
-	}
-	session, done := s.underLease(r, v, leaser(r))
-	defer done()
-	v.rawOOB(session.Context(), flushWriter{w, fl})
-}
-
-type flushWriter struct {
-	w  io.Writer
-	fl http.Flusher
-}
-
-func (f flushWriter) Write(b []byte) (int, error) {
-	n, err := f.w.Write(b)
-	if f.fl != nil {
-		f.fl.Flush()
-	}
-	return n, err
-}
-
-func (s *Server) hConsoleWrite(w http.ResponseWriter, r *http.Request) {
-	v, ctl := s.consoleCtl(w, r)
-	if ctl == nil {
-		return
-	}
-	b, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
-	if err != nil {
-		httpErr(w, 400, "%v", err)
-		return
-	}
-	if err := v.writeOOB(r.Context(), b); err != nil {
-		httpErr(w, 502, "%v", err)
-		return
-	}
-	w.WriteHeader(204)
-}
-
-// hConsoleArm puts the Mac's UART into serial mode now (it leaves it on reboot).
-func (s *Server) hConsoleArm(w http.ResponseWriter, r *http.Request) {
-	v, ctl := s.consoleCtl(w, r)
-	if ctl == nil {
-		return
-	}
-	if err := v.armOOB(r.Context(), 0); err != nil {
-		httpErr(w, 502, "%v", err)
-		return
-	}
-	// Switching the port into serial mode glitches the line, and the Mac's
-	// shell reads the glitch as a stray 0xFF. Ctrl-U discards it.
-	s.clock().Sleep(200 * time.Millisecond)
-	v.writeOOB(r.Context(), []byte{0x15})
-	w.Write([]byte("armed\n"))
 }

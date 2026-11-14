@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/oob"
 	"io"
@@ -113,17 +112,16 @@ func TestRecoveryNetworkSilentLossIsUnknownAndNeverResets(t *testing.T) {
 		t.Fatal("unknown loss became PASS")
 	}
 }
-func TestRecoveryExplicitSerialJobStillUsesItsConfiguredRoute(t *testing.T) {
+func TestRecoveryExplicitSerialJobIsRefusedAndAsksNoController(t *testing.T) {
 	l, c := countedModeLab(t, "m3pro")
-	j := l.run(api.JobSpec{RecoveryMode: api.RecoverySerialAssisted, Kernel: l.artifact("krel=mode-serial behavior=ok")})
-	l.expect(j, api.OutcomePass)
-	if c.status.Load() == 0 || c.arm.Load() == 0 || j.Spec.RecoveryMode != api.RecoverySerialAssisted || j.EffectiveRecoveryMode != api.RecoverySerialAssisted {
-		t.Fatal("serial-assisted route not validated/used", c.counts(), j.EffectiveRecoveryMode)
+	before := c.counts()
+	_, code, e := l.s.Submit(api.JobSpec{Device: l.name, RecoveryMode: api.RecoverySerialAssisted, Kernel: l.artifact("krel=mode-serial behavior=ok")})
+	if e == nil || code != http.StatusGone || e.Error() != api.NoSerialConsole {
+		t.Fatal("serial-assisted job admitted", code, e)
 	}
-	if !strings.Contains(modeMessages(j), "console=ttySAC0") {
-		t.Fatal("serial stage capability lost", modeMessages(j))
+	if jobs, _ := l.s.store.jobs(l.name, 100, true); len(jobs) != 0 || c.counts() != before {
+		t.Fatal("refused serial-assisted job queued or touched the controller", len(jobs), c.counts())
 	}
-	l.waitDevice(func(d api.Device) bool { return d.Kernel == agent.SimKnownGood })
 }
 func TestRecoveryRejectsUnknownModeBeforeQueue(t *testing.T) {
 	l := newLab(t, false)
@@ -201,7 +199,7 @@ func TestRecoveryNetworkTransitionCancelsAndDrainsPriorControllerCall(t *testing
 		t.Fatal("masked reset admitted")
 	}
 }
-func TestRecoveryNetworkMaskPersistsAcrossRestartUntilExplicitSerial(t *testing.T) {
+func TestRecoveryNetworkMaskPersistsAcrossRestartAndNoSerialJobLiftsIt(t *testing.T) {
 	l, c := countedModeLab(t, "mode-restart")
 	v := l.s.dev(l.name)
 	j := &api.Job{ID: "mode-restart-job", Spec: api.JobSpec{Device: l.name, RecoveryMode: api.RecoveryNetworkOnly}, State: api.JobQueued}
@@ -225,11 +223,11 @@ func TestRecoveryNetworkMaskPersistsAcrossRestartUntilExplicitSerial(t *testing.
 		t.Fatal("restart touched isolated controller", before, c.counts())
 	}
 	serial := &api.Job{ID: "explicit-reenable", Spec: api.JobSpec{Device: l.name, RecoveryMode: api.RecoverySerialAssisted}, State: api.JobQueued}
-	if e := s.beginJobRecoveryMode(ctx, fresh, serial); e != nil {
-		t.Fatal(e)
+	if e := s.beginJobRecoveryMode(ctx, fresh, serial); e == nil || e.Error() != api.NoSerialConsole {
+		t.Fatal("stored serial-assisted job admitted", e)
 	}
-	if fresh.snapshot().EffectiveRecoveryMode != api.RecoverySerialAssisted || c.status.Load() <= before[2] {
-		t.Fatal("explicit serial did not freshly validate")
+	if fresh.snapshot().EffectiveRecoveryMode != api.RecoveryNetworkOnly || c.counts() != before {
+		t.Fatal("serial-assisted job lifted the network hold or touched the controller", fresh.snapshot().EffectiveRecoveryMode, c.counts())
 	}
 }
 
@@ -237,7 +235,7 @@ func TestRecoveryTransactionIsolatesExecBeforeAnyJob(t *testing.T) {
 	l, c := countedModeLab(t, "pre-job-network")
 	v := l.s.dev(l.name)
 	v.mu.Lock()
-	v.d.Lease = &api.Lease{Holder: "own", Expires: time.Now().Add(time.Hour)}
+	v.d.Lease = &api.Lease{Holder: "own", Maintainer: "ada", Expires: time.Now().Add(time.Hour)}
 	v.mu.Unlock()
 	before := c.counts()
 	q := `{"mode":"network-only","holder":"own","transaction":"fresh-preparation"}`
@@ -263,10 +261,13 @@ func TestRecoveryTransactionIsolatesExecBeforeAnyJob(t *testing.T) {
 	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"command":"DO_NOT_EXECUTE"}`))
 	req.SetPathValue("name", l.name)
 	l.s.hExec(rec, byMaintainer(req))
-	if rec.Code != 409 || c.counts() != before {
-		t.Fatal("pre-job serial fallback escaped transaction", rec.Code, c.counts())
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "is offline") || c.counts() != before {
+		t.Fatal("pre-job serial fallback escaped transaction", rec.Code, rec.Body.String(), c.counts())
 	}
-	for _, spec := range []api.JobSpec{{Device: l.name, Holder: "own", RecoveryMode: api.RecoverySerialAssisted, RecoveryTransaction: "fresh-preparation"}, {Device: l.name, Holder: "own", RecoveryMode: api.RecoveryNetworkOnly, RecoveryTransaction: "foreign"}, {Device: l.name, Holder: "own", RecoveryMode: api.RecoveryNetworkOnly}} {
+	if _, code, e := l.s.Submit(api.JobSpec{Device: l.name, Holder: "own", RecoveryMode: api.RecoverySerialAssisted, RecoveryTransaction: "fresh-preparation"}); e == nil || code != http.StatusGone {
+		t.Fatal("serial-assisted job admitted inside a transaction", code, e)
+	}
+	for _, spec := range []api.JobSpec{{Device: l.name, Holder: "own", RecoveryMode: api.RecoveryNetworkOnly, RecoveryTransaction: "foreign"}, {Device: l.name, Holder: "own", RecoveryMode: api.RecoveryNetworkOnly}} {
 		if _, code, e := l.s.Submit(spec); e == nil || code != 409 {
 			t.Fatal("mismatched transaction admitted", code, e)
 		}
@@ -286,11 +287,18 @@ func TestRecoveryTransactionRefusesForeignLeaseBeforeControllerUse(t *testing.T)
 	v.d.Lease = &api.Lease{Holder: "actual-owner", Expires: time.Now().Add(time.Hour)}
 	v.mu.Unlock()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"mode":"serial-assisted","holder":"foreign","transaction":"wrong"}`))
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"mode":"network-only","holder":"foreign","transaction":"wrong"}`))
 	req.SetPathValue("name", l.name)
 	l.s.hRecoveryMode(rec, byMaintainer(req))
 	if rec.Code != 409 || c.counts() != before {
 		t.Fatal("foreign lease touched controller", rec.Code, c.counts())
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"mode":"serial-assisted","holder":"actual-owner","transaction":"own"}`))
+	req.SetPathValue("name", l.name)
+	l.s.hRecoveryMode(rec, byMaintainer(req))
+	if rec.Code != http.StatusGone || rec.Body.String() != api.NoSerialConsole+"\n" || c.counts() != before {
+		t.Fatal("serial-assisted mode selected or touched controller", rec.Code, rec.Body.String(), c.counts())
 	}
 }
 

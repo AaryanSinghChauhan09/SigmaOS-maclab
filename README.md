@@ -836,13 +836,11 @@ The page has no serial console.
   text console, emergency shell, login screen, desktop), with `grim` as a fallback. Jobs capture
   `screen/after-boot.jpg` and `screen/after-tests.jpg`.
 - `GET /api/devices/{n}/logs?source=journal|kernel&lines=N`: live from the Mac.
-- `lab shell <device>`: an interactive shell over the out-of-band USB-C serial link (`GET/POST
-  /api/devices/{n}/console`). It works with the Mac's network down. `lab-agent setup` enables an
-  115200 getty on `ttySAC0`.
 
-Before the display driver loads, the screen can't be captured, but serial carries the text of every
-stage: m1n1, U-Boot, the kernel from `[0.000000]` (lab boots add `console=ttySAC0,115200`), and
-login. A Mac leaves serial mode on every reboot, so labd asks oobd to re-arm around each one.
+The serial console is not part of Omarchy Mac Lab: a Hard reset is the only out-of-band function.
+`lab shell`, `lab console`, `lab serial` and `lab recovery-mode` say so, and labd refuses the console
+routes, the serial log, the serial-assisted recovery mode and a `lab exec` on a Mac that is off the
+network with the same line.
 
 ## Build from a GitHub URL
 
@@ -1177,7 +1175,7 @@ claude mcp add maclab -- lab mcp
 
 Tools: `lab_devices`, `lab_device`, `lab_run`, `lab_wait`, `lab_job`, `lab_jobs`,
 `lab_log`, `lab_screenshot`, `lab_baseline`, `lab_crashtest`, `lab_lease`,
-`lab_release`, `lab_reset`, `lab_serial`, `lab_exec`, `lab_cancel`, `lab_retry`, `lab_build`,
+`lab_release`, `lab_reset`, `lab_exec`, `lab_cancel`, `lab_retry`, `lab_build`,
 `lab_build_status`, `lab_package`, `lab_publish`, `lab_gate` and `lab_exclude`. A device in `needs_hands` is waiting for a
 person. Tell the user; don't retry. Take `lab_lease` before a series of jobs
 that must not interleave with others' (benchmarks). A Mac someone else leases
