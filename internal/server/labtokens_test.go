@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -751,5 +753,104 @@ func TestAnAdminTokenOnDiskAndMaclabsMaintainerTokensOpenNothing(t *testing.T) {
 	}
 	if n := -1; fresh.store.db.QueryRow(`SELECT count(*) FROM maintainers`).Scan(&n) != nil || n != 0 {
 		t.Errorf("a fresh labd has %d of maclab's Maintainers", n)
+	}
+}
+
+// held is a request body the browser holds back: nothing of it arrives
+// until send, and asked closes when labd first reads for it.
+type held struct {
+	body  io.Reader
+	asked chan struct{}
+	once  sync.Once
+	send  chan struct{}
+}
+
+func (h *held) Read(p []byte) (int, error) {
+	h.once.Do(func() { close(h.asked) })
+	<-h.send
+	return h.body.Read(p)
+}
+
+// heldForm starts a form of the lab's own page whose body the browser holds
+// back, waits until labd has let the request in and reads for the body, and
+// returns what sends the body and gives labd's answer.
+func (b *browser) heldForm(target string, fields ...string) (send func() *httptest.ResponseRecorder) {
+	b.l.t.Helper()
+	v := url.Values{}
+	for i := 0; i+1 < len(fields); i += 2 {
+		v.Set(fields[i], fields[i+1])
+	}
+	h := &held{body: strings.NewReader(v.Encode()), asked: make(chan struct{}), send: make(chan struct{})}
+	r := httptest.NewRequest("POST", "http://"+labHost+target, h)
+	r = r.WithContext(onTunnel(r.Context()))
+	r.RemoteAddr = "@"
+	for name, value := range map[string]string{"X-Forwarded-Proto": "https", "CF-Connecting-IP": "203.0.113.9", "User-Agent": "TestBrowser/9.75",
+		"Origin": labAddress, "X-CSRF-Token": b.csrf(), "Content-Type": formType} {
+		r.Header.Set(name, value)
+	}
+	r.AddCookie(b.session())
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b.l.h.ServeHTTP(w, r)
+	}()
+	select {
+	case <-h.asked:
+	case <-done:
+		b.l.t.Fatalf("labd answered %s before its body came: %d %s", target, w.Code, w.Body)
+	case <-time.After(10 * time.Second):
+		b.l.t.Fatalf("labd never read for the body of %s", target)
+	}
+	return func() *httptest.ResponseRecorder {
+		close(h.send)
+		<-done
+		return w
+	}
+}
+
+// A cut outlives a request that was let in before it: whoever holds a stolen
+// session and keeps "make a Lab token" open, its body unsent, gets no token
+// by sending the body after the session was ended.
+func TestACutSessionMakesNoLabTokenThroughARequestItHeldOpen(t *testing.T) {
+	for name, cut := range map[string]string{"End all access": "/me/end-all-access", "Sign out everywhere": "/me/sign-out-everywhere"} {
+		t.Run(name, func(t *testing.T) {
+			l := pagesLab(t, nil)
+			thief, person := l.signedIn(ownerID), l.signedIn(ownerID)
+			told := l.toldAgents()
+			told.forget()
+			send := thief.heldForm("/me/tokens", "name", "kept past the cut", "period", "never")
+			if w := person.form(cut, "sure", "yes"); w.Code != http.StatusSeeOther {
+				t.Fatalf("%s: %d %s", name, w.Code, w.Body)
+			}
+			w := send()
+			if found := reLabToken.FindAllString(w.Body.String(), -1); len(found) != 0 {
+				t.Errorf("the answer shows a Lab token's secret")
+			}
+			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/sign-in" {
+				t.Errorf("the answer is not a signed-out browser's: %d to %q\n%s", w.Code, w.Header().Get("Location"), w.Body)
+			}
+			if n := l.count(`SELECT count(*) FROM lab_tokens WHERE account_id = ?`, ownerID); n != 0 {
+				t.Errorf("%d Lab tokens were made after the cut", n)
+			}
+			for _, line := range told.lines() {
+				if strings.Contains(line, "kept past the cut") {
+					t.Errorf("\"Agents\" was told of a token that was not made: %s", line)
+				}
+			}
+			if n := l.count(`SELECT count(*) FROM people_record WHERE what LIKE '%kept past the cut%'`); n != 0 {
+				t.Errorf("the People record has %d lines for a token that was not made", n)
+			}
+		})
+	}
+}
+
+// A request held open by a session that is still there makes its token.
+func TestAHeldRequestOfALiveSessionMakesItsLabToken(t *testing.T) {
+	l := pagesLab(t, nil)
+	b := l.signedIn(ownerID)
+	w := b.heldForm("/me/tokens", "name", "slow", "period", "90")()
+	if found := reLabToken.FindAllString(w.Body.String(), -1); w.Code != http.StatusOK || len(found) != 1 {
+		t.Fatalf("a slow form of a live session: %d, %d secrets", w.Code, len(found))
 	}
 }

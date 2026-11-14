@@ -157,9 +157,16 @@ func labTokenName(name string) (string, bool) {
 // errTooManyTokens is the eleventh token.
 var errTooManyTokens = fmt.Errorf("has %d Lab tokens, which is the most a person has: revoke one first", labTokenCap)
 
+// errSessionEnded is a token asked for by a browser session that was ended
+// while its request was on the way.
+var errSessionEnded = errors.New("the browser session that asked has ended")
+
 // makeLabToken makes a Lab token for the person and returns its secret,
-// which nothing keeps.
-func (st *store) makeLabToken(accountID int64, name string, period int, now time.Time, told bool) (secret string, t labToken, err error) {
+// which nothing keeps. session is the hash of the browser session that asks:
+// the token is made only while that session is the person's, in the one
+// statement, so a request let in before a cut makes nothing after it. The
+// break-glass command has no session and gives none.
+func (st *store) makeLabToken(accountID int64, name string, period int, now time.Time, told bool, session string) (secret string, t labToken, err error) {
 	secret = newLabToken()
 	t = labToken{AccountID: accountID, Name: name, Period: period, Made: now, Expires: expiry(period, now), told: told}
 	var expires any
@@ -167,12 +174,18 @@ func (st *store) makeLabToken(accountID int64, name string, period int, now time
 		expires = t.Expires.UnixMicro()
 	}
 	res, err := st.db.Exec(`INSERT INTO lab_tokens (hash, account_id, name, period, made, expires, told)
-		SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE (SELECT count(*) FROM lab_tokens WHERE account_id = ?2) < ?8`,
-		hashSecret(secret), accountID, name, period, now.UnixMicro(), expires, told, labTokenCap)
+		SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE (SELECT count(*) FROM lab_tokens WHERE account_id = ?2) < ?8
+		AND (?9 = '' OR EXISTS (SELECT 1 FROM browser_sessions WHERE hash = ?9 AND account_id = ?2))`,
+		hashSecret(secret), accountID, name, period, now.UnixMicro(), expires, told, labTokenCap, session)
 	if err != nil {
 		return "", t, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		if session != "" {
+			if _, _, err := st.session(session); err != nil {
+				return "", t, errSessionEnded
+			}
+		}
 		return "", t, errTooManyTokens
 	}
 	t.ID, _ = res.LastInsertId()
@@ -410,7 +423,7 @@ func BreakGlass(dataDir, handle string, accountID int64, now time.Time) (*Minted
 		p = called[0]
 	}
 	name := "break-glass " + now.UTC().Format("2006-01-02 15:04:05")
-	secret, t, err := st.makeLabToken(p.AccountID, name, breakGlassPeriod, now, false)
+	secret, t, err := st.makeLabToken(p.AccountID, name, breakGlassPeriod, now, false, "")
 	if errors.Is(err, errTooManyTokens) {
 		return nil, fmt.Errorf("@%s %v", p.Handle, err)
 	}

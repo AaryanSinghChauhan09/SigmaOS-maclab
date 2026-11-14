@@ -179,8 +179,13 @@ func (s *Server) pMakeToken(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusBadRequest, "A Lab token lasts 30 days, 90 days or 1 year unused, or never expires.")
 		return
 	}
-	secret, t, err := s.store.makeLabToken(p.AccountID, name, period, s.now(), true)
+	secret, t, err := s.store.makeLabToken(p.AccountID, name, period, s.now(), true, signedInOf(r).hash)
 	switch {
+	case errors.Is(err, errSessionEnded):
+		// The answer a signed-out browser gets on this route.
+		w.Header().Set("Location", "/sign-in")
+		w.WriteHeader(http.StatusSeeOther)
+		return
 	case errors.Is(err, errTooManyTokens):
 		refuse(http.StatusConflict, fmt.Sprintf("You have %d Lab tokens, which is the most a person has. Revoke one first.", labTokenCap))
 		return
