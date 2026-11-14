@@ -104,9 +104,31 @@ func readPins(path string) (map[string]string, error) {
 	return out, sc.Err()
 }
 
+// frozenPath is dir/rel for a file of the Release frozen in dir. A Release's
+// files are its own: a rel that leaves dir is refused, and so is a link
+// anywhere on the way, so nothing is read or written through one.
+func frozenPath(dir, rel string) (string, error) {
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%s is not inside the Release's folder", rel)
+	}
+	p := dir
+	for _, part := range strings.Split(filepath.Clean(rel), string(filepath.Separator)) {
+		p = filepath.Join(p, part)
+		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			at, _ := filepath.Rel(dir, p)
+			return "", fmt.Errorf("%s in the Release's folder is a link: a Release's files are kept in the folder itself", at)
+		}
+	}
+	return p, nil
+}
+
 // pinned reads dir/rel and checks it against its pin.
 func pinned(dir, rel string, pins map[string]string) ([]byte, string, error) {
-	b, err := os.ReadFile(filepath.Join(dir, rel))
+	p, err := frozenPath(dir, rel)
+	if err != nil {
+		return nil, "", err
+	}
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return nil, "", err
 	}
@@ -148,6 +170,9 @@ func (s *Server) loadInstalled(manifestSHA, device string) (*installedCtx, error
 	c.man, c.manSHA = &installed.Manifest{}, msha
 	if err := json.Unmarshal(mb, c.man); err != nil {
 		return nil, err
+	}
+	if err := installed.PayloadName(c.man.Kernel.PayloadManifest); err != nil {
+		return nil, fmt.Errorf("frozen manifest: %w", err)
 	}
 	pb, _, err := pinned(c.dir, filepath.Join("expected", c.man.Kernel.PayloadManifest), exp)
 	if err != nil {
@@ -738,9 +763,8 @@ var syncDir = func(path string) error {
 }
 
 type freezeManifestReq struct {
-	Manifest   string   `json:"manifest"` // artifact sha256s of the uploaded files
-	Payload    string   `json:"payload"`
-	ApprovedBy []string `json:"approved_by"`
+	Manifest string `json:"manifest"` // artifact sha256s of the uploaded files
+	Payload  string `json:"payload"`
 }
 
 func (s *Server) hFreezeManifest(w http.ResponseWriter, r *http.Request) {
@@ -778,24 +802,33 @@ func (s *Server) hFreezeManifest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	dir := s.frozenDir(release)
+	rel := filepath.Join("expected", m.Kernel.PayloadManifest) // a name Validate passed: it stays under expected/
+	pins := fmt.Sprintf("# PINS.expected %s by maclab, frozen by @%s: do not rewrite\n%s  expected/manifest.json\n%s  %s\n",
+		at.Format(time.RFC3339), by.Handle, installed.SHA256(mb), installed.SHA256(pb), rel)
+	files := []struct {
+		rel string
+		b   []byte
+	}{{"expected/manifest.json", mb}, {rel, pb}, {"PINS.expected", []byte(pins)}}
+	// every place is looked at before the first file is written
+	for _, f := range files {
+		if _, err := frozenPath(dir, f.rel); err != nil {
+			httpErr(w, 409, "%v", err)
+			return
+		}
+	}
 	if _, err := os.Stat(filepath.Join(dir, "PINS.expected")); err == nil {
 		httpErr(w, 409, "release %s already has a frozen expected manifest", release)
 		return
 	}
-	rel := filepath.Join("expected", m.Kernel.PayloadManifest)
-	if err := writeOnce(filepath.Join(dir, "expected", "manifest.json"), mb); err != nil {
-		httpErr(w, 409, "%v", err)
-		return
-	}
-	if err := writeOnce(filepath.Join(dir, rel), pb); err != nil {
-		httpErr(w, 409, "%v", err)
-		return
-	}
-	pins := fmt.Sprintf("# PINS.expected %s by maclab (approved by %s): do not rewrite\n%s  expected/manifest.json\n%s  %s\n",
-		at.Format(time.RFC3339), strings.Join(req.ApprovedBy, ", "), installed.SHA256(mb), installed.SHA256(pb), rel)
-	if err := writeOnce(filepath.Join(dir, "PINS.expected"), []byte(pins)); err != nil {
-		httpErr(w, 409, "%v", err)
-		return
+	for _, f := range files {
+		p, err := frozenPath(dir, f.rel)
+		if err == nil {
+			err = writeOnce(p, f.b)
+		}
+		if err != nil {
+			httpErr(w, 409, "%v", err)
+			return
+		}
 	}
 	if err := s.listRelease(&m, installed.SHA256(mb), by, at); err != nil {
 		httpErr(w, 500, "the manifest of Release %s is frozen, but the Release is not listed until labd starts again: %v", release, err)
@@ -1099,6 +1132,8 @@ func (s *Server) promotion(ctx context.Context, by Person, release string, req p
 	alive := v.aliveLocked()
 	v.mu.Unlock()
 	switch {
+	case d.ID != j.DeviceID && j.DeviceID != "":
+		return nil, refuse(409, "job %s ran under an earlier enrollment of the name %s, not on the Mac that has it now: a Promotion needs that Mac's own passed run", j.ID, d.Name)
 	case !alive:
 		return nil, refuse(409, "%s is not checking in; promotion records the known-good on the Mac too", d.Name)
 	case !versionAtLeast(d.Facts.AgentVersion, promoteMinAgent):

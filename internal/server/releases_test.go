@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -451,6 +452,24 @@ func TestPromotionNeedsThatMacsOwnPassedRunAndRevokingUndoesNothing(t *testing.T
 		t.Fatalf("an M team member promoting: %s %s", r.Status, raw)
 	}
 
+	// The run of an earlier enrollment that had the Mac's name is not this
+	// Mac's own.
+	enrollment := j.DeviceID
+	j.DeviceID = "an-earlier-enrollment"
+	if err := l.s.store.saveJob(j); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, raw := promote(harnessToken, map[string]any{"device": "sim-mac", "job": j.ID, "confirm": true}); r.StatusCode != http.StatusConflict || !strings.Contains(raw, "enrollment") {
+		t.Fatalf("promoting from another enrollment's run: %s %s", r.Status, raw)
+	}
+	if got := l.s.dev("sim-mac").snapshot().KnownGood; got != kg {
+		t.Fatalf("another enrollment's run moved the known-good to %s", got)
+	}
+	j.DeviceID = enrollment
+	if err := l.s.store.saveJob(j); err != nil {
+		t.Fatal(err)
+	}
+
 	// It does not wait for the verdict, and the sentence says where the
 	// Release stands.
 	r, out, raw := promote(harnessToken, ask)
@@ -529,5 +548,179 @@ func TestLabdSendsNoInstallOperation(t *testing.T) {
 		if bytes.Contains(src, []byte("CmdInstall")) {
 			t.Errorf("%s can send a Mac the Install operation", f)
 		}
+	}
+}
+
+// manifestNaming is a manifest of release for sim-mac that keeps its
+// payload list at name, and that list.
+func manifestNaming(release, name string) (manifest, payload string) {
+	payload = tVml + "  vmlinuz\n"
+	m := installed.Manifest{Schema: installed.ManifestSchema, Release: release,
+		Artifacts: []installed.Artifact{{Name: "linux-aurora", File: "f", SHA256: tVml, Version: release + "-1", MtreeSHA256: tMtr}},
+		DTBs:      []installed.DTB{{Name: "t-a.dtb", SHA256: tDtbA}},
+		Macs:      map[string]installed.MacExpect{"sim-mac": {Board: "apple,sim", BoardDTB: "t-a.dtb", UbootGzSHA256: tUbt}}}
+	m.DTBsSHA256 = installed.DTBsDigest(m.DTBs)
+	m.Kernel.Release, m.Kernel.VmlinuzSHA256 = "7.2.0-sim-"+release, tVml
+	m.Kernel.PayloadManifest, m.Kernel.PayloadManifestSHA256, m.Kernel.PayloadCount = name, installed.SHA256([]byte(payload)), 1
+	m.M1n1.BinSHA256, m.M1n1.Version = tM1n1, "v1"
+	mb, _ := json.Marshal(m)
+	return string(mb), payload
+}
+
+func absent(t *testing.T, what string, paths ...string) {
+	t.Helper()
+	for _, p := range paths {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s: %s is there (%v)", what, p, err)
+		}
+	}
+}
+
+func TestAManifestCannotNameAFileOutsideItsReleasesFolder(t *testing.T) {
+	l, _, _ := installedLab(t, nil)
+	grace := l.member("grace")
+	l.freeLease()
+	l.leaseAs(grace, 0)
+	data, dir := l.s.cfg.DataDir, l.s.frozenDir("10.0")
+	outside := filepath.Join(t.TempDir(), "planted")
+
+	for _, name := range []string{"../../../log/backup.ok", "..", outside, "payload/../../PINS.expected", "payload/../../../../admins.new"} {
+		manifest, payload := manifestNaming("10.0", name)
+		r, body := l.as(grace.Token, "POST", "/api/installed/10.0/manifest", map[string]any{"manifest": l.artifact(manifest), "payload": l.artifact(payload)})
+		if r.StatusCode != http.StatusBadRequest || !strings.Contains(body, "payload_manifest") {
+			t.Errorf("a manifest whose payload list is at %q: %s %s", name, r.Status, body)
+		}
+		absent(t, name, filepath.Join(data, "log", "backup.ok"), outside, filepath.Join(data, "admins.new"), dir)
+	}
+	if got := l.releases(grace.Token); len(got) != 1 {
+		t.Fatalf("a refused manifest listed a Release: %+v", got)
+	}
+
+	// The place every manifest names today is taken as before, and who
+	// froze it is the person labd knows, not a name the request gives.
+	manifest, payload := manifestNaming("10.0", "payload/linux-aurora.files.sha256")
+	r, body := l.as(grace.Token, "POST", "/api/installed/10.0/manifest", map[string]any{"manifest": l.artifact(manifest), "payload": l.artifact(payload), "approved_by": []string{"mallory"}})
+	if r.StatusCode != 200 {
+		t.Fatalf("freezing a manifest: %s %s", r.Status, body)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "expected", "payload", "linux-aurora.files.sha256")); err != nil || string(b) != payload {
+		t.Fatalf("the frozen payload list: %q %v", b, err)
+	}
+	pins, _ := os.ReadFile(filepath.Join(dir, "PINS.expected"))
+	if !strings.Contains(string(pins), "frozen by @grace") || strings.Contains(string(pins), "mallory") {
+		t.Fatalf("PINS.expected names who froze it from the request:\n%s", pins)
+	}
+	if _, err := l.s.loadInstalled(installed.SHA256([]byte(manifest)), "sim-mac"); err != nil {
+		t.Fatalf("the Release it froze does not load: %v", err)
+	}
+}
+
+func TestAFreezeWritesThroughNoLinkPlantedInTheReleasesFolder(t *testing.T) {
+	l, _, _ := installedLab(t, nil)
+	elsewhere := t.TempDir()
+	plant := func(target, link string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for release, link := range map[string]string{
+		"10.1": "expected",
+		"10.2": "expected/payload",
+		"10.3": "expected/payload/k.sha256",
+		"10.4": "expected/manifest.json",
+		"10.5": "PINS.expected",
+	} {
+		dir := l.s.frozenDir(release)
+		target := filepath.Join(elsewhere, release)
+		if link == "expected" || link == "expected/payload" {
+			if err := os.Mkdir(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		plant(target, filepath.Join(dir, link))
+		manifest, payload := manifestNaming(release, "payload/k.sha256")
+		r, body := l.post("/api/installed/"+release+"/manifest", map[string]any{"manifest": l.artifact(manifest), "payload": l.artifact(payload)})
+		if r.StatusCode != http.StatusConflict || !strings.Contains(body, "link") {
+			t.Errorf("a freeze of %s with a link at %s: %s %s", release, link, r.Status, body)
+		}
+		if left, _ := filepath.Glob(filepath.Join(target, "*")); len(left) != 0 {
+			t.Errorf("a freeze of %s wrote through the link at %s: %v", release, link, left)
+		}
+		for _, f := range []string{"expected/manifest.json", "expected/payload/k.sha256", "PINS.expected"} {
+			if fi, err := os.Lstat(filepath.Join(dir, f)); err == nil && fi.Mode().IsRegular() {
+				t.Errorf("a freeze of %s refused for the link at %s left %s", release, link, f)
+			}
+		}
+		if l.s.releaseNowOrNil(release) != nil {
+			t.Errorf("Release %s is listed", release)
+		}
+	}
+}
+
+func TestAFrozenReleaseIsReadThroughNoLink(t *testing.T) {
+	l, msha, _ := installedLab(t, nil)
+	if _, err := l.s.loadInstalled(msha, "sim-mac"); err != nil {
+		t.Fatalf("a frozen Release: %v", err)
+	}
+
+	// A Release frozen before the pins named who froze it loads as it did.
+	manifest, payload := manifestNaming("8.8", "payload/linux-aurora.files.sha256")
+	old := l.s.frozenDir("8.8")
+	if err := os.MkdirAll(filepath.Join(old, "expected", "payload"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(old, "expected", "manifest.json"), []byte(manifest), 0o444)
+	os.WriteFile(filepath.Join(old, "expected", "payload", "linux-aurora.files.sha256"), []byte(payload), 0o444)
+	os.WriteFile(filepath.Join(old, "PINS.expected"), []byte(fmt.Sprintf("# PINS.expected 2026-11-01T09:00:00+10:00 by maclab (approved by boss, dave): do not rewrite\n%s  expected/manifest.json\n%s  expected/payload/linux-aurora.files.sha256\n",
+		installed.SHA256([]byte(manifest)), installed.SHA256([]byte(payload)))), 0o444)
+	if c, err := l.s.loadInstalled(installed.SHA256([]byte(manifest)), "sim-mac"); err != nil || c.release != "8.8" || c.payload["vmlinuz"] != tVml {
+		t.Fatalf("a Release frozen earlier: %+v %v", c, err)
+	}
+
+	// The same bytes behind a link are not the Release's files.
+	dir, elsewhere := l.s.frozenDir("9.9"), t.TempDir()
+	list := filepath.Join(dir, "expected", "payload", "linux-aurora.files.sha256")
+	b, err := os.ReadFile(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(elsewhere, "copy"), b, 0o444)
+	if err := os.Remove(list); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(elsewhere, "copy"), list); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.s.loadInstalled(msha, "sim-mac"); err == nil || !strings.Contains(err.Error(), "link") {
+		t.Fatalf("a payload list that is a link: %v", err)
+	}
+	os.Remove(list)
+	os.WriteFile(list, b, 0o444)
+	if _, err := l.s.loadInstalled(msha, "sim-mac"); err != nil {
+		t.Fatalf("the Release with its own file back: %v", err)
+	}
+	if err := os.Rename(filepath.Join(dir, "expected", "payload"), filepath.Join(elsewhere, "payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(elsewhere, "payload"), filepath.Join(dir, "expected", "payload")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.s.loadInstalled(msha, "sim-mac"); err == nil || !strings.Contains(err.Error(), "link") {
+		t.Fatalf("a payload folder that is a link: %v", err)
+	}
+}
+
+func TestARunThatFailsAfterAnyVerdictAddsAWarning(t *testing.T) {
+	l, _, _, _ := twoReleases(t)
+	relVerdict(t, l.s, l.who(lrGrace), "9.9", api.ReleaseNotQualified, "the fan is loud")
+	l.clock.Advance(time.Hour)
+	relRun(t, l.s, "job-late", "9.9", "m1-pro", l.s.now(), api.OutcomeHung)
+	r, err := l.s.releaseNow("9.9")
+	if err != nil || r.State != api.ReleaseNotQualified || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "job-late") {
+		t.Fatalf("a run that failed after \"not qualified\": %+v %v", r, err)
 	}
 }
