@@ -74,9 +74,8 @@ AI agents get the same operations over MCP (`lab mcp`).
      file U-Boot loads them from (`ubootefi.var` on the ESP).
 3. **Watch.** labd waits for a check-in from the new boot. The boot is tagged
    `maclab.job=<id>` on the kernel command line, so labd can tell "booted the
-   test kernel" from "fell back". On Macs with an OOB controller, labd also
-   reads the serial console and classifies panics, oopses, RCU stalls and
-   lockups as they happen.
+   test kernel" from "fell back". labd reads no console: what it knows of a
+   lost boot is what the Mac kept of it (see "When things go wrong").
 4. **Test.** `boot-health` always runs. It is followed by any builtin tests
    (`gui-smoke`, `gui-terminal`, `suspend-devices`) or your own scripts. GUI
    tests run inside the GUI user's Hyprland session. Anything written to
@@ -111,7 +110,7 @@ AI agents get the same operations over MCP (`lab mcp`).
    under NAME, executable, before the script runs. A module, a firmware blob or
    a binary needs no download inside the script this way, and the Audit log
    names each file with its hash. `--gui-script` takes none.
-5. **Collect.** The journal, kernel log and serial console are saved.
+5. **Collect.** The journal and the kernel log are saved.
    Warnings and errors that aren't in the Mac's baseline are listed as
    `new_error_lines`.
 6. **Restore.** The agent reboots to the known-good kernel, checks that the
@@ -222,7 +221,7 @@ reboot lands on the Mac's own entry.
   `maclab-lab-boot-deadlines.service`, an early unit with no network
   dependency, reboots a Lab boot when either passes, and on a Volunteer's Mac
   as soon as its Availability window closes. labd waits for that
-  before its recovery ladder, so a Lab-owned Mac's OOB hard resets are a later rung.
+  before its recovery ladder, so a Lab-owned Mac's Hard resets are a later rung.
 - After any recovery, lab-agent uploads the lost boot's journal (by boot ID)
   and any pstore/ramoops records, as `prevboot/` in the job.
 - A boot that came back only through its deadline fails as `lost_contact`:
@@ -238,13 +237,17 @@ labd notices a problem from any of these signals:
 - The heartbeat stops.
 - The boot ID doesn't change after a reboot.
 - The Mac comes back on the known-good kernel.
-- A panic appears on serial, and the Mac doesn't reboot within 60s.
-- The serial console goes silent mid-boot for 2 minutes.
+- The Mac reports a panic, and doesn't reboot within 60s.
 
 It then climbs a ladder:
 
 1. Soft reboot through the agent, if the agent still answers.
-2. Hard reset through the OOB controller, up to twice.
+2. Hard reset through the Out-of-band controller, up to twice: only a
+   Lab-owned Mac the lab has a Sighting of, while the controller is healthy
+   (see [Out-of-band control on the mini](#out-of-band-control-on-the-mini)).
+   With no Sighting, no cable or an unhealthy controller the rung is skipped:
+   the Mac's own watchdog has had its time by then, and the next rung says
+   why no Hard reset was sent. A Volunteer's Mac never gets one.
 3. **Ask a human.** The Mac goes to `needs_hands`, and one urgent
    notification goes out (ntfy and/or a command such as `notify-send`):
 
@@ -281,13 +284,14 @@ says to run it afresh with `lab run`.
 Each Mac gets a recovery tier: 0 = panic reboot + one-shot fallback and the
 Lab boot deadlines,
 1 = + hardware watchdog (`apple_wdt`, armed through systemd),
-2 = + out-of-band reset and serial.
+2 = + Hard reset: a Lab-owned Mac the lab has a Sighting of, while the Out-of-band controller is healthy.
 
 What a crashed boot leaves behind is incomplete. These Macs have no pstore
 backend: there is no ramoops region in the device tree, and the kernel's EFI
 pstore backend is off by default (`CONFIG_EFI_VARS_PSTORE_DEFAULT_DISABLE`); it
 wouldn't help anyway, since U-Boot keeps EFI variables in RAM at runtime. So the
-panic message itself reaches only a serial console. Writes made just before a
+panic message itself reaches only a serial console, which this lab does not
+read. Writes made just before a
 panic are lost too. On an M1 MacBook Air (two runs, each ending in a sysrq
 panic), files whose `fsync` had returned 1 s or 0 s before the panic were gone
 after the reset, although `panic=10` held the Mac up for 10 s after it. Files
@@ -523,11 +527,11 @@ canceled jobs stay canceled). But `systemctl disable --now` can fail, or die of 
 systemd goes on to stop the agent, so uninstall first asks systemd whether `lab-agent.service` is
 still active or enabled. If it is neither, there is no agent to keep the Mac in the lab: uninstall
 leaves it `left`, says so, and finishes when run again. If labd doesn't hear that the Mac stays,
-uninstall says so: `lab reset <device>` on the controller puts a Mac that left back in the lab, and
-runs the recovery ladder on it, out-of-band reset included, as for any Mac (a Mac that wedged
+uninstall says so: `lab reset <device>` puts a Lab-owned Mac that left back in the lab and sends it
+a Hard reset, as for any Mac the lab has a Sighting of (a Mac that wedged
 mid-uninstall, say). Only labd's own recovery leaves a Mac that left alone. Don't `lab reset` a Mac
 whose uninstall finished: it brings back a Mac with no agent, which then goes through recovery,
-out-of-band resets and all, and ends in a call for hands. Use `lab forget` for it instead. Once the
+Hard resets and all, and ends in a call for hands. Use `lab forget` for it instead. Once the
 agent is stopped, uninstall disables and removes it and the lab's other units
 (`maclab-lab-boot-deadlines`, `-session` and `-lock`, as `leave` does), then its config (with the device secret), clears a lab one-shot, removes the
 maclab block from `limine.conf` (or restores `custom.cfg` from its backup), the staged kernels and
@@ -821,6 +825,42 @@ Thunderbolt-capable cable, and nothing else goes on those ports.
   no command line: `/usr/local/lab/secrets/oobd.token`, which only root
   reads, for the controller, and `/var/lab/secrets/oobd.token`, which only
   the `lab` account reads, for labd (`--oobd-token-file`).
+
+**Which Mac is on which port** is not written anywhere: labd learns it and
+keeps it in memory.
+
+- **Sighting.** Every 15 s labd asks the controller what its three ports
+  show. While a Mac's Linux is up with a Thunderbolt link the port shows the
+  Mac's name; when that name (the Mac's name in the lab, or the hostname its
+  check-ins report) belongs to exactly one Lab-owned Mac's record, labd
+  remembers the Mac, the port, the partner's product id and the plug count.
+  A port that is no longer connected, or shows another product id or plug
+  count, ends the Sighting. Any conflict ends the Sightings involved and
+  makes none: one name on two ports, a sighted Mac's name on another port,
+  another name on a sighted Mac's port, one name in two records. After labd
+  restarts it holds none, and Macs that are up are sighted again by
+  themselves.
+- **Hard reset.** `lab reset <mac>`, or Hard reset on the Live tab of a
+  Lab-owned Mac's page, which asks twice: a Maintainer, or the holder of a
+  Lease on the Mac. labd looks at the port, and the controller compares it
+  once more under its lock; a port that changed ends the Sighting and the
+  reset is refused with the reason. If the Mac does not return the lab sends
+  one more, then asks for hands. Refused for a Mac the lab cannot place, and
+  always for a Volunteer's Mac.
+- **Proving reset.** `lab reset <mac> --prove left|middle|right`, Maintainers
+  only, for a Mac that shows no name (hung when cabled, a USB 2 cable, a
+  kernel with no Thunderbolt): the lab resets that port and places the Mac
+  there only if it returns on a new boot and every other Lab-owned Mac keeps
+  its boot id.
+- **What a Mac shows.** `lab status`, `lab oob <mac>`, Macs and a Mac's page
+  say sighted, not sighted (a connected port with no Sighting could be its
+  cable) or no cable, and why no Hard reset reaches it.
+- **The controller unhealthy.** A reset is refused with the reason, each Mac
+  is shown as having no Hard reset, jobs still run, and "Agents" gets one
+  line, and one when it answers again.
+- **After labd starts**, it gives each Lab-owned Mac that was up when it
+  stopped its own watchdog's time and a boot, runs the ladder on whichever
+  did not return, and writes the result for "Agents".
 
 `sudo scripts/mini/setup` makes the token, installs the LaunchDaemon file and
 starts the controller once a build is Deployed. `sudo scripts/mini/ports`
@@ -1301,9 +1341,9 @@ simulated Mac (`internal/agent/sim.go`):
 
 - A good kernel
 - Panic at boot
-- Hang, recovered by hard reset
-- Silent hang, caught from serial
-- No OOB, human power cycle, then queued jobs resume
+- Hang, recovered by a Hard reset
+- Silent hang, Hard reset after its boot timeout
+- No Sighting or no controller, human power cycle, then queued jobs resume
 - Crash during a test
 - Deliberate crash test
 - A failing test
