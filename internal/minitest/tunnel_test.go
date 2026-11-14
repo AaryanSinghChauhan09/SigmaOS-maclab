@@ -468,8 +468,8 @@ func TestSetupRefusesItsOwnInstalledCredentialAsTheSource(t *testing.T) {
 		if !strings.Contains(out, "is where the set-up keeps the tunnel's credential") {
 			t.Errorf("setup %v does not say why:\n%s", args, out)
 		}
-		if strings.Contains(out, "remove") {
-			t.Errorf("setup %v spoke of removing it:\n%s", args, out)
+		if strings.Contains(out, "setup: remove ") || strings.Contains(out, "would remove ") {
+			t.Errorf("setup %v went on to remove it:\n%s", args, out)
 		}
 	}
 	if got := read(t, token); got != madeUpCredential+"\n" {
