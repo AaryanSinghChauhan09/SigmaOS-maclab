@@ -1,6 +1,6 @@
 // Package githubtest is a stand-in for the part of GitHub labd's browser
-// sign-in talks to: the OAuth web flow (authorize, the code for a token) and
-// GET /user. Tests sign people in against it, and tools/fake-github serves it
+// sign-in talks to: the OAuth web flow (authorize, the code for a token),
+// GET /user, and GET /users/{handle}, which says whose a handle is. Tests sign people in against it, and tools/fake-github serves it
 // on a loopback port for a labd under development. It knows the accounts it
 // was given and nothing else, and it signs anyone in as any of them: it must
 // never stand where a lab that holds anything can reach it.
@@ -42,6 +42,8 @@ type Server struct {
 	codes  map[string]grant
 	tokens map[string]int64
 	asked  []url.Values
+	looked []string
+	broken int
 }
 
 // New is a fake GitHub with one OAuth app and no accounts.
@@ -73,7 +75,33 @@ func (s *Server) Asked() []url.Values {
 	return append([]url.Values(nil), s.asked...)
 }
 
+// LookedUp is every handle GET /users/{handle} was asked for, oldest first.
+func (s *Server) LookedUp() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.looked...)
+}
+
+// Break makes every answer from now on this status, as when GitHub is
+// down; 0 mends it.
+func (s *Server) Break(status int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.broken = status
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	broken := s.broken
+	s.mu.Unlock()
+	if broken != 0 {
+		http.Error(w, "unavailable", broken)
+		return
+	}
+	if handle, ok := strings.CutPrefix(r.URL.Path, "/users/"); ok && r.Method == http.MethodGet {
+		s.lookup(w, handle)
+		return
+	}
 	switch r.Method + " " + r.URL.Path {
 	case "GET /login/oauth/authorize":
 		s.authorize(w, r)
@@ -180,6 +208,34 @@ func (s *Server) user(w http.ResponseWriter, r *http.Request) {
 		"id":         id,
 		"name":       "Full Name of " + login,
 		"email":      login + "@mail.example",
+		"avatar_url": "https://avatars.example/u/" + strconv.FormatInt(id, 10),
+		"type":       "User",
+	})
+}
+
+// lookup answers as GitHub does for a public profile: handles match
+// whatever their case, and the answer carries the handle as the account
+// writes it.
+func (s *Server) lookup(w http.ResponseWriter, handle string) {
+	s.mu.Lock()
+	s.looked = append(s.looked, handle)
+	var id int64
+	var login string
+	for uid, name := range s.users {
+		if strings.EqualFold(name, handle) {
+			id, login = uid, name
+		}
+	}
+	s.mu.Unlock()
+	if id == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"login":      login,
+		"id":         id,
+		"name":       "Full Name of " + login,
+		"email":      nil,
 		"avatar_url": "https://avatars.example/u/" + strconv.FormatInt(id, 10),
 		"type":       "User",
 	})

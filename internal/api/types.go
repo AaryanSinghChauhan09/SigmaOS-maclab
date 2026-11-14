@@ -162,8 +162,12 @@ type Enrollment struct {
 	// the tailnet login that ran ./volunteer. Device.Volunteer is true
 	// exactly when Kind is KindVolunteer.
 	VolunteerName string `json:"volunteer_name,omitempty"`
-	Contact       string `json:"contact,omitempty"`
-	NtfyTopic     string `json:"ntfy_topic,omitempty"`
+	// VolunteerID is the GitHub account id of the Mac's Volunteer, the
+	// person who lends it: whose Mac it is on the site. 0 for a Lab-owned
+	// Mac, and for a Mac enrolled before the lab kept people.
+	VolunteerID int64  `json:"volunteer_id,omitempty"`
+	Contact     string `json:"contact,omitempty"`
+	NtfyTopic   string `json:"ntfy_topic,omitempty"`
 	// NtfyOwnURL is the topic the Volunteer chose with `notify --topic`, as
 	// the Mac's check-ins carried it; it replaces the generated one.
 	NtfyOwnURL string `json:"ntfy_own_url,omitempty"`
@@ -995,7 +999,11 @@ type EnrollTokenRequest struct {
 	// VolunteerName and Contact make the token a Volunteer's: both or
 	// neither. Either makes Volunteer true too.
 	VolunteerName string `json:"volunteer_name,omitempty"`
-	Contact       string `json:"contact,omitempty"`
+	// VolunteerID is the GitHub account id of the Mac's Volunteer, the
+	// person who lends it: whose Mac it is on the site. 0 for a Lab-owned
+	// Mac, and for a Mac enrolled before the lab kept people.
+	VolunteerID int64  `json:"volunteer_id,omitempty"`
+	Contact     string `json:"contact,omitempty"`
 	// VolunteerLogin is the Volunteer's tailnet login, which labd links to
 	// the Mac when it enrolls (see Device.LinkedLogin). Only a Maintainer's
 	// token for a Volunteer's Mac carries one.
