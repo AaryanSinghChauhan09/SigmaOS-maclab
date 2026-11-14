@@ -1,0 +1,534 @@
+package minitest
+
+import (
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+)
+
+// ops plays labd's ops socket: it writes each request into the log the
+// stand-ins write, so that a test reads one order of events, keeps the lines
+// for "Agents", and answers the drain and the parts as the test says.
+type ops struct {
+	mu sync.Mutex
+	// drain is what POST /drain answers, one after the other; the last one
+	// stays. None is a labd with nothing running.
+	drain []string
+	parts string
+	lines []string
+	// old is a labd from before the drain: it has the lines only.
+	old bool
+}
+
+func (o *ops) told() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string{}, o.lines...)
+}
+
+func (o *ops) set(f func(*ops)) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	f(o)
+}
+
+func (m *mini) ops() *ops {
+	m.t.Helper()
+	o := &ops{parts: "builder none\ncontroller none\n"}
+	for _, d := range []string{"var/lab/run", "var/lab/log", "var/lab/data"} {
+		if err := os.MkdirAll(m.path(d), 0o700); err != nil {
+			m.t.Fatal(err)
+		}
+	}
+	ln, err := net.Listen("unix", m.path("var/lab/run/ops.sock"))
+	if err != nil {
+		m.t.Fatal(err)
+	}
+	srv := &httptest.Server{Listener: ln, Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		f, err := os.OpenFile(m.log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err == nil {
+			fmt.Fprintf(f, "ops %s %s %s\n", r.Method, r.URL.Path, body)
+			f.Close()
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "POST /agents/line":
+			o.lines = append(o.lines, string(body))
+			io.WriteString(w, "recorded\n")
+		case "POST /drain":
+			if o.old {
+				http.NotFound(w, r)
+				return
+			}
+			answer := "0 0"
+			if len(o.drain) > 0 {
+				answer = o.drain[0]
+				if len(o.drain) > 1 {
+					o.drain = o.drain[1:]
+				}
+			}
+			io.WriteString(w, answer+"\n")
+		case "DELETE /drain":
+			io.WriteString(w, "lifted\n")
+		case "GET /parts":
+			if o.old {
+				http.NotFound(w, r)
+				return
+			}
+			io.WriteString(w, o.parts)
+		default:
+			http.NotFound(w, r)
+		}
+	})}}
+	srv.Start()
+	m.t.Cleanup(srv.Close)
+	m.env = append(m.env, "LAB_DRAIN_STEP=0", "LAB_PARTS_TRIES=2")
+	return o
+}
+
+// load marks a daemon as one the set-up has started.
+func (m *mini) load(label string) {
+	m.t.Helper()
+	write(m.t, filepath.Join(filepath.Dir(m.root), "state", "loaded."+label), "", 0o644)
+}
+
+func (m *mini) sql(db, statement string) string {
+	m.t.Helper()
+	out, err := exec.Command("sqlite3", m.path("var/lab/data/"+db), statement).CombinedOutput()
+	if err != nil {
+		m.t.Fatalf("sqlite3 %s %q: %v\n%s", db, statement, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// databases gives the mini both databases, each with one row.
+func (m *mini) databases() {
+	m.t.Helper()
+	need(m.t, "sqlite3")
+	if err := os.MkdirAll(m.path("var/lab/data"), 0o700); err != nil {
+		m.t.Fatal(err)
+	}
+	for _, db := range []string{"labd.db", "reports.db"} {
+		m.sql(db, "PRAGMA journal_mode=WAL; CREATE TABLE seen(what TEXT); INSERT INTO seen VALUES('before');")
+	}
+}
+
+// onSwitch runs a line of shell at the moment a Deploy installs tag's
+// LaunchDaemon file: labd of the old build is stopped, the databases are
+// copied, and tag's labd is about to start.
+func (m *mini) onSwitch(tag, shell string) {
+	m.t.Helper()
+	write(m.t, m.bin+"/cp", `#!/bin/bash
+if [[ "$*" == *"/`+tag+`/deploy/`+labdLabel+`.plist "* ]]; then
+  `+shell+`
+fi
+exec /bin/cp "$@"
+`, 0o755)
+}
+
+// order fails unless each of want is in the log, after the one before it.
+func order(t *testing.T, log string, want ...string) {
+	t.Helper()
+	at := 0
+	for _, w := range want {
+		i := strings.Index(log[at:], w)
+		if i < 0 {
+			t.Fatalf("no %q after %q in:\n%s", w, log[:at], log)
+		}
+		at += i + len(w)
+	}
+}
+
+// noWayBack adds deploy/no-way-back to a bundle already written, as a
+// release that changes a database beyond adding to it carries it.
+func noWayBack(t *testing.T, k key, dir, tag string, healthy bool) {
+	t.Helper()
+	work := t.TempDir()
+	if out, err := exec.Command("tar", "-xzf", filepath.Join(dir, bundleName), "-C", work).CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+	write(t, work+"/lab-server/deploy/no-way-back", "This release rewrites a table.\n", 0o644)
+	if out, err := exec.Command("tar", "-czf", filepath.Join(dir, bundleName), "-C", work, "lab-server").CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+	k.sign(t, filepath.Join(dir, bundleName))
+}
+
+func TestDeployGoesThroughItsStepsInOrder(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	m.databases()
+	d := m.frontDoor()
+	first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+	m.ok("deploy", "--from", r.from(first), first)
+	// The set-up has since started the tunnel, the controller and the Builder,
+	// and the tools are in their copy.
+	write(t, m.path("Library/LaunchDaemons/"+cloudflaredLabel+".plist"), "<plist/>\n", 0o644)
+	m.load(cloudflaredLabel)
+	m.load(oobdLabel)
+	m.load(builderLabel)
+	write(t, m.path("usr/local/lab/tools/20261101T000000Z.abcdef/cloudflared/bin/cloudflared"), "cloudflared 2026.10.1\n", 0o755)
+	if err := os.Symlink("20261101T000000Z.abcdef", m.path("usr/local/lab/tools/current")); err != nil {
+		t.Fatal(err)
+	}
+	m.sql("labd.db", "INSERT INTO seen VALUES('a job that ended')")
+	o.set(func(o *ops) { o.drain = []string{"1 1", "1 0", "0 0"}; o.lines = nil; o.parts = "builder ok\ncontroller ok\n" })
+	os.Remove(m.log)
+	asked := d.count()
+
+	out := m.ok("deploy", "--from", r.from(tag), tag)
+
+	labd := m.path("Library/LaunchDaemons/" + labdLabel + ".plist")
+	order(t, m.calls(),
+		"ops POST /agents/line Deploy of "+tag+" on the mini: started, from "+first,
+		"ops POST /drain", "ops POST /drain", "ops POST /drain",
+		"launchctl bootout system/"+labdLabel,
+		"as-lab sqlite3 "+m.path("var/lab/data/labd.db"),
+		"as-lab sqlite3 "+m.path("var/lab/data/reports.db"),
+		"launchctl bootstrap system "+labd,
+		"launchctl kickstart -k system/"+oobdLabel,
+		"launchctl kickstart -k system/"+builderLabel,
+		"ops GET /parts",
+		"ops POST /agents/line Deployed "+tag+" on the mini",
+	)
+	if m.current() != tag || !m.loaded() {
+		t.Fatalf("the mini runs %q, labd loaded %v\n%s", m.current(), m.loaded(), out)
+	}
+	if d.count() == asked {
+		t.Errorf("the Front door was not asked:\n%s", out)
+	}
+	// The copy is of the databases as they were with labd stopped.
+	for _, db := range []string{"labd.db", "reports.db"} {
+		copied := m.path("var/lab/before-deploy/" + tag + "/" + db)
+		got, err := exec.Command("sqlite3", copied, "SELECT group_concat(what, ', ') FROM seen").CombinedOutput()
+		want := "before"
+		if db == "labd.db" {
+			want = "before, a job that ended"
+		}
+		if err != nil || strings.TrimSpace(string(got)) != want {
+			t.Errorf("the copy of %s holds %q (%v), want %q", db, got, err, want)
+		}
+	}
+	if got := o.told(); len(got) != 2 || !strings.Contains(got[1], "the Builder and the Out-of-band controller") || !strings.Contains(got[1], first+" is kept as the way back") {
+		t.Errorf("\"Agents\" was told %q", got)
+	}
+	// A Deploy restarts the lab's services: not the mini, and no tool.
+	calls := m.calls()
+	for _, never := range []string{"brew", "reboot", "shutdown", "fdesetup", "softwareupdate", "installer", "launchctl reboot", "tools/", "DELETE /drain",
+		"system/" + cloudflaredLabel + "\n", "kickstart -k system/" + signalLabel, "kickstart -k system/" + tailscaledLabel, "kickstart -k system/" + litestreamLabel} {
+		if strings.Contains(calls, never) {
+			t.Errorf("a Deploy's calls hold %q:\n%s", never, calls)
+		}
+	}
+	if got := read(t, m.path("usr/local/lab/tools/current/cloudflared/bin/cloudflared")); got != "cloudflared 2026.10.1\n" {
+		t.Errorf("the tools' copy changed: %q", got)
+	}
+	if entries, _ := os.ReadDir(m.path("usr/local/lab/tools")); len(entries) != 2 {
+		t.Errorf("the tools folder holds %d entries after a Deploy", len(entries))
+	}
+}
+
+func TestDeployStopsWhenJobsStillRunAfterItsWait(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+	m.ok("deploy", "--from", r.from(first), first)
+	o.set(func(o *ops) { o.drain = []string{"2 1"}; o.lines = nil })
+	os.Remove(m.log)
+
+	out := m.refused("deploy", "--wait", "0", "--from", r.from(tag), tag)
+
+	if m.current() != first || !m.loaded() || !reflect.DeepEqual(m.builds(), []string{first}) {
+		t.Fatalf("the mini runs %q (loaded %v), builds %v\n%s", m.current(), m.loaded(), m.builds(), out)
+	}
+	if strings.Contains(m.calls(), "launchctl boot") {
+		t.Errorf("a service was touched:\n%s", m.calls())
+	}
+	order(t, m.calls(), "ops POST /drain", "ops DELETE /drain")
+	if !strings.Contains(out, "2 jobs and 1 builds still ran after 0 minutes") {
+		t.Errorf("no word of what still ran:\n%s", out)
+	}
+	if got := o.told(); len(got) != 2 || !strings.Contains(got[1], "did not go on") || !strings.Contains(got[1], "2 jobs and 1 builds") {
+		t.Errorf("\"Agents\" was told %q", got)
+	}
+	if exists(m.path("usr/local/lab/.deploying")) {
+		t.Error("the Deploy's lock was left behind")
+	}
+}
+
+func TestDeployOverALabdThatCannotDrainGoesOn(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+	// The first Deploy finds no labd to drain.
+	if out := m.ok("deploy", "--from", r.from(first), first); !strings.Contains(out, "labd does not run: there is no job to drain") {
+		t.Errorf("a first Deploy:\n%s", out)
+	}
+	o.set(func(o *ops) { o.old = true })
+
+	out := m.ok("deploy", "--from", r.from(tag), tag)
+
+	if m.current() != tag || !strings.Contains(out, "does not drain jobs") {
+		t.Errorf("the mini runs %q\n%s", m.current(), out)
+	}
+}
+
+func TestDeployGoesBackWhenTheBuilderOrTheControllerIsNotWell(t *testing.T) {
+	for _, c := range []struct{ parts, word string }{
+		{"builder silent\ncontroller ok\n", "the Builder has not asked labd for work"},
+		{"builder ok\ncontroller bad\n", "the Out-of-band controller does not answer labd"},
+	} {
+		t.Run(c.word, func(t *testing.T) {
+			m, k, r := deployed(t)
+			o := m.ops()
+			first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+			bundle(t, k, filepath.Join(r.dir, first), first, true)
+			bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+			m.ok("deploy", "--from", r.from(first), first)
+			// The part is unwell under the new build only.
+			m.onSwitch(tag, `touch "$STUB_STATE/unwell"`)
+			m.onSwitchBack(first, `rm -f "$STUB_STATE/unwell"`)
+			o.set(func(o *ops) { o.lines = nil })
+			stop := m.partsFollow(o, c.parts)
+			defer stop()
+
+			out := m.refused("deploy", "--from", r.from(tag), tag)
+
+			if m.current() != first || !m.loaded() {
+				t.Fatalf("the mini runs %q (loaded %v)\n%s", m.current(), m.loaded(), out)
+			}
+			if !strings.Contains(out, c.word) || !strings.Contains(out, first+" is back and answers") {
+				t.Errorf("no word of why:\n%s", out)
+			}
+			if got := o.told(); len(got) != 2 || !strings.Contains(got[1], "failed its check: "+first+" is back and answers") {
+				t.Errorf("\"Agents\" was told %q", got)
+			}
+		})
+	}
+}
+
+// onSwitchBack is onSwitch for the build put back, kept beside it.
+func (m *mini) onSwitchBack(tag, shell string) {
+	m.t.Helper()
+	was := read(m.t, m.bin+"/cp")
+	i := strings.Index(was, "exec /bin/cp")
+	write(m.t, m.bin+"/cp", was[:i]+`if [[ "$*" == *"/`+tag+`/deploy/`+labdLabel+`.plist "* ]]; then
+  `+shell+`
+fi
+`+was[i:], 0o755)
+}
+
+// partsFollow has the made-up labd answer unwell while the file a switch
+// leaves is there, and well otherwise.
+func (m *mini) partsFollow(o *ops, unwell string) (stop func()) {
+	m.t.Helper()
+	mark := filepath.Join(filepath.Dir(m.root), "state", "unwell")
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			parts := "builder ok\ncontroller ok\n"
+			if exists(mark) {
+				parts = unwell
+			}
+			o.set(func(o *ops) { o.parts = parts })
+		}
+	}()
+	return func() { close(done); wg.Wait() }
+}
+
+func TestGoingBackFromANoWayBackReleaseRestoresTheDatabases(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	m.databases()
+	first, bad := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, bad), bad, false)
+	noWayBack(t, k, filepath.Join(r.dir, bad), bad, false)
+	m.ok("deploy", "--from", r.from(first), first)
+	m.load(litestreamLabel)
+	write(t, m.path("Library/LaunchDaemons/"+litestreamLabel+".plist"), "<plist/>\n", 0o644)
+	write(t, m.path("var/lab/data/.labd.db-litestream/generation"), "abc\n", 0o600)
+	// What the new release does to the databases once it has them.
+	m.onSwitch(bad, `sqlite3 "$LAB_SYSROOT/var/lab/data/labd.db" "INSERT INTO seen VALUES('after')"; sqlite3 "$LAB_SYSROOT/var/lab/data/reports.db" "DROP TABLE seen"`)
+	o.set(func(o *ops) { o.lines = nil })
+	os.Remove(m.log)
+
+	out := m.refused("deploy", "--from", r.from(bad), bad)
+
+	if m.current() != first || !m.loaded() {
+		t.Fatalf("the mini runs %q (loaded %v)\n%s", m.current(), m.loaded(), out)
+	}
+	for _, db := range []string{"labd.db", "reports.db"} {
+		if got := m.sql(db, "SELECT group_concat(what, ', ') FROM seen"); got != "before" {
+			t.Errorf("%s holds %q after the way back, want what it held before the Deploy\n%s", db, got, out)
+		}
+	}
+	if exists(m.path("var/lab/data/.labd.db-litestream")) {
+		t.Error("Litestream's own files of the database that was replaced were kept")
+	}
+	order(t, m.calls(),
+		"launchctl bootout system/"+litestreamLabel,
+		"launchctl bootstrap system "+m.path("Library/LaunchDaemons/"+litestreamLabel+".plist"),
+		"launchctl bootstrap system "+m.path("Library/LaunchDaemons/"+labdLabel+".plist"),
+	)
+	if !strings.Contains(out, `"No way back."`) {
+		t.Errorf("no word of why the databases went back:\n%s", out)
+	}
+	if got := o.told(); len(got) != 2 || !strings.Contains(got[1], "what arrived since is lost") {
+		t.Errorf("\"Agents\" was told %q", got)
+	}
+}
+
+// A release that only adds to a database leaves it alone on the way back:
+// the previous build reads it as it is.
+func TestGoingBackFromAnOrdinaryReleaseKeepsWhatArrived(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.databases()
+	first, bad := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, bad), bad, false)
+	m.ok("deploy", "--from", r.from(first), first)
+	m.onSwitch(bad, `sqlite3 "$LAB_SYSROOT/var/lab/data/labd.db" "INSERT INTO seen VALUES('after')"`)
+
+	out := m.refused("deploy", "--from", r.from(bad), bad)
+
+	if got := m.sql("labd.db", "SELECT group_concat(what, ', ') FROM seen"); got != "before, after" {
+		t.Errorf("labd.db holds %q\n%s", got, out)
+	}
+	if strings.Contains(out, "No way back") {
+		t.Errorf("the databases went back:\n%s", out)
+	}
+}
+
+func TestADeployThatCannotCopyTheDatabasesPutsThePreviousBuildBack(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.databases()
+	first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+	m.ok("deploy", "--from", r.from(first), first)
+	write(t, m.path("var/lab/data/reports.db"), "not a database\n", 0o600)
+
+	out := m.refused("deploy", "--from", r.from(tag), tag)
+
+	if m.current() != first || !m.loaded() || !reflect.DeepEqual(m.builds(), []string{first}) {
+		t.Fatalf("the mini runs %q (loaded %v), builds %v\n%s", m.current(), m.loaded(), m.builds(), out)
+	}
+	if !strings.Contains(out, "reports.db could not be copied") || !strings.Contains(out, first+" is back and answers") {
+		t.Errorf("no word of what happened:\n%s", out)
+	}
+}
+
+func TestTheCopiesOfTheDatabasesGoWithTheirBuilds(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.databases()
+	tags := []string{"v0.2.0-rc.1", "v0.2.0-rc.2", "v0.2.0-rc.3", "v0.2.0"}
+	for _, tag := range tags {
+		bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+		m.ok("deploy", "--from", r.from(tag), tag)
+	}
+	entries, _ := os.ReadDir(m.path("var/lab/before-deploy"))
+	var got []string
+	for _, e := range entries {
+		got = append(got, e.Name())
+	}
+	if want := []string{"v0.2.0", "v0.2.0-rc.2", "v0.2.0-rc.3"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("copies kept: %v, want %v", got, want)
+	}
+	if got := mode(t, m.path("var/lab/before-deploy")); got != 0o700 {
+		t.Errorf("the folder of the copies is %v", got)
+	}
+}
+
+func TestDeploysDryRunNamesEveryStep(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	tag := "v0.2.0-rc.1"
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+	noWayBack(t, k, filepath.Join(r.dir, tag), tag, true)
+
+	out := m.ok("deploy", "--dry-run", "--from", r.from(tag), tag)
+
+	for _, want := range []string{"would tell \"Agents\" and drain jobs", "would stop labd and copy labd.db reports.db", "would switch", "never the mini, and no tool", "the Builder asks it for work", `says "No way back."`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the dry run doesn't say %q:\n%s", want, out)
+		}
+	}
+	if len(o.told()) != 0 || strings.Contains(m.calls(), "ops ") || exists(m.path("var/lab/before-deploy")) {
+		t.Errorf("a dry run told \"Agents\", drained or copied:\n%s", m.calls())
+	}
+}
+
+// What a Deploy says reaches "Agents" through a real labd's ops socket.
+func TestDeployTellsAgentsThroughLabd(t *testing.T) {
+	m, k, r := deployed(t)
+	a, _ := m.withLabd()
+	first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+	m.ok("deploy", "--from", r.from(first), first)
+	a.posted(t, 2)
+
+	out := m.ok("deploy", "--from", r.from(tag), tag)
+
+	got := a.posted(t, 4)
+	if got[2] != "Deploy of "+tag+" on the mini: started, from "+first+". Jobs are drained, then the lab's services restart; the mini does not." {
+		t.Errorf("the line of the start: %q\n%s", got[2], out)
+	}
+	if !strings.HasPrefix(got[3], "Deployed "+tag+" on the mini: labd answers on its loopback port and its socket") {
+		t.Errorf("the report: %q", got[3])
+	}
+	if !strings.Contains(out, "jobs are drained") {
+		t.Errorf("a real labd was not asked to drain:\n%s", out)
+	}
+}
+
+func TestDeployRefusesALinkPlantedWhereTheCopiesGo(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.databases()
+	first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+	m.ok("deploy", "--from", r.from(first), first)
+	v := m.victim()
+	link := m.path("var/lab/before-deploy")
+	plant(t, link, v.dir)
+	os.Remove(m.log)
+
+	out := m.refused("deploy", "--from", r.from(tag), tag)
+
+	saysLink(t, out, link)
+	v.intact("a Deploy with a link where the databases' copies go")
+	if m.current() != first || !m.loaded() || strings.Contains(m.calls(), "launchctl boot") {
+		t.Errorf("the mini runs %q (loaded %v) after the refusal:\n%s", m.current(), m.loaded(), m.calls())
+	}
+}

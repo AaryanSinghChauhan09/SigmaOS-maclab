@@ -94,6 +94,15 @@ LABD_OOBD_TOKEN="$LAB_HOME/secrets/oobd.token"
 # The tunnel's credential, as cloudflared reads it with --token-file.
 TUNNEL_TOKEN="$LAB_HOME/secrets/cloudflared.token"
 LAUNCHD_DIR="$SYSROOT/Library/LaunchDaemons"
+# Before a Deploy switches, both databases are copied here, a folder for
+# each version Deployed: the way back from a release that says "No way
+# back.". It is outside data/, so no backup carries it.
+BEFORE_DEPLOY="$LAB_HOME/before-deploy"
+# The Maintenance run's own folder, root's: its reports, and what it carries
+# over the restart of the mini. Its second half is started by a LaunchDaemon
+# that it installs before the restart and removes when it is done.
+MAINTENANCE="$LAB_ROOT/maintenance"
+MAINTENANCE_LABEL="org.omarchy-mac.lab.maintenance"
 # Backups. The live databases stay out of restic: it carries the copies the
 # nightly run makes in snapshots/. What the guest and R2 are reached with is
 # in one folder only the lab account reads.
@@ -396,6 +405,76 @@ recovered() {
   local hook
   hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/notify"
   [[ ! -x $hook ]] || "$hook" recovered "$1" "$2" >/dev/null 2>&1 || true
+}
+
+# What follows is for the two scripts that restart labd: Deploy and the
+# Maintenance run. Both run as root and reach labd as the lab account.
+
+# tell TEXT: one line for "Agents", from a script that runs as root.
+tell() {
+  local hook
+  hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/notify"
+  say "$1"
+  as_lab "$hook" agents "$1" >/dev/null 2>&1 || say "that line did not reach \"Agents\": it is in $LAB_HOME/log/notify.log"
+}
+
+# ops METHOD PATH: labd's answer on its ops socket.
+ops() { as_lab curl -fsS --max-time 20 --unix-socket "$OPS_SOCKET" -X "$1" "http://labd$2" 2>/dev/null; }
+
+DRAINING=0
+
+# drain_jobs MINUTES: labd starts no further job, and this waits until the
+# jobs and builds that run have ended. A job that waits stays queued and
+# starts after the restart. Returns 1, with the drain lifted, when some
+# still run after MINUTES; what ran is then in STILL_RUNNING.
+STILL_RUNNING=""
+drain_jobs() {
+  local limit=$(( $1 * 60 )) step="${LAB_DRAIN_STEP:-5}" waited=0 left jobs builds
+  if [[ ! -S $OPS_SOCKET ]] || ! loaded "$LABD_LABEL"; then
+    say "labd does not run: there is no job to drain"
+    return 0
+  fi
+  if ! left="$(ops POST /drain)"; then
+    say "the labd that runs does not drain jobs (it is older than this script, or does not answer): a job that runs now ends with the restart"
+    return 0
+  fi
+  DRAINING=1
+  while :; do
+    read -r jobs builds <<<"$left"
+    [[ $jobs =~ ^[0-9]+$ && $builds =~ ^[0-9]+$ ]] || { say "labd's answer to the drain was not understood: a job that runs now ends with the restart"; return 0; }
+    (( jobs + builds > 0 )) || break
+    if (( waited >= limit )); then
+      STILL_RUNNING="$jobs jobs and $builds builds"
+      lift_drain
+      return 1
+    fi
+    (( waited % 60 )) || say "waiting for $jobs jobs and $builds builds to end"
+    sleep "$step"
+    waited=$((waited + step))
+    left="$(ops POST /drain)" || { say "labd stopped answering while jobs were drained"; return 0; }
+  done
+  say "jobs are drained: none runs, and labd starts none until it is back"
+}
+
+# lift_drain: labd starts jobs again. A labd that restarted is not draining.
+lift_drain() {
+  (( DRAINING )) || return 0
+  DRAINING=0
+  ops DELETE /drain >/dev/null || true
+}
+
+# parts_bad: what labd says is wrong with the Builder or the Out-of-band
+# controller, or nothing. A part the mini does not have yet is not wrong,
+# and a labd too old to say is not asked twice.
+parts_bad() {
+  local out
+  out="$(ops GET /parts)" || return 0
+  case "$out" in
+    *"builder silent"*) echo "the Builder has not asked labd for work" ;;
+  esac
+  case "$out" in
+    *"controller bad"*) echo "the Out-of-band controller does not answer labd" ;;
+  esac
 }
 
 # ping_check NAME: tell that check the lab did what the check waits for. The
