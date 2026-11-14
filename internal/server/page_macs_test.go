@@ -1,6 +1,7 @@
 package server
 
 import (
+	"html"
 	"net/http"
 	"regexp"
 	"strings"
@@ -32,7 +33,7 @@ func macRows(page string) (rows map[string]string, order []string) {
 }
 
 func rowText(row string) string {
-	return strings.Join(strings.Fields(reTag.ReplaceAllString(row, " ")), " ")
+	return html.UnescapeString(strings.Join(strings.Fields(reTag.ReplaceAllString(row, " ")), " "))
 }
 
 func buttons(row string) string {
@@ -200,6 +201,9 @@ func TestMacsFiltersAllMineAndLeasedByMe(t *testing.T) {
 		if got := strings.Join(order, " "); got != want {
 			t.Errorf("/macs%s for grace: %q, want %q", query, got, want)
 		}
+	}
+	if rows, _ := macRows(linus.macsPage("")); !strings.Contains(rowText(rows["graces-air"]), "Volunteer's of @grace") {
+		t.Errorf("an M team member is not shown whose Mac it is: %s", rowText(rows["graces-air"]))
 	}
 	if _, order := macRows(linus.macsPage("?show=leased")); strings.Join(order, " ") != "m1-pro" {
 		t.Errorf("Leased by me, for linus: %v", order)

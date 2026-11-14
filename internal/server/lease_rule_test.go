@@ -230,6 +230,18 @@ func TestOnlyTheMTeamAndMaintainersTakeALease(t *testing.T) {
 	if w := byToken(token); w.Code != http.StatusForbidden {
 		t.Errorf("a Lab token after its person lost the mark: %d %s", w.Code, w.Body)
 	}
+
+	// A Blocked person takes none, and meets the one sentence.
+	l.lrMark(lrGrace)
+	if err := l.s.store.block(lrGrace, ownerID, "", l.s.now()); err != nil {
+		t.Fatal(err)
+	}
+	if w := byToken(token); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), blockedSentence) {
+		t.Errorf("a Blocked person's Lab token: %d %s", w.Code, w.Body)
+	}
+	if _, err := l.s.takeLease(v, Person{AccountID: lrGrace, Handle: "grace", MTeam: true, Blocked: true}, "x@y", 0); err == nil || statusOf(err) != http.StatusForbidden {
+		t.Errorf("the Lease rule for a Blocked person: %v", err)
+	}
 }
 
 // Only a Mac that has passed its baseline and has not left takes a Lease.
