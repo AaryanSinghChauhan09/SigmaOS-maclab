@@ -1,0 +1,168 @@
+#!/bin/bash
+# The Front door's test 9: cloudflared to the Unix socket, streams
+# included; the tunnel restarted mid-stream gives a clean error and agents
+# come back by themselves (spec section 16, Ready item 1; section 6, "The
+# tunnel" and "Held responses").
+#
+#   fd09-tunnel-restart [--dry-run]
+#   fd09-tunnel-restart --lab --mini USER@HOST [--mac NAME] [--records DIR]
+#   fd09-tunnel-restart --local [--records DIR]
+#
+#   1. The mini says where the tunnel leads: every name of its route file
+#      to labd's Unix socket, which only the lab account opens. A request
+#      made now is in labd's caller log with the edge's ray id, which labd
+#      keeps only for what came in on that socket.
+#   2. Under a Lease it takes on the Mac, two silent commands are held
+#      through the tunnel for 40 s: one by lab exec, one by the probe, which
+#      counts the Keepalives that crossed.
+#   3. cloudflared is restarted on the mini.
+#   4. lab exec must end within two minutes with its one plain sentence,
+#      "connection lost; the command may still be running", and no page;
+#      the probe's stream must have been cut after its Keepalives.
+#   5. The Exec record must hold lab's command once: it was not sent again.
+#   6. The lab answers again, and the Mac is checking in again with nobody
+#      touching it; a new lab exec on it works.
+#
+#   --mini USER@HOST   the mini, as the owner reaches it over SSH with a key;
+#                      sudo asks for the password there, twice
+#
+# --local: the stand-in for the tunnel dials the socket of a labd started
+# here, and is restarted in place of cloudflared: every connection drops and
+# it is gone for two seconds.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=scripts/cutover/front-door/edge.sh
+. "$FD_HERE/edge.sh"
+usage() { sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+no_rest
+SENTENCE="connection lost; the command may still be running"
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login, it would:
+  1. run: curl $ADDRESS/fd09-…, then ssh -t MINI sudo $MINI_SCRIPTS/edge-facts origin and callers /fd09-…
+     and want the tunnel's routes on labd's Unix socket, and the request logged with a ray id
+  2. run: lab lease $MAC, then hold lab exec $MAC 'sleep 240; echo fd09-…' and the same through the probe for 40 s
+  3. run: ssh -t MINI sudo launchctl kickstart -k system/$TUNNEL_LABEL
+  4. want lab exec to end within two minutes saying "$SENTENCE", and the probe's stream cut after its Keepalives
+  5. want the Exec record to hold lab's command once
+  6. want $ADDRESS/healthz to answer again, $MAC checking in again by itself, and a new lab exec to work
+  7. run: lab release $MAC
+  8. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-09.md
+The tunnel is down for a moment: everyone using the lab then is cut. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+[[ $MODE != lab || -n $MINI ]] || fail "--lab needs --mini USER@HOST: the tunnel is restarted there"
+edge_workspace
+if [[ $MODE == local ]]; then
+  edge_lab
+  edge_mac
+else
+  logged_in
+fi
+record_start 09 "the tunnel restarted mid-stream: a clean error, and the Macs come back by themselves"
+bad=0
+
+# 1. Where the tunnel leads.
+run="fd09-$(nonce)"
+ask through "$ADDRESS/$run"
+sleep 1
+if [[ $MODE == local ]]; then
+  mini_facts "$WORK/facts" "callers /$run"
+  rec "the stand-in for the tunnel dials the Unix socket of the labd started here"
+else
+  mini_facts "$WORK/facts" origin "callers /$run"
+  if [[ "$(fact "$WORK/facts" tunnel_origin)" == socket && "$(fact "$WORK/facts" socket)" == ok ]]; then
+    rec "every name of the tunnel's route file leads to labd's Unix socket, which is the lab account's alone"
+  else
+    rec "FAIL: the tunnel's route file leads to \"$(fact "$WORK/facts" tunnel_origin)\" and labd's socket is \"$(fact "$WORK/facts" socket)\""
+    bad=1
+  fi
+fi
+if [[ "$(fact "$WORK/facts" lines)" == 1 && "$(fact "$WORK/facts" with_ray)" == 1 ]]; then
+  rec "a request through the Front door is in labd's caller log with the edge's ray id: it came in on the socket"
+else
+  rec "FAIL: a request through the Front door is in the caller log $(fact "$WORK/facts" lines) time(s), $(fact "$WORK/facts" with_ray) with a ray id"
+  bad=1
+fi
+
+# 2. Two streams, held.
+own_lease
+mark="$run"
+"$LAB_CMD" exec --timeout 300 "$MAC" "sleep 240; echo $mark-lab" > "$WORK/exec.out" 2> "$WORK/exec.err" &
+lab_pid=$!
+"$PROBE" held --timeout 300 exec "$MAC" "sleep 240; echo $mark-probe" > "$WORK/held.out" 2> "$WORK/held.err" &
+probe_pid=$!
+say "holding two streams for 40 s"
+sleep 40
+kill -0 "$lab_pid" 2>/dev/null || failed "FAIL: lab exec ended before the tunnel was restarted: $(plain "$WORK/exec.err")"
+
+# 3. The restart.
+restart_tunnel
+restarted="$(now)"
+
+# 4. A clean error.
+lab_status=0
+for _ in $(seq 240); do
+  kill -0 "$lab_pid" 2>/dev/null || break
+  sleep 0.5
+done
+if kill -0 "$lab_pid" 2>/dev/null; then
+  kill "$lab_pid" 2>/dev/null || true
+  rec "FAIL: two minutes after the restart lab exec was still waiting on a stream that was gone"
+  bad=1
+else
+  wait "$lab_pid" || lab_status=$?
+  said="$(plain "$WORK/exec.err")"
+  if (( lab_status != 0 )) && [[ $said == *"$SENTENCE"* ]]; then
+    rec "lab exec ended $(calc "$(now) - $restarted") s after the restart, saying: $said"
+  else
+    rec "FAIL: lab exec ended with status $lab_status, saying: ${said:-nothing}"
+    bad=1
+  fi
+fi
+wait "$probe_pid" 2>/dev/null || true
+if [[ "$(fact "$WORK/held.out" ended)" == cut ]] && (( $(fact "$WORK/held.out" keepalives) >= 2 )); then
+  rec "the probe's stream was cut after $(fact "$WORK/held.out" seconds) s and $(fact "$WORK/held.out" keepalives) Keepalives"
+else
+  rec "FAIL: the probe's stream ended as \"$(fact "$WORK/held.out" ended)\" with $(fact "$WORK/held.out" keepalives) Keepalives"
+  bad=1
+fi
+
+# 6 (first half). The lab answers again.
+front_door_answers
+rec "the lab answered again $(calc "$(now) - $restarted") s after the restart"
+
+# 5. Not sent again.
+"$PROBE" execs "$MAC" "$mark-lab" > "$WORK/execs.out" 2> "$WORK/execs.err" || failed "FAIL: the Exec record could not be read: $(plain "$WORK/execs.err")"
+if [[ "$(fact "$WORK/execs.out" lines)" == 1 ]]; then
+  rec "the Exec record holds lab's command once: it was not sent again"
+else
+  rec "FAIL: the Exec record holds lab's command $(fact "$WORK/execs.out" lines) times"
+  bad=1
+fi
+
+# 6. The Mac is back by itself.
+back=""
+for _ in $(seq 90); do
+  "$PROBE" mac "$MAC" > "$WORK/mac.out" 2> /dev/null || true
+  if [[ "$(fact "$WORK/mac.out" alive)" == true ]]; then
+    back="$(calc "$(now) - $restarted")"
+    break
+  fi
+  sleep 2
+done
+if [[ -n $back ]] && "$LAB_CMD" exec "$MAC" "echo $mark-back" > "$WORK/back.out" 2> "$WORK/back.err" && grep -q "$mark-back" "$WORK/back.out"; then
+  rec "$MAC was checking in again $back s after the restart, with nobody touching it, and a new lab exec on it worked"
+else
+  rec "FAIL: $MAC did not come back within three minutes: $(plain "$WORK/back.err")"
+  bad=1
+fi
+give_back
+(( ! bad )) || { record_done fail; exit 1; }
+record_done pass

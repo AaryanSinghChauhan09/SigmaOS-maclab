@@ -1,0 +1,131 @@
+#!/bin/bash
+# The Front door's test 8: a forged CF-Connecting-IP from outside does not
+# change the logged address (spec section 16, Ready item 1; section 6, "What
+# labd does itself").
+#
+#   fd08-forged-address [--dry-run]
+#   fd08-forged-address --lab --mini USER@HOST [--records DIR]
+#   fd08-forged-address --local [--records DIR]
+#
+# Two requests go to paths nobody else asks for, with curl: one plain, one
+# that names an address of its own choosing in CF-Connecting-IP,
+# X-Forwarded-For and True-Client-IP (203.0.113.77, an address kept for
+# documents). The mini is then asked what labd's caller log holds for the
+# two paths (scripts/mini/edge-facts, which prints counts and no address):
+#
+#   - the plain request is logged from this machine's own address, as the
+#     edge reports it at /cdn-cgi/trace, with the edge's ray id;
+#   - the forged address is in no line, and the request that named it is
+#     logged from the same address as the plain one. An edge that refuses
+#     such a request itself, so that labd never sees it, passes too.
+#
+#   --mini USER@HOST   the mini, as the owner reaches it over SSH with a key;
+#                      sudo asks for the password there, once
+#
+# --local: the stand-in for the edge names its own address for every caller
+# (198.51.100.7), as the edge does. The same two requests go through it,
+# and a third, forged, to labd's loopback port, where labd believes no
+# header and logs the connection's own address.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=scripts/cutover/front-door/edge.sh
+. "$FD_HERE/edge.sh"
+usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS it would:
+  1. run: curl $ADDRESS/cdn-cgi/trace, for this machine's address as the edge sees it (kept in memory, written nowhere)
+  2. run: curl $ADDRESS/fd08-…-plain
+  3. run: curl -H 'CF-Connecting-IP: $FORGED_ADDRESS' -H 'X-Forwarded-For: $FORGED_ADDRESS' -H 'True-Client-IP: $FORGED_ADDRESS' $ADDRESS/fd08-…-forged
+  4. run: ssh -t MINI sudo $MINI_SCRIPTS/edge-facts callers PATH $FORGED_ADDRESS SHA256, for each path
+  5. want the plain request logged from this machine's address with a ray id, and $FORGED_ADDRESS in no line
+  6. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-08.md
+No address goes into the record. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+[[ $MODE != lab || -n $MINI ]] || fail "--lab needs --mini USER@HOST: the caller log is read there"
+edge_workspace
+if [[ $MODE == local ]]; then
+  edge_lab
+  mine="$STAND_IN_ADDRESS"
+else
+  # One address family, so that every request leaves from one address.
+  CURL_MORE=(-4)
+  ask trace "$ADDRESS/cdn-cgi/trace"
+  mine="$(sed -n 's/^ip=//p' "$WORK/trace.body" | tr -cd '0-9A-Fa-f.:' | head -n 1)"
+  [[ $STATUS == 200 && -n $mine ]] || fail "the edge did not say which address this machine has ($(where trace))"
+fi
+record_start 08 "a forged CF-Connecting-IP does not change the logged address"
+
+run="fd08-$(nonce)"
+forge=(-H "CF-Connecting-IP: $FORGED_ADDRESS" -H "X-Forwarded-For: $FORGED_ADDRESS" -H "True-Client-IP: $FORGED_ADDRESS")
+ask plain "$ADDRESS/$run-plain"
+plain_status="$STATUS"
+ask forged "${forge[@]}" "$ADDRESS/$run-forged"
+forged_status="$STATUS"
+refused_at_edge=0
+if edge_page forged; then
+  refused_at_edge=1
+  rec "the edge refused the request that named an address itself ($(where forged))"
+fi
+want="$(sha256_text "$mine")"
+commands=("callers /$run-plain $FORGED_ADDRESS $want" "callers /$run-forged $FORGED_ADDRESS $want")
+if [[ $MODE == local ]]; then
+  CURL_MORE=()
+  ask loopback "${forge[@]}" "http://$LOCAL_LISTEN/$run-loopback"
+  commands+=("callers /$run-loopback $FORGED_ADDRESS $(sha256_text 127.0.0.1)")
+fi
+sleep 1
+mini_facts "$WORK/facts" "${commands[@]}"
+# The facts come in blocks of five lines, one block for each path.
+block() { sed -n "$(( ($1 - 1) * 5 + 1 )),$(( $1 * 5 ))p" "$WORK/facts" > "$WORK/facts.$1"; }
+block 1
+block 2
+bad=0
+
+p="$WORK/facts.1"
+if [[ "$(fact "$p" lines)" == 1 && "$(fact "$p" as_expected)" == 1 ]]; then
+  rec "the plain request (HTTP $plain_status) is in labd's caller log once, from this machine's own address"
+else
+  rec "FAIL: the plain request is in the caller log $(fact "$p" lines) time(s), $(fact "$p" as_expected) of them from this machine's address: the log cannot be told from here"
+  bad=1
+fi
+if [[ "$(fact "$p" with_ray)" == 1 ]]; then
+  rec "its line carries the edge's ray id, which labd keeps only for a request on the tunnel's socket"
+else
+  rec "FAIL: its line carries no ray id: the request did not reach labd on the tunnel's socket"
+  bad=1
+fi
+
+f="$WORK/facts.2"
+if [[ "$(fact "$f" forged)" != 0 || "$(fact "$p" forged)" != 0 ]]; then
+  rec "FAIL: labd logged a request as coming from $FORGED_ADDRESS, the address the request itself named"
+  bad=1
+elif [[ "$(fact "$f" lines)" == 1 && "$(fact "$f" as_expected)" == 1 ]]; then
+  rec "the request that named $FORGED_ADDRESS in three headers (HTTP $forged_status) is logged from this machine's own address"
+elif [[ "$(fact "$f" lines)" == 0 && $refused_at_edge == 1 ]]; then
+  rec "the request that named $FORGED_ADDRESS never reached labd"
+else
+  rec "FAIL: the request that named $FORGED_ADDRESS is in the caller log $(fact "$f" lines) time(s), $(fact "$f" as_expected) of them from this machine's address"
+  bad=1
+fi
+
+if [[ $MODE == local ]]; then
+  block 3
+  l="$WORK/facts.3"
+  if [[ "$(fact "$l" lines)" == 1 && "$(fact "$l" forged)" == 0 && "$(fact "$l" as_expected)" == 1 && "$(fact "$l" with_ray)" == 0 ]]; then
+    rec "at labd's loopback port the same forged request is logged from 127.0.0.1, with no ray id: nothing a caller sends is believed there"
+  else
+    rec "FAIL: at labd's loopback port the forged request was logged $(fact "$l" lines) time(s), $(fact "$l" forged) of them from the forged address"
+    bad=1
+  fi
+fi
+(( ! bad )) || { record_done fail; exit 1; }
+record_done pass

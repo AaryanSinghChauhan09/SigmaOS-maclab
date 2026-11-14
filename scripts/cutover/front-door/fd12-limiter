@@ -1,0 +1,100 @@
+#!/bin/bash
+# The Front door's test 12: the eleventh bad credential gets 429, and a
+# valid one from the same address passes (spec section 16, Ready item 1;
+# section 6, "What labd does itself").
+#
+#   fd12-limiter [--dry-run | --local | --lab] [--records DIR]
+#
+# Eleven requests carry a Lab token made up here, which no lab ever gave
+# out, to /api/auth, with curl. The first ten must be refused as a wrong
+# credential (401) and the eleventh as one too many (429), in labd's own
+# words. Then the saved login must pass from the same address, asked by the
+# probe and by lab status, and a twelfth wrong one must still get 429.
+#
+# What it leaves behind: for 15 minutes a wrong credential from this
+# machine's address gets 429, and "Agents" is told once that the limiter is
+# refusing an address, and once more when it stops. A second run inside
+# those minutes cannot count to eleven: it says so and stops (status 3).
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=scripts/cutover/front-door/edge.sh
+. "$FD_HERE/edge.sh"
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS it would:
+  1. run: lab status, under the saved login
+  2. run eleven times: curl -H 'Authorization: Bearer lab_…' $ADDRESS/api/auth, with a token made up here
+  3. want 401 ten times, then 429 with labd's own sentence
+  4. ask /api/auth with the saved login from the same address (the probe, over IPv4 as curl), then run lab status: both must pass
+  5. send a twelfth wrong one and want 429 still
+  6. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-12.md
+For 15 minutes afterwards a wrong credential from this address gets 429, and "Agents" gets one line. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+edge_workspace
+if [[ $MODE == local ]]; then
+  edge_lab
+else
+  logged_in
+  # One address family, so that every request leaves from one address.
+  CURL_MORE=(-4)
+fi
+record_start 12 "the eleventh bad credential gets 429, and a valid one still passes"
+
+"$LAB_CMD" status > /dev/null 2> "$WORK/before.err" || failed "FAIL: lab status did not pass before any wrong credential: $(plain "$WORK/before.err")"
+
+# The made-up token reaches curl in a file, as a real one would.
+( umask 077; echo "Authorization: Bearer lab_$(head -c 20 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$WORK/wrong" )
+codes=()
+for n in $(seq 11); do
+  ask "wrong.$n" -H "@$WORK/wrong" "$ADDRESS/api/auth"
+  if edge_page "wrong.$n"; then
+    failed "FAIL: wrong credential $n was answered by the edge and not by labd ($(where "wrong.$n"))"
+  fi
+  codes+=("$STATUS")
+  if [[ $STATUS == 429 ]] && (( n < 11 )); then
+    if (( n == 1 )); then
+      stopped "this address is already refused: the first wrong credential got 429. An earlier run did that, or someone guessing: run it again in 15 minutes"
+    fi
+    stopped "429 came at wrong credential $n, not at the eleventh: other refused credentials from this address were counted in the last 10 minutes. Run it again in 15 minutes"
+  fi
+done
+rec "eleven wrong credentials got: ${codes[*]}"
+tenth=1
+for n in 0 1 2 3 4 5 6 7 8 9; do [[ ${codes[$n]} == 401 ]] || tenth=0; done
+if (( ! tenth )); then
+  failed "FAIL: each of the first ten is refused with 401"
+fi
+if [[ ${codes[10]} != 429 ]]; then
+  failed "FAIL: the eleventh got ${codes[10]}, not 429: labd did not count them against one address"
+fi
+if grep -q "Too many refused credentials" "$WORK/wrong.11.body"; then
+  rec "the eleventh was refused in labd's own words: too many refused credentials from this network"
+else
+  failed "FAIL: the eleventh got 429 without labd's sentence"
+fi
+
+# The saved login, over IPv4 as curl went, so that it leaves from the
+# address that is now refused; then lab itself.
+"$PROBE" get --ipv4 /api/auth > "$WORK/valid.out" 2> "$WORK/valid.err" || failed "FAIL: the probe could not ask with the saved login: $(plain "$WORK/valid.err")"
+if [[ "$(fact "$WORK/valid.out" status)" == 200 ]] && "$LAB_CMD" status > /dev/null 2> "$WORK/after.err"; then
+  rec "the saved login passed from the same address right after (HTTP 200), and so did lab status"
+else
+  failed "FAIL: a valid credential from the same address was refused (HTTP $(fact "$WORK/valid.out" status)): $(plain "$WORK/after.err")"
+fi
+ask wrong.12 -H "@$WORK/wrong" "$ADDRESS/api/auth"
+if [[ $STATUS == 429 ]]; then
+  rec "a twelfth wrong one still got 429"
+else
+  failed "FAIL: a twelfth wrong one got $STATUS"
+fi
+rec "left behind: for 15 minutes a wrong credential from this address gets 429; \"Agents\" is told once now and once when it ends"
+record_done pass

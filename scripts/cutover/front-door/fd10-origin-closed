@@ -1,0 +1,195 @@
+#!/bin/bash
+# The Front door's test 10: the origin is closed. Nothing of the lab
+# answers on the LAN or the tailnet; the router has no forwards and UPnP is
+# off (spec section 16, Ready item 1; section 5, "labd's listeners").
+#
+#   fd10-origin-closed [--dry-run]
+#   fd10-origin-closed --lab --mini USER@HOST [--no-forwards] [--upnp-off] [--port N]... [--records DIR]
+#   fd10-origin-closed --local [--port N]... [--records DIR]
+#
+# Run it from a machine on the mini's LAN and on the tailnet.
+#
+#   1. On the mini (scripts/mini/edge-facts origin): every TCP port the
+#      lab's own daemons listen on is on loopback. tailscaled is not
+#      counted: it is the tailnet, and SSH comes in through it.
+#   2. From here: each address the mini has beyond loopback, the LAN's and
+#      the tailnet's, is asked on the lab's ports (labd 7770, the
+#      Out-of-band controller 7780, cloudflared's metrics 20241, and 80,
+#      443, 8080). None may take a connection. An address counts only if
+#      its SSH port answers from here, which shows it can be reached.
+#   3. The router. This network is asked whether a router offers to open
+#      ports to whoever asks (UPnP's search, NAT-PMP's question): no answer
+#      is wanted. Its forwards are on a page only the owner can read:
+#      --no-forwards says the owner read it and it lists none, --upnp-off
+#      that UPnP (and NAT-PMP, where the router has it) is switched off
+#      there. Without them the test asks at the terminal.
+#
+#   --mini USER@HOST   the mini, as the owner reaches it over SSH with a key;
+#                      sudo asks for the password there, once
+#   --port N           one more port to ask in step 2 (repeatable)
+#
+# --local: a labd started here must refuse to listen beyond loopback, and
+# this machine's own addresses beyond loopback are asked on the ports that
+# labd and the stand-in for the tunnel listen on. No router is asked.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=scripts/cutover/front-door/edge.sh
+. "$FD_HERE/edge.sh"
+usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+no_forwards=0
+upnp_off=0
+ports=(7770 7780 20241 80 443 8080)
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --no-forwards) no_forwards=1 ;;
+    --upnp-off) upnp_off=1 ;;
+    --port)
+      (( $# >= 2 )) || usage
+      [[ $2 =~ ^[1-9][0-9]{0,4}$ ]] || fail "--port $2 is not a port"
+      ports+=("$2")
+      shift
+      ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. From this machine, on the mini's LAN and the tailnet, it would:
+  1. run: ssh -t MINI sudo $MINI_SCRIPTS/edge-facts origin, and want no port of the lab's daemons open beyond loopback
+  2. run: ssh MINI ifconfig, for the mini's addresses, and ask each of them here on ports ${ports[*]}: none may answer
+  3. ask this network for a router that opens ports by itself (UPnP, NAT-PMP): no answer is wanted
+  4. take the owner's reading of the router: no forwards (--no-forwards), UPnP off (--upnp-off), or ask at the terminal
+  5. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-10.md
+No address goes into the record. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+# addresses: the addresses in ifconfig's output on stdin that another
+# machine could reach: not loopback, not link-local.
+addresses() {
+  awk '$1 == "inet" || $1 == "inet6" { a = $2; sub(/%.*/, "", a); sub(/\/.*/, "", a); print a }' \
+    | grep -vE '^(127\.|::1$|fe80:|169\.254\.)' | sort -u
+}
+# target ADDRESS PORT
+target() { if [[ $1 == *:* ]]; then echo "[$1]:$2"; else echo "$1:$2"; fi; }
+
+[[ $MODE != lab || -n $MINI ]] || fail "--lab needs --mini USER@HOST: its listeners and its addresses are read there"
+edge_workspace
+bad=0
+if [[ $MODE == local ]]; then
+  edge_lab
+  record_start 10 "the origin is closed: nothing answers beyond loopback"
+  "$BIN/labd" --listen=0.0.0.0:0 --data="$WORK/other" --omt=false > "$WORK/open.log" 2>&1 &
+  open_pid=$!
+  for _ in $(seq 50); do
+    kill -0 "$open_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$open_pid" 2>/dev/null; then
+    kill "$open_pid" 2>/dev/null || true
+    rec "FAIL: labd took --listen 0.0.0.0 and served there"
+    bad=1
+  elif grep -q "beyond this machine" "$WORK/open.log"; then
+    rec "labd refuses to listen beyond loopback: asked for 0.0.0.0 it stops, and says so"
+  else
+    rec "FAIL: asked to listen on 0.0.0.0 labd stopped without saying why: $(plain "$WORK/open.log")"
+    bad=1
+  fi
+  ports=("${LOCAL_LISTEN##*:}" "${ADDRESS##*:}" "${ports[@]:6}")
+  ifconfig 2>/dev/null | addresses > "$WORK/addresses" || true
+  reached="$(wc -l < "$WORK/addresses" | tr -d ' ')"
+else
+  record_start 10 "the origin is closed: nothing of the lab answers on the LAN or the tailnet"
+  mini_facts "$WORK/facts" origin
+  if [[ "$(fact "$WORK/facts" beyond_loopback)" == 0 ]] && (( $(fact "$WORK/facts" lab_listeners) > 0 )); then
+    rec "on the mini the lab's daemons listen on $(fact "$WORK/facts" lab_listeners) TCP port(s), every one on loopback"
+  else
+    rec "FAIL: on the mini the lab's daemons listen beyond loopback on: $(fact "$WORK/facts" beyond_loopback_ports) ($(fact "$WORK/facts" lab_listeners) port(s) in all)"
+    bad=1
+  fi
+  # shellcheck disable=SC2029
+  ssh "$MINI" /sbin/ifconfig 2> "$WORK/ifconfig.err" | addresses > "$WORK/all" || true
+  [[ -s $WORK/all ]] || failed "FAIL: the mini named no address of its own: $(plain "$WORK/ifconfig.err")"
+  # Only an address whose SSH port answers from here can show anything.
+  : > "$WORK/addresses"
+  while read -r a; do
+    "$PROBE" answers "$(target "$a" 22)" > "$WORK/ssh.out" 2>/dev/null || true
+    [[ "$(fact "$WORK/ssh.out" open)" != 1 ]] || echo "$a" >> "$WORK/addresses"
+  done < "$WORK/all"
+  reached="$(wc -l < "$WORK/addresses" | tr -d ' ')"
+  rec "the mini has $(wc -l < "$WORK/all" | tr -d ' ') address(es) beyond loopback; $reached of them can be reached from this machine (SSH answers there)"
+  (( reached >= 2 )) || { rec "FAIL: fewer than two of the mini's addresses can be reached from here: run this from a machine on the mini's LAN and on the tailnet"; bad=1; }
+fi
+
+# 2. Nothing answers.
+targets=()
+while read -r a; do
+  for p in "${ports[@]}"; do targets+=("$(target "$a" "$p")"); done
+done < "$WORK/addresses"
+if (( ${#targets[@]} )); then
+  "$PROBE" answers "${targets[@]}" > "$WORK/answers.out" 2> "$WORK/answers.err" || failed "FAIL: the probe could not ask: $(plain "$WORK/answers.err")"
+  if [[ "$(fact "$WORK/answers.out" open)" == 0 ]]; then
+    rec "asked on $reached address(es) and ports ${ports[*]}: none takes a connection"
+  else
+    rec "FAIL: something answers beyond loopback on port(s) $(fact "$WORK/answers.out" open_ports) ($(fact "$WORK/answers.out" open) of $(fact "$WORK/answers.out" asked) asked)"
+    bad=1
+  fi
+else
+  rec "this machine has no address beyond loopback to ask"
+fi
+
+# 3. The router.
+if [[ $MODE == local ]]; then
+  rec "local: no router is asked"
+else
+  gateway="$(route -n get default 2>/dev/null | awk '$1 == "gateway:" { print $2 }' || true)"
+  [[ -n $gateway ]] || gateway="$(ip route show default 2>/dev/null | awk '{ print $3; exit }' || true)"
+  "$PROBE" router ${gateway:+--gateway "$gateway"} > "$WORK/router.out" 2> "$WORK/router.err" || true
+  upnp="$(fact "$WORK/router.out" upnp)"
+  pmp="$(fact "$WORK/router.out" nat_pmp)"
+  if [[ $upnp == answers || $pmp == answers ]]; then
+    rec "FAIL: a router on this network offers to open ports by itself (UPnP: ${upnp:-not asked}; NAT-PMP: ${pmp:-not asked})"
+    bad=1
+  else
+    rec "no router on this network answered UPnP's search (${upnp:-not asked}) or NAT-PMP's question (${pmp:-not asked})"
+  fi
+  owner_says() {
+    local answer
+    [[ -t 0 ]] || return 2
+    read -r -p "$ME: $1 [y/N] " answer
+    [[ $answer == y || $answer == Y || $answer == yes ]]
+  }
+  if (( ! no_forwards )); then
+    code=0
+    owner_says "Open the router's own pages. Does it list no port forward and no DMZ host at all?" || code=$?
+    (( code != 2 )) || stopped "the router's forwards are on a page only the owner reads: run this at a terminal, or with --no-forwards once the page lists none"
+    (( code != 0 )) || no_forwards=1
+  fi
+  if (( ! upnp_off )); then
+    code=0
+    owner_says "On the same pages, is UPnP switched off (and NAT-PMP, if the router has it)?" || code=$?
+    (( code != 2 )) || stopped "the router's UPnP setting is on a page only the owner reads: run this at a terminal, or with --upnp-off once it is off"
+    (( code != 0 )) || upnp_off=1
+  fi
+  if (( no_forwards )); then
+    rec "the owner read the router: it lists no port forward"
+  else
+    rec "FAIL: the owner read the router: it lists a port forward"
+    bad=1
+  fi
+  if (( upnp_off )); then
+    rec "the owner read the router: UPnP is switched off"
+  else
+    rec "FAIL: the owner read the router: UPnP is not switched off"
+    bad=1
+  fi
+fi
+(( ! bad )) || { record_done fail; exit 1; }
+record_done pass

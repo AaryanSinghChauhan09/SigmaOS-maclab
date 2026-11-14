@@ -1,0 +1,168 @@
+#!/bin/bash
+# The Front door's fourteen tests, one after another (spec section 16,
+# Ready item 1, and step 18 of the day).
+#
+#   run [--dry-run | --local | --lab] [--only N,N...] [--skip N,N...] [--for N "OPTIONS"]...
+#       [--mac NAME] [--mini USER@HOST] [--job ID] [--records DIR] [--bin DIR] [--deploy DIR]
+#
+# It runs each test of this folder (fdNN-…) in the order of its number, in
+# the same mode, and ends with one line for each: pass, fail, stopped (the
+# test could not be carried through, and it is the owner's to look at) or
+# no script. Through the Lab address (--lab) each test writes its own dated
+# record under docs/acceptance/, and the run writes the list of them there
+# as DATE-front-door.md; Ready wants all fourteen to say pass.
+#
+#   --only N,N     only these tests, by number (1, 2, 4 to 13, 15, 16)
+#   --skip N,N     all but these
+#   --for N "OPTIONS"
+#                  options for test N alone, as one word, such as
+#                  --for 2 "--release 0.2.0" or --for 16 "--link-up 40 --link-down 90"
+#
+# The other options go to every test that is run. Each test says what it
+# needs when run with --help.
+#
+# Nothing a test prints is shown raw when it is a web page: such a line is
+# left out, and the test itself names the status and the ray id.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$here/../../.." && pwd)"
+ME=run
+ALL="01 02 04 05 06 07 08 09 10 11 12 13 15 16"
+
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+say() { echo "$ME: $*"; }
+fail() { echo "$ME: $*" >&2; exit 2; }
+
+mode=dry
+only=""
+skip=""
+records=""
+shared=()
+extra=()
+
+# numbers LIST: a list such as 1,2,13 as " 01 02 13".
+numbers() {
+  local n out=""
+  for n in ${1//,/ }; do
+    [[ $n =~ ^0?[1-9]$|^1[0-6]$ ]] || fail "$n is not a test's number"
+    n="$(printf '%02d' "$((10#$n))")"
+    [[ " $ALL " == *" $n "* ]] || fail "there is no test $((10#$n)): the fourteen are 1, 2, 4 to 13, 15 and 16"
+    out="$out $n"
+  done
+  echo "$out"
+}
+
+while (( $# )); do
+  case "$1" in
+    --dry-run) mode=dry ;;
+    --local) mode=local ;;
+    --lab) mode=lab ;;
+    --only) (( $# >= 2 )) || usage; only="$(numbers "$2")" || exit 2; shift ;;
+    --skip) (( $# >= 2 )) || usage; skip="$(numbers "$2")" || exit 2; shift ;;
+    --for)
+      (( $# >= 3 )) || usage
+      n="$(numbers "$2")" || exit 2
+      extra+=("${n# }=$3")
+      shift 2
+      ;;
+    --records) (( $# >= 2 )) || usage; records="$2"; shared+=("$1" "$2"); shift ;;
+    --mac | --mini | --job | --bin | --deploy) (( $# >= 2 )) || usage; shared+=("$1" "$2"); shift ;;
+    -h | --help) usage ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+
+flag="--dry-run"
+[[ $mode == dry ]] || flag="--$mode"
+log="$(mktemp "${TMPDIR:-/tmp}/front-door-run.XXXXXX")"
+trap 'rm -f "$log"' EXIT
+
+results=()
+worst=0
+for n in $ALL; do
+  [[ -z $only || " $only " == *" $n "* ]] || continue
+  [[ " $skip " != *" $n "* ]] || continue
+  script=""
+  for f in "$here/fd$n"-*; do
+    [[ -f $f && -x $f && $f != *.sh && $f != *.md ]] || continue
+    script="$f"
+    break
+  done
+  if [[ -z $script ]]; then
+    results+=("$n|no script|")
+    worst=1
+    continue
+  fi
+  args=("$flag" ${shared[@]+"${shared[@]}"})
+  for e in ${extra[@]+"${extra[@]}"}; do
+    # shellcheck disable=SC2206
+    [[ ${e%%=*} != "$n" ]] || args+=(${e#*=})
+  done
+  echo
+  say "test $((10#$n)): $(basename "$script") ${args[*]}"
+  # A line of a web page is never shown.
+  "$script" "${args[@]}" 2>&1 | tee "$log" | grep --line-buffered -viE '<!doctype|<html|<head|<body|<script|<title|</'
+  code="${PIPESTATUS[0]}"
+  case "$code" in
+    0) word=pass ;;
+    3)
+      word=stopped
+      (( worst == 1 )) || worst=3
+      ;;
+    *)
+      word=fail
+      worst=1
+      ;;
+  esac
+  record="$(sed -n 's/.*The record is \(.*\)$/\1/p' "$log" | tail -n 1)"
+  results+=("$n|$word|$record")
+done
+
+echo
+(( ${#results[@]} )) || fail "no test was chosen"
+if [[ $mode == dry ]]; then
+  for r in "${results[@]}"; do
+    IFS='|' read -r n word _ <<<"$r"
+    [[ $word == pass ]] || say "test $((10#$n)): $word"
+  done
+  say "dry run: ${#results[@]} test(s) asked what they would do. Nothing was sent."
+  exit $(( worst == 0 ? 0 : 1 ))
+fi
+
+passed=0
+summary=""
+for r in "${results[@]}"; do
+  IFS='|' read -r n word record <<<"$r"
+  [[ $word != pass ]] || passed=$((passed + 1))
+  say "test $((10#$n)): $word"
+  summary="$summary- Test $((10#$n)): $word${record:+ (\`$(basename "$record")\`)}"$'\n'
+done
+say "$passed of ${#results[@]} passed"
+
+dir="$records"
+[[ -n $dir || $mode != lab ]] || dir="$repo/docs/acceptance"
+if [[ -n $dir ]]; then
+  mkdir -p "$dir"
+  out="$dir/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door.md"
+  {
+    echo "# The Front door's tests"
+    echo
+    if [[ $mode == lab ]]; then
+      echo "Run $(TZ=Australia/Brisbane date '+%Y-%m-%d %H:%M') (Brisbane) by \`scripts/cutover/front-door/run --lab\`, through the Lab address."
+    else
+      echo "Run $(TZ=Australia/Brisbane date '+%Y-%m-%d %H:%M') (Brisbane) by \`scripts/cutover/front-door/run --local\`, against a labd on this machine's loopback: no tunnel and no edge. It proves the scripts, not the Front door."
+    fi
+    echo
+    printf '%s' "$summary"
+    echo
+    if (( passed == 14 )); then
+      echo "Result: pass, all fourteen"
+    else
+      echo "Result: $passed of fourteen passed in this run"
+    fi
+  } > "$out"
+  say "the list is $out"
+fi
+exit "$worst"

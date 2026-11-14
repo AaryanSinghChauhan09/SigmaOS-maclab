@@ -1,0 +1,90 @@
+#!/bin/bash
+# The Front door's test 11: a cut job wait leaves its job untouched (spec
+# section 16, Ready item 1; section 6, "Held responses").
+#
+#   fd11-cut-job-wait [--dry-run | --local | --lab] [--mac NAME] [--records DIR]
+#
+# Under a Lease it takes on the Mac, a job is queued that takes over a
+# minute: the Mac boots into the test, runs a script that sleeps, and boots
+# back. lab wait is started on it and killed three seconds later, while labd
+# holds its job wait: the waiter's connection is cut mid-call. The job must
+# still be going right after, and a new lab wait must follow it to its end,
+# which must be a pass: a job that was canceled does not pass.
+#
+# --local: the simulated Mac runs no script; its reboots are made to take
+# six seconds each, so that the cut falls while the job is booting.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=scripts/cutover/front-door/edge.sh
+. "$FD_HERE/edge.sh"
+usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+no_rest
+SCRIPT="$FD_HERE/wait-a-minute.sh"
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login, it would:
+  1. run: lab lease $MAC
+  2. run: lab run $MAC --script wait-a-minute.sh --no-wait
+  3. run: lab wait JOB, and kill it after 3 s, while labd holds the call
+  4. want the job still going two seconds later
+  5. run: lab wait JOB again, to the job's end, and want a pass: it was not canceled
+  6. run: lab release $MAC
+  7. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-11.md
+The job reboots $MAC twice. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+edge_workspace
+if [[ $MODE == local ]]; then
+  edge_lab
+  edge_mac 6s
+else
+  logged_in
+fi
+record_start 11 "a cut job wait leaves its job untouched"
+own_lease
+
+"$LAB_CMD" run "$MAC" --script "$SCRIPT" --no-wait > "$WORK/run.out" 2> "$WORK/run.err" \
+  || failed "FAIL: the job was not queued: $(plain "$WORK/run.err")"
+job="$(sed -n 's/^job \(j[0-9a-z-]*\) queued.*/\1/p' "$WORK/run.out" | head -n 1)"
+[[ -n $job ]] || failed "FAIL: lab run did not name its job"
+rec "job $job queued on $MAC"
+
+"$LAB_CMD" wait "$job" > "$WORK/wait.out" 2> "$WORK/wait.err" &
+waiter=$!
+sleep 3
+if ! kill -0 "$waiter" 2>/dev/null; then
+  wait "$waiter" || true
+  failed "FAIL: lab wait had ended by itself after 3 s, so there was no waiter to cut: $(plain "$WORK/wait.err")"
+fi
+kill -9 "$waiter" 2>/dev/null || true
+wait "$waiter" 2>/dev/null || true
+rec "lab wait was killed 3 s into its call, while labd held it"
+sleep 2
+
+"$PROBE" job "$job" > "$WORK/job.out" 2> "$WORK/job.err" || failed "FAIL: the job could not be read after the cut: $(plain "$WORK/job.err")"
+state="$(fact "$WORK/job.out" state)"
+outcome="$(fact "$WORK/job.out" outcome)"
+if [[ -n $state && $state != "done" ]]; then
+  rec "two seconds after the cut the job is still going ($state)"
+elif [[ $outcome == pass ]]; then
+  failed "FAIL: the job had already passed when its waiter was cut, so the cut showed nothing: it needs a job that takes longer"
+else
+  failed "FAIL: after the cut the job is ${state:-unknown}${outcome:+, $outcome}"
+fi
+
+if "$LAB_CMD" wait "$job" > "$WORK/again.out" 2> "$WORK/again.err"; then
+  "$PROBE" job "$job" > "$WORK/job.out" 2> /dev/null || true
+  [[ "$(fact "$WORK/job.out" outcome)" == pass ]] || failed "FAIL: the job ended as $(fact "$WORK/job.out" state), $(fact "$WORK/job.out" outcome)"
+  rec "a new lab wait followed the job to its end, and it passed: the cut did not cancel it"
+else
+  "$PROBE" job "$job" > "$WORK/job.out" 2> /dev/null || true
+  failed "FAIL: the job ended as $(fact "$WORK/job.out" state), $(fact "$WORK/job.out" outcome): $(plain "$WORK/again.err")"
+fi
+give_back
+record_done pass

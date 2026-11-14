@@ -1,0 +1,131 @@
+#!/bin/bash
+# The Front door's test 2: freeze-entry on a real Mac (spec section 16,
+# Ready item 1; section 6, "Held responses").
+#
+#   fd02-freeze-entry [--dry-run]
+#   fd02-freeze-entry --lab --release R [--mac NAME] [--records DIR]
+#   fd02-freeze-entry --local [--records DIR]
+#
+# freeze-entry has labd read a Mac's installer entry through lab-agent's
+# identity check and freeze what it read: a held response, which through
+# the tunnel is always a stream. Under a Lease it takes on the Mac, the
+# probe sends the freeze under the saved login and wants a Keepalive at
+# once, the stream held until labd has the Mac's answer, and the frozen
+# entry's SHA-256 in the last line.
+#
+#   --release R   a Release whose manifest is frozen and names the Mac, and
+#                 whose installer entry for that Mac is not frozen yet. An
+#                 entry is frozen once: a second run needs another Release,
+#                 and says so (status 3).
+#
+# --local: a simulated Mac has no installer entry to read, so labd's answer
+# is an error. What is proved there is the form: the stream, the Keepalive
+# at once, and the error in the last line with its status.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=scripts/cutover/front-door/edge.sh
+. "$FD_HERE/edge.sh"
+usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+release=""
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --release) (( $# >= 2 )) || usage; release="$2"; shift ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+[[ -z $release || $release =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ ]] || fail "--release $release is not a Release's name"
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login, it would:
+  1. run: lab lease $MAC
+  2. send what lab installed freeze-entry $MAC --release ${release:-R} sends, with the probe, and time the stream:
+     a Keepalive within 5 s, the stream held until labd has read the Mac, the frozen entry's SHA-256 in the last line
+  3. run: lab installed status --release ${release:-R} and want the entry listed as frozen
+  4. run: lab release $MAC
+  5. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-02.md
+An entry is frozen once: each run needs a Release whose entry for $MAC is not frozen yet. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+# made_up_release: a frozen manifest that names the simulated Mac, with
+# made-up digests: enough for labd to hold a freeze, never an install.
+made_up_release() {
+  local dir="$WORK/release" a b c d e payload dtbs
+  mkdir -p "$dir"
+  a="$(sha256_text vmlinuz)" b="$(sha256_text dtb)" c="$(sha256_text mtree)" d="$(sha256_text m1n1)" e="$(sha256_text uboot)"
+  payload="$a  vmlinuz"$'\n'
+  printf '%s' "$payload" > "$dir/payload.sha256"
+  dtbs="$(sha256_text "sim.dtb $b"$'\n')"
+  cat > "$dir/manifest.json" <<JSON
+{"schema":"maclab.installed-manifest/2","release":"$release",
+ "artifacts":[{"name":"linux-front-door","file":"linux-front-door.pkg.tar.zst","sha256":"$a","version":"0-1","mtree_sha256":"$c"}],
+ "kernel":{"release":"0.0.0-front-door","vmlinuz_sha256":"$a","payload_manifest":"payload/linux-front-door.files.sha256","payload_manifest_sha256":"$(sha256_text "$payload")","payload_count":1,"regenerated_on_mac":[]},
+ "m1n1":{"bin_sha256":"$d","version":"v0-front-door"},
+ "dtbs":[{"name":"sim.dtb","sha256":"$b"}],"dtbs_sha256":"$dtbs",
+ "macs":{"$MAC":{"board":"apple,sim","board_dtb":"sim.dtb","uboot_gz_sha256":"$e","boot_bin_sha256":"$e"}}}
+JSON
+  "$LAB_CMD" installed freeze-manifest --release "$release" "$dir/manifest.json" "$dir/payload.sha256" > "$WORK/manifest.out" 2> "$WORK/manifest.err" \
+    || fail "the labd started here did not freeze a made-up manifest: $(plain "$WORK/manifest.err")"
+}
+
+[[ $MODE != lab || -n $release ]] || fail "--lab needs --release R: a Release whose manifest names $MAC and whose installer entry for it is not frozen yet"
+edge_workspace
+if [[ $MODE == local ]]; then
+  release="${release:-0.0.0-front-door}"
+  edge_lab
+  edge_mac
+  made_up_release
+else
+  logged_in
+fi
+record_start 02 "freeze-entry answers as a stream"
+own_lease
+
+held="$WORK/held.out"
+"$PROBE" held freeze "$MAC" "$release" > "$held" 2> "$WORK/held.err" || failed "the probe could not send the freeze: $(plain "$WORK/held.err")"
+ended="$(fact "$held" ended)"
+case "$ended" in
+  refused)
+    said="$(fact "$held" said)"
+    if [[ $said == *"already frozen"* ]]; then
+      stopped "$MAC's installer entry for Release $release is already frozen, and an entry is frozen once: run this with a Release whose entry for $MAC is not frozen yet"
+    fi
+    failed "labd refused the freeze before it held anything (HTTP $(fact "$held" status)): $said"
+    ;;
+  silent_form) failed "labd answered in the silent form, with no Keepalive: through the tunnel freeze-entry is always a stream" ;;
+  cut) failed "the stream was cut after $(fact "$held" seconds) s; the last line never came" ;;
+  result | error) ;;
+  *) failed "the probe's request did not reach the lab: $(fact "$held" said)" ;;
+esac
+count="$(fact "$held" keepalives)"
+first="$(fact "$held" first)"
+rec "the freeze answered as a stream that lasted $(fact "$held" seconds) s, with $count Keepalive(s), the first after ${first:-no} s"
+if (( count < 1 )) || is "${first:-99} > 5"; then
+  failed "FAIL: no Keepalive came within 5 s of the request"
+fi
+if [[ $MODE == local ]]; then
+  [[ $ended == error && -n "$(fact "$held" error_status)" ]] \
+    || failed "FAIL: a simulated Mac has no installer entry, and the stream ended with \"$ended\" where labd's error and its status were due"
+  rec "the last line carried labd's error and its status ($(fact "$held" error_status)), as a simulated Mac has no installer entry to read"
+  give_back
+  record_done pass
+  exit 0
+fi
+[[ $ended == result ]] || failed "FAIL: the freeze failed on the way (status $(fact "$held" error_status)): $(fact "$held" said)"
+sha="$(fact "$held" entry_sha256)"
+[[ $sha =~ ^[0-9a-f]{64}$ ]] || failed "FAIL: the last line held no frozen entry"
+rec "the last line was the frozen entry, SHA-256 $sha"
+if "$LAB_CMD" installed status --release "$release" > "$WORK/status.out" 2> "$WORK/status.err" && grep -q "PINS.installer-entry.$MAC" "$WORK/status.out"; then
+  rec "lab installed status lists $MAC's entry as frozen for Release $release"
+else
+  failed "FAIL: lab installed status does not list $MAC's frozen entry: $(plain "$WORK/status.err")"
+fi
+give_back
+record_done pass

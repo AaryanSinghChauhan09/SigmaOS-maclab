@@ -1,0 +1,236 @@
+#!/bin/bash
+# The Front door's test 13: the cache. /api/* and signed-in HTML never HIT;
+# a fingerprinted asset and a signed-out public page do, and the page is
+# served stale while refreshed (spec section 16, Ready item 1; section 6,
+# "Cache"; docs/acceptance/cache-policy.md).
+#
+#   fd13-cache [--dry-run | --local | --lab] [--session] [--records DIR]
+#
+# Everything is asked with curl and judged by what the edge says it did
+# (cf-cache-status) and by labd's own cache policy on the answer.
+#
+#   kept      every signed-out public page, two exports and one of the
+#             interface's fingerprinted files: asked until the edge answers
+#             from its copy (HIT), each with the policy labd states for it
+#   never     the same page with the session cookie's name in the request;
+#             /api/auth with no credential; an API read under the saved
+#             login; /status: asked three times each, never a HIT, and the
+#             page for a session says private, no-store
+#   stale     /privacy, once its copy is over 60 s old: the edge must answer
+#             from the stale copy while it fetches the page again (UPDATING),
+#             and from the new copy on the next request
+#
+#   --session   also fetch a page as a person signed in: it asks, at a
+#               prompt that shows nothing, for the session cookie of a
+#               browser signed in to the lab (name=value, from the browser's
+#               developer tools), and uses it for three requests. The page
+#               must come back signed in, never a HIT. Without it "signed
+#               in" is the cookie's name with a made-up value, which is all
+#               the edge's rule and labd's guard look at.
+#
+# --local: no edge, so no cf-cache-status. What is proved is the policy
+# labd states for each kind of answer, through the stand-in for the tunnel.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=scripts/cutover/front-door/edge.sh
+. "$FD_HERE/edge.sh"
+usage() { sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+session=0
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --session) session=1 ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+
+PAGES="/ /matrix /models /features /gaps /aurora /benchmarks /candidates /reports /data /terms /privacy"
+EXPORTS="/api/v1/reports.json /api/v1/matrix.json"
+BROWSER="public, max-age=0"
+EDGE="max-age=60, stale-while-revalidate=86400, stale-if-error=86400"
+SESSION="private, no-store"
+ASSET="public, max-age=31536000, immutable"
+INSTALL="public, max-age=300"
+STALE_PAGE=/privacy
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS it would, with curl:
+  1. ask each signed-out public page ($PAGES), two exports ($EXPORTS) and one fingerprinted file under /assets/
+     until cf-cache-status is HIT, and want labd's policy on each ("$BROWSER" for a page or an export)
+  2. ask / with the session cookie's name, /api/auth, an API read under the saved login (the probe) and /status,
+     three times each, and want never a HIT, and "$SESSION" on the page for a session
+  3. wait until the edge's copy of $STALE_PAGE is over 60 s old, ask again and want UPDATING (served stale while refreshed), then HIT
+  4. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-13.md
+Nothing was sent.
+PLAN
+  exit 0
+fi
+[[ $session == 0 || $MODE == lab ]] || fail "--session is for a run through the Lab address"
+
+edge_workspace
+if [[ $MODE == local ]]; then
+  edge_lab
+else
+  logged_in
+fi
+record_start 13 "the cache: what the edge keeps, what it never keeps, and stale while refreshed"
+bad=0
+flunk() {
+  rec "FAIL: $*"
+  bad=$((bad + 1))
+}
+policy() { header "$1" cache-control; }
+
+# kept NAME PATH WANT: PATH is answered 200 with the policy WANT, and from
+# the edge's copy within eight requests.
+kept() {
+  local name="$1" path="$2" want="$3" seen="" cs
+  for _ in 1 2 3 4 5 6 7 8; do
+    ask "$name" "$ADDRESS$path"
+    [[ $STATUS == 200 ]] || { flunk "$path: HTTP $STATUS"; return 0; }
+    [[ "$(policy "$name")" == "$want" ]] || { flunk "$path says Cache-Control: $(policy "$name"), not \"$want\""; return 0; }
+    [[ $MODE == lab ]] || return 0
+    cs="$(cache_status "$name")"
+    seen="${seen:+$seen }${cs:-none}"
+    [[ $cs != HIT ]] || { KEPT="$KEPT $path($seen)"; return 0; }
+    sleep 1
+  done
+  flunk "$path was never answered from the edge's copy: $seen"
+}
+
+# never NAME WHAT CURL-ARGS...: three requests, none answered from the
+# edge's copy.
+never() {
+  local name="$1" what="$2" seen="" cs
+  shift 2
+  for _ in 1 2 3; do
+    ask "$name" "$@"
+    cs="$(cache_status "$name")"
+    seen="${seen:+$seen }${cs:-none}"
+    [[ $cs != HIT && $cs != UPDATING && $cs != STALE && $cs != REVALIDATED ]] || { flunk "$what was answered from the edge's copy: $seen"; return 0; }
+  done
+  [[ $MODE == lab ]] || seen="no edge here"
+  NEVER="$NEVER; $what (HTTP $STATUS: $seen)"
+}
+
+# 1. Kept.
+KEPT=""
+i=0
+for path in $PAGES; do
+  i=$((i + 1))
+  kept "page.$i" "$path" "$BROWSER"
+done
+through="$(header page.1 cloudflare-cdn-cache-control)"
+if [[ $MODE == local ]]; then
+  [[ $through == "$EDGE" ]] || flunk "a public page says $through for the edge's own header, not \"$EDGE\""
+  (( bad )) || rec "each of the $i signed-out public pages says \"$BROWSER\" to the browser and \"$EDGE\" to the edge"
+else
+  (( bad )) || rec "each of the $i signed-out public pages says \"$BROWSER\" and was answered from the copy the edge keeps:$KEPT"
+  rec "the header meant for the edge alone reaches the browser: ${through:-no}"
+fi
+KEPT=""
+i=0
+was=$bad
+for path in $EXPORTS; do
+  i=$((i + 1))
+  kept "export.$i" "$path" "$BROWSER"
+done
+(( bad > was )) || rec "the exports are kept the same way:${KEPT:- $EXPORTS}"
+asset="$(grep -oE '/assets/[A-Za-z0-9._/-]+' "$WORK/page.1.body" | head -n 1 || true)"
+if [[ -n $asset ]]; then
+  KEPT=""
+  was=$bad
+  kept asset "$asset" "$ASSET"
+  (( bad > was )) || rec "a fingerprinted file of the interface says \"$ASSET\"${KEPT:+, from the copy the edge keeps:$KEPT}"
+else
+  flunk "the home page names no file under /assets/"
+fi
+ask install "$ADDRESS/install"
+if [[ $STATUS == 200 && "$(policy install)" == "$INSTALL" ]]; then
+  rec "/install says \"$INSTALL\" (the edge: $(cache_status install | grep . || echo none))"
+else
+  flunk "/install: HTTP $STATUS, Cache-Control: $(policy install)"
+fi
+
+# 2. Never.
+NEVER=""
+was=$bad
+never cookie "/ with the session cookie's name" -H "Cookie: lab_session=fd13-not-a-session" "$ADDRESS/"
+[[ "$(policy cookie)" == "$SESSION" ]] || flunk "/ asked with the session cookie says Cache-Control: $(policy cookie), not \"$SESSION\""
+[[ -z "$(header cookie cloudflare-cdn-cache-control)" ]] || flunk "/ asked with the session cookie carries the edge's own header"
+never auth "/api/auth with no credential" "$ADDRESS/api/auth"
+[[ "$(policy auth)" == no-store ]] || flunk "/api/auth says Cache-Control: $(policy auth), not no-store"
+never status "/status" "$ADDRESS/status"
+[[ "$(policy status)" == no-store ]] || flunk "/status says Cache-Control: $(policy status), not no-store"
+seen=""
+for _ in 1 2 3; do
+  "$PROBE" get /api/devices > "$WORK/api.out" 2> "$WORK/api.err" || { flunk "an API read under the saved login failed: $(plain "$WORK/api.err")"; break; }
+  cs="$(fact "$WORK/api.out" cache_status)"
+  seen="${seen:+$seen }${cs:-none}"
+  [[ "$(fact "$WORK/api.out" status)" == 200 && $cs != HIT && "$(fact "$WORK/api.out" cache_control)" == no-store ]] \
+    || { flunk "an API read under the saved login: HTTP $(fact "$WORK/api.out" status), cf-cache-status ${cs:-none}, Cache-Control: $(fact "$WORK/api.out" cache_control)"; break; }
+done
+[[ $MODE == lab ]] || seen="no edge here"
+NEVER="$NEVER; /api/devices under the saved login ($seen)"
+"$PROBE" get / > "$WORK/token.out" 2> "$WORK/token.err" || flunk "a public page under the saved login failed: $(plain "$WORK/token.err")"
+[[ "$(fact "$WORK/token.out" cache_control)" == no-store && "$(fact "$WORK/token.out" cache_status)" != HIT ]] \
+  || flunk "a public page asked with a Lab token says Cache-Control: $(fact "$WORK/token.out" cache_control), cf-cache-status $(fact "$WORK/token.out" cache_status)"
+if (( bad == was )); then
+  rec "never answered from the copy the edge keeps:${NEVER#;}; / with a Lab token"
+  rec "a page asked with the session cookie says \"$SESSION\"; /api/auth, /status and an API read say no-store"
+fi
+
+if (( session )); then
+  [[ -t 0 ]] || fail "--session asks at a terminal"
+  read -r -s -p "$ME: the session cookie of a browser signed in to the lab, as name=value (nothing is shown): " pair
+  echo
+  [[ $pair =~ ^[A-Za-z0-9_-]*lab_session=[A-Za-z0-9._~+/=-]+$ ]] || fail "that is not the session cookie: its name ends in lab_session"
+  ( umask 077; echo "Cookie: $pair" > "$WORK/session" )
+  pair=""
+  never signed "/ as a person signed in" -H "@$WORK/session" "$ADDRESS/"
+  rm -f "$WORK/session"
+  if [[ $STATUS == 200 && "$(policy signed)" == "$SESSION" ]] && grep -q 'sign-out' "$WORK/signed.body"; then
+    rec "/ for a person signed in came back signed in, says \"$SESSION\", and was never answered from the edge's copy"
+  else
+    flunk "/ with that cookie: HTTP $STATUS, Cache-Control: $(policy signed), and the page is $(grep -q 'sign-out' "$WORK/signed.body" || echo not) a signed-in one"
+  fi
+  rm -f "$WORK/signed.body" "$WORK/signed.headers"
+fi
+
+# 3. Stale while refreshed.
+if [[ $MODE == lab ]]; then
+  stale=""
+  for _ in 1 2; do
+    cs=""
+    for _ in 1 2 3 4 5 6; do
+      ask stale "$ADDRESS$STALE_PAGE"
+      cs="$(cache_status stale)"
+      [[ $cs != HIT ]] || break
+      sleep 1
+    done
+    [[ $cs == HIT ]] || { flunk "$STALE_PAGE was not answered from the edge's copy before the wait: $cs"; break; }
+    age="$(header stale age | tr -cd '0-9')"
+    pause=$((65 - ${age:-0}))
+    (( pause < 1 )) || { say "waiting $pause s for the edge's copy of $STALE_PAGE to pass 60 s"; sleep "$pause"; }
+    ask stale "$ADDRESS$STALE_PAGE"
+    cs="$(cache_status stale)"
+    stale="${stale:+$stale, then }$cs"
+    if [[ $cs == UPDATING || $cs == STALE ]]; then
+      sleep 3
+      ask fresh "$ADDRESS$STALE_PAGE"
+      rec "$STALE_PAGE, its copy over 60 s old, was answered from the stale copy while the edge fetched it again ($cs); three seconds later: $(cache_status fresh), age $(header fresh age | tr -cd '0-9') s"
+      stale=ok
+      break
+    fi
+  done
+  [[ $stale == ok ]] || flunk "$STALE_PAGE, its copy over 60 s old, was not served stale while refreshed: the edge said $stale. The header pair is what to change (docs/acceptance/cache-policy.md)"
+else
+  rec "local: no edge here, so nothing is served stale; the policy that asks for it is the edge's header above"
+fi
+(( ! bad )) || { record_done fail; exit 1; }
+record_done pass

@@ -1,0 +1,177 @@
+#!/bin/bash
+# The Front door's test 6: ten clients at once (check-ins, three streams,
+# a download): no cut, no throttle (spec section 16, Ready item 1).
+#
+#   fd06-ten-clients [--dry-run | --local | --lab] [--mac NAME] [--seconds N] [--job ID] [--records DIR]
+#
+# For N seconds, under a Lease it takes on the Mac, ten clients use the lab
+# at the same time, under the saved login:
+#
+#   - six ask for the Mac's state every two seconds, as lab status does;
+#   - three hold a stream for the whole time: two lab exec of a silent
+#     command, and the event stream, read by the probe;
+#   - one downloads a job's file with lab logs, again and again.
+#
+# Meanwhile the Mac's own lab-agent goes on checking in. Every request must
+# be answered by labd: none refused or challenged by the edge, no stream
+# cut, every download whole. The download's speed alone and in the crowd is
+# written down; it decides nothing here (test 16 measures speed).
+#
+#   --seconds N   how long the ten run: 120 through the Lab address, 40
+#                 against a local labd
+#   --job ID      the job whose file is downloaded (fd05-outside-transfers
+#                 --lab --prepare makes and names it); without it a job is
+#                 run on the Mac first, which leaves that file
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=scripts/cutover/front-door/edge.sh
+. "$FD_HERE/edge.sh"
+usage() { sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+seconds=""
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --seconds) (( $# >= 2 )) || usage; seconds="$2"; shift ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+if [[ -z $seconds ]]; then
+  if [[ $MODE == local ]]; then seconds=40; else seconds=120; fi
+fi
+[[ $seconds =~ ^[1-9][0-9]{0,3}$ ]] || fail "--seconds $seconds is not a number of seconds"
+(( seconds >= 35 && seconds <= 3500 )) || fail "--seconds $seconds: from 35, so that each stream is held past a Keepalive, to 3500"
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login, it would:
+  1. run: lab lease $MAC, then download the file of ${JOB:-a job run for it} once, alone
+  2. for $seconds s, at the same time:
+     six times over, lab status $MAC every 2 s
+     twice, lab exec $MAC 'sleep $seconds; echo fd06-…'
+     once, the event stream, held and read by the probe
+     once, lab logs JOB $JOB_FILE, again and again
+  3. want every request answered by labd, no stream cut, every download whole, and $MAC still checking in
+  4. run: lab release $MAC
+  5. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-06.md
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+edge_workspace
+if [[ $MODE == local ]]; then
+  JOB_FILE_BYTES=$((8 << 20))
+  edge_lab
+  edge_mac
+else
+  logged_in
+fi
+record_start 06 "ten clients at once: no cut, no throttle"
+own_lease
+[[ -n $JOB ]] || transfer_job
+
+# One download alone, for its size and its speed.
+t0="$(now)"
+size="$("$LAB_CMD" logs "$JOB" "$JOB_FILE" 2> "$WORK/alone.err" | wc -c | tr -d ' ')" || true
+[[ ! -s $WORK/alone.err && ${size:-0} -gt 0 ]] || failed "job $JOB's file $JOB_FILE could not be downloaded: $(plain "$WORK/alone.err")"
+alone="$(mbit "$size" "$(calc "$(now) - $t0")")"
+
+end="$(calc "$(now) + $seconds")"
+mark="fd06-$(nonce)"
+pids=()
+
+# A client that asks for the Mac's state every two seconds.
+checker() {
+  local n="$1" asked=0 failed=0
+  while is "$(now) < $end"; do
+    asked=$((asked + 1))
+    "$LAB_CMD" status "$MAC" > /dev/null 2>> "$WORK/check.$n.err" || failed=$((failed + 1))
+    sleep 2
+  done
+  echo "$asked $failed" > "$WORK/check.$n"
+}
+# The client that downloads.
+downloader() {
+  local got count=0 short=0 bytes=0 start
+  start="$(now)"
+  while is "$(now) < $end"; do
+    got="$("$LAB_CMD" logs "$JOB" "$JOB_FILE" 2>> "$WORK/down.err" | wc -c | tr -d ' ')" || true
+    got="${got:-0}"
+    count=$((count + 1))
+    bytes=$((bytes + got))
+    (( got == size )) || short=$((short + 1))
+  done
+  echo "$count $short $bytes $(calc "$(now) - $start")" > "$WORK/down"
+}
+
+for n in 1 2 3 4 5 6; do
+  checker "$n" &
+  pids+=($!)
+done
+for n in 1 2; do
+  "$LAB_CMD" exec --timeout $((seconds + 60)) "$MAC" "sleep $seconds; echo $mark-$n" > "$WORK/exec.$n.out" 2> "$WORK/exec.$n.err" &
+  pids+=($!)
+done
+"$PROBE" held --for "$seconds" events > "$WORK/events.out" 2> "$WORK/events.err" &
+pids+=($!)
+downloader &
+pids+=($!)
+say "ten clients for $seconds s"
+status=()
+for pid in "${pids[@]}"; do
+  code=0
+  wait "$pid" || code=$?
+  status+=("$code")
+done
+
+bad=0
+asked=0
+refused=0
+for n in 1 2 3 4 5 6; do
+  read -r a f < "$WORK/check.$n" || failed "FAIL: one of the six clients ended without a count"
+  asked=$((asked + a))
+  refused=$((refused + f))
+done
+rec "six clients asked for $MAC's state $asked times; $refused went unanswered"
+if (( refused > 0 )); then
+  cat "$WORK"/check.*.err 2>/dev/null | head -n 1 > "$WORK/check.first"
+  rec "FAIL: the first of them: $(plain "$WORK/check.first")"
+  bad=1
+fi
+for n in 1 2; do
+  if [[ ${status[$((5 + n))]} == 0 ]] && grep -q "$mark-$n" "$WORK/exec.$n.out"; then
+    rec "lab exec $n, silent for $seconds s, came back with its output"
+  else
+    rec "FAIL: lab exec $n was cut or failed: $(plain "$WORK/exec.$n.err")"
+    bad=1
+  fi
+done
+events="$WORK/events.out"
+if [[ "$(fact "$events" ended)" == held ]] && (( $(fact "$events" keepalives) >= seconds / 15 )); then
+  rec "the event stream was held $(fact "$events" seconds) s, with $(fact "$events" keepalives) lines of its own 15 s Keepalive"
+else
+  rec "FAIL: the event stream ended as \"$(fact "$events" ended)\" after $(fact "$events" seconds) s with $(fact "$events" keepalives) Keepalive lines (HTTP $(fact "$events" status)) $(fact "$events" said)"
+  bad=1
+fi
+read -r count short bytes took < "$WORK/down" || failed "FAIL: the downloading client ended without a count: $(plain "$WORK/down.err")"
+crowd="$(mbit "$bytes" "$took")"
+if (( short == 0 && count > 0 )); then
+  rec "the download ran $count times, each whole ($size bytes): $crowd Mbit/s in the crowd, $alone Mbit/s alone"
+else
+  rec "FAIL: $short of $count downloads came short of $size bytes: $(plain "$WORK/down.err")"
+  bad=1
+fi
+"$PROBE" mac "$MAC" > "$WORK/mac.out" 2> "$WORK/mac.err" || true
+if [[ "$(fact "$WORK/mac.out" alive)" == true ]]; then
+  rec "$MAC went on checking in"
+else
+  rec "FAIL: $MAC is not checking in after the ten: $(fact "$WORK/mac.out" said)"
+  bad=1
+fi
+give_back
+(( ! bad )) || { record_done fail; exit 1; }
+record_done pass

