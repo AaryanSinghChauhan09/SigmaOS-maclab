@@ -1,7 +1,7 @@
 ------------------------------ MODULE LabBoot ------------------------------
 (***************************************************************************)
 (* One Lab boot of a Lab-owned Mac, from labd sending boot_once to labd    *)
-(* putting the Mac back on its Known-good kernel (CONTEXT.md's terms).     *)
+(* putting the Mac back on its Known-good kernel (GLOSSARY.md's terms).     *)
 (*                                                                         *)
 (* The actors are labd (internal/server/runner.go, recover.go, device.go), *)
 (* lab-agent on the arming boot and on the Lab boot (internal/agent/       *)
@@ -1061,7 +1061,7 @@ BoundedFirmwareWrites == nvWrites <= 3
 OneFirmwareWrite == nvWrites <= 1
 
 \* labd asks a person to power cycle the Mac only when it can't come back by
-\* itself (CONTEXT.md, Needs hands). A running Lab boot always can: its
+\* itself (GLOSSARY.md, Needs hands). A running Lab boot always can: its
 \* ceiling, and the agent's watchdog, reboot it to the Known-good kernel.
 HandsOnlyWhenStuck ==
     devState = "needs_hands" => ~(kernel = "Test" /\ mac = "running")

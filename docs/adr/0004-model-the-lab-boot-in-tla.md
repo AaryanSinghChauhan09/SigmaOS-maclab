@@ -6,7 +6,7 @@ status: accepted
 
 The Lab boot's bugs have been in how labd, lab-agent, the firmware and Omarchy's own tools interleave, not in any one function. limine-snapper-sync dropped the lab's block between the arm and the reboot (18b9311). A failed re-arm left the one-shot set while labd heard the arm had failed (b804c41). The agent's watchdog beat the No-contact deadline (2f2e337). A test ending fed the watchdog past the point labd had asked for hands (953652a). A canceled job left the Mac on its test kernel (1995466). Each was found on a real Mac, or by lab-loop, after it had shipped. Unit tests check the interleavings someone thought of, so we decided to state what a Lab boot must guarantee as a TLA+ specification (`specs/labboot/LabBoot.tla`) and have TLC check every interleaving of a small model. `make spec` runs it, and so does CI.
 
-The spec's terms are CONTEXT.md's. Each fix in the list above can be undone in the model with a name in `Bugs`, and CI requires TLC to find the bug again, so the spec is shown to catch the bugs we have already had. What the model says today's code still gets wrong lives in `open-*` models that must fail until it is fixed.
+The spec's terms are GLOSSARY.md's. Each fix in the list above can be undone in the model with a name in `Bugs`, and CI requires TLC to find the bug again, so the spec is shown to catch the bugs we have already had. What the model says today's code still gets wrong lives in `open-*` models that must fail until it is fixed.
 
 ## Considered options
 

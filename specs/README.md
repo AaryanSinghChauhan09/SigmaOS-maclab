@@ -27,7 +27,7 @@ The properties, named as in the module:
 | `NoContactBeforeWatchdog` | the No-contact deadline, not the agent's watchdog, ends a Lab boot that never reached labd | 2f2e337 |
 | `WatchdogIdleFromLabd` | outside a test, a Lab boot that lost labd is reset `watchdogIdle` after the last sign of labd, no later | 953652a |
 | `BoundedFirmwareWrites`, `OneFirmwareWrite` | NVRAM and U-Boot's file see one one-shot write per Lab boot, however long labd is out of reach | b804c41 |
-| `HandsOnlyWhenStuck` | labd asks for hands only when the Mac can't come back by itself (CONTEXT.md, Needs hands) | 1b269f5, 10f4ab6, c478594, 4a5a608 |
+| `HandsOnlyWhenStuck` | labd asks for hands only when the Mac can't come back by itself (GLOSSARY.md, Needs hands) | 1b269f5, 10f4ab6, c478594, 4a5a608 |
 | `Terminates` | labd finishes the job before the model's clock runs out | |
 
 Each model in `labboot/models/` says on its `\* expect:` line how TLC must end, and `check.sh` fails the build otherwise:

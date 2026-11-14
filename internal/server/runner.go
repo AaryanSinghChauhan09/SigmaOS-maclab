@@ -1012,7 +1012,7 @@ func (r *jobRun) addRecovery(steps []string) {
 // none: that is the next rung. Without one the next rung is a person, so labd
 // waits until lab-agent's watchdog has reset the boot (idleReset after the
 // last sign of labd) and a boot timeout more for the known-good boot: a
-// person is asked only for a Mac that can't come back by itself (CONTEXT.md,
+// person is asked only for a Mac that can't come back by itself (GLOSSARY.md,
 // Needs hands).
 //
 // A Mac labd still hears gets none either: its watchdog is fed, and the
