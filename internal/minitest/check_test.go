@@ -221,11 +221,18 @@ func TestOneRunSetsTheWholeMachineUp(t *testing.T) {
 		}
 	}
 
-	// Safe to run again, with or without what was brought.
+	// Safe to run again, without what was brought or with the very same
+	// line: what the first run took is gone from where the owner left it.
 	os.Remove(w.log)
-	for _, args := range [][]string{{}, {"--dry-run"}} {
+	for _, args := range [][]string{{}, {"--dry-run"}, w.flags} {
 		if out := w.ok("setup", args...); !strings.Contains(out, "setup: nothing to change") {
 			t.Errorf("a second run (%v) changed something:\n%s", args, out)
+		}
+	}
+	again := w.ok("setup", w.flags...)
+	for _, want := range []string{"the tunnel's credential is in place", "the Builder's token is in place", "every key of the backups is in place", "every check's address is in place", "the mini's place on the tailnet is in place"} {
+		if !strings.Contains(again, want+": a run before this one took it") {
+			t.Errorf("given the same line again, the set-up does not say that %s:\n%s", want, again)
 		}
 	}
 	for _, call := range []string{"bootstrap", "bootout", "brew install", "installer", " up ", "defaults write", "pmset -a", "-setairportpower"} {

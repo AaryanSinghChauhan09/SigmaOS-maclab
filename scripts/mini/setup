@@ -114,6 +114,42 @@ while (( $# )); do
 done
 (( DRY )) || need_root
 [[ -f $deploy/homebrew-formulae && -f $deploy/pins ]] || fail "no deploy/ folder beside scripts/: run the set-up from an unpacked bundle or from the repository"
+
+# A run that stopped part of the way has already taken some of what was
+# brought, and removed it from where the owner left it. Given the same line
+# again, the set-up leaves out what is in place rather than stop on a file
+# that is gone.
+taken() { say "$1 is gone and $2 is in place: a run before this one took it"; }
+
+# all_taken FOLDER PLACE NAME...: FOLDER holds none of the names and PLACE
+# holds every one.
+all_taken() {
+  local from="$1" to="$2" name
+  shift 2
+  [[ -d $from ]] || return 1
+  for name in "$@"; do
+    [[ ! -e $from/$name && ! -L $from/$name && -s $to/$name ]] || return 1
+  done
+}
+
+if [[ -n $credential && ! -e $credential && ! -L $credential && -s $TUNNEL_TOKEN ]]; then
+  taken "$credential" "the tunnel's credential"
+  credential=""
+fi
+if [[ -n $builder_token && ! -e $builder_token && ! -L $builder_token && -s $BUILDER_TOKEN ]]; then
+  taken "$builder_token" "the Builder's token"
+  builder_token=""
+fi
+# shellcheck disable=SC2086
+if [[ -n $keys ]] && all_taken "$keys" "$BACKUP_KEYS" $BACKUP_KEYS_HOUSE $BACKUP_KEYS_OFFSITE; then
+  taken "what $keys held" "every key of the backups"
+  keys=""
+fi
+# shellcheck disable=SC2086
+if [[ -n $checks ]] && all_taken "$checks" "$CHECKS" $CHECK_NAMES; then
+  taken "what $checks held" "every check's address"
+  checks=""
+fi
 if [[ -n $key ]]; then
   [[ -f $key ]] || fail "no file $key"
   grep -Eq "^$RELEASE_SIGNER .*(ssh-|ecdsa-|sk-)[a-z0-9@.-]+ AAAA" "$key" || fail "$key holds no key for $RELEASE_SIGNER: it is not an allowed_signers file of the release key"
@@ -200,6 +236,11 @@ case "$builder_cpus" in
   "" | 10 | 8 | 6) ;;
   *) fail "--builder-cpus $builder_cpus: a build gets 10 cores, or 8 or 6" ;;
 esac
+if [[ -n $tailscale_key && ! -e $tailscale_key && ! -L $tailscale_key && -x $TAILSCALE ]] &&
+  [[ "$("$TAILSCALE" --socket="$TAILSCALED_SOCKET" status --json 2>/dev/null | jq -r '.BackendState // ""' 2>/dev/null)" == Running ]]; then
+  taken "$tailscale_key" "the mini's place on the tailnet"
+  tailscale_key=""
+fi
 if [[ -n $tailscale_key ]]; then
   [[ -f $tailscale_key && ! -L $tailscale_key ]] || fail "$tailscale_key is no plain file"
   case "$(looks "$tailscale_key")" in

@@ -103,7 +103,7 @@ unsealed() {
 }
 
 daemons() {
-  local pair label account plist user prog real open out pid who
+  local pair label account plist user prog real open out pid who files
   echo "The lab's daemons, each under its account and run from where only $ROOT_OWNER can write:"
   for pair in $LAB_DAEMONS; do
     label="${pair%%:*}" account="${pair##*:}"
@@ -161,7 +161,8 @@ daemons() {
       bad "$label (pid $pid) runs as ${who:-an account ps does not name}; the spec's table says $account"
       continue
     fi
-    if sys lsof -nP -p "$pid" 2>/dev/null | grep -q /opt/homebrew; then
+    files="$(sys lsof -nP -p "$pid" 2>/dev/null)"
+    if [[ $files == */opt/homebrew* ]]; then
       bad "$label (pid $pid) has a file under /opt/homebrew loaded"
       continue
     fi

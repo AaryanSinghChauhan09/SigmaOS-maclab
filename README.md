@@ -688,6 +688,27 @@ of every report published so far.
 A Mac enrolled with `./volunteer` (see [Volunteer a Mac](#volunteer-a-mac)) is a
 Volunteer's too, named and reached by the tailnet login that ran it.
 
+### The mini's set-up and its check
+
+`sudo scripts/mini/setup` sets the whole machine up in one run, in the order
+of the spec's "Changes to make on the mini": the `lab` account and its
+folders; the Homebrew formulae of `deploy/homebrew-formulae`, installed as
+the account Homebrew belongs to and copied into `/usr/local/lab/tools`, which
+only root can write and every daemon runs from; `container` at its pin; each
+LaunchDaemon under its account; `tailscaled` in place of the Tailscale
+Standalone app, under the lab's own LaunchDaemon file and joined tagged
+`tag:lab`; Wi-Fi off; SSH with keys only after Unlock; no update that
+restarts by itself; `autorestart 1` and `sleep 0`. `--dry-run` says what
+would change. A run changes only what is not yet right, so a run that
+stopped is finished by the next one, and what it cannot do yet (no Deployed
+build, a key not brought) it names and passes over.
+
+`sudo scripts/mini/check` reads the result and changes nothing: every
+daemon's account, program and loaded files, the two copies of the tools,
+the formulae's versions, the pins, the tailnet, SSH, Screen Sharing, Wi-Fi,
+Software Update, power, and that no process has a secret in its arguments.
+It exits 1 when anything is not as the set-up leaves it.
+
 ### Out-of-band control on the mini
 
 One Out-of-band controller, `oobd`, runs on the mini as a root LaunchDaemon

@@ -190,7 +190,9 @@ sys() {
 formulae() { sed -e 's/#.*//' "$deploy/homebrew-formulae" | awk 'NF { print $1 }'; }
 
 # wifi_device: the Wi-Fi port's device, or nothing on a Mac with none.
-wifi_device() { sys networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: Wi-Fi/ { getline; print $2; exit }'; }
+# (awk reads to the end: a tool cut off in the middle of its answer would
+# fail the pipe.)
+wifi_device() { sys networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: Wi-Fi/ { getline; if (!seen) print $2; seen = 1 }'; }
 
 # wired_address: the address of the first wired port that has one.
 wired_address() {
@@ -213,7 +215,7 @@ sshd_says() {
 }
 
 # power_value KEY: one of pmset's settings in use.
-power_value() { sys pmset -g 2>/dev/null | awk -v key="$1" '$1 == key { print $2; exit }'; }
+power_value() { sys pmset -g 2>/dev/null | awk -v key="$1" '$1 == key && !seen { print $2; seen = 1 }'; }
 
 # loaded LABEL: whether launchd has that daemon.
 loaded() { launchctl print "system/$1" >/dev/null 2>&1; }
