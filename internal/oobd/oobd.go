@@ -37,6 +37,9 @@ type Tool interface {
 // Ports reads what this machine sees on a port, touching nothing.
 type Ports interface {
 	Read(ctx context.Context, rid int) (oob.Port, error)
+	// Look is Read without the Mac's name, which is slow to read: what a
+	// reset compares the moment before it is sent.
+	Look(ctx context.Context, rid int) (oob.Port, error)
 }
 
 type Config struct {
@@ -197,7 +200,7 @@ func (s *Server) hReset(w http.ResponseWriter, r *http.Request, rid int) {
 		return
 	}
 	if want != nil {
-		p, err := s.cfg.Ports.Read(r.Context(), rid)
+		p, err := s.cfg.Ports.Look(r.Context(), rid)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return

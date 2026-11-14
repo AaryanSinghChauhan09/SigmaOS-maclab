@@ -28,27 +28,43 @@ func DefaultPorts() SystemPorts {
 func (sp SystemPorts) Read(ctx context.Context, rid int) (oob.Port, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, sp.Ioreg, "-l", "-w0", "-r", "-c", "AppleHPM").Output()
-	if err != nil {
-		return oob.Port{}, fmt.Errorf("reading the ports with %s: %v", sp.Ioreg, err)
-	}
-	h, ok := parsePorts(string(out))[rid]
-	if !ok {
-		return oob.Port{}, fmt.Errorf("this machine has no port with RID %d", rid)
-	}
-	p := oob.Port{RID: rid, Connected: h.connected, ProductID: h.productID, PlugCount: h.plugCount}
-	if !h.connected {
-		p.ProductID = 0
-		return p, nil
+	p, receptacle, err := sp.look(ctx, rid)
+	if err != nil || !p.Connected {
+		return p, err
 	}
 	// A port with no name is still a port: a Mac that is hung, off or on a
 	// USB 2 link shows none.
 	if out, err := exec.CommandContext(ctx, sp.Profiler, "SPThunderboltDataType", "-json").Output(); err == nil {
 		if names, err := peerNames(out); err == nil {
-			p.Name = names[h.receptacle]
+			p.Name = names[receptacle]
 		}
 	}
 	return p, nil
+}
+
+func (sp SystemPorts) Look(ctx context.Context, rid int) (oob.Port, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	p, _, err := sp.look(ctx, rid)
+	return p, err
+}
+
+// look is the one read of ioreg: the port, and the receptacle its name
+// would be found on.
+func (sp SystemPorts) look(ctx context.Context, rid int) (oob.Port, int, error) {
+	out, err := exec.CommandContext(ctx, sp.Ioreg, "-l", "-w0", "-r", "-c", "AppleHPM").Output()
+	if err != nil {
+		return oob.Port{}, 0, fmt.Errorf("reading the ports with %s: %v", sp.Ioreg, err)
+	}
+	h, ok := parsePorts(string(out))[rid]
+	if !ok {
+		return oob.Port{}, 0, fmt.Errorf("this machine has no port with RID %d", rid)
+	}
+	p := oob.Port{RID: rid, Connected: h.connected, ProductID: h.productID, PlugCount: h.plugCount}
+	if !h.connected {
+		p.ProductID = 0
+	}
+	return p, h.receptacle, nil
 }
 
 // hpmPort is one USB-C port controller as ioreg shows it.

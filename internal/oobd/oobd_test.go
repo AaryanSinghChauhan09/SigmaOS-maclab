@@ -85,6 +85,12 @@ func (f *fakePorts) Read(ctx context.Context, rid int) (oob.Port, error) {
 	return p, nil
 }
 
+func (f *fakePorts) Look(ctx context.Context, rid int) (oob.Port, error) {
+	p, err := f.Read(ctx, rid)
+	p.Name = ""
+	return p, err
+}
+
 func (f *fakePorts) set(p oob.Port) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

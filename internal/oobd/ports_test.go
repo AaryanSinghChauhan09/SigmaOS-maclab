@@ -2,6 +2,10 @@ package oobd
 
 import (
 	"context"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -134,5 +138,40 @@ func TestThisMachinesOwnPortsAreRead(t *testing.T) {
 		if err != nil || got.RID != rid || got.Connected != p.connected {
 			t.Errorf("RID %d: %+v, %v", rid, got, err)
 		}
+	}
+}
+
+// The reset's last look is one read of the port and the tool right after it:
+// the name is not read in between, which may take half a minute with a hung
+// Mac on the bus, long enough for a cable to move.
+func TestAResetsLastLookReadsNoName(t *testing.T) {
+	sp := stubs(t)
+	tool := &fakeTool{}
+	s, err := New(Config{Token: testToken, Tool: tool, Ports: sp}, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	r := &rig{t: t, srv: srv}
+	if code, body := r.do("POST", "/v1/ports/2/reset", testToken, `{"product_id":29448,"plug_count":40}`); code != 200 {
+		t.Fatalf("reset of a port as it was seen: %d %s", code, body)
+	}
+	if code, body := r.do("POST", "/v1/ports/2/reset", testToken, `{"product_id":29448,"plug_count":39}`); code != http.StatusConflict {
+		t.Fatalf("reset of a port plugged again: %d %s", code, body)
+	}
+	if runs := tool.seen(); len(runs) != 1 || runs[0] != (toolRun{2, "reboot"}) {
+		t.Fatalf("the tool ran %v, want the one reset", runs)
+	}
+	if n := strings.Count(testdataArgs(t, sp.Ioreg), "\n"); n != 2 {
+		t.Errorf("ioreg ran %d times, want once for each reset", n)
+	}
+	if args := testdataArgs(t, sp.Profiler); args != "" {
+		t.Errorf("the name was read before a reset:\n%s", args)
+	}
+	// The status still names the Mac.
+	code, body := r.do("GET", "/v1/ports/2/status", testToken, "")
+	if code != 200 || !strings.Contains(body, `"omarchy-m1-pro"`) {
+		t.Errorf("status: %d %s", code, body)
 	}
 }
