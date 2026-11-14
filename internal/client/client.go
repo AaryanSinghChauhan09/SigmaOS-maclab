@@ -105,6 +105,9 @@ type Device struct {
 	Alive  bool              `json:"alive"`
 	Queued int               `json:"queued"`
 	Events []api.KernelEvent `json:"recent_events,omitempty"`
+	// Cable is a Lab-owned Mac's place on the lab server's cables; nil for
+	// a Volunteer's Mac.
+	Cable *api.Cable `json:"cable,omitempty"`
 }
 
 func (c *Client) Devices(ctx context.Context) ([]Device, error) {

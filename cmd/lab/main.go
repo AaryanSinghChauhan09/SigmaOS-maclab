@@ -91,9 +91,14 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
                                       needs that Mac's own passed Installed run; refused on a Volunteer's Mac
   lab installed status --release R                   the Release's Macs, runs and verdict history, and its frozen files
                                       verdict and promote say what they are about to do and ask once; --yes answers
-  lab reset <device>                  run the recovery ladder on an idle Mac by hand; a Mac that left
-                                      (lab-agent uninstall) goes back in the lab first
-  lab oob <device>
+  lab reset <device>                  Hard reset a Lab-owned Mac through its cable to the lab server: a Maintainer,
+                                      or the holder of a Lease on it. Refused for a Mac the lab cannot place, and
+                                      for a Volunteer's Mac. A Mac that left (lab-agent uninstall) goes back in first
+  lab reset <device> --prove left|middle|right
+                                      a Proving reset (Maintainers): reset that port of the lab server to place a
+                                      Mac the lab has no Sighting of. It counts only if that Mac returns and every
+                                      other Mac keeps its boot id
+  lab oob <device>                    its cable: sighted, not sighted or no cable, and what the ports show
   lab audit <device>                  labd's copy of a Volunteer's Mac's Audit log: every Maintainer action on it
   lab upload <file> [--for <mac>]     to the artifact store, in 32 MiB parts; cut, the same command resumes
   lab mcp                             MCP server on stdio, for AI agents
@@ -720,9 +725,18 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		return c.Release(ctx, pos[0], *who)
 
 	case "reset":
+		prove := fs.String("prove", "", "a Proving reset of this port of the lab server: left, middle or right, facing its back (Maintainers)")
 		pos := parse(fs, args)
-		if err := need(pos, 1, "lab reset <device>"); err != nil {
+		if err := need(pos, 1, "lab reset <device> [--prove left|middle|right]"); err != nil {
 			return err
+		}
+		if *prove != "" {
+			p, err := c.ProvingReset(ctx, pos[0], *prove)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s is placed on the %s port: it returned on a new boot and every other Mac kept its boot id\n", p.Device, p.Port)
+			return nil
 		}
 		out, err := c.Reset(ctx, pos[0], holder())
 		fmt.Print(out)
@@ -758,13 +772,11 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		if err := need(pos, 1, "lab oob <device>"); err != nil {
 			return err
 		}
-		st, err := c.OOBStatus(ctx, pos[0])
+		st, err := c.Cable(ctx, pos[0])
 		if err != nil {
 			return err
 		}
-		for k, v := range st {
-			fmt.Printf("%s: %v\n", k, v)
-		}
+		showCable(os.Stdout, st)
 		return nil
 
 	case "upload":
@@ -1065,13 +1077,13 @@ func showDevices(ctx context.Context, c *client.Client) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "DEVICE\tSTATE\tTIER\tKERNEL\tLAST SEEN\tJOB\tLEASE")
+	fmt.Fprintln(w, "DEVICE\tSTATE\tTIER\tCABLE\tKERNEL\tLAST SEEN\tJOB\tLEASE")
 	for _, d := range devs {
 		lease := ""
 		if d.Lease != nil {
 			lease = d.Lease.Who()
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\n", d.Name, d.State, d.Tier, d.Kernel, ago(d.LastSeen), d.ActiveJob, lease)
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.State, d.Tier, cableWord(d.Cable), d.Kernel, ago(d.LastSeen), d.ActiveJob, lease)
 	}
 	w.Flush()
 	for _, d := range devs {
@@ -1089,6 +1101,57 @@ func showDevices(ctx context.Context, c *client.Client) error {
 		}
 	}
 	return nil
+}
+
+// cableWord is a Mac's cable in the fleet's table: sighted, not sighted or
+// no cable for a Lab-owned Mac, and whether a Hard reset can reach it.
+func cableWord(c *api.Cable) string {
+	switch {
+	case c == nil:
+		return "-"
+	case c.State == api.CableSighted && c.NoHardReset != "":
+		return c.State + " (" + c.Port + "), no Hard reset"
+	case c.State == api.CableSighted:
+		return c.State + " (" + c.Port + ")"
+	}
+	return c.State
+}
+
+// showCable prints what `lab oob <mac>` shows.
+func showCable(w io.Writer, st *api.OOBStatus) {
+	if st.Cable == nil {
+		fmt.Fprintf(w, "%s: a Volunteer's Mac: no cable joins it to the lab server, and it never gets a Hard reset\n", st.Device)
+		return
+	}
+	fmt.Fprintf(w, "%s: %s\n", st.Device, st.Cable)
+	if !st.Cable.Since.IsZero() {
+		fmt.Fprintf(w, "  since:       %s\n", st.Cable.Since.Local().Format("2006-01-02 15:04:05"))
+	}
+	if st.Cable.NoHardReset != "" {
+		fmt.Fprintf(w, "  hard reset:  none: %s\n", st.Cable.NoHardReset)
+	} else {
+		fmt.Fprintf(w, "  hard reset:  through the %s port (`lab reset %s`)\n", st.Cable.Port, st.Device)
+	}
+	if st.Controller != "" {
+		fmt.Fprintf(w, "  controller:  %s\n", st.Controller)
+	}
+	for _, p := range st.Ports {
+		what := "nothing connected"
+		if p.Connected {
+			what = fmt.Sprintf("connected, product id %d, plug count %d", p.ProductID, p.PlugCount)
+			if p.Name != "" {
+				what += ", shows the name " + p.Name
+			} else {
+				what += ", shows no name"
+			}
+			if p.Mac != "" {
+				what += ": " + p.Mac
+			} else {
+				what += ": no Sighting"
+			}
+		}
+		fmt.Fprintf(w, "  %-12s %s\n", p.Port+":", what)
+	}
 }
 
 func showDevice(ctx context.Context, c *client.Client, name string) error {
@@ -1126,8 +1189,11 @@ func showDevice(ctx context.Context, c *client.Client, name string) error {
 	fmt.Printf("  last seen:   %s, uptime %.0fs, systemd %s\n", ago(d.LastSeen), d.Health.Uptime, d.Health.SystemState)
 	tiers := []string{"panic reboot + one-shot fallback", "+ hardware watchdog", "+ out-of-band reset"}
 	fmt.Printf("  recovery:    tier %d (%s)\n", d.Tier, tiers[d.Tier])
-	if d.OOB != nil {
-		fmt.Printf("  oob:         %s\n", d.OOB.URL)
+	if d.Cable != nil {
+		fmt.Printf("  cable:       %s\n", d.Cable)
+		if d.Cable.NoHardReset != "" {
+			fmt.Printf("  hard reset:  none: %s\n", d.Cable.NoHardReset)
+		}
 	}
 	if d.Lease != nil {
 		fmt.Printf("  lease:       %s until %s\n", d.Lease.Who(), d.Lease.Expires.Format(time.TimeOnly))

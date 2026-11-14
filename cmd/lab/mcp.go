@@ -302,8 +302,16 @@ func serveMCP(ctx context.Context) error {
 			}
 			return text("released"), nil, c.Release(ctx, a.Device, who)
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "lab_reset", Description: "Run the recovery ladder on an idle Mac that is wedged or offline (soft reboot, hard reset, then ask a human). A Mac that left the lab (lab-agent uninstall) goes back in it first."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, a devArg) (*mcp.CallToolResult, any, error) {
+	type resetArg struct {
+		Device string `json:"device"`
+		Prove  string `json:"prove,omitempty" jsonschema:"a Proving reset (Maintainers only): reset this port of the lab server, left, middle or right, to place a Mac the lab has no Sighting of. Only when a person asks for it: it restarts whatever Mac is on that port"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_reset", Description: "Hard reset a Lab-owned Mac that is wedged or offline, through its cable to the lab server: a Maintainer, or the holder of a Lease on it. Refused for a Mac the lab cannot place (lab_device says why, under cable) and for a Volunteer's Mac. If the Mac does not return, the lab sends one more and then asks a person. A Mac that left the lab (lab-agent uninstall) goes back in it first."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a resetArg) (*mcp.CallToolResult, any, error) {
+			if a.Prove != "" {
+				p, err := c.ProvingReset(ctx, a.Device, a.Prove)
+				return text(p), nil, err
+			}
 			out, err := c.Reset(ctx, a.Device, who)
 			return text(out), nil, err
 		})
