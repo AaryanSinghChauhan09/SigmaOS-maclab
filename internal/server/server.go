@@ -163,9 +163,7 @@ type Server struct {
 
 	// leaseMu makes taking a Lease one step: the count of a person's Leases
 	// per Configuration is read on other Macs than the one leased.
-	leaseMu     sync.Mutex
-	mteamForNow sync.Map // account id: the M team's mark, until People keeps it (lease_who.go)
-	lentForNow  sync.Map // Mac name: its Volunteer's account id, until a Mac carries it (lease_who.go)
+	leaseMu sync.Mutex
 }
 
 // clock is where labd reads time: Config.Clock, or the wall clock when unset.

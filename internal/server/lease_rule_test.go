@@ -183,7 +183,7 @@ func TestOnlyTheMTeamAndMaintainersTakeALease(t *testing.T) {
 	l.signedIn(nobodyID).refusedLease("m1-pro", "x@y", 0, http.StatusForbidden, "no role", "M team")
 	// The rule itself refuses whoever is neither, whatever let them in.
 	v := l.s.dev("m1-pro")
-	if _, err := l.s.takeLease(v, asker{AccountID: nobodyID, Handle: "nobody-yet"}, "x@y", 0); err == nil || statusOf(err) != http.StatusForbidden {
+	if _, err := l.s.takeLease(v, Person{AccountID: nobodyID, Handle: "nobody-yet"}, "x@y", 0); err == nil || statusOf(err) != http.StatusForbidden {
 		t.Errorf("the Lease rule for a person with no role: %v", err)
 	}
 	if q := l.leaseOn("m1-pro"); q != nil {
@@ -553,11 +553,23 @@ func TestTheDailySummaryCarriesConfigurationsAndLeaseHolders(t *testing.T) {
 }
 
 // lrMark and lrUnmark set and take the M team's mark.
-func (l *signInLab) lrMark(id int64)   { l.s.mteamForNow.Store(id, true) }
-func (l *signInLab) lrUnmark(id int64) { l.s.mteamForNow.Delete(id) }
+func (l *signInLab) lrMark(id int64)   { l.lrSetMark(id, true) }
+func (l *signInLab) lrUnmark(id int64) { l.lrSetMark(id, false) }
+
+func (l *signInLab) lrSetMark(id int64, on bool) {
+	l.t.Helper()
+	if err := l.s.store.setMark(id, "m_team", on); err != nil {
+		l.t.Fatal(err)
+	}
+}
 
 // lrLend makes the account the Mac's Volunteer.
-func (l *signInLab) lrLend(mac string, id int64) { l.s.lentForNow.Store(mac, id) }
+func (l *signInLab) lrLend(mac string, id int64) {
+	v := l.s.dev(mac)
+	v.mu.Lock()
+	v.d.VolunteerID = id
+	v.mu.Unlock()
+}
 
 // passedBaseline has the lab's Mac count as one that passed its baseline,
 // for a test that leases it and runs no job: only such a Mac takes a Lease.

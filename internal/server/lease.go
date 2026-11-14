@@ -22,13 +22,47 @@ const (
 	leaseLongest = 24 * time.Hour
 )
 
-// leaseIsOf is whether l is a's Lease, whatever its holder label: by account
-// id, and for a Lease taken before labd kept people, by the name recorded.
-func leaseIsOf(l *api.Lease, a asker) bool {
-	if l.AccountID != 0 {
-		return l.AccountID == a.AccountID
+// leaser is the person r asks about a Lease as, by Lab token or browser
+// session; nobody for neither, who takes no Lease.
+func leaser(r *http.Request) Person {
+	if p := credentialOf(r); p != nil {
+		return *p
 	}
-	return l.Owner() != "" && l.Owner() == a.Handle
+	return Person{}
+}
+
+// teamUp admits a Maintainer or an M team member: the routes of a Lease.
+// The request ends when the role or the mark goes, or the session or the
+// Lab token it came with.
+func (s *Server) teamUp(h http.HandlerFunc) http.HandlerFunc {
+	const need = "a Lease is for the M team and Maintainers"
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch a, who := s.access(r); a {
+		case adminAccess:
+			s.asMaintainer(w, r, who, h)
+		case teamAccess:
+			s.asSignedIn(w, r, teamKey{}, h)
+		case ownAccess:
+			httpErr(w, 403, "@%s lends a Mac and sees their own Macs; %s", who, need)
+		case signedInAccess:
+			httpErr(w, 403, "@%s is signed in with no role in the lab; %s", who, need)
+		case viewAccess:
+			httpErr(w, 403, "%s may only look; %s", who, need)
+		case blockedAccess:
+			httpErr(w, 403, "%s", blockedSentence)
+		default:
+			s.noCredential(w, r)
+		}
+	}
+}
+
+// leaseIsOf is whether l is p's Lease, whatever its holder label: by account
+// id, and for a Lease taken before labd kept people, by the name recorded.
+func leaseIsOf(l *api.Lease, p Person) bool {
+	if l.AccountID != 0 {
+		return l.AccountID == p.AccountID
+	}
+	return l.Owner() != "" && l.Owner() == p.Handle
 }
 
 // liveLeaseLocked is the Mac's Lease while it runs, else nil. Caller holds
@@ -48,12 +82,12 @@ func (s *Server) leased(v *dev) bool {
 	return v.liveLeaseLocked() != nil
 }
 
-// holdsLease is whether a holds the Lease on v now, under any holder label.
-func (s *Server) holdsLease(v *dev, a asker) bool {
+// holdsLease is whether p holds the Lease on v now, under any holder label.
+func (s *Server) holdsLease(v *dev, p Person) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	l := v.liveLeaseLocked()
-	return l != nil && leaseIsOf(l, a)
+	return l != nil && leaseIsOf(l, p)
 }
 
 // leaseAsked is what the Lease rule found for a person asking for a Lease
@@ -64,15 +98,15 @@ type leaseAsked struct {
 	warning string
 }
 
-// mayLease is the Lease rule for a taking or renewing a Lease on v under
+// mayLease is the Lease rule for p taking or renewing a Lease on v under
 // this holder label: a refusal, or what was found. Only a Maintainer or an
 // M team member; only a Mac that passed its baseline and has not left; a
 // Volunteer's Mac only inside its Availability window, at either Access
 // level; not while someone else holds it; and one Lease per Configuration
 // for an M team member, where a Maintainer is only warned.
-func (s *Server) mayLease(v *dev, a asker, holder string) (leaseAsked, error) {
+func (s *Server) mayLease(v *dev, p Person, holder string) (leaseAsked, error) {
 	var found leaseAsked
-	if !a.Maintainer && !a.MTeam {
+	if !p.OnMTeam() {
 		return found, refuse(403, "a Lease is for the M team and Maintainers")
 	}
 	v.mu.Lock()
@@ -85,7 +119,7 @@ func (s *Server) mayLease(v *dev, a asker, holder string) (leaseAsked, error) {
 		err = refuse(409, "%s has not passed its baseline yet, so it takes no Lease", name)
 	case v.d.IsVolunteer() && v.openUntilLocked().IsZero():
 		err = refuse(409, "%s's Availability window is closed: a Lease on a Volunteer's Mac lasts only inside it", name)
-	case l != nil && !(leaseIsOf(l, a) && l.Holder == holder):
+	case l != nil && !(leaseIsOf(l, p) && l.Holder == holder):
 		err = refuse(409, "%s is leased by %s until %s", name, l.Who(), l.Expires.Format(time.TimeOnly))
 	case l != nil:
 		found.renews = true
@@ -94,22 +128,22 @@ func (s *Server) mayLease(v *dev, a asker, holder string) (leaseAsked, error) {
 	if err != nil || found.renews {
 		return found, err
 	}
-	if held, same := s.heldOfConfiguration(v, a); held != "" {
-		if !a.Maintainer {
-			return found, refuse(409, "@%s already holds a Lease on %s: one Lease per Configuration for an M team member. Release %s first", a.Handle, same, held)
+	if held, same := s.heldOfConfiguration(v, p); held != "" {
+		if !p.isMaintainer() {
+			return found, refuse(409, "@%s already holds a Lease on %s: one Lease per Configuration for an M team member. Release %s first", p.Handle, same, held)
 		}
 		found.warning = "you already hold a Lease on " + same + "; an M team member would be refused a second"
 	}
 	return found, nil
 }
 
-// heldOfConfiguration names a Mac other than v that a leases now and that
-// counts as v's Configuration, and says in what way it does; "" when a
+// heldOfConfiguration names a Mac other than v that p leases now and that
+// counts as v's Configuration, and says in what way it does; "" when p
 // holds none.
-func (s *Server) heldOfConfiguration(v *dev, a asker) (held, same string) {
+func (s *Server) heldOfConfiguration(v *dev, p Person) (held, same string) {
 	mine := s.configuration(v)
 	for _, o := range s.allDevs() {
-		if o == v || !s.holdsLease(o, a) {
+		if o == v || !s.holdsLease(o, p) {
 			continue
 		}
 		theirs := s.configuration(o)
@@ -125,11 +159,11 @@ func (s *Server) heldOfConfiguration(v *dev, a asker) (held, same string) {
 	return "", ""
 }
 
-// takeLease takes a Lease on v for a, or renews the one a holds under this
+// takeLease takes a Lease on v for p, or renews the one p holds under this
 // holder label, for ttl; 0 is leaseDefault. On a Volunteer's Mac it is cut
 // to the window's end. The Lease it returns carries the warning, which is
 // not kept.
-func (s *Server) takeLease(v *dev, a asker, holder string, ttl time.Duration) (api.Lease, error) {
+func (s *Server) takeLease(v *dev, p Person, holder string, ttl time.Duration) (api.Lease, error) {
 	if holder == "" {
 		return api.Lease{}, refuse(400, "holder required")
 	}
@@ -137,20 +171,20 @@ func (s *Server) takeLease(v *dev, a asker, holder string, ttl time.Duration) (a
 		ttl = leaseDefault
 	}
 	switch {
-	case a.Maintainer && ttl > leaseLongest:
+	case p.isMaintainer() && ttl > leaseLongest:
 		return api.Lease{}, refuse(400, "a Lease lasts 24 hours at most")
-	case !a.Maintainer && ttl > leaseDefault:
+	case !p.isMaintainer() && ttl > leaseDefault:
 		return api.Lease{}, refuse(400, "an M team member's Lease lasts 4 hours at most; renew it at any time, and it ends 4 hours from then")
 	}
 	s.leaseMu.Lock()
 	defer s.leaseMu.Unlock()
-	found, err := s.mayLease(v, a, holder)
+	found, err := s.mayLease(v, p, holder)
 	if err != nil {
 		return api.Lease{}, err
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	v.d.Lease = &api.Lease{Holder: holder, Maintainer: a.Handle, By: a.Handle, AccountID: a.AccountID, Expires: s.now().Add(ttl)}
+	v.d.Lease = &api.Lease{Holder: holder, Maintainer: p.Handle, By: p.Handle, AccountID: p.AccountID, Expires: s.now().Add(ttl)}
 	v.capLeaseLocked()
 	v.saveLocked()
 	taken := *v.d.Lease
@@ -158,23 +192,23 @@ func (s *Server) takeLease(v *dev, a asker, holder string, ttl time.Duration) (a
 	return taken, nil
 }
 
-// releaseLease ends a's Lease on v; holder, when given, must be its label.
+// releaseLease ends p's Lease on v; holder, when given, must be its label.
 // With force a Maintainer ends another person's, which labd records.
-func (s *Server) releaseLease(v *dev, a asker, holder string, force bool) error {
+func (s *Server) releaseLease(v *dev, p Person, holder string, force bool) error {
 	v.mu.Lock()
 	l := v.liveLeaseLocked()
 	name := v.d.Name
 	v.mu.Unlock()
 	switch {
-	case l == nil || leaseIsOf(l, a) && (holder == "" || l.Holder == holder):
+	case l == nil || leaseIsOf(l, p) && (holder == "" || l.Holder == holder):
 		s.endLease(v, nil, "")
-	case !force && !leaseIsOf(l, a):
+	case !force && !leaseIsOf(l, p):
 		return refuse(409, "%s is leased by %s until %s; only %s can release it, or a Maintainer with `lab release %s --force`", name, l.Who(), l.Expires.Format(time.TimeOnly), orStr(l.Owner(), l.Holder), name)
 	case !force:
 		return refuse(409, "leased by %s, not %s", l.Holder, holder)
-	case !a.Maintainer:
+	case !p.isMaintainer():
 		return refuse(403, "only a Maintainer ends another person's Lease")
-	case !s.endLease(v, l, "ended early by Maintainer "+a.Handle+" (lab release --force)"):
+	case !s.endLease(v, l, "ended early by Maintainer "+p.Handle+" (lab release --force)"):
 		return refuse(409, "%s's lease changed meanwhile; look again before releasing it", name)
 	}
 	return nil
@@ -187,7 +221,7 @@ func (s *Server) hLease(w http.ResponseWriter, r *http.Request) {
 	}
 	var req api.LeaseRequest
 	json.NewDecoder(r.Body).Decode(&req)
-	l, err := s.takeLease(v, s.asking(r), req.Holder, time.Duration(req.TTLSec)*time.Second)
+	l, err := s.takeLease(v, leaser(r), req.Holder, time.Duration(req.TTLSec)*time.Second)
 	if err != nil {
 		httpErr(w, statusOf(err), "%v", err)
 		return
@@ -201,7 +235,7 @@ func (s *Server) hRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force, _ := strconv.ParseBool(r.URL.Query().Get("force"))
-	if err := s.releaseLease(v, s.asking(r), r.URL.Query().Get("holder"), force); err != nil {
+	if err := s.releaseLease(v, leaser(r), r.URL.Query().Get("holder"), force); err != nil {
 		httpErr(w, statusOf(err), "%v", err)
 		return
 	}

@@ -83,8 +83,8 @@ func (s *Server) pMacs(w http.ResponseWriter, r *http.Request) {
 // renderMacs writes Macs; with a refusal, it is said above the table under
 // its own status.
 func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string, refused error) {
-	a := s.asking(r)
-	data := macsData{Show: show, Maintainer: a.Maintainer}
+	p := leaser(r)
+	data := macsData{Show: show, Maintainer: p.isMaintainer()}
 	page := web.Page{Title: "Macs", Nav: "macs"}
 	if refused != nil {
 		data.Flash, page.Status = refused.Error(), statusOf(refused)
@@ -103,11 +103,11 @@ func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string,
 		if d.State == api.StateLeft {
 			continue
 		}
-		mine := s.holdsLease(v, a)
-		if show == showLeased && !mine || show == showMine && !s.lends(a, v) {
+		mine := s.holdsLease(v, p)
+		if show == showLeased && !mine || show == showMine && (d.VolunteerID == 0 || d.VolunteerID != p.AccountID) {
 			continue
 		}
-		data.Macs = append(data.Macs, s.macRow(v, d, a, mine))
+		data.Macs = append(data.Macs, s.macRow(v, d, p, mine))
 	}
 	if len(data.Macs) == 0 {
 		data.Empty = map[string]string{showAll: "No Mac is enrolled.", showMine: "You lend no Mac.", showLeased: "You hold no Lease."}[show]
@@ -116,10 +116,13 @@ func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string,
 	s.render(w, r, "macs", page)
 }
 
-func (s *Server) macRow(v *dev, d DeviceView, a asker, mine bool) macRow {
+func (s *Server) macRow(v *dev, d DeviceView, p Person, mine bool) macRow {
 	row := macRow{Name: d.Name, Kind: "Lab-owned", State: s.macState(v, d), Mine: mine}
 	if d.IsVolunteer() {
 		row.Kind = "Volunteer's"
+		if volunteer, err := s.person(d.VolunteerID); err == nil {
+			row.Volunteer = volunteer.Handle
+		}
 	}
 	conf := s.configuration(v)
 	row.Configuration, row.SetBy = conf.String(), conf.SetBy
@@ -128,19 +131,20 @@ func (s *Server) macRow(v *dev, d DeviceView, a asker, mine bool) macRow {
 	}
 	if l := d.Lease; l != nil {
 		row.Holder, row.Until = orStr(l.Owner(), l.Holder), when(l.Expires)
-		if holder, ok := s.askerByAccount(l.AccountID); ok {
-			row.Holder, row.HolderKind = holder.Handle, holder.kind()
-			row.HolderClass = map[bool]string{true: "kind-maintainer", false: "kind-mteam"}[holder.Maintainer]
+		if holder, err := s.person(l.AccountID); err == nil {
+			// Who is an Admin is on no screen: here an Admin is a Maintainer.
+			kind := min(holder.Role(), web.Maintainer)
+			row.Holder, row.HolderKind, row.HolderClass = holder.Handle, kind.Badge(), kind.BadgeClass()
 		}
 	}
 	if mine {
 		return row
 	}
-	found, err := s.mayLease(v, a, a.Handle)
+	found, err := s.mayLease(v, p, p.Handle)
 	switch {
 	case err == nil:
 		row.CanLease = true
-		if held, _ := s.heldOfConfiguration(v, a); found.warning != "" && held != "" {
+		if held, _ := s.heldOfConfiguration(v, p); found.warning != "" && held != "" {
 			row.Warning = "you hold " + held + ", the same Configuration: an M team member would be refused"
 		}
 	case d.Lease != nil:
@@ -151,7 +155,7 @@ func (s *Server) macRow(v *dev, d DeviceView, a asker, mine bool) macRow {
 		row.Why = "outside its Availability window"
 	default:
 		row.Why = err.Error()
-		if held, _ := s.heldOfConfiguration(v, a); held != "" {
+		if held, _ := s.heldOfConfiguration(v, p); held != "" {
 			row.Why = "you hold " + held + ", the same Configuration"
 			if !conf.Known() || !s.configuration(s.dev(held)).Known() {
 				row.Why = "you hold " + held + ", and its core counts are unknown: the two count as the same Configuration until a Maintainer sets them"
@@ -205,7 +209,7 @@ func (s *Server) pMacsLease(w http.ResponseWriter, r *http.Request) {
 	if v == nil {
 		return
 	}
-	a := s.asking(r)
+	p := leaser(r)
 	var ttl time.Duration
 	if raw := r.PostFormValue("hours"); raw != "" {
 		hours, err := strconv.Atoi(raw)
@@ -216,7 +220,7 @@ func (s *Server) pMacsLease(w http.ResponseWriter, r *http.Request) {
 		ttl = time.Duration(hours) * time.Hour
 	}
 	// A Lease taken on the site has the person's handle as its label.
-	_, err := s.takeLease(v, a, a.Handle, ttl)
+	_, err := s.takeLease(v, p, p.Handle, ttl)
 	s.backToMacs(w, r, err)
 }
 
@@ -225,15 +229,15 @@ func (s *Server) pMacsRenew(w http.ResponseWriter, r *http.Request) {
 	if v == nil {
 		return
 	}
-	a := s.asking(r)
+	p := leaser(r)
 	v.mu.Lock()
 	l := v.liveLeaseLocked()
 	v.mu.Unlock()
-	if l == nil || !leaseIsOf(l, a) {
+	if l == nil || !leaseIsOf(l, p) {
 		s.backToMacs(w, r, refuse(409, "you hold no Lease on %s to renew", v.snapshot().Name))
 		return
 	}
-	_, err := s.takeLease(v, a, l.Holder, 0)
+	_, err := s.takeLease(v, p, l.Holder, 0)
 	s.backToMacs(w, r, err)
 }
 
@@ -246,12 +250,12 @@ func (s *Server) pMacsRelease(w http.ResponseWriter, r *http.Request) {
 	if !s.sure(w, r, "Release: your Lease on "+name+" ends now", macsPath(showOf(r.PostFormValue("show")))) {
 		return
 	}
-	a := s.asking(r)
-	if !s.holdsLease(v, a) {
+	p := leaser(r)
+	if !s.holdsLease(v, p) {
 		s.backToMacs(w, r, refuse(409, "you hold no Lease on %s to release", name))
 		return
 	}
-	s.backToMacs(w, r, s.releaseLease(v, a, "", false))
+	s.backToMacs(w, r, s.releaseLease(v, p, "", false))
 }
 
 // coreCountMax is above any Mac's count; it only keeps nonsense out.
@@ -273,6 +277,6 @@ func (s *Server) pMacsConfiguration(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.setConfiguration(v, s.asking(r).Handle, cpu, gpu)
+	s.setConfiguration(v, leaser(r).Handle, cpu, gpu)
 	s.backToMacs(w, r, nil)
 }
