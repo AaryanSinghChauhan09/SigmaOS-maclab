@@ -588,7 +588,7 @@ func TestASignedInPersonDeletesByTheLinkToo(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), field) {
 		t.Fatalf("the confirmation of a signed-in person: %d, without their token", page.Code)
 	}
-	if cc := page.Header().Get("Cache-Control"); cc != "no-store" {
+	if cc := page.Header().Get("Cache-Control"); cc != "private, no-store" {
 		t.Errorf("Cache-Control %q", cc)
 	}
 	send := func(values url.Values) int {
