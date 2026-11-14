@@ -505,6 +505,74 @@ func TestAFailedSendNeverBlocksALease(t *testing.T) {
 	l.wantLeaseEvents("taken", "released")
 }
 
+// leaseLinesOf are the lines the Lab group got that start with "<handle>'s
+// Lease on", once the lines to post have had time to arrive.
+func leaseLinesOf(sig *fakeSignal, handle string) []string {
+	var got []string
+	for end := time.Now().Add(5 * time.Second); len(got) == 0 && time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		for _, line := range sig.lines() {
+			if line.group == testLabGroup && strings.HasPrefix(line.text, handle+"'s Lease on ") {
+				got = append(got, line.text)
+			}
+		}
+	}
+	return got
+}
+
+// wantLeaseEndedWithItsMac is what a Mac that left under a Lease leaves
+// behind: "ended" in the Lease record of that enrollment, saying why, and
+// one line for the Lab group, which names the Mac only.
+func wantLeaseEndedWithItsMac(t *testing.T, s *Server, sig *fakeSignal, mac, deviceID, handle, why string) {
+	t.Helper()
+	events, err := s.store.leaseRecord(deviceID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Event != api.LeaseTaken || events[0].Event != api.LeaseEnded || events[0].Handle != handle ||
+		events[0].AccountID != testAccount(handle) || !strings.Contains(events[0].Why, "left the lab") || !strings.Contains(events[0].Why, why) {
+		t.Errorf("the Lease record of a Mac that left under a Lease, newest first: %+v", events)
+	}
+	if got := leaseLinesOf(sig, handle); len(got) != 1 || got[0] != handle+"'s Lease on "+mac+" ended: "+mac+" left the lab." {
+		t.Errorf("the Lab group about the Lease of a Mac that left: %q", got)
+	}
+}
+
+// A Volunteer's Mac that leaves under a Lease ends the Lease: "ended" in
+// the Lease record and one line for the Lab group.
+func TestAVolunteersMacThatLeavesEndsItsLease(t *testing.T) {
+	sig := &fakeSignal{}
+	dir := signalDir(t)
+	n, _ := leavingLab(t, labConfig{config: func(c *Config) { c.Signal, c.SignalDir = sig, dir }})
+	ken := n.member("ken")
+	n.leaseAs(ken, 0)
+	id := n.s.dev(n.name).snapshot().ID
+
+	n.mustVolunteer("leave", "--yes")
+	n.leavingRequireGone(n.name)
+	wantLeaseEndedWithItsMac(t, n.s, sig, n.name, id, "ken", "its Volunteer left the lab")
+}
+
+// A Maintainer ending a Mac's enrollment under a Lease ends the Lease the
+// same way, and its holder's sessions are cut as a Lease's end cuts them.
+func TestAMacWhoseEnrollmentIsEndedEndsItsLease(t *testing.T) {
+	l := newEndsLab(t)
+	l.leaseAs(l.grace, 0)
+	exec := l.heldExec(l.grace)
+	id := l.s.dev(l.name).snapshot().ID
+
+	l.leavingMustEnd(harnessToken, l.name)
+	select {
+	case got := <-exec:
+		if !strings.Contains(got, "the Lease on "+l.name+" ended, which cut this session") {
+			t.Errorf("the lab exec held under the Lease of a Mac that left answered: %s", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("the Mac left, yet the lab exec under its Lease is still held")
+	}
+	l.leavingRequireGone(l.name)
+	wantLeaseEndedWithItsMac(t, l.s, l.sig, l.name, id, "grace", "ended its enrollment")
+}
+
 // A Lease its Mac's window, a Pause or a lowered Access level ended cancels
 // no job of its holder's: what is queued stays queued, as it did before
 // Leases had endings.

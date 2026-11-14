@@ -75,6 +75,7 @@ func (s *Server) endEnrollment(v *dev, l leaving) bool {
 	v.forgotten = true
 	d := v.d
 	v.mu.Unlock()
+	s.endLeaseOfLeaving(v, reason)
 	s.mu.Lock()
 	if s.devs[name] != v {
 		s.mu.Unlock()

@@ -510,7 +510,8 @@ type leaseEnding struct {
 	note string
 	// asToday is a Lease its window's end, a Pause or a lowered Access level
 	// ended: lab-agent stops what runs, and the holder's queued jobs stay
-	// queued, as they did before Leases had endings.
+	// queued, as they did before Leases had endings. The Lease of a Mac that
+	// leaves is one too: its jobs are the leaving's to end.
 	asToday bool
 }
 
@@ -520,6 +521,7 @@ const (
 	byAMaintainer leaseCause = iota
 	leftTeam
 	blocked
+	macLeft
 )
 
 // endedByMaintainer is a Lease a Maintainer ended; why may be empty.
@@ -544,6 +546,22 @@ func allAccessEnded(by Person) leaseEnding {
 	return leaseEnding{event: api.LeaseEnded, by: by, why: `"End all access"`}
 }
 
+// leftWithItsMac is the Lease on a Mac that leaves the lab, how says in
+// which way. The leaving itself ends every job on the Mac, so the Lease's
+// end only cuts its holder's sessions.
+func leftWithItsMac(how string) leaseEnding {
+	return leaseEnding{event: api.LeaseEnded, why: "the Mac left the lab (" + how + ")", cause: macLeft, asToday: true}
+}
+
+// endLeaseOfLeaving ends the Lease on v, a Mac that is leaving the lab,
+// before it goes: a Lease is never dropped without its line.
+func (s *Server) endLeaseOfLeaving(v *dev, how string) {
+	v.mu.Lock()
+	l := v.d.Lease
+	v.mu.Unlock()
+	s.endLease(v, l, leftWithItsMac(how))
+}
+
 // over is whether the Lease ends over its holder: its running job is then
 // canceled as `lab cancel` does. Released or run out, the job finishes.
 func (e leaseEnding) over() bool { return e.event == api.LeaseEnded }
@@ -559,6 +577,8 @@ func (e leaseEnding) said(l *api.Lease) string {
 		return "its Lease was ended by @" + e.by.Handle + ": " + e.why
 	case e.cause == byAMaintainer:
 		return "its Lease was ended by @" + e.by.Handle
+	case e.cause == macLeft:
+		return "its Lease ended: " + e.why
 	}
 	return "its Lease ended: @" + l.Owner() + " " + map[leaseCause]string{leftTeam: "left the M team", blocked: "was Blocked"}[e.cause]
 }
@@ -598,6 +618,8 @@ func (s *Server) endLease(v *dev, l *api.Lease, e leaseEnding) bool {
 		s.labGroup.LeaseEndedLeftTeam(handle, name)
 	case e.cause == blocked:
 		s.labGroup.LeaseEndedBlocked(handle, name)
+	case e.cause == macLeft:
+		s.labGroup.LeaseEndedMacLeft(handle, name)
 	default:
 		s.labGroup.LeaseEndedByMaintainer(e.by.Handle, handle, name, e.why)
 	}

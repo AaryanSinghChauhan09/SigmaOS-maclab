@@ -51,6 +51,10 @@ func (g labGroupLines) LeaseEndedBlocked(handle, mac string) {
 	g.l.post(lineLab, handle+"'s Lease on "+mac+" ended: "+handle+" was Blocked.")
 }
 
+func (g labGroupLines) LeaseEndedMacLeft(handle, mac string) {
+	g.l.post(lineLab, handle+"'s Lease on "+mac+" ended: "+mac+" left the lab.")
+}
+
 // people posts a line of the People record with its link to People.
 func (g labGroupLines) people(text string) {
 	if at := g.link("/people"); at != "" {
