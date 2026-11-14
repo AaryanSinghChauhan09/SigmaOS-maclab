@@ -1838,14 +1838,15 @@ func TestBaselinePublishesWhenKnownGoodChanges(t *testing.T) {
 func TestResetRespectsLease(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
-	v := l.s.dev("sim-mac")
-	v.mu.Lock()
-	v.d.Lease = &api.Lease{Holder: "connor (homework)", Expires: time.Now().Add(time.Hour)}
-	v.mu.Unlock()
-	if r, body := l.get("POST", "/api/devices/sim-mac/reset?by=some-agent"); r.StatusCode != 409 || !strings.Contains(body, "connor (homework)") {
+	connor := l.addMaintainer(harnessToken, "connor")
+	if r, body := l.as(connor.Token, "POST", "/api/devices/sim-mac/lease", api.LeaseRequest{Holder: "connor (homework)"}); r.StatusCode != 200 {
+		t.Fatalf("lease: %s %s", r.Status, body)
+	}
+	// Naming the holder's label is not holding the Lease.
+	if r, body := l.get("POST", "/api/devices/sim-mac/reset?by="+url.QueryEscape("connor (homework)")); r.StatusCode != 409 || !strings.Contains(body, "connor (homework)") {
 		t.Fatalf("reset by a non-holder: %s %s", r.Status, body)
 	}
-	if r, _ := l.get("POST", "/api/devices/sim-mac/reset?by="+url.QueryEscape("connor (homework)")); r.StatusCode != 200 {
+	if r, _ := l.as(connor.Token, "POST", "/api/devices/sim-mac/reset", nil); r.StatusCode != 200 {
 		t.Fatalf("reset by the holder: %s", r.Status)
 	}
 }

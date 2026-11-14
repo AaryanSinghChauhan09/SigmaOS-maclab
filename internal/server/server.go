@@ -161,6 +161,7 @@ type Server struct {
 	mu          sync.Mutex
 	devs        map[string]*dev // by name
 	cancels     map[string]context.CancelFunc
+	cancelWhy   map[string]string // why a job in cancels was canceled, when whoever did said
 	hub         hub
 	builds      *buildMgr
 	notifyHooks []func(Notification)
@@ -292,7 +293,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		st.db.Close()
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, callers: callers}
+	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, cancelWhy: map[string]string{}, callers: callers}
 	s.start = s.now()
 	s.lines = newGroupLines(st, s.clock(), logger, cfg.Signal, cfg.SignalDir)
 	s.labGroup = labGroupLines{l: s.lines, link: s.pageAddress}
@@ -330,6 +331,11 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 			}
 		}
 		d.ActiveJob = ""
+		if d.Lease != nil && d.Lease.Job != "" { // no job outlives labd, so none extends a Lease
+			l := *d.Lease
+			l.Job = ""
+			d.Lease = &l
+		}
 		if d.Kind == "" { // enrolled before Kinds existed: ./volunteer's Macs are Volunteers'
 			d.Kind = map[bool]string{false: api.KindLabOwned, true: api.KindVolunteer}[d.Volunteer]
 		}
@@ -365,6 +371,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	s.builds = newBuildMgr(s)
 	s.reconcileRunningBuilds()
 	go s.monitor()
+	go s.leaseKeeper()
 	go s.buildMonitor()
 	go s.lines.run(ctx)
 	go s.summaryLoop()
@@ -664,11 +671,12 @@ func (s *Server) routes() []route {
 		{"POST /api/devices/{name}/end-enrollment", maintainers, s.hEndEnrollment},
 		{"POST /api/devices/{name}/lease", team, s.hLease},
 		{"DELETE /api/devices/{name}/lease", team, s.hRelease},
-		{"POST /api/devices/{name}/reset", maintainers, s.hReset},
+		{"GET /api/devices/{name}/leases", macNamed, s.hLeaseRecord},
+		{"POST /api/devices/{name}/reset", team, s.hReset},
 		{"GET /api/devices/{name}/serial", maintainers, s.hSerial},
 		{"GET /api/devices/{name}/oob", macNamed, s.hOOBStatus},
 		{"GET /api/stream", scoped, s.hStream},
-		{"POST /api/devices/{name}/screenshot", maintainers, s.hScreenshot},
+		{"POST /api/devices/{name}/screenshot", team, s.hScreenshot},
 		{"GET /api/devices/{name}/screen", macNamed, s.hScreen},
 		{"GET /api/devices/{name}/screens", macNamed, s.hScreens},
 		{"GET /api/devices/{name}/screens/{file}", macNamed, s.hScreen},
@@ -688,13 +696,13 @@ func (s *Server) routes() []route {
 		{"POST /api/artifacts/uploads", teamBuilds, s.teamUpload(s.hStartUpload)},
 		{"PUT /api/artifacts/uploads/{sha}/parts/{n}", teamBuilds, s.teamUpload(s.hPutPart)},
 		{"POST /api/artifacts/uploads/{sha}/close", teamBuilds, s.teamUpload(s.hCloseUpload)},
-		{"POST /api/mesa/jobs", maintainers, s.hSubmit},
-		{"POST /api/jobs", maintainers, s.hSubmit},
+		{"POST /api/mesa/jobs", team, s.hSubmit},
+		{"POST /api/jobs", team, s.hSubmit},
 		{"GET /api/jobs", scoped, s.hJobs},
 		{"GET /api/jobs/{id}", jobNamed, s.hJob},
 		{"GET /api/jobs/{id}/wait", jobNamed, s.hWait},
-		{"POST /api/jobs/{id}/cancel", maintainers, s.hCancel},
-		{"POST /api/jobs/{id}/retry", maintainers, s.hRetry},
+		{"POST /api/jobs/{id}/cancel", team, s.hCancel},
+		{"POST /api/jobs/{id}/retry", team, s.hRetry},
 		{"POST /api/jobs/{id}/publish", maintainers, s.hPublish},
 		{"POST /api/jobs/{id}/exclude", maintainers, s.hExclude},
 		{"DELETE /api/jobs/{id}/exclude", maintainers, s.hExclude},
@@ -722,8 +730,8 @@ func (s *Server) routes() []route {
 		{"GET /api/builders", maintainers, s.hBuilders},
 		{"POST /api/builders", maintainers, s.hAddBuilder},
 		{"DELETE /api/builders/{name}", maintainers, s.hRemoveBuilder},
-		{"POST /api/devices/{name}/exec", maintainers, s.hExec},
-		{"GET /api/devices/{name}/audit", maintainers, s.hAudit},
+		{"POST /api/devices/{name}/exec", team, s.hExec},
+		{"GET /api/devices/{name}/audit", macNamed, s.hAudit},
 		{"GET /api/maintainers", maintainers, s.hMaintainersGone},
 		{"POST /api/maintainers", maintainers, s.hMaintainersGone},
 		{"DELETE /api/maintainers/{name}", maintainers, s.hMaintainersGone},
@@ -1420,8 +1428,8 @@ func (s *Server) forget(v *dev, holder string, force bool) (int, error) {
 	if err != nil {
 		return 500, err
 	}
-	l := v.d.Lease
-	leased := l != nil && s.now().Before(l.Expires)
+	l := v.liveLeaseLocked()
+	leased := l != nil
 	if leased && len(v.parked) > 0 {
 		return 409, fmt.Errorf("%s has %d queued jobs set aside by %s's lease until %s: end the lease (`lab release %s --force`) so they run, or cancel them, first",
 			name, len(v.parked), l.Who(), l.Expires.Format(time.DateTime), name)
@@ -1468,18 +1476,18 @@ func (s *Server) hReset(w http.ResponseWriter, r *http.Request) {
 	if v == nil {
 		return
 	}
-	by := r.URL.Query().Get("by")
+	p := leaser(r)
+	by := orStr(r.URL.Query().Get("by"), p.Handle)
+	// A reset reboots the Mac, so a Lease fences it like a job.
+	if err := s.fence(v, p, fenceReset); err != nil {
+		httpErr(w, statusOf(err), "%v", err)
+		return
+	}
 	v.mu.Lock()
 	busy := v.d.State == api.StateBusy || v.d.State == api.StateRecovering
-	lease := v.d.Lease
 	v.mu.Unlock()
 	if busy {
 		httpErr(w, 409, "%s is busy; cancel its job instead", v.d.Name)
-		return
-	}
-	// A reset reboots the Mac, so a lease fences it like a job.
-	if lease != nil && s.now().Before(lease.Expires) && !lease.HeldBy(by, maintainerName(r)) {
-		httpErr(w, 409, "%s is leased by %s until %s; only the lease holder can reset it", v.d.Name, lease.Who(), lease.Expires.Format(time.DateTime))
 		return
 	}
 	back, err := s.rejoin(v, "reset requested by "+orStr(by, "an admin"))
@@ -1545,7 +1553,7 @@ func (s *Server) hSubmit(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "Mesa endpoint requires an explicit Mesa package request")
 		return
 	}
-	j, code, err := s.submit(maintainerName(r), spec, "")
+	j, code, err := s.submit(leaser(r), spec, "")
 	if err != nil {
 		httpErr(w, code, "%v", err)
 		return
@@ -1554,7 +1562,9 @@ func (s *Server) hSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 // Submit validates and queues a job that labd queues itself, for no Maintainer.
-func (s *Server) Submit(spec api.JobSpec) (*api.Job, int, error) { return s.submit("", spec, "") }
+func (s *Server) Submit(spec api.JobSpec) (*api.Job, int, error) {
+	return s.submit(Person{}, spec, "")
+}
 
 // Retry queues a finished job again as a new job: the same Mac, kernel,
 // tests and cmdline, recording which job it retries. holder, if given,
@@ -1563,10 +1573,12 @@ func (s *Server) Submit(spec api.JobSpec) (*api.Job, int, error) { return s.subm
 // collected, it builds again from the commit and the config that build
 // recorded, never from wherever a branch points now or the Mac's config as
 // it is now.
-func (s *Server) Retry(id, holder string) (*api.Job, int, error) { return s.retry("", id, holder) }
+func (s *Server) Retry(id, holder string) (*api.Job, int, error) {
+	return s.retry(Person{}, id, holder)
+}
 
-// retry is Retry for the Maintainer who asked.
-func (s *Server) retry(maintainer, id, holder string) (*api.Job, int, error) {
+// retry is Retry for the person who asked.
+func (s *Server) retry(by Person, id, holder string) (*api.Job, int, error) {
 	old, err := s.store.job(id)
 	if err != nil {
 		return nil, 404, fmt.Errorf("no job %s", id)
@@ -1602,7 +1614,7 @@ func (s *Server) retry(maintainer, id, holder string) (*api.Job, int, error) {
 			notes = append(notes, note)
 		}
 	}
-	return s.submit(maintainer, spec, old.ID, notes...)
+	return s.submit(by, spec, old.ID, notes...)
 }
 
 // pinnedConfig is the config a retry of old builds its kernel again with: the
@@ -1664,14 +1676,29 @@ func validateRequiredWatchdog(tests []api.TestSpec, d api.Device) error {
 	return nil
 }
 
-// submit queues a job for the Maintainer who asked; retryOf names the job it retries, whose source may
-// come with the kernel already built from it, and notes go in the job's
-// events after the first. The job records what lab gate needs to know about
-// its Mac as it is now.
-func (s *Server) submit(maintainer string, spec api.JobSpec, retryOf string, notes ...string) (*api.Job, int, error) {
+// submit queues a job for the person who asked, a Maintainer or an M team
+// member, or for labd itself (nobody); retryOf names the job it retries,
+// whose source may come with the kernel already built from it, and notes go
+// in the job's events after the first. The job records what lab gate needs
+// to know about its Mac as it is now. An M team member's job needs their
+// own Lease on the Mac, and is never a baseline or a build: those stay with
+// Maintainers.
+func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...string) (*api.Job, int, error) {
+	maintainer := by.Handle
 	v := s.dev(spec.Device)
 	if v == nil {
 		return nil, 404, fmt.Errorf("no device %q", spec.Device)
+	}
+	if by.AccountID != 0 && !by.isMaintainer() {
+		if err := s.fence(v, by, fenceJobs); err != nil {
+			return nil, statusOf(err), err
+		}
+		switch {
+		case spec.Baseline:
+			return nil, 403, errors.New("a baseline is a Maintainer's to run")
+		case spec.Source != "" && spec.Kernel == "":
+			return nil, 403, errors.New("building a kernel from source is a Maintainer's until M team builds open: boot a kernel that is already built")
+		}
 	}
 	v.recoveryMu.Lock()
 	defer v.recoveryMu.Unlock()
@@ -1802,8 +1829,14 @@ func (s *Server) submit(maintainer string, spec api.JobSpec, retryOf string, not
 			return nil, code, err
 		}
 	}
+	owner := jobOwner{account: by.AccountID, holder: spec.Holder, maintainer: maintainer}
+	if by.Handle != "" {
+		if err := s.fence(v, by, fenceJobs); err != nil {
+			return nil, statusOf(err), err
+		}
+	}
 	v.mu.Lock()
-	leased := v.leaseHoldsBackLocked(spec.Holder, maintainer)
+	leased := v.leaseHoldsBackLocked(owner)
 	v.mu.Unlock()
 	if leased != "" {
 		return nil, 409, errors.New(leased)
@@ -1813,7 +1846,7 @@ func (s *Server) submit(maintainer string, spec api.JobSpec, retryOf string, not
 	if retryOf != "" {
 		msg = "queued: a retry of job " + retryOf
 	}
-	j := &api.Job{ID: "j" + now.Format("0102-150405") + "-" + randHex(2), Spec: spec, Maintainer: maintainer, DeviceID: d.ID, State: api.JobQueued, Created: now, Updated: now,
+	j := &api.Job{ID: "j" + now.Format("0102-150405") + "-" + randHex(2), Spec: spec, Maintainer: maintainer, AccountID: by.AccountID, DeviceID: d.ID, State: api.JobQueued, Created: now, Updated: now,
 		Events: []api.JobEvent{{Time: now, Msg: msg}}, RetryOf: retryOf,
 		DeviceAtSubmit: &api.DeviceSnapshot{Family: family(d.Facts), Volunteer: d.Volunteer, OMT: s.omtWanted(d.Device, api.JobSpec{})}}
 	for _, n := range notes {
@@ -1841,7 +1874,7 @@ func (s *Server) submit(maintainer string, spec api.JobSpec, retryOf string, not
 
 // hRetry submits a finished job again; ?holder= names who retries it.
 func (s *Server) hRetry(w http.ResponseWriter, r *http.Request) {
-	j, code, err := s.retry(maintainerName(r), r.PathValue("id"), r.URL.Query().Get("holder"))
+	j, code, err := s.retry(leaser(r), r.PathValue("id"), r.URL.Query().Get("holder"))
 	if err != nil {
 		httpErr(w, code, "%v", err)
 		return
@@ -1947,18 +1980,24 @@ func (s *Server) hCancel(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, "no job %s", id)
 		return
 	}
-	s.mu.Lock()
-	cancel := s.cancels[id]
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
-		w.Write([]byte("canceling; the Mac is being restored to its known-good kernel\n"))
+	p := leaser(r)
+	if err := mayCancel(p, j); err != nil {
+		httpErr(w, statusOf(err), "%v", err)
 		return
 	}
-	if j.State == api.JobQueued {
-		s.updateJob(j, func(j *api.Job) {
-			j.State, j.Outcome, j.Summary, j.Canceled = api.JobDone, api.OutcomeCanceled, "canceled before it started", true
-		})
+	// A job someone else cancels says who did.
+	why := ""
+	if j.AccountID != p.AccountID || j.AccountID == 0 && j.Maintainer != p.Handle {
+		why = "by @" + p.Handle
+		s.log.Printf("job %s (%s) of %s: canceled by @%s", j.ID, j.Spec.Device, orStr(j.Maintainer, "labd"), p.Handle)
+	}
+	s.mu.Lock()
+	running := s.cancels[id] != nil
+	s.mu.Unlock()
+	s.cancelJob(id, why)
+	if running {
+		w.Write([]byte("canceling; the Mac is being restored to its known-good kernel\n"))
+		return
 	}
 	w.Write([]byte("canceled\n"))
 }

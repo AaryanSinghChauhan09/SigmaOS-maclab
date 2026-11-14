@@ -85,6 +85,7 @@ func (s *Server) deviceLoop(v *dev) {
 			cancel()
 			s.mu.Lock()
 			delete(s.cancels, id)
+			delete(s.cancelWhy, id)
 			s.mu.Unlock()
 		case <-tick.C():
 			v.unpark()
@@ -124,6 +125,10 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 	}
 	if err := validateRequiredWatchdog(j.Spec.Tests, v.snapshot()); err != nil {
 		r.finish(api.OutcomeInfra, "stored job refused before device commands: "+err.Error())
+		return
+	}
+	if why := r.withoutItsLease(); why != "" {
+		r.finish(api.OutcomeCanceled, "not run: "+why)
 		return
 	}
 	if r.park() {
@@ -167,7 +172,7 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		if v.d.State == api.StateLeft {
 			return ""
 		}
-		if why := v.leaseHoldsBackLocked(j.Spec.Holder, j.Maintainer); why != "" {
+		if why := v.leaseHoldsBackLocked(ownerOf(j)); why != "" {
 			return why
 		}
 		if !v.aliveLocked() || (v.d.State != api.StateReady && v.d.State != api.StateNew) {
@@ -215,10 +220,25 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			return
 		}
 	}
+	if why := r.withoutItsLease(); why != "" {
+		r.finish(api.OutcomeCanceled, "not run: "+why)
+		return
+	}
+	// A job that starts under its person's own Lease runs under it: the
+	// Lease lasts until the job ends, and labd never queues the job again.
 	v.mu.Lock()
+	under := false
+	if l := v.liveLeaseLocked(); l != nil && leaseCovers(l, ownerOf(j)) {
+		held := *l
+		held.Job = j.ID
+		v.d.Lease, under = &held, true
+	}
 	v.d.ActiveJob = j.ID
 	v.setStateLocked(api.StateBusy, "job "+j.ID)
 	v.mu.Unlock()
+	if under {
+		s.updateJob(j, func(j *api.Job) { j.UnderLease = true })
+	}
 	r.started = s.now()
 	r.tellVolunteerJobStarting()
 	if r.serialEnabled() {
@@ -236,6 +256,7 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		v.sendOwedDoneLocked()
 		v.saveLocked()
 		v.mu.Unlock()
+		s.lapse(v) // a Lease extended for this job ends with it
 	}()
 
 	// A Mac still on a lab entry (an earlier job's restore failed or was cut
@@ -346,12 +367,18 @@ func (r *jobRun) retry() {
 	if r.j.Spec.Holder == omtHolder {
 		return
 	}
+	if r.j.UnderLease {
+		// Its holder decides what runs under a Lease, and without one the
+		// job could not run again anyway.
+		r.ev("not retried: it ran under a Lease")
+		return
+	}
 	spec := r.j.Spec
 	if spec.Source != "" && spec.Kernel != "" {
 		// the kernel is built: the retry boots it again
 		spec.Source, spec.Config = "", ""
 	}
-	j, _, err := r.s.submit(r.j.Maintainer, spec, r.j.ID)
+	j, _, err := r.s.submit(r.s.submitter(r.j), spec, r.j.ID)
 	if err != nil {
 		r.ev("not retried: %v", err)
 		return
@@ -385,6 +412,9 @@ func (r *jobRun) finishAt(outcome, summary string, at time.Time) {
 	if r.v != nil {
 		r.v.endJobLocked(r.j.ID)
 		r.s.forgetCoreCounts(r.v)
+	}
+	if why := r.s.canceledWhy(r.j.ID); why != "" && outcome == api.OutcomeCanceled {
+		summary += " (" + why + ")"
 	}
 	r.s.updateJob(r.j, func(j *api.Job) {
 		j.State, j.Outcome, j.Summary = api.JobDone, outcome, summary

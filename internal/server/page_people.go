@@ -26,6 +26,7 @@ func init() {
 	addPage("POST /people/{id}/maintainer/remove", web.Admins, (*Server).pRemoveMaintainer)
 	addPage("POST /people/{id}/block", web.Maintainers, (*Server).pBlock)
 	addPage("POST /people/{id}/unblock", web.Maintainers, onPerson((*Server).unblock))
+	addPage("POST /people/{id}/leases/{mac}/end", web.Maintainers, (*Server).pEndLease)
 }
 
 const recordShown = 200
@@ -86,6 +87,9 @@ type personOpen struct {
 	// not use it on this person.
 	EndAll string
 	Record []recordShownLine
+	// Leases is the person's part of the Lease record: their Leases, and
+	// those they ended.
+	Leases []recordShownLine
 }
 
 type recordShownLine struct {
@@ -159,7 +163,7 @@ func (s *Server) showPeople(w http.ResponseWriter, r *http.Request, status int, 
 			continue
 		}
 		row := personRow{knownPerson: k, You: k.AccountID == me.AccountID, Twin: called[strings.ToLower(k.Handle)] > 1, Badge: k.Role().Badge(), BadgeClass: k.Role().BadgeClass(),
-			Macs: s.macsLentBy(k.AccountID), Leases: s.leasesHeldBy(k.Handle), SignedIn: signedIn[k.AccountID], Counted: k.OnMTeam(), Seen: "not signed in yet"}
+			Macs: s.macsLentBy(k.AccountID), Leases: s.leasesOf(k.Person), SignedIn: signedIn[k.AccountID], Counted: k.OnMTeam(), Seen: "not signed in yet"}
 		if k.Blocked {
 			row.Badge, row.BadgeClass = "Blocked", "kind-blocked"
 		}
@@ -209,7 +213,39 @@ func (s *Server) openPerson(me *Person, k knownPerson, handles map[int64]string,
 	if lines, err := s.store.recordLinesOf(k.AccountID, recordShown); err == nil {
 		o.Record = shown(lines)
 	}
+	if events, err := s.store.leaseRecordOf(k.AccountID, recordShown); err == nil {
+		for _, e := range events {
+			o.Leases = append(o.Leases, recordShownLine{utcMinute(e.Time), e.Line()})
+		}
+	}
 	return o
+}
+
+// endLeaseSentence is what End Lease states before it is pressed again.
+func endLeaseSentence(handle, mac string) string {
+	return "End @" + handle + "'s Lease on " + mac + ": its job is canceled and its sessions are cut"
+}
+
+// pEndLease is End Lease in a person's row: a Maintainer ends the Lease
+// the person holds on the Mac, saying why if they wish.
+func (s *Server) pEndLease(w http.ResponseWriter, r *http.Request) {
+	k, err := s.personAt(r)
+	mac := r.PathValue("mac")
+	var why string
+	if err == nil {
+		why, err = leaseWhy(r.PostFormValue("why"))
+	}
+	if v := s.dev(mac); err == nil && (v == nil || !s.holdsLease(v, k.Person)) {
+		err = refuse(http.StatusConflict, "@%s holds no Lease on %s.", k.Handle, mac)
+	} else if err == nil {
+		if !s.sure(w, r, endLeaseSentence(k.Handle, mac), "/people?open="+r.PathValue("id")) {
+			return
+		}
+		if err = s.releaseLease(v, *PersonOf(r), "", true, why); err == nil {
+			err = s.recordNoted(r, "ended the Lease on "+mac+" of", &k.Person, why)
+		}
+	}
+	s.done(w, r, k.AccountID, err)
 }
 
 // leavesTeam is the sentence of Remove from M team, for a person holding
@@ -287,7 +323,7 @@ func (s *Server) pUnmarkMTeam(w http.ResponseWriter, r *http.Request) {
 		err = mayUnmarkMTeam(k)
 	}
 	if err == nil {
-		if !s.sure(w, r, leavesTeam(len(s.leasesHeldBy(k.Handle))), "/people?open="+r.PathValue("id")) {
+		if !s.sure(w, r, leavesTeam(len(s.leasesOf(k.Person))), "/people?open="+r.PathValue("id")) {
 			return
 		}
 		err = s.unmarkMTeam(r, k)

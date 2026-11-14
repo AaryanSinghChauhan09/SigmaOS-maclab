@@ -108,6 +108,11 @@ func (v *dev) endJobLocked(job string) {
 	if v.d.ActiveJob == job {
 		v.d.ActiveJob = ""
 	}
+	if l := v.d.Lease; l != nil && l.Job == job {
+		free := *l
+		free.Job = ""
+		v.d.Lease = &free
+	}
 	for sha, j := range v.grants {
 		if j == job {
 			delete(v.grants, sha)

@@ -43,11 +43,11 @@ func (v *dev) syncAccessLocked(ci api.Checkin) bool {
 	}
 	lowered := v.d.AccessLevel == api.AccessFull && ci.AccessLevel != api.AccessFull
 	v.d.AccessLevel, v.d.Publish = ci.AccessLevel, ci.Publish
-	if l := v.d.Lease; lowered && l != nil && v.s.now().Before(l.Expires) {
+	if l := v.liveLeaseLocked(); lowered && l != nil {
 		v.s.log.Printf("%s: its Volunteer lowered the Access level; %s's lease ends", v.d.Name, l.Holder)
 		ended := *l
 		ended.Expires = v.s.now()
-		v.d.Lease = &ended
+		v.d.Lease, v.leaseCut = &ended, "its Volunteer lowered the Access level"
 	}
 	return true
 }
@@ -71,7 +71,7 @@ func needsFull(spec api.JobSpec) string {
 
 // heldLocked is whether a job or lease holds the Mac now. Caller holds v.mu.
 func (v *dev) heldLocked() bool {
-	return v.d.ActiveJob != "" || (v.d.Lease != nil && v.s.now().Before(v.d.Lease.Expires))
+	return v.d.ActiveJob != "" || v.liveLeaseLocked() != nil
 }
 
 // ---- labd's copy of each Mac's Audit log ----
@@ -133,6 +133,7 @@ func (v *dev) copyAudit(es []api.AuditEntry) {
 		if e.End <= have {
 			continue
 		}
+		e.AccountID = v.s.auditAccount(e)
 		line, _ := json.Marshal(e)
 		b.Write(append(line, '\n'))
 		have = e.End
@@ -159,8 +160,31 @@ func (v *dev) copyAudit(es []api.AuditEntry) {
 	v.auditHave = have
 }
 
-// hAudit is labd's copy of a Volunteer Mac's Audit log, for Maintainers.
+// auditAccount is the account of the person an Audit log entry names, as
+// labd knows it when the entry arrives: the Mac wrote their handle at the
+// time, and a later rename must not change whose entry it is. 0 when labd
+// or the Mac's Volunteer acted, or the handle is nobody's now.
+func (s *Server) auditAccount(e api.AuditEntry) int64 {
+	if e.Maintainer == "" {
+		return 0
+	}
+	if e.Job != "" {
+		if j, err := s.store.job(e.Job); err == nil && j.AccountID != 0 && j.Maintainer == e.Maintainer {
+			return j.AccountID
+		}
+	}
+	var id int64
+	s.store.db.QueryRow(`SELECT account_id FROM people WHERE handle = ? COLLATE NOCASE ORDER BY last_seen DESC LIMIT 1`, e.Maintainer).Scan(&id)
+	return id
+}
+
+// hAudit is labd's copy of a Volunteer Mac's Audit log, for Maintainers and
+// the Mac's Volunteer. The M team reads the fleet's jobs, not this.
 func (s *Server) hAudit(w http.ResponseWriter, r *http.Request) {
+	if c := callerOf(r); c.team != "" {
+		httpErr(w, 403, "@%s is an M team member; the Audit log is for Maintainers and the Mac's Volunteer", c.team)
+		return
+	}
 	v := s.devOr404(w, r)
 	if v == nil {
 		return

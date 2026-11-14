@@ -95,19 +95,6 @@ func (s *Server) macsLentBy(accountID int64) []string {
 	return names
 }
 
-// leasesHeldBy names the Macs the person holds a Lease on now.
-func (s *Server) leasesHeldBy(handle string) []string {
-	var names []string
-	for _, v := range s.allDevs() {
-		v.mu.Lock()
-		if l := v.d.Lease; l != nil && s.now().Before(l.Expires) && strings.EqualFold(l.Owner(), handle) {
-			names = append(names, v.d.Name)
-		}
-		v.mu.Unlock()
-	}
-	return names
-}
-
 // knownPerson is a Person with what else the lab keeps of them.
 type knownPerson struct {
 	Person
@@ -350,7 +337,7 @@ func (s *Server) unmarkMTeam(r *http.Request, k knownPerson) error {
 		return err
 	}
 	s.changed(k.AccountID)
-	s.endLeasesOf(k.Handle, "ended: @"+k.Handle+" left the M team")
+	s.endLeasesOf(k.Person, leftTheTeam(*PersonOf(r)))
 	s.agents.MTeamUnmarked(PersonOf(r).Handle, k.Handle)
 	return s.record(r, "removed from the M team", &k.Person)
 }
@@ -454,7 +441,7 @@ func (s *Server) blockEnds(k knownPerson) string {
 		n := len(tokens)
 		ends = append(ends, counted(n, "Lab token", "Lab tokens")+" stopped")
 	}
-	if n := len(s.leasesHeldBy(k.Handle)); n > 0 {
+	if n := len(s.leasesOf(k.Person)); n > 0 {
 		ends = append(ends, counted(n, "Lease", "Leases")+" ended")
 	}
 	if signIns, _ := s.reports.SignInsOf(k.AccountID); len(signIns) > 0 {
@@ -491,7 +478,7 @@ func (s *Server) block(r *http.Request, k knownPerson, reason string) error {
 		return err
 	}
 	s.changed(k.AccountID)
-	s.endLeasesOf(k.Handle, "ended: @"+k.Handle+" was blocked")
+	s.endLeasesOf(k.Person, wasBlocked(*by))
 	s.endMacSignInsOf(k.AccountID)
 	s.endEnrollmentsOf(k.AccountID)
 	s.agents.Blocked(by.Handle, k.Handle)

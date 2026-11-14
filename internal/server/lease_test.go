@@ -187,7 +187,7 @@ func TestEndAllAccessEndsThePersonsLeases(t *testing.T) {
 		t.Fatal(err)
 	}
 	const ended = `@joshua used "End all access"`
-	if err := l.s.endAllAccess(p, "ended: "+ended); err != nil {
+	if err := l.s.endAllAccess(p, p); err != nil {
 		t.Fatal(err)
 	}
 	if q := l.s.dev(l.name).snapshot().Lease; q != nil {
@@ -254,7 +254,8 @@ func TestUnparkNeverBlocksOnAFullQueue(t *testing.T) {
 	v := newDev(&Server{}, api.Device{Name: "m"}, "")
 	v.queue = make(chan string, 2)
 	v.queue <- "already-queued"
-	v.parked = []parkedJob{{"a", "joshua@mini", "joshua"}, {"b", "joshua@mini", "joshua"}, {"c", "joshua@mini", "joshua"}}
+	joshua := jobOwner{holder: "joshua@mini", maintainer: "joshua"}
+	v.parked = []parkedJob{{"a", joshua}, {"b", joshua}, {"c", joshua}}
 
 	done := make(chan struct{})
 	go func() { v.unpark(); close(done) }()

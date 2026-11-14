@@ -81,6 +81,7 @@ func TestRoutesDeclareReach(t *testing.T) {
 	want := []string{
 		"GET /api/devices",
 		"GET /api/devices/{name}",
+		"GET /api/devices/{name}/leases",
 		"GET /api/devices/{name}/oob",
 		"GET /api/stream",
 		"GET /api/devices/{name}/screen",
@@ -93,6 +94,7 @@ func TestRoutesDeclareReach(t *testing.T) {
 		"GET /api/jobs/{id}",
 		"GET /api/jobs/{id}/wait",
 		"GET /api/jobs/{id}/files/{name...}",
+		"GET /api/devices/{name}/audit",
 	}
 	if !slices.Equal(people, want) {
 		t.Errorf("routes a person may reach:\n got %q\nwant %q", people, want)

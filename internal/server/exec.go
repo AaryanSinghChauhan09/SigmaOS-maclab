@@ -18,7 +18,9 @@ import (
 // hExec runs a shell command on a Mac, as root: through the agent when the
 // Mac is on the network, otherwise through the serial shell. This is what
 // agents use instead of ssh. The answer is held until the command ends (see
-// held): cutting it does not stop the command on the Mac.
+// held): cutting it does not stop the command on the Mac. A Lease fences
+// it: an M team member runs it on a Mac they lease, nobody under another
+// person's Lease, and the holder's is cut when their Lease ends.
 func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 	v := s.devOr404(w, r)
 	if v == nil {
@@ -32,6 +34,11 @@ func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 	if a.TimeoutSec <= 0 || a.TimeoutSec > 3600 {
 		a.TimeoutSec = 120
 	}
+	p := leaser(r)
+	if err := s.fence(v, p, fenceExec); err != nil {
+		httpErr(w, statusOf(err), "%v", err)
+		return
+	}
 	if err := s.mayDo(callerOf(r), v, actExec); err != nil {
 		httpErr(w, 403, "%v", err)
 		return
@@ -43,21 +50,32 @@ func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 409, "%s is offline and has no serial console", v.d.Name)
 		return
 	}
+	session, done := s.underLease(r, v, p)
+	defer done()
 	s.held(w, r, func() (any, error) {
 		var res api.ExecResult
 		var err error
 		if alive {
-			err = v.call(r.Context(), api.CmdExec, "", a, time.Duration(a.TimeoutSec+30)*time.Second, &res)
+			err = v.call(session.Context(), api.CmdExec, "", a, time.Duration(a.TimeoutSec+30)*time.Second, &res)
 			res.Via = "agent"
 		} else {
-			res, err = v.execOOB(r.Context(), a)
+			res, err = v.execOOB(session.Context(), a)
 			res.Via = "serial"
 		}
 		if err != nil {
-			return nil, err
+			return nil, leaseCut(session, r, v, err)
 		}
 		return res, nil
 	})
+}
+
+// leaseCut is err, or, when the session ended because its Lease did and
+// not because its caller left, the refusal that says so.
+func leaseCut(session, r *http.Request, v *dev, err error) error {
+	if session.Context().Err() != nil && r.Context().Err() == nil {
+		return refuse(409, "the Lease on %s ended, which cut this session; a command it started may still be running on the Mac", v.snapshot().Name)
+	}
+	return err
 }
 
 var (

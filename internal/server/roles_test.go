@@ -841,7 +841,7 @@ func TestALabTokenActsWithItsPersonsKind(t *testing.T) {
 		t.Errorf("the token of a person with no role: %d", w.Code)
 	}
 	for _, token := range []string{own, team} {
-		if w := l.asToken(token, "POST", "/api/jobs", "198.51.100.7"); w.Code != http.StatusForbidden {
+		if w := l.asToken(token, "POST", "/api/builds", "198.51.100.7"); w.Code != http.StatusForbidden {
 			t.Errorf("a token below Maintainer on a Maintainer's route: %d %s", w.Code, w.Body)
 		}
 	}

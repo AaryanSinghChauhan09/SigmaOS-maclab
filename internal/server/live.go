@@ -122,9 +122,7 @@ func (s *Server) hStream(w http.ResponseWriter, r *http.Request) {
 // viewLocked is view for callers already holding v.mu.
 func (v *dev) viewLocked() DeviceView {
 	d := v.d
-	if d.Lease != nil && v.s.now().After(d.Lease.Expires) {
-		d.Lease = nil
-	}
+	d.Lease = v.liveLeaseLocked()
 	if c, _ := v.configurationLocked(); c != (api.Configuration{}) {
 		d.Configuration = &c
 	} else {
@@ -365,6 +363,11 @@ func (s *Server) consoleCtl(w http.ResponseWriter, r *http.Request) (*dev, oob.C
 		httpErr(w, 409, "%s has no out-of-band controller, so there is no serial console", v.d.Name)
 		return nil, nil
 	}
+	// The console is a root shell, fenced by a Lease as lab exec is.
+	if err := s.fence(v, leaser(r), fenceExec); err != nil {
+		httpErr(w, statusOf(err), "%v", err)
+		return nil, nil
+	}
 	return v, ctl
 }
 
@@ -382,7 +385,9 @@ func (s *Server) hConsoleRaw(w http.ResponseWriter, r *http.Request) {
 	if fl != nil {
 		fl.Flush()
 	}
-	v.rawOOB(r.Context(), flushWriter{w, fl})
+	session, done := s.underLease(r, v, leaser(r))
+	defer done()
+	v.rawOOB(session.Context(), flushWriter{w, fl})
 }
 
 type flushWriter struct {

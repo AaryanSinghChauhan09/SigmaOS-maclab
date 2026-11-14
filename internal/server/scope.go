@@ -360,8 +360,9 @@ func actScript(why string) action { return action{kindFull, "Maintainer's script
 
 // mayDo is why c may not do a on v, or nil when it may. A Mac c doesn't see
 // is errNotSeen. A person may only watch their own Mac; a Mac may only add
-// files to its own jobs; Maintainers and labd do the rest, as far as a
-// Volunteer's Mac's Access level and Availability window allow.
+// files to its own jobs; Maintainers and labd do the rest, and an M team
+// member on a Mac they lease, as far as a Volunteer's Mac's Access level
+// and Availability window allow.
 func (s *Server) mayDo(c caller, v *dev, a action) error {
 	if v == nil {
 		return errNotSeen
@@ -385,7 +386,9 @@ func (s *Server) mayDoLocked(c caller, v *dev, a action) error {
 		}
 		return fmt.Errorf("a Mac may not ask for %s on %s", a.what, d.Name)
 	case c.team != "":
-		return fmt.Errorf("an M team member needs their own Lease on %s for %s", d.Name, a.what)
+		if l := v.liveLeaseLocked(); l == nil || l.AccountID == 0 || l.AccountID != c.account {
+			return fmt.Errorf("an M team member needs their own Lease on %s for %s: `lab lease %s`", d.Name, a.what, d.Name)
+		}
 	case c.login != "":
 		if !s.seesLocked(c, v) {
 			return errNotSeen

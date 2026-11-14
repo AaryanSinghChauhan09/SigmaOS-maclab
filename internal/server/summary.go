@@ -48,7 +48,6 @@ func (s *Server) postDailySummary(day time.Time) {
 
 // summaryMacs is every enrolled Mac as the daily summary shows it.
 func (s *Server) summaryMacs() []MacSummary {
-	now := s.now()
 	var out []MacSummary
 	for _, v := range s.allDevs() {
 		d := v.snapshot()
@@ -59,9 +58,12 @@ func (s *Server) summaryMacs() []MacSummary {
 		if c := s.configuration(v); c != (api.Configuration{}) {
 			m.Configuration = c.String()
 		}
+		v.mu.Lock()
+		l := v.liveLeaseLocked()
+		v.mu.Unlock()
 		switch {
-		case d.Lease != nil && d.Lease.Expires.After(now):
-			m.State = MacLeased(orStr(d.Lease.Owner(), d.Lease.Holder), d.Lease.Expires)
+		case l != nil:
+			m.State = MacLeased(orStr(l.Owner(), l.Holder), l.Expires)
 		case d.ActiveJob != "" || d.State == api.StateBusy || d.State == api.StateRecovering:
 			m.State = MacRunningJob
 		case v.windowClosed():

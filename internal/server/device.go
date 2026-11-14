@@ -47,6 +47,7 @@ type dev struct {
 	restore       api.DeviceState
 	queue         chan string
 	parked        []parkedJob   // queued jobs someone else's lease holds back (see park)
+	leaseCut      string        // why the Mac's Volunteer or its window cut the Lease short, "" when nothing did
 	coresLooked   bool          // the Mac's jobs were looked through for its core counts (see configuration)
 	gone          chan struct{} // closed when the device is forgotten: ends deviceLoop
 	stop          chan struct{} // closed when the Mac's enrollment ends
@@ -505,7 +506,7 @@ func (v *dev) sendFor(c caller, kind, job string, args any) string {
 // now): no other boot ever gets the command. It returns the command's ID
 // and that boot.
 func (v *dev) sendForBoot(c caller, boot, kind, job string, args any) (string, string) {
-	maintainer := c.maintainer
+	maintainer := orStr(c.maintainer, c.team) // the handle of whoever asked, in the field the agent has
 	if maintainer == "" && c.login == "" && job != "" {
 		if j, err := v.s.store.job(job); err == nil {
 			maintainer = j.Maintainer

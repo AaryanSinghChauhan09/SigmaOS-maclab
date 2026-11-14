@@ -300,7 +300,7 @@ func (s *Server) pEndOwnAccess(w http.ResponseWriter, r *http.Request) {
 	if err := s.record(r, `used "End all access"`, nil); err != nil {
 		s.log.Printf("the People record: %v", err)
 	}
-	if err := s.endAllAccess(*p, `ended: @`+p.Handle+` used "End all access"`); err != nil {
+	if err := s.endAllAccess(*p, *p); err != nil {
 		s.pageFailed(w, err)
 		return
 	}
@@ -380,7 +380,7 @@ func (s *Server) pEndAccess(w http.ResponseWriter, r *http.Request) {
 	if err := s.record(r, `used "End all access" on`, &p); err != nil {
 		s.log.Printf("the People record: %v", err)
 	}
-	if err := s.endAllAccess(p, `ended: @`+by.Handle+` used "End all access" on @`+p.Handle); err != nil {
+	if err := s.endAllAccess(p, *by); err != nil {
 		s.pageFailed(w, err)
 		return
 	}

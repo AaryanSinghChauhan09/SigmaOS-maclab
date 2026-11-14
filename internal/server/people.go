@@ -109,7 +109,10 @@ func (s *Server) sessionOf(value string) *signedIn {
 
 // setMaintainer gives the person the Maintainer role or takes it away. It
 // holds from their next request, and their open streams end now. Taking it
-// away ends the leases they hold, which nobody else would release.
+// away ends the Leases they hold: they were taken under a Maintainer's rule
+// (24 hours, more than one of a Configuration), and the person leases again
+// as an M team member. Only an Admin takes it away, and who is an Admin is
+// on no screen, so the record and the Lab group say "an Admin".
 func (s *Server) setMaintainer(accountID int64, on bool) error {
 	if err := s.store.setMaintainer(accountID, on); err != nil {
 		return err
@@ -117,7 +120,9 @@ func (s *Server) setMaintainer(accountID int64, on bool) error {
 	s.conns.end(accountConnKey(accountID))
 	if !on {
 		if p, err := s.person(accountID); err == nil && !p.Admin {
-			s.endLeasesOf(p.Handle, "ended: @"+p.Handle+" is no longer a Maintainer")
+			end := endedByMaintainer(Person{Handle: "an Admin"}, "no longer a Maintainer")
+			end.note = "ended: @" + p.Handle + " is no longer a Maintainer"
+			s.endLeasesOf(p, end)
 		}
 	}
 	return nil

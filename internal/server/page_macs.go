@@ -255,7 +255,7 @@ func (s *Server) pMacsRelease(w http.ResponseWriter, r *http.Request) {
 		s.backToMacs(w, r, refuse(409, "you hold no Lease on %s to release", name))
 		return
 	}
-	s.backToMacs(w, r, s.releaseLease(v, p, "", false))
+	s.backToMacs(w, r, s.releaseLease(v, p, "", false, ""))
 }
 
 // coreCountMax is above any Mac's count; it only keeps nonsense out.

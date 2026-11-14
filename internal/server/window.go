@@ -64,23 +64,24 @@ func (v *dev) openUntilLocked() time.Time {
 
 // capLeaseLocked ends a lease on a Volunteer's Mac with its Availability
 // window at the latest: at the window's end, or now once it has closed (a
-// Pause). An end that moves later doesn't stretch a lease again. It says
-// whether the lease changed. Caller holds v.mu.
+// Pause). An end that moves later doesn't stretch a lease again, and a
+// lease cut so is not extended for a job (see liveLeaseLocked): lab-agent
+// stops the job. It says whether the lease changed. Caller holds v.mu.
 func (v *dev) capLeaseLocked() bool {
 	l := v.d.Lease
 	if l == nil || !v.d.IsVolunteer() {
 		return false
 	}
-	end := v.openUntilLocked()
+	end, why := v.openUntilLocked(), "the Availability window ended"
 	if end.IsZero() {
-		end = v.s.now()
+		end, why = v.s.now(), "the Availability window closed"
 	}
 	if !l.Expires.After(end) {
 		return false
 	}
 	capped := *l
 	capped.Expires = end
-	v.d.Lease = &capped
+	v.d.Lease, v.leaseCut = &capped, why
 	return true
 }
 
