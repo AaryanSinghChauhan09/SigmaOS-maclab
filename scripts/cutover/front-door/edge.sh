@@ -111,8 +111,9 @@ edge_mac() {
   [[ -n $token ]] || fail "the labd started here made no Join command"
   "$BIN/lab-agent" sim --server "$ADDRESS" --token "$token" --reboot-delay "$delay" > "$WORK/sim.log" 2>&1 &
   SIM_PID=$!
-  for n in $(seq 100); do
+  for n in $(seq 300); do
     "$LAB_CMD" status "$MAC" 2>/dev/null | grep -q "$MAC" && break
+    kill -0 "$SIM_PID" 2>/dev/null || fail "the simulated Mac stopped while joining: $(plain "$WORK/sim.log")"
     sleep 0.1
   done
   "$LAB_CMD" baseline "$MAC" > "$WORK/baseline.log" 2>&1 || fail "the simulated Mac's baseline: $(plain "$WORK/baseline.log")"

@@ -41,6 +41,10 @@ usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2;
 LISTENER_ACCOUNT=lab
 ROOT_LISTENERS='^(oobd|lab-build)'
 
+# digest: the SHA-256 of standard input. macOS has shasum; the tests also
+# run where only sha256sum is.
+digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; }
+
 origin() {
   local routes="$LAB_CURRENT/deploy/cloudflared.yml" socket="${LABD_SOCKET#"$SYSROOT"}" services other others listening total=0 beyond=0 names="" command user name port
   need_root
@@ -107,7 +111,7 @@ callers() {
   local same=0 addr
   if [[ -n $expect ]]; then
     while read -r _ addr; do
-      [[ "$(printf '%s' "$addr" | shasum -a 256 | cut -d' ' -f1)" != "$expect" ]] || same=$((same + 1))
+      [[ "$(printf '%s' "$addr" | digest | cut -d' ' -f1)" != "$expect" ]] || same=$((same + 1))
     done <<<"$addresses"
   fi
   echo "as_expected=$same"
