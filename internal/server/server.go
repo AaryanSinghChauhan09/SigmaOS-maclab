@@ -700,8 +700,8 @@ func (s *Server) routes() []route {
 		{"POST /api/devices/{name}/exec", maintainers, s.hExec},
 		{"GET /api/devices/{name}/audit", maintainers, s.hAudit},
 		{"GET /api/maintainers", maintainers, s.hMaintainers},
-		{"POST /api/maintainers", maintainers, s.hAddMaintainer},
-		{"DELETE /api/maintainers/{name}", maintainers, s.hRemoveMaintainer},
+		{"POST /api/maintainers", maintainers, s.adminOnly(s.hAddMaintainer)},
+		{"DELETE /api/maintainers/{name}", maintainers, s.adminOnly(s.hRemoveMaintainer)},
 	}
 }
 

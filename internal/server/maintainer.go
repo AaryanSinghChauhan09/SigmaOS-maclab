@@ -115,6 +115,21 @@ func (s *Server) maintainer(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// adminOnly keeps a Maintainer route from the browser session of a
+// Maintainer who is not an Admin: only an Admin adds and removes Maintainers.
+// A Maintainer's token is let through as before.
+func (s *Server) adminOnly(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if si := signedInOf(r); si != nil && !si.Admin {
+			if _, err := s.store.maintainerByToken(hashSecret(bearer(r))); err != nil {
+				httpErr(w, 403, "@%s is a Maintainer; only an Admin adds and removes Maintainers", si.Handle)
+				return
+			}
+		}
+		h(w, r)
+	}
+}
+
 // viewer guards read-only endpoints, which a person labd knows may use too,
 // and passes on who they are (see callerOf): what they see is their scope.
 func (s *Server) viewer(h http.HandlerFunc) http.HandlerFunc {

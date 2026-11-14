@@ -363,7 +363,7 @@ func TestARoleChangeTakesEffectOnTheNextRequest(t *testing.T) {
 	if me := b.whoami(); me.Kind != "Maintainer" {
 		t.Errorf("a Maintainer reads as %+v", me)
 	}
-	if w := b.write("POST", "/api/maintainers", `{"name":"new"}`); w.Code != http.StatusOK {
+	if w := b.write("POST", "/api/builders", `{"name":"new"}`); w.Code != http.StatusOK {
 		t.Errorf("a Maintainer's write from the lab's own page: %d %s", w.Code, w.Body)
 	}
 
@@ -674,6 +674,40 @@ func TestAnAdminIsWhoeverTheConfigurationNamesNow(t *testing.T) {
 	}
 	if w := b.do("GET", "/api/maintainers", ""); w.Code != http.StatusForbidden {
 		t.Errorf("no longer an Admin, on a Maintainer's route: %d %s", w.Code, w.Body)
+	}
+}
+
+// Only an Admin adds and removes Maintainers: a Maintainer signed in with a
+// browser sees who they are and changes none of them.
+func TestOnlyAnAdminsBrowserAddsAndRemovesMaintainers(t *testing.T) {
+	l := newSignInLab(t, nil)
+	l.gh.AddUser(8, "grace")
+	b := l.browser()
+	b.mustSignIn(8)
+	if err := l.s.setMaintainer(8, true); err != nil {
+		t.Fatal(err)
+	}
+	first := l.s.cfg.FirstMaintainer
+	if w := b.do("GET", "/api/maintainers", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), first) {
+		t.Fatalf("a Maintainer reading the Maintainers: %d %s", w.Code, w.Body)
+	}
+	if w := b.write("POST", "/api/maintainers", `{"name":"new"}`); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Admin") {
+		t.Errorf("a Maintainer adding a Maintainer: %d %s, want 403 naming the Admin", w.Code, w.Body)
+	}
+	if w := b.write("DELETE", "/api/maintainers/"+first, ""); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Admin") {
+		t.Errorf("a Maintainer removing a Maintainer: %d %s, want 403 naming the Admin", w.Code, w.Body)
+	}
+	if n, err := l.s.store.countMaintainers(); err != nil || n != 1 || !l.s.store.hasMaintainer(first) {
+		t.Fatalf("after a Maintainer's two tries there are %d Maintainers (%v), %s among them: %v", n, err, first, l.s.store.hasMaintainer(first))
+	}
+
+	owner := l.browser()
+	owner.mustSignIn(ownerID)
+	if w := owner.write("POST", "/api/maintainers", `{"name":"new"}`); w.Code != http.StatusOK {
+		t.Fatalf("an Admin adding a Maintainer: %d %s", w.Code, w.Body)
+	}
+	if w := owner.write("DELETE", "/api/maintainers/new", ""); w.Code != http.StatusOK {
+		t.Errorf("an Admin removing a Maintainer: %d %s", w.Code, w.Body)
 	}
 }
 
