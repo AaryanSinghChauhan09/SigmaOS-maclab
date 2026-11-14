@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# A smoke test of the plain labd binary on an empty data directory, as it runs
-# behind a proxy at a public URL: its own host, or a prefix on a shared host
-# such as https://example.org/lab. curl plays the proxy from loopback (a
-# trusted proxy sending X-Forwarded-Proto/Host). Nothing leaves this machine.
+# A smoke test of the plain labd binary on an empty data directory, in
+# Preview, as it runs on the mini: at its Lab address through the tunnel's
+# Unix socket, where curl plays cloudflared, and at its loopback port, where
+# curl is a caller on the same machine. The Lab address may carry a prefix,
+# such as https://example.org/lab. Nothing leaves this machine.
 #
-#   .github/scripts/labd-smoke.sh <directory holding labd and lab-agent-linux-arm64> [public URL]
+#   .github/scripts/labd-smoke.sh <directory holding labd and lab-agent-linux-arm64> [Lab address]
 set -euo pipefail
 
 BIN=${1:?usage: labd-smoke.sh <bin directory> [public URL]}
@@ -18,9 +19,12 @@ PREFIX=${PUB#https://"$HOST"}
 WORK=$(mktemp -d)
 LOG=${RUNNER_TEMP:-$WORK}/labd-smoke.log
 PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-ROOT=http://127.0.0.1:$PORT
-B=$ROOT$PREFIX                      # labd as the proxy reaches it
-FWD=(-H 'X-Forwarded-Proto: https' -H "X-Forwarded-Host: $HOST")
+ALIAS=alias.example
+SOCK=$WORK/labd.sock
+ROOT=http://$HOST                   # labd as cloudflared asks for it, on the socket
+B=$ROOT$PREFIX
+LOOP=http://127.0.0.1:$PORT$PREFIX  # labd as a caller on this machine asks for it
+FWD=(--unix-socket "$SOCK" -H 'X-Forwarded-Proto: https')
 PID=
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -31,12 +35,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$BIN/labd" --listen="127.0.0.1:$PORT" --data="$WORK/data" --public-url="$PUB" \
-	--trusted-proxy=127.0.0.1/32 --maintainer=ci --omt-site= >"$LOG" 2>&1 &
+"$BIN/labd" --listen="127.0.0.1:$PORT" --socket="$SOCK" --data="$WORK/data" --public-url="$PUB" \
+	--alias="$ALIAS" --preview --maintainer=ci --omt-site= >"$LOG" 2>&1 &
 PID=$!
 
 c() { curl -sS --max-time 20 "$@"; }
 code() { c -o /dev/null -w '%{http_code}' "$@"; }
+head_of() { c -o /dev/null -D - "$@" | tr -d '\r'; }
 sha256() { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 field() { python3 -c 'import json, sys; sys.stdout.write(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 mask() { [ -z "${GITHUB_ACTIONS:-}" ] || echo "::add-mask::$1"; }
@@ -52,6 +57,11 @@ TOK=$(cat "$WORK/data/admin.token")
 mask "$TOK"
 AUTH=(-H "Authorization: Bearer $TOK")
 
+# labd listens on this machine only: a socket for its own account, and loopback.
+[ "$(python3 -c 'import os, stat, sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))' "$SOCK")" = 0o600 ] || fail "the socket's mode"
+"$BIN/labd" --listen="0.0.0.0:$PORT" --data="$WORK/other" --maintainer=ci >/dev/null 2>&1 && fail "labd listened beyond this machine"
+[ "$(c "$LOOP/healthz")" = ok ] || fail "healthz at the loopback port"
+
 # The UI, under the prefix, with its <base> and headers.
 page=$(c -D - "${FWD[@]}" "$B/")
 grep -qF "<base href=\"$PREFIX/\">" <<<"$page" || fail "the UI's <base>"
@@ -59,6 +69,8 @@ grep -qi '^strict-transport-security: max-age=' <<<"$page" || fail "HSTS"
 grep -qi "^content-security-policy: frame-ancestors 'none'" <<<"$page" || fail "frame-ancestors"
 grep -qi '^x-content-type-options: nosniff' <<<"$page" || fail "nosniff"
 [ "$(code "${FWD[@]}" "$B/ui/app.js")" = 200 ] || fail "app.js"
+grep -qi '^x-robots-tag: noindex' <<<"$page" || fail "noindex in Preview"
+head_of "${FWD[@]}" "$B/healthz" | grep -qi '^cache-control: no-store$' || fail "no-store by default"
 
 # The API: tokens only, under the prefix only.
 [ "$(code "${FWD[@]}" "$B/api/devices")" = 401 ] || fail "the API without a token"
@@ -69,9 +81,22 @@ if [ -n "$PREFIX" ]; then
 	[ "$(code "${FWD[@]}" "${AUTH[@]}" "$B//api/devices")" = 404 ] || fail "a path the router would clean"
 fi
 
-# What the proxy forwards must name the public URL.
-[ "$(code -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: evil.example' "${AUTH[@]}" "$B/api/devices")" = 421 ] || fail "another host forwarded"
-[ "$(code -H 'X-Forwarded-Proto: http' -H "X-Forwarded-Host: $HOST" "${AUTH[@]}" "$B/api/devices")" = 421 ] || fail "plain http forwarded"
+# Exactly two names through the tunnel, and this machine's own at the loopback port.
+[ "$(code "${FWD[@]}" "${AUTH[@]}" "http://evil.example$PREFIX/api/devices")" = 421 ] || fail "a third name"
+[ "$(code --unix-socket "$SOCK" -H 'X-Forwarded-Proto: http' "${AUTH[@]}" "$B/api/devices")" = 421 ] || fail "plain http forwarded"
+[ "$(code -H "Host: $HOST" "${AUTH[@]}" "$LOOP/api/devices")" = 421 ] || fail "the Lab address at the loopback port"
+[ "$(c "${AUTH[@]}" "$LOOP/api/devices")" = "[]" ] || fail "the API at the loopback port"
+
+# The Alias: pages are forwarded for good, the API is refused in one line.
+fwd=$(head_of "${FWD[@]}" "http://$ALIAS$PREFIX/install?x=1")
+grep -q '^HTTP/1.1 308' <<<"$fwd" || fail "the Alias's forward"
+grep -qixF "location: $PUB/install?x=1" <<<"$fwd" || fail "the Alias's forward keeps path and query"
+grep -qi '^set-cookie' <<<"$fwd" && fail "the Alias set a cookie"
+[ "$(code "${FWD[@]}" "${AUTH[@]}" "http://$ALIAS$PREFIX/api/devices")" = 421 ] || fail "the API on the Alias"
+[ "$(c "${FWD[@]}" "${AUTH[@]}" "http://$ALIAS$PREFIX/api/devices")" = "Omarchy Mac Lab is at $PUB: use that address" ] || fail "the Alias's line"
+
+# Early data can be replayed.
+[ "$(code "${FWD[@]}" "${AUTH[@]}" -H 'Early-Data: 1' "$B/api/devices")" = 425 ] || fail "early data under the API"
 
 # A page from another origin can't change anything.
 [ "$(code -X POST "${FWD[@]}" "${AUTH[@]}" -H 'Origin: https://evil.example' -d '{}' "$B/api/jobs")" = 403 ] || fail "a cross-origin POST"
@@ -91,6 +116,17 @@ got=$(printf 'Authorization: Bearer %s\n' "$ENR" | c "${FWD[@]}" -H @- "$B/api/j
 terms=$(printf 'Authorization: Bearer %s\n' "$ENR" | c "${FWD[@]}" -H @- "$B/api/join/terms")
 [ "$(field text <<<"$terms" | sha256)" = "$(field sha256 <<<"$terms")" ] || fail "the terms' sha256"
 [ "$(code "${FWD[@]}" "$B/api/join/terms?token=$ENR")" = 401 ] || fail "a token in the URL"
+
+# The caller log: the edge's address is believed on the socket alone, and no
+# token or query reaches it.
+c "${FWD[@]}" -H 'CF-Connecting-IP: 203.0.113.7' -H 'CF-Ray: 8f1e2d3c4b5a6978-BNE' "$B/healthz" >/dev/null
+c -H 'CF-Connecting-IP: 198.51.100.66' -H 'CF-Ray: forged' "$LOOP/healthz" >/dev/null
+CALLERS=$(cat "$WORK"/data/callers/*.log)
+grep -qF '"addr":"203.0.113.7","ray":"8f1e2d3c4b5a6978-BNE"' <<<"$CALLERS" || fail "the caller's address through the tunnel"
+grep -qF '198.51.100.66' <<<"$CALLERS" && fail "a forged address at the loopback port was believed"
+grep -qF '"who":"person:ci"' <<<"$CALLERS" || fail "the caller log names no person"
+grep -qF "$TOK" <<<"$CALLERS" && fail "the caller log holds the Maintainer token"
+grep -qF "$ENR" <<<"$CALLERS" && fail "the caller log holds the enrollment token"
 
 # labd's log holds neither token.
 grep -qF "$TOK" "$LOG" && fail "labd logged the Maintainer token"
