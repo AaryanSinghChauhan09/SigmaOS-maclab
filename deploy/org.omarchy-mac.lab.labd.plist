@@ -15,6 +15,7 @@
     <string>--listen</string><string>127.0.0.1:7770</string>
     <string>--socket</string><string>/var/lab/run/labd.sock</string>
     <string>--public-url</string><string>https://lab.omarchy-mac.org</string>
+    <string>--alias</string><string>maclab.omarchy.org</string>
     <string>--preview</string>
     <string>--data</string><string>/var/lab/data</string>
   </array>

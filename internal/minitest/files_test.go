@@ -151,6 +151,7 @@ func TestLabdsLaunchDaemon(t *testing.T) {
 		"--socket":     "/var/lab/run/labd.sock",
 		"--data":       "/var/lab/data",
 		"--public-url": "https://" + shell(t, "LAB_HOST"),
+		"--alias":      "maclab.omarchy.org",
 	} {
 		if got, ok := flags[flag]; !ok || got != want {
 			t.Errorf("%s is %q, want %q", flag, got, want)
