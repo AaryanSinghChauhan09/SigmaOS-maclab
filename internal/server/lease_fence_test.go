@@ -145,9 +145,10 @@ func TestAnMTeamMemberCancelsOnlyTheirOwnJobs(t *testing.T) {
 	}
 }
 
-// A Maintainer acts without a Lease on a free Mac. Under another person's
-// Lease a Maintainer is refused jobs, exec and a reset, still looks, and
-// ends the Lease, which is recorded.
+// A Maintainer acts without a Lease on a free Mac, lab exec excepted
+// (exec_record_test.go). Under another person's Lease a Maintainer is
+// refused jobs, exec and a reset, still looks, and ends the Lease, which is
+// recorded.
 func TestAMaintainerActsOnAFreeMacAndWaitsUnderAnothersLease(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
@@ -155,7 +156,7 @@ func TestAMaintainerActsOnAFreeMacAndWaitsUnderAnothersLease(t *testing.T) {
 	looks := map[string]bool{"a screenshot": true, "the kept screens": true, "the live journal": true}
 
 	for _, f := range l.fenced() {
-		if f.what == "a reset" || f.what == "a job" {
+		if f.what == "a reset" || f.what == "a job" || f.what == "lab exec" {
 			continue // each has tests of its own on a free Mac
 		}
 		if r, body := f.ask(harnessToken); r.StatusCode != 200 {

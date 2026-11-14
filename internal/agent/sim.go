@@ -965,10 +965,14 @@ func (s *Sim) CollectPstore(since time.Time, outDir string) ([]string, error) { 
 func (s *Sim) Exec(ctx context.Context, a api.ExecArgs) api.ExecResult {
 	if s.OnExec != nil {
 		if out, ok := s.OnExec(a.Command); ok {
-			return api.ExecResult{Stdout: out, Via: "agent"}
+			return api.ExecResult{Stdout: out, Seconds: 0.01, Via: "agent"}
 		}
 	}
-	return api.ExecResult{Stdout: "sim ran: " + a.Command + "\n", Via: "agent"}
+	var code int
+	if _, err := fmt.Sscanf(a.Command, "exit %d", &code); err == nil {
+		return api.ExecResult{ExitCode: code, Seconds: 0.01, Via: "agent"}
+	}
+	return api.ExecResult{Stdout: "sim ran: " + a.Command + "\n", Seconds: 0.01, Via: "agent"}
 }
 
 // omtReport writes a small omarchy-m-test report like the real tool's.

@@ -398,6 +398,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	go s.gcLoop()
 	go s.omtScheduler()
 	go s.callerLogLoop()
+	go s.execRecordLoop()
 	return s, nil
 }
 
@@ -754,6 +755,7 @@ func (s *Server) routes() []route {
 		{"DELETE /api/builders/{name}", maintainers, s.hRemoveBuilder},
 		{"POST /api/devices/{name}/exec", team, s.hExec},
 		{"GET /api/devices/{name}/audit", macNamed, s.hAudit},
+		{"GET /api/devices/{name}/execs", macNamed, s.hExecRecord},
 		{"GET /api/maintainers", maintainers, s.hMaintainersGone},
 		{"POST /api/maintainers", maintainers, s.hMaintainersGone},
 		{"DELETE /api/maintainers/{name}", maintainers, s.hMaintainersGone},

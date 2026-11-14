@@ -139,6 +139,21 @@ func (l *lab) alExec(token, command string) (*http.Response, api.ExecResult, str
 	return r, res, body
 }
 
+// alExecLeased is alExec under a Lease m takes for it and releases after:
+// nobody runs lab exec without their own.
+func (l *lab) alExecLeased(m testMaintainer, command string) (*http.Response, api.ExecResult, string) {
+	l.t.Helper()
+	l.leaseAs(m, 0)
+	defer func() {
+		if r, body := l.as(m.Token, "DELETE", "/api/devices/"+l.name+"/lease", nil); r.StatusCode != 200 {
+			l.t.Fatalf("%s releasing %s: %s %s", m.Name, l.name, r.Status, body)
+		}
+	}()
+	return l.alExec(m.Token, command)
+}
+
+var harnessAda = testMaintainer{Name: harnessMaintainer, Token: harnessToken}
+
 // alSubmit submits a job through labd's API and returns the answer, whatever it is.
 func (l *lab) alSubmit(spec api.JobSpec) (*http.Response, string) {
 	l.t.Helper()
@@ -247,7 +262,7 @@ func TestAccessLevelIsQualificationByDefault(t *testing.T) {
 
 func TestQualificationAccessLevelRejectsExecAtLabd(t *testing.T) {
 	l, _ := windowEndLab(t, labConfig{})
-	r, res, body := l.alExec(harnessToken, "cat /etc/shadow")
+	r, res, body := l.alExecLeased(harnessAda, "cat /etc/shadow")
 	if !alIs4xx(r) || strings.Contains(res.Stdout, "sim ran") {
 		t.Fatalf("lab exec on a Mac at Qualification: %s %s", r.Status, body)
 	}
@@ -294,7 +309,7 @@ func TestFullAccessLevelAllowsExecAndScripts(t *testing.T) {
 	if out := l.mustVolunteer("status"); alStatusLevel(out) != "full" {
 		t.Fatalf("status does not show the Access level as Full:\n%s", out)
 	}
-	r, res, body := l.alExec(harnessToken, "uname -a")
+	r, res, body := l.alExecLeased(harnessAda, "uname -a")
 	if r.StatusCode != 200 || !strings.Contains(res.Stdout, "sim ran: uname -a") {
 		t.Fatalf("lab exec on a Mac at Full: %s %s", r.Status, body)
 	}
@@ -450,12 +465,12 @@ func TestEveryMaintainerActionIsInTheMacsAuditLog(t *testing.T) {
 	l, clock := windowEndLab(t, labConfig{})
 	grace := l.addMaintainer(harnessToken, "grace")
 	l.alSetAccess("full")
-	if r, _, body := l.alExec(harnessToken, "uname -a # al-first"); r.StatusCode != 200 {
+	if r, _, body := l.alExecLeased(harnessAda, "uname -a # al-first"); r.StatusCode != 200 {
 		t.Fatalf("exec: %s %s", r.Status, body)
 	}
 	id := l.submitJob(l.alScriptJob("7.2-audited", "echo al-audited-script", false))
 	l.expect(l.jobAPI(id, 90*time.Second), api.OutcomePass)
-	if r, _, body := l.alExec(grace.Token, "ls /home # al-last"); r.StatusCode != 200 {
+	if r, _, body := l.alExecLeased(grace, "ls /home # al-last"); r.StatusCode != 200 {
 		t.Fatalf("exec as grace: %s %s", r.Status, body)
 	}
 	out := l.alWaitLog(harnessMaintainer, "grace", "uname -a # al-first", "ls /home # al-last", id, "echo al-audited-script")
@@ -516,7 +531,7 @@ func TestLogReadsTheAuditLogWithLabdDown(t *testing.T) {
 func TestLabdKeepsItsOwnCopyOfTheAuditLog(t *testing.T) {
 	l, _ := windowEndLab(t, labConfig{})
 	l.alSetAccess("full")
-	if r, _, body := l.alExec(harnessToken, "uptime # al-labd-copy"); r.StatusCode != 200 {
+	if r, _, body := l.alExecLeased(harnessAda, "uptime # al-labd-copy"); r.StatusCode != 200 {
 		t.Fatalf("exec: %s %s", r.Status, body)
 	}
 	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-copied behavior=ok")})
@@ -553,7 +568,7 @@ func TestJobsListsTheLabsJobsOnTheMac(t *testing.T) {
 func TestStatusShowsTheLatestAuditEntries(t *testing.T) {
 	l, _ := windowEndLab(t, labConfig{})
 	l.alSetAccess("full")
-	if r, _, body := l.alExec(harnessToken, "df -h # al-in-status"); r.StatusCode != 200 {
+	if r, _, body := l.alExecLeased(harnessAda, "df -h # al-in-status"); r.StatusCode != 200 {
 		t.Fatalf("exec: %s %s", r.Status, body)
 	}
 	l.alWaitLog("al-in-status")
@@ -619,7 +634,7 @@ func TestAccessLevelDoesNotApplyToALabOwnedMac(t *testing.T) {
 	l.baseline()
 	l.volunteer("access", "qualification") // a Lab-owned Mac has no Access level, whatever this answers
 	time.Sleep(time.Second)
-	r, res, body := l.alExec(harnessToken, "uname -a")
+	r, res, body := l.alExecLeased(harnessAda, "uname -a")
 	if r.StatusCode != 200 || !strings.Contains(res.Stdout, "sim ran: uname -a") {
 		t.Fatalf("lab exec on a Lab-owned Mac: %s %s", r.Status, body)
 	}

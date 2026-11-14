@@ -314,9 +314,9 @@ type fenced struct {
 var (
 	fenceJobs  = fenced{what: "jobs"}
 	fenceReset = fenced{what: "a reset"}
-	// fenceExec is lab exec and the serial console. A Maintainer still runs
-	// it on a free Mac; set own for "nobody without their own Lease".
-	fenceExec = fenced{what: "lab exec"}
+	// fenceExec is lab exec: the one exception to "a Maintainer may do
+	// everything on any Mac".
+	fenceExec = fenced{what: "lab exec", own: true}
 )
 
 // fence is why p may not do f on v now, or nil. An M team member needs

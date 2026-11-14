@@ -124,7 +124,6 @@ func openRequestsEnd(t *testing.T, cut func(*lab, testMaintainer)) {
 	t.Cleanup(cancel)
 	open := map[string]string{
 		"stream":         "/api/stream",
-		"console":        "/api/devices/" + l.name + "/console",
 		"job wait":       "/api/jobs/" + j.ID + "/wait?timeout=3600",
 		"build-log tail": "/api/builds/" + b.ID + "/log?offset=0&wait=50",
 	}

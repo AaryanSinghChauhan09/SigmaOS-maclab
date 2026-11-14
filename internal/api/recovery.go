@@ -1,9 +1,15 @@
 package api
 
 const (
-	RecoveryNetworkOnly    = "network-only"
+	RecoveryNetworkOnly = "network-only"
+	// RecoverySerialAssisted is a mode of the old lab, kept as a name so it
+	// can be refused: see NoSerialConsole.
 	RecoverySerialAssisted = "serial-assisted"
 )
+
+// NoSerialConsole is what the lab answers wherever the serial console is
+// asked for: a Hard reset is its only out-of-band function.
+const NoSerialConsole = "The serial console is not part of Omarchy Mac Lab."
 
 func ValidRecoveryMode(mode string) bool {
 	return mode == "" || mode == RecoveryNetworkOnly || mode == RecoverySerialAssisted

@@ -203,6 +203,16 @@ func TestTheEventStreamKeepsIts15s(t *testing.T) {
 	}
 }
 
+// leasedByName gives the Mac a Lease of a Maintainer known by name alone,
+// as the requests byMaintainer makes are: nobody runs lab exec without
+// their own.
+func (l *lab) leasedByName(name string) {
+	v := l.s.dev(l.name)
+	v.mu.Lock()
+	v.d.Lease = &api.Lease{Holder: name + "@laptop", Maintainer: name, Expires: time.Now().Add(time.Hour)}
+	v.mu.Unlock()
+}
+
 // heldExec asks for an exec on l's Mac as a Maintainer.
 func heldExec(l *lab, tunnel bool, accept string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"command":"uname -r"}`))
@@ -243,6 +253,7 @@ func heldLast(t *testing.T, body string) api.HeldLine {
 func TestTheSilentFormAnswersOnlyOnTheLoopbackPort(t *testing.T) {
 	l := newLab(t, false)
 	l.waitDevice(func(d api.Device) bool { return d.BootID != "" })
+	l.leasedByName("ada")
 
 	rec := heldExec(l, false, "")
 	var res api.ExecResult

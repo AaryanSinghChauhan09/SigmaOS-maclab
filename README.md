@@ -167,8 +167,10 @@ read count as the same Configuration until a Maintainer sets them, on Macs.
 A Lease fences jobs, `lab exec`, screenshots, the live journal and reset. An
 M team member needs their own Lease on the Mac for each, cancels only their
 own jobs, and runs no baseline and no build. A Maintainer acts without a Lease
-on a free Mac; under another person's Lease a Maintainer is refused jobs, exec
-and a reset, may still look and cancel a job, and may end the Lease. The M team
+on a free Mac, with one exception: nobody runs `lab exec` without their own
+Lease, a Maintainer included. Under another person's Lease a Maintainer is
+refused jobs, exec and a reset, may still look and cancel a job, and may end
+the Lease. The M team
 reads every job, result and collected file on the fleet; a Mac's Audit log is
 for Maintainers and its Volunteer.
 
@@ -181,6 +183,14 @@ How a Lease ends decides what happens to its holder's work:
 | Runs out with nothing running | | canceled and cut |
 | Ended by a Maintainer (`lab release <device> --force`, or End Lease on People), the holder leaving the M team or being Blocked, "End all access" | canceled as `lab cancel` does; the Mac returns to its Known-good kernel | canceled and cut |
 | Window end, Pause, lowered Access level on a Volunteer's Mac | stopped by `lab-agent` | stay queued |
+
+Every `lab exec`, and every refused attempt, is in the Exec record: the person
+and the handle they had then, the Mac, when, the command's text, its exit code
+and how long it ran, and never its output. A line is deleted when it is 12
+months old. `GET /api/devices/<device>/execs` shows it to Maintainers and the
+Mac's Volunteer, and to anyone else the commands they ran themselves. The text
+of a command is kept and is visible on the Mac while it runs: never put a
+secret in one.
 
 A job that ran under a Lease is never queued again by labd itself. Jobs others
 queued before the Lease run when it ends. Cutting a `lab exec` ends its answer;

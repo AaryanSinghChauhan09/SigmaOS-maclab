@@ -71,11 +71,6 @@ func (v *dev) writeOOB(ctx context.Context, b []byte) error {
 func (v *dev) rawOOB(ctx context.Context, w io.Writer) error {
 	return v.useOOB(ctx, func(c oob.Controller, x context.Context) error { return c.Raw(x, w) })
 }
-func (v *dev) execOOB(ctx context.Context, a api.ExecArgs) (api.ExecResult, error) {
-	var out api.ExecResult
-	e := v.useOOB(ctx, func(c oob.Controller, x context.Context) error { var e error; out, e = serialExec(x, c, a); return e })
-	return out, e
-}
 
 // This policy survives a failed return and controller restart. An empty legacy
 // request inherits a network hold; only explicit validated serial-assisted may
