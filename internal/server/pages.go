@@ -95,7 +95,7 @@ func (s *Server) fleet() *web.Fleet {
 		f.Macs++
 		switch d.State {
 		case api.StateReady:
-			if d.Lease == nil {
+			if !s.leased(v) {
 				f.Free++
 			}
 		case api.StateBusy:

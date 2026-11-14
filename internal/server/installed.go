@@ -1100,7 +1100,7 @@ func (s *Server) promote(ctx context.Context, v *dev, release string, j *api.Job
 	}
 	v.mu.Lock()
 	prev := v.d.KnownGood
-	v.d.KnownGood = j.Result.BootKernel
+	v.d.KnownGood, v.coresLooked = j.Result.BootKernel, false
 	err := v.storeLocked()
 	if err != nil {
 		v.d.KnownGood = prev

@@ -63,10 +63,12 @@ const usage = `lab: run kernels and tests on Omarchy Macs
                                       caused; the gate lists who set it aside, why and when. --clear counts it again
   lab retry <job> [--no-wait]         run a finished job again: same Mac, kernel (or source commit), tests and cmdline
   lab publish <job>                   upload a known-good run's omarchy-m-test report to omarchy-m-testing.org
-  lab lease <device> [--ttl 1h] | lab release <device> [--force]
-                                      reserve a Mac: until the lease ends only your jobs run on it,
-                                      and others' queued jobs wait. Only you can release it;
-                                      --force ends another Maintainer's lease, and is recorded
+  lab lease <device> [--ttl 4h] | lab release <device> [--force]
+                                      take a Lease on a Mac, for 4 hours unless --ttl says otherwise (a Maintainer
+                                      up to 24h): until it ends only your jobs run on it, and others' queued
+                                      jobs wait. Running it again renews the Lease: it ends 4 hours from then.
+                                      An M team member holds one Mac of each Configuration. Only you release
+                                      your Lease; --force ends another person's (Maintainers), and is recorded
   lab forget <device> [--force]       take a Mac out of the lab (after lab-agent uninstall); its jobs stay.
                                       Refused while someone else leases it or its agent checks in, unless --force
   lab installed freeze-manifest --release R <manifest.json> <payload.sha256> [--approved-by a,b]
@@ -119,6 +121,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "lab:", err)
 		os.Exit(1)
 	}
+}
+
+// leaseLine is what lab lease prints for a Lease taken or renewed.
+func leaseLine(device string, l *api.Lease) string {
+	return fmt.Sprintf("%s leased by %s until %s", device, l.Who(), l.Expires.Local().Format("15:04:05 on Mon 2 Jan"))
 }
 
 func holder() string {
@@ -685,17 +692,20 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		return nil
 
 	case "lease":
-		ttl := fs.Duration("ttl", time.Hour, "")
+		ttl := fs.Duration("ttl", 0, "how long the Lease lasts; the lab's 4 hours when not given")
 		who := fs.String("holder", holder(), "")
 		pos := parse(fs, args)
-		if err := need(pos, 1, "lab lease <device>"); err != nil {
+		if err := need(pos, 1, "lab lease <device> [--ttl 4h]"); err != nil {
 			return err
 		}
 		l, err := c.Lease(ctx, pos[0], *who, *ttl)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s leased by %s until %s\n", pos[0], l.Who(), l.Expires.Format(time.TimeOnly))
+		fmt.Println(leaseLine(pos[0], l))
+		if l.Warning != "" {
+			fmt.Fprintln(os.Stderr, "warning: "+l.Warning)
+		}
 		return nil
 
 	case "forget":
@@ -719,7 +729,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 
 	case "release":
 		who := fs.String("holder", holder(), "")
-		force := fs.Bool("force", false, "end the lease even if another Maintainer took it; labd records that you did")
+		force := fs.Bool("force", false, "end the Lease even if another person took it (Maintainers); the lab records that you did")
 		pos := parse(fs, args)
 		if err := need(pos, 1, "lab release <device> [--force]"); err != nil {
 			return err
@@ -1144,6 +1154,9 @@ func showDevice(ctx context.Context, c *client.Client, name string) error {
 	}
 	if d.Volunteer {
 		fmt.Printf("  gate:        a Volunteer's Mac: lab gate counts it only with --volunteers\n")
+	}
+	if d.Configuration != nil {
+		fmt.Printf("  config:      %s\n", d.Configuration)
 	}
 	fmt.Printf("  kernel:      %s (known-good: %s)\n", d.Kernel, orDash(d.KnownGood, "no baseline yet"))
 	fmt.Printf("  last seen:   %s, uptime %.0fs, systemd %s\n", ago(d.LastSeen), d.Health.Uptime, d.Health.SystemState)

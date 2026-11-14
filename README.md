@@ -139,17 +139,34 @@ an inference, not a diagnosis.
 
 ### Reserving a Mac
 
-`lab lease <device> --ttl 3h` reserves a Mac: until the lease runs out or
-`lab release <device>`, only your jobs run on it. Others' new jobs are refused. Jobs
-they queued before you took it wait aside, saying so, while yours queued after
-them go first, and run once the lease ends. A job already running when you take
-it finishes first. A lease belongs to its holder (`MACLAB_HOLDER`, else
-`user@host`) and to the Maintainer whose token took it: naming the same holder
-doesn't let another Maintainer renew it, release it, reset the Mac or run jobs
-under it. On a Volunteer's Mac it ends with the Availability window at the latest.
-Another Maintainer can end it early with `lab release <device> --force`, for a
-lease someone forgot; labd's log and each job it set aside record who ended it.
-Removing a Maintainer ends their leases the same way.
+`lab lease <device>` takes a Lease on a Mac, as does the Lease button on Macs:
+until it runs out or `lab release <device>`, only your jobs run on it. Others'
+new jobs are refused, a Maintainer's included, naming the holder and the end
+time. Jobs they queued before you took it wait aside, saying so, while yours
+queued after them go first, and run once the Lease ends. A job already running
+when you take it finishes first.
+
+A Lease is a person's, a Maintainer's or an M team member's: the lab keeps the
+account id, and a rename changes nothing. Inside it is the holder label
+(`MACLAB_HOLDER`, else `user@host`), so one person's several agents keep apart:
+naming the same holder doesn't let another person renew it, release it, reset
+the Mac or run jobs under it. It lasts 4 hours; a Maintainer may ask for up to
+24 (`--ttl 24h`), an M team member may not. Taking it again renews it, at any
+time: it then ends 4 hours from that moment. Only a Mac that has passed its
+baseline and has not left is leased; a Volunteer's Mac only inside its
+Availability window, at either Access level, and there the Lease ends with the
+window at the latest.
+
+An M team member holds one Mac of each Configuration (the board with its CPU
+and GPU core counts): a second Lease is refused, naming the one held. A
+Maintainer is warned and goes on. The lab works the Configuration out: from a
+table for a board sold with one, otherwise from the kernel log of the Mac's
+latest job on its Known-good kernel. Macs of one board whose counts it cannot
+read count as the same Configuration until a Maintainer sets them, on Macs.
+
+A Maintainer can end another person's Lease early with `lab release <device>
+--force`; labd's log and each job it set aside record who ended it. Removing a
+Maintainer ends their leases the same way.
 
 ## Lab boots come back by themselves
 

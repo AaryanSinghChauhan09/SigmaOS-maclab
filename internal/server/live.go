@@ -125,6 +125,11 @@ func (v *dev) viewLocked() DeviceView {
 	if d.Lease != nil && v.s.now().After(d.Lease.Expires) {
 		d.Lease = nil
 	}
+	if c, _ := v.configurationLocked(); c != (api.Configuration{}) {
+		d.Configuration = &c
+	} else {
+		d.Configuration = nil
+	}
 	if d.OOB != nil {
 		// The controller's token resets the Mac and opens its root console:
 		// labd alone talks to the controller, clients only show the URL.

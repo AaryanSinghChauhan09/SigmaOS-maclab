@@ -1,0 +1,49 @@
+{{define "main" -}}
+{{with .Data -}}
+<h1>Macs</h1>
+{{- if .Flash}}
+<p class="flash flash-alert" role="alert">{{.Flash}}</p>
+{{- end}}
+<nav class="chips" aria-label="Which Macs">
+<a class="chip{{if eq .Show "all"}} current{{end}}" href="{{href "/macs"}}">All</a>
+<a class="chip{{if eq .Show "mine"}} current{{end}}" href="{{href "/macs?show=mine"}}">Mine</a>
+<a class="chip{{if eq .Show "leased"}} current{{end}}" href="{{href "/macs?show=leased"}}">Leased by me</a>
+</nav>
+{{- if .Empty}}
+<p class="dim">{{.Empty}}</p>
+{{- else}}
+<div class="scroll">
+<table class="stack">
+<thead><tr><th>Mac</th><th>Kind</th><th>Configuration</th><th>State</th><th>Lease</th><th>Take it</th></tr></thead>
+<tbody>
+{{- range .Macs}}
+<tr id="mac-{{.Name}}">
+<td data-label="Mac">{{.Name}}</td>
+<td data-label="Kind">{{.Kind}}{{if .Volunteer}} of @{{.Volunteer}}{{end}}</td>
+<td data-label="Configuration">{{.Configuration}}{{if .SetBy}} <span class="dim">set by @{{.SetBy}}</span>{{end}}
+{{- if $.Data.Maintainer}}
+<form class="form-inline" method="post" action="{{href (print "/macs/" .Name "/configuration")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><label>CPU <input name="cpu" inputmode="numeric" size="3" value="{{.CPU}}"></label> <label>GPU <input name="gpu" inputmode="numeric" size="3" value="{{.GPU}}"></label> <button class="button button-small button-plain" type="submit">Set</button></form>
+{{- end}}</td>
+<td data-label="State">{{.State}}</td>
+<td data-label="Lease">{{if .Holder}}@{{.Holder}}{{if .HolderKind}} <span class="badge {{.HolderClass}}">{{.HolderKind}}</span>{{end}} <span class="nowrap">until {{.Until}}</span>{{else}}<span class="dim">none</span>{{end}}</td>
+<td data-label="Take it">
+{{- if .Mine}}
+<form class="inline" method="post" action="{{href (print "/macs/" .Name "/renew")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><button class="button button-small" type="submit">Renew</button></form>
+{{template "take" ($.Take (print "/macs/" .Name "/release") "Release" (print "Release: your Lease on " .Name " ends now") "show" $.Data.Show)}}
+{{- else if .CanLease}}
+<form class="form-inline" method="post" action="{{href (print "/macs/" .Name "/lease")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}">{{if $.Data.Maintainer}}<label><input name="hours" inputmode="numeric" size="2" value="4"> hours</label> {{end}}<button class="button button-small" type="submit">Lease</button></form>
+{{- if .Warning}}
+<p class="dim">{{.Warning}}</p>
+{{- end}}
+{{- else}}
+<span class="dim">{{.Why}}</span>
+{{- end}}
+</td>
+</tr>
+{{- end}}
+</tbody>
+</table>
+</div>
+{{- end}}
+{{- end}}
+{{- end}}

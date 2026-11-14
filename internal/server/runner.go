@@ -384,6 +384,7 @@ func (r *jobRun) finishAt(outcome, summary string, at time.Time) {
 	// done: no more fetching its artifacts or adding its files.
 	if r.v != nil {
 		r.v.endJobLocked(r.j.ID)
+		r.s.forgetCoreCounts(r.v)
 	}
 	r.s.updateJob(r.j, func(j *api.Job) {
 		j.State, j.Outcome, j.Summary = api.JobDone, outcome, summary

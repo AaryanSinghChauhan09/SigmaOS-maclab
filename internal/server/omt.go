@@ -569,7 +569,7 @@ func (s *Server) omtScheduler() {
 			if d.State != api.StateReady || d.ActiveJob != "" || !s.omtWanted(d, api.JobSpec{}) {
 				continue
 			}
-			if l := d.Lease; l != nil && s.now().Before(l.Expires) {
+			if s.leased(v) {
 				continue
 			}
 			spec := api.JobSpec{Device: d.Name, Holder: omtHolder, Publish: s.cfg.OMTPublish}

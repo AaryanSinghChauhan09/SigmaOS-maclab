@@ -160,6 +160,12 @@ type Server struct {
 	lines    *groupLines
 	labGroup labGroupLines
 	agents   agentsLines
+
+	// leaseMu makes taking a Lease one step: the count of a person's Leases
+	// per Configuration is read on other Macs than the one leased.
+	leaseMu     sync.Mutex
+	mteamForNow sync.Map // account id: the M team's mark, until People keeps it (lease_who.go)
+	lentForNow  sync.Map // Mac name: its Volunteer's account id, until a Mac carries it (lease_who.go)
 }
 
 // clock is where labd reads time: Config.Clock, or the wall clock when unset.
@@ -633,8 +639,8 @@ func (s *Server) routes() []route {
 		{"PATCH /api/devices/{name}", maintainers, s.hPatchDevice},
 		{"DELETE /api/devices/{name}", maintainers, s.hForgetDevice},
 		{"POST /api/devices/{name}/end-enrollment", maintainers, s.hEndEnrollment},
-		{"POST /api/devices/{name}/lease", maintainers, s.hLease},
-		{"DELETE /api/devices/{name}/lease", maintainers, s.hRelease},
+		{"POST /api/devices/{name}/lease", team, s.hLease},
+		{"DELETE /api/devices/{name}/lease", team, s.hRelease},
 		{"POST /api/devices/{name}/reset", maintainers, s.hReset},
 		{"GET /api/devices/{name}/serial", maintainers, s.hSerial},
 		{"GET /api/devices/{name}/oob", macNamed, s.hOOBStatus},
@@ -1422,75 +1428,6 @@ func (s *Server) forget(v *dev, holder string, force bool) (int, error) {
 	close(v.gone)
 	s.dropNamedState(name, v.d.ID)
 	return 200, nil
-}
-
-func (s *Server) hLease(w http.ResponseWriter, r *http.Request) {
-	v := s.devOr404(w, r)
-	if v == nil {
-		return
-	}
-	var req api.LeaseRequest
-	json.NewDecoder(r.Body).Decode(&req)
-	if req.Holder == "" {
-		httpErr(w, 400, "holder required")
-		return
-	}
-	if req.TTLSec <= 0 {
-		req.TTLSec = 3600
-	}
-	me := maintainerName(r)
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if why := v.leaseHoldsBackLocked(req.Holder, me); why != "" {
-		httpErr(w, 409, "%s", why)
-		return
-	}
-	if err := s.mayDoLocked(callerOf(r), v, actLease); err != nil {
-		httpErr(w, 409, "%v", err)
-		return
-	}
-	v.d.Lease = &api.Lease{Holder: req.Holder, Maintainer: me, By: me, Expires: s.now().Add(time.Duration(req.TTLSec) * time.Second)}
-	v.capLeaseLocked()
-	v.saveLocked()
-	writeJSON(w, v.d.Lease)
-}
-
-func (s *Server) hRelease(w http.ResponseWriter, r *http.Request) {
-	v := s.devOr404(w, r)
-	if v == nil {
-		return
-	}
-	holder := r.URL.Query().Get("holder")
-	force, _ := strconv.ParseBool(r.URL.Query().Get("force"))
-	me := maintainerName(r)
-	v.mu.Lock()
-	l := v.d.Lease
-	live := l != nil && s.now().Before(l.Expires)
-	if live && !force {
-		// Only the Maintainer who took a lease ends it early, unless another
-		// Maintainer forces it: one forgotten would otherwise hold the Mac.
-		if l.Owner() != "" && l.Owner() != me {
-			v.mu.Unlock()
-			httpErr(w, 409, "%s is leased by %s until %s; only %s can release it, or another Maintainer with `lab release %s --force`", v.d.Name, l.Who(), l.Expires.Format(time.TimeOnly), l.Owner(), v.d.Name)
-			return
-		}
-		if holder != "" && l.Holder != holder {
-			v.mu.Unlock()
-			httpErr(w, 409, "leased by %s, not %s", l.Holder, holder)
-			return
-		}
-	}
-	forced := live && force && (l.Owner() != me || (holder != "" && l.Holder != holder))
-	v.mu.Unlock()
-	if forced {
-		if !s.endLease(v, l, "ended early by Maintainer "+me+" (lab release --force)") {
-			httpErr(w, 409, "%s's lease changed meanwhile; look again before releasing it", v.d.Name)
-			return
-		}
-	} else {
-		s.endLease(v, nil, "")
-	}
-	w.Write([]byte("ok"))
 }
 
 // hReset runs the recovery ladder by hand, e.g. for an idle Mac that is wedged.

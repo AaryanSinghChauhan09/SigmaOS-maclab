@@ -56,9 +56,12 @@ func (s *Server) summaryMacs() []MacSummary {
 			continue
 		}
 		m := MacSummary{Name: d.Name, State: MacFree}
+		if c := s.configuration(v); c != (api.Configuration{}) {
+			m.Configuration = c.String()
+		}
 		switch {
 		case d.Lease != nil && d.Lease.Expires.After(now):
-			m.State = MacLeased(d.Lease.Holder, d.Lease.Expires)
+			m.State = MacLeased(orStr(d.Lease.Owner(), d.Lease.Holder), d.Lease.Expires)
 		case d.ActiveJob != "" || d.State == api.StateBusy || d.State == api.StateRecovering:
 			m.State = MacRunningJob
 		case v.windowClosed():

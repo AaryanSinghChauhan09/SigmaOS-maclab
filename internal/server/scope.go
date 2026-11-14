@@ -171,6 +171,7 @@ const (
 	builder                  // the builder, by its token
 	invited                  // someone joining with an enrollment token (enr_...), see joinToken
 	maintainers              // a Maintainer's token: the fleet's own, and every change
+	team                     // a Maintainer or an M team member: a Lease
 	people                   // Maintainers, and any person labd knows: ./volunteer
 	macNamed                 // the Mac in {name}: whoever sees it
 	jobNamed                 // the job in {id}: whoever sees its Mac
@@ -200,6 +201,8 @@ func (s *Server) register(m *http.ServeMux, rt route) {
 		h = s.joinToken(h)
 	case maintainers:
 		h = s.maintainer(h)
+	case team:
+		h = s.teamUp(h)
 	case people:
 		h = s.viewer(notSignedIn(h))
 	case scoped:

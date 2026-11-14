@@ -47,6 +47,7 @@ type dev struct {
 	restore       api.DeviceState
 	queue         chan string
 	parked        []parkedJob   // queued jobs someone else's lease holds back (see park)
+	coresLooked   bool          // the Mac's jobs were looked through for its core counts (see configuration)
 	gone          chan struct{} // closed when the device is forgotten: ends deviceLoop
 	stop          chan struct{} // closed when the Mac's enrollment ends
 	goneWhy       string        // why it ended, once it has
