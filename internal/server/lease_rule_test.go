@@ -178,7 +178,12 @@ func TestOnlyTheMTeamAndMaintainersTakeALease(t *testing.T) {
 	if code, _, body := l.browser().lease("m1-pro", "x@y", 0); code != http.StatusUnauthorized {
 		t.Errorf("signed out: %d %s", code, body)
 	}
-	l.signedIn(nobodyID).refusedLease("m1-pro", "x@y", 0, http.StatusForbidden, "M team")
+	l.signedIn(nobodyID).refusedLease("m1-pro", "x@y", 0, http.StatusForbidden, "no role", "M team")
+	// The rule itself refuses whoever is neither, whatever let them in.
+	v := l.s.dev("m1-pro")
+	if _, err := l.s.takeLease(v, asker{AccountID: nobodyID, Handle: "nobody-yet"}, "x@y", 0); err == nil || statusOf(err) != http.StatusForbidden {
+		t.Errorf("the Lease rule for a person with no role: %v", err)
+	}
 	if q := l.leaseOn("m1-pro"); q != nil {
 		t.Fatalf("a refused Lease was taken: %+v", q)
 	}
@@ -427,6 +432,9 @@ func TestTheConfigurationComesFromTheTableElseTheKernelLog(t *testing.T) {
 	l.lrKernelLog("max-a", "j-newest", lrKnownGood, t0.Add(5*time.Hour), lrLog("12", "30"))
 	if got := conf("max-a"); got != "j414c, 12 CPU and 38 GPU cores" {
 		t.Errorf("a Maintainer's correction after a later job: %q", got)
+	}
+	if w := ravi.lrPost("/macs/pro-16/configuration", "cpu", "10", "gpu", "14"); w.Code != http.StatusSeeOther || conf("pro-16") != "j316s, 10 CPU and 14 GPU cores" {
+		t.Errorf("a Maintainer's correction of a board in the table: %d, %q", w.Code, conf("pro-16"))
 	}
 	// Emptied, the control hands the Configuration back to labd.
 	if w := ravi.lrPost("/macs/max-a/configuration", "cpu", "", "gpu", ""); w.Code != http.StatusSeeOther {
