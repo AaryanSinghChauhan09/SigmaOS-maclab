@@ -101,6 +101,54 @@ type Check struct {
 	// typed y: shown as "works (unconfirmed)" and never counted towards a
 	// feature's state.
 	AnsweredByDefault bool
+
+	raw *Object
+}
+
+// Kind is how the check was run: "automatic" or "human".
+func (c *Check) Kind() string { return text(member(c.raw, "kind")) }
+
+// Expected is the state the catalogue expects of the check's feature in a layer, "" for none.
+func (c *Check) Expected(layer string) string {
+	return text(member(c.raw, "classification", "expected", layer))
+}
+
+// ExpectedStates are the expected states the report carries, in its order.
+func (c *Check) ExpectedStates() *Object {
+	expected, _ := member(c.raw, "classification", "expected").(*Object)
+	return expected
+}
+
+// Classified reports whether the check carries a classification.
+func (c *Check) Classified() bool {
+	classification, _ := member(c.raw, "classification").(*Object)
+	return classification != nil
+}
+
+// Score is a benchmark's measurement, or nil.
+func (c *Check) Score() *Object {
+	score, _ := member(c.raw, "score").(*Object)
+	return score
+}
+
+// Evidence is the check's evidence, line by line.
+func (c *Check) Evidence() []string {
+	lines, _ := member(c.raw, "evidence").([]any)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, rubyText(line))
+	}
+	return out
+}
+
+// State is the result state the check's outcome counts as in its run: a
+// failure is a regression where an earlier Verified run found the feature working.
+func (r *Run) CheckState(c *Check) string {
+	state := StateOfOutcome(c.Outcome)
+	if state == "fails" && r.Regression(c.Feature) {
+		return "regression"
+	}
+	return state
 }
 
 // ExpectedGap reports whether the check failed as the catalogue expects on
@@ -139,6 +187,12 @@ func (r *Run) Chip() string       { return r.text("machine", "chip") }
 func (r *Run) Kernel() string     { return r.text("machine", "kernel") }
 func (r *Run) Stack() string      { return r.text("system", "stack") }
 func (r *Run) StackWords() string { return StackWords(r.Stack()) }
+
+// Storage is the SSD's capacity ("1TB"), "" for a report from before it was recorded.
+func (r *Run) Storage() string { return r.text("machine", "storage") }
+
+// Unattended reports whether nobody was at the Mac: only the automatic checks ran.
+func (r *Run) Unattended() bool { return member(r.doc, "unattended") == true }
 
 // ToolVersion is the omarchy-m-test version that ran it.
 func (r *Run) ToolVersion() string { return r.text("tool", "version") }
@@ -313,6 +367,7 @@ func (r *Run) Checks() []*Check {
 				Outcome: text(member(check, "classification", "outcome")), Feature: text(member(check, "classification", "feature")),
 				Layer:             text(member(check, "classification", "layer")),
 				AnsweredByDefault: member(check, "answered_by_default") == true,
+				raw:               check,
 			})
 		}
 	}
