@@ -33,7 +33,7 @@ jobs:
       - name: The tag is a Lab release's and sits on main
         run: |
           [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "$GITHUB_REF_NAME is not vX.Y.Z or vX.Y.Z-rc.N"; exit 1; }
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_REF_NAME is not on main"; exit 1; }
+          git merge-base --is-ancestor HEAD origin/main || { echo "$GITHUB_REF_NAME is not on main"; exit 1; }
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod

@@ -46,7 +46,7 @@ func TestReleaseWorkflow(t *testing.T) {
 	for _, s := range []string{
 		"release/check.sh",
 		`LAB_RELEASE="$GITHUB_REF_NAME" release/build.sh`,
-		`git merge-base --is-ancestor "$GITHUB_SHA" origin/main`,
+		`git merge-base --is-ancestor HEAD origin/main`,
 	} {
 		if !strings.Contains(build, s) {
 			t.Errorf("the build job lacks %q", s)
