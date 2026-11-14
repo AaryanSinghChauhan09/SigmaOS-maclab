@@ -28,6 +28,7 @@ func TestForgetRefusesLeaseAndLiveAgent(t *testing.T) {
 		!strings.Contains(body, "checked in") || !strings.Contains(body, "sudo lab-agent uninstall") || !strings.Contains(body, "--force") {
 		t.Fatalf("forgetting a Mac whose agent checks in: %d %s", code, body)
 	}
+	l.passedBaseline()
 	if resp, body := l.post("/api/devices/"+l.name+"/lease", api.LeaseRequest{Holder: "alice", TTLSec: 600}); resp.StatusCode != 200 {
 		t.Fatalf("lease: %d %s", resp.StatusCode, body)
 	}

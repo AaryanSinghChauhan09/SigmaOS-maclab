@@ -33,6 +33,7 @@ func TestTheDailySummaryGoesAt0800Brisbane(t *testing.T) {
 	sig := &fakeSignal{}
 	dir := signalDir(t)
 	l := newLabWith(t, labConfig{clock: clock, config: func(c *Config) { c.Signal, c.SignalDir = sig, dir }})
+	l.passedBaseline()
 	if r, body := l.post("/api/devices/sim-mac/lease", api.LeaseRequest{Holder: "ada", TTLSec: 4 * 3600}); r.StatusCode != 200 {
 		t.Fatalf("lease: %s %s", r.Status, body)
 	}

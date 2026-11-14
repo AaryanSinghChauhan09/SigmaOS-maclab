@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/window"
 )
@@ -557,3 +558,12 @@ func (l *signInLab) lrUnmark(id int64) { l.s.mteamForNow.Delete(id) }
 
 // lrLend makes the account the Mac's Volunteer.
 func (l *signInLab) lrLend(mac string, id int64) { l.s.lentForNow.Store(mac, id) }
+
+// passedBaseline has the lab's Mac count as one that passed its baseline,
+// for a test that leases it and runs no job: only such a Mac takes a Lease.
+func (l *lab) passedBaseline() {
+	v := l.s.dev(l.name)
+	v.mu.Lock()
+	v.d.KnownGood = agent.SimKnownGood
+	v.mu.Unlock()
+}

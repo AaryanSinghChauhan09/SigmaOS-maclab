@@ -13,6 +13,7 @@ import (
 func TestLeaseRunsOutOnTheLabClock(t *testing.T) {
 	clock := agent.NewFakeClock(time.Now())
 	l := newLabWith(t, labConfig{clock: clock})
+	l.passedBaseline()
 	if r, body := l.post("/api/devices/sim-mac/lease", api.LeaseRequest{Holder: "connor", TTLSec: 60}); r.StatusCode != 200 {
 		t.Fatalf("lease: %s %s", r.Status, body)
 	}
@@ -56,6 +57,7 @@ func TestAgentStampsEventsWithTheLabClock(t *testing.T) {
 
 func TestALeaseNamesTheMaintainerWhoTookIt(t *testing.T) {
 	l := newLabWith(t, labConfig{})
+	l.passedBaseline()
 	if r, body := l.post("/api/devices/sim-mac/lease", api.LeaseRequest{Holder: "w7C-reload", TTLSec: 60}); r.StatusCode != 200 {
 		t.Fatalf("lease: %s %s", r.Status, body)
 	}
