@@ -979,7 +979,18 @@ func (s *Sim) Exec(ctx context.Context, a api.ExecArgs) api.ExecResult {
 	if _, err := fmt.Sscanf(a.Command, "exit %d", &code); err == nil {
 		return api.ExecResult{ExitCode: code, Seconds: 0.01, Via: "agent"}
 	}
-	return api.ExecResult{Stdout: "sim ran: " + a.Command + "\n", Seconds: 0.01, Via: "agent"}
+	// A command that starts with "sleep N" is silent that long, as on a Mac.
+	took := 0.01
+	var sec float64
+	if _, err := fmt.Sscanf(a.Command, "sleep %f", &sec); err == nil && sec > 0 {
+		start := time.Now()
+		select {
+		case <-time.After(time.Duration(sec * float64(time.Second))):
+		case <-ctx.Done():
+		}
+		took = time.Since(start).Seconds()
+	}
+	return api.ExecResult{Stdout: "sim ran: " + a.Command + "\n", Seconds: took, Via: "agent"}
 }
 
 // omtReport writes a small omarchy-m-test report like the real tool's.
