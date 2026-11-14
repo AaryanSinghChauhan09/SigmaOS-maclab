@@ -397,6 +397,12 @@ func (c *Client) Installed(ctx context.Context, method, release, what string, bo
 	return c.do(ctx, method, p, r, out)
 }
 
+// Releases lists every Release with its verdict, newest first.
+func (c *Client) Releases(ctx context.Context) ([]api.Release, error) {
+	var out []api.Release
+	return out, c.do(ctx, "GET", "/api/installed", nil, &out)
+}
+
 func (c *Client) CancelBuild(ctx context.Context, id string) error {
 	return c.do(ctx, "POST", "/api/builds/"+url.PathEscape(id)+"/cancel", nil, nil)
 }

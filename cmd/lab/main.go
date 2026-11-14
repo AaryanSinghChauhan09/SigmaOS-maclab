@@ -74,11 +74,23 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
                                       jobs wait. Running it again renews the Lease: it ends 4 hours from then.
                                       An M team member holds one Mac of each Configuration. Only you release
                                       your Lease; --force ends another person's (Maintainers), and is recorded
-  lab installed freeze-manifest --release R <manifest.json> <payload.sha256> [--approved-by a,b]
-  lab installed freeze-entry <device> --release R    freeze the installer's boot entry, after the install
-  lab installed promote <device> --release R --job <id>   accepted by you
-                                      references + known-good, labd's and the agent's (Mac on that kernel, agent 0.7.3+)
-  lab installed status --release R                   the frozen files of a release
+  lab installed list                  every Release with its verdict
+  lab installed freeze-manifest --release R <manifest.json> <payload.sha256> [--approved-by a,b] [--for MAC]
+                                      from then the Release is listed, with you as who froze it. An M team
+                                      member holds a Lease on one of the Release's Macs and names it (--for)
+  lab installed freeze-entry <device> --release R    freeze the installer's boot entry, after the install: labd reads
+                                      the Mac through its read-only identity check, not an exec. Needs your own
+                                      Lease on the Mac; refused outside the Availability window and on a
+                                      Volunteer's Mac
+  lab installed verdict --release R qualified|not-qualified --note "…" [--yes]
+                                      record the verdict: the first is any M team member's, every later one a
+                                      Maintainer's. "qualified" needs a passed Installed run of the Release
+  lab installed verdict --release R --revoke --note "…" [--yes]      revoke it (Maintainers)
+  lab installed promote <device> --release R --job <id> [--yes]      accepted by you (Maintainers)
+                                      references + known-good, labd's and the agent's (Mac on that kernel, agent 0.7.3+);
+                                      needs that Mac's own passed Installed run; refused on a Volunteer's Mac
+  lab installed status --release R                   the Release's Macs, runs and verdict history, and its frozen files
+                                      verdict and promote say what they are about to do and ask once; --yes answers
   lab reset <device>                  run the recovery ladder on an idle Mac by hand; a Mac that left
                                       (lab-agent uninstall) goes back in the lab first
   lab oob <device>
@@ -1538,18 +1550,32 @@ func manifestSHA(arg string) (string, error) {
 	return "", fmt.Errorf("--installed takes the frozen manifest file or its full sha256, not %q", arg)
 }
 
-// installedCmd handles `lab installed ...`: freezing a release's expectation
-// and promoting an accepted installed run.
+// installedCmd handles `lab installed ...`: listing Releases, freezing a
+// Release's expectation, recording its verdict and promoting an accepted
+// installed run.
 func installedCmd(ctx context.Context, c *client.Client, args []string) error {
+	const usage = "lab installed list|freeze-manifest|freeze-entry|verdict|promote|status ..."
 	if len(args) < 1 {
-		return errors.New("lab installed freeze-manifest|freeze-entry|promote|status ...")
+		return errors.New(usage)
 	}
 	sub := args[0]
 	fs := flag.NewFlagSet("installed "+sub, flag.ContinueOnError)
 	release := fs.String("release", "", "release name, e.g. 12.0")
 	approved := fs.String("approved-by", "", "who approved the manifest, comma-separated")
 	job := fs.String("job", "", "the installed job to promote")
+	note := fs.String("note", "", "why: a verdict needs a note every time")
+	revoke := fs.Bool("revoke", false, "revoke the verdict (Maintainers)")
+	yes := fs.Bool("yes", false, "go on without being asked")
+	forMac := fs.String("for", "", "freeze-manifest, as an M team member: one of the Release's Macs, which you lease")
 	pos := parse(fs, args[1:])
+	if sub == "list" {
+		all, err := c.Releases(ctx)
+		if err != nil {
+			return err
+		}
+		printReleases(os.Stdout, all)
+		return nil
+	}
 	if *release == "" {
 		return errors.New("--release is required")
 	}
@@ -1560,6 +1586,7 @@ func installedCmd(ctx context.Context, c *client.Client, args []string) error {
 		if err := need(pos, 2, "lab installed freeze-manifest --release R <manifest.json> <payload.sha256>"); err != nil {
 			return err
 		}
+		c.UploadFor = *forMac
 		m, err1 := c.Upload(ctx, pos[0])
 		p, err2 := c.Upload(ctx, pos[1])
 		if err1 != nil || err2 != nil {
@@ -1575,15 +1602,54 @@ func installedCmd(ctx context.Context, c *client.Client, args []string) error {
 			return err
 		}
 		err = c.Installed(ctx, "POST", *release, "entry/"+pos[0], nil, &out)
+	case "verdict":
+		req := api.VerdictRequest{Note: *note}
+		switch {
+		case *revoke && len(pos) == 0:
+			req.State = api.ReleaseRevoked
+		case !*revoke && len(pos) == 1 && pos[0] == "qualified":
+			req.State = api.ReleaseQualified
+		case !*revoke && len(pos) == 1 && pos[0] == "not-qualified":
+			req.State = api.ReleaseNotQualified
+		default:
+			return errors.New(`usage: lab installed verdict --release R qualified|not-qualified --note "…", or --revoke --note "…"`)
+		}
+		var asked api.ReleaseAnswer
+		if err := c.Installed(ctx, "POST", *release, "verdict", req, &asked); err != nil {
+			return err
+		}
+		if err := confirmed(asked.Confirm, *yes, os.Stdin); err != nil {
+			return err
+		}
+		req.Confirm = true
+		var done api.ReleaseAnswer
+		if err := c.Installed(ctx, "POST", *release, "verdict", req, &done); err != nil {
+			return err
+		}
+		if done.Release != nil {
+			printReleases(os.Stdout, []api.Release{*done.Release})
+		}
+		return nil
 	case "promote":
 		if err := need(pos, 1, "lab installed promote <device> --release R --job <id>"); err != nil {
 			return err
 		}
-		err = c.Installed(ctx, "POST", *release, "promote", map[string]any{"device": pos[0], "job": *job}, &out)
+		ask := map[string]any{"device": pos[0], "job": *job}
+		var asked struct {
+			Confirm string `json:"confirm"`
+		}
+		if err := c.Installed(ctx, "POST", *release, "promote", ask, &asked); err != nil {
+			return err
+		}
+		if err := confirmed(asked.Confirm, *yes, os.Stdin); err != nil {
+			return err
+		}
+		ask["confirm"] = true
+		err = c.Installed(ctx, "POST", *release, "promote", ask, &out)
 	case "status":
 		err = c.Installed(ctx, "GET", *release, "", nil, &out)
 	default:
-		return fmt.Errorf("unknown: lab installed %s", sub)
+		return fmt.Errorf("unknown: lab installed %s; %s", sub, usage)
 	}
 	if err != nil {
 		return err
@@ -1591,4 +1657,68 @@ func installedCmd(ctx context.Context, c *client.Client, args []string) error {
 	b, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(b))
 	return nil
+}
+
+// confirmed shows the sentence the lab wants confirmed, warnings and all,
+// and asks once at a terminal. With yes it only shows it. With neither a
+// terminal nor yes nothing goes on.
+func confirmed(sentence string, yes bool, in io.Reader) error {
+	fmt.Fprintln(os.Stderr, sentence)
+	if yes {
+		return nil
+	}
+	f, ok := in.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return errors.New("nothing was done: run it again with --yes to confirm")
+	}
+	fmt.Fprint(os.Stderr, "Type yes to go on: ")
+	line, _ := bufio.NewReader(io.LimitReader(f, 64)).ReadString('\n')
+	if strings.TrimSpace(line) != "yes" {
+		return errors.New("nothing was done")
+	}
+	return nil
+}
+
+// releaseState says a Release's state with its date.
+func releaseState(r api.Release) string {
+	words := map[string]string{api.ReleaseQualified: "qualified", api.ReleaseNotQualified: "not qualified", api.ReleaseRevoked: "revoked"}[r.State]
+	if words == "" || r.StateAt == nil {
+		return "no verdict"
+	}
+	return words + " " + r.StateAt.Local().Format("2006-01-02")
+}
+
+// printReleases prints each Release with its verdict, as `lab installed
+// list` shows them.
+func printReleases(w io.Writer, all []api.Release) {
+	if len(all) == 0 {
+		fmt.Fprintln(w, "no Release yet: one is listed once its manifest is frozen (lab installed freeze-manifest)")
+		return
+	}
+	for _, r := range all {
+		by := "@" + r.FrozenBy
+		if r.FrozenBy == "" {
+			by = "before the lab kept who"
+		}
+		fmt.Fprintf(w, "%s  %s\n  frozen %s by %s; kernel %s\n  %d of %d Configurations have a passed run; %d promoted\n",
+			r.Name, releaseState(r), r.FrozenAt.Local().Format("2006-01-02 15:04"), by, r.Kernel, r.Passed, r.Configurations, r.Promoted)
+		for _, m := range r.Macs {
+			line := fmt.Sprintf("  %s (%s): %d Installed runs", m.Mac, m.Configuration, m.Runs)
+			if m.PassedRun != "" {
+				line += ", passed " + m.PassedRun
+			} else if m.LatestRun != "" {
+				line += ", latest " + m.LatestRun + " " + m.LatestOutcome
+			}
+			if m.Promoted != nil {
+				line += "; promoted by @" + m.Promoted.Handle
+				if m.Promoted.Mark != "" {
+					line += " (" + m.Promoted.Mark + ")"
+				}
+			}
+			fmt.Fprintln(w, line)
+		}
+		for _, warn := range r.Warnings {
+			fmt.Fprintln(w, "  warning: "+warn)
+		}
+	}
 }
