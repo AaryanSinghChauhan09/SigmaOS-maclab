@@ -18,10 +18,6 @@ import (
 // for the mini, where the process list, pf, the volumes and labd's page
 // times are what the test says. No container, no kernel, no mini.
 
-func cutover(t *testing.T, name string) string {
-	return filepath.Join(repo(t), "scripts", "cutover", name)
-}
-
 // lab: a build is a file the made-up process list shows as the Builder's VM
 // for a while. A build with a transfer ends once an upload has finished
 // after it began; outcome.<cores>.<n> names another end for the nth build
@@ -566,6 +562,9 @@ func TestWhatCannotBeMeasuredDecidesNothing(t *testing.T) {
 				t.Fatalf("exit %d, want 1\n%s", code, out)
 			}
 			wants(t, "the record", g.record(), "FAILED: "+c.says, "Result: fail")
+			if name == "a stale image" {
+				wants(t, "the record", g.record(), `sudo /usr/local/lab/current/scripts/mini/container as "$(cat /usr/local/lab/container-user)" image delete maclab-kbuild:1 maclab-pkgbuild:1, then sudo /usr/local/lab/current/scripts/mini/setup`)
+			}
 			if g.cores() != "10" || strings.Count(g.calls("calls"), "ssh ") != 1 || !strings.HasPrefix(g.results(), "builder-gate fail ") {
 				t.Errorf("it went on, or wrote: cores %s, results %q\n%s", g.cores(), g.results(), g.calls("calls"))
 			}

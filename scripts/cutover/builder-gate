@@ -321,7 +321,7 @@ build() {
     # refused or an image that cannot read its input.
     case "$stage" in
       build | package) ;;
-      *) give_up "$title (build $id) $state after $seconds s in its ${stage:-first} stage, before it compiled anything: fewer cores do not mend that, so nothing was decided. lab build-log $id says why. A build that could not read its input was built by an image older than the Deployed build: delete the Builder's two images on the mini and run the set-up there" ;;
+      *) give_up "$title (build $id) $state after $seconds s in its ${stage:-first} stage, before it compiled anything: fewer cores do not mend that, so nothing was decided. lab build-log $id says why. A build that could not read its input at /in was built by an image older than the Deployed build: on the mini, sudo $MINI_SCRIPTS/container as \"\$(cat /usr/local/lab/container-user)\" image delete maclab-kbuild:1 maclab-pkgbuild:1, then sudo $MINI_SCRIPTS/setup, which builds both again" ;;
     esac
     rec "$title (build $id): $state after $seconds s, in its $stage stage"
     return 0
