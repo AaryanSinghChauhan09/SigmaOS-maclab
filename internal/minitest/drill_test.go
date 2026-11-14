@@ -409,7 +409,7 @@ func TestADrillThatBreaksOffTellsTheOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := d.refused("restore-drill")
-	if got := d.told(); !strings.Contains(got, " agents The Restore drill failed: it stopped before it was done") || strings.Count(got, "\n") != 1 {
+	if got := d.told(); !strings.Contains(got, " trouble:restore-drill The Restore drill failed: it stopped before it was done") || strings.Count(got, "\n") != 1 {
 		t.Errorf("the owner is told %q\n%s", got, out)
 	}
 	if len(d.scratch()) != 0 || len(d.out.pinged()) != 0 {
