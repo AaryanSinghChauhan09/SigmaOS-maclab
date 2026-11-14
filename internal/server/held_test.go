@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"log"
-	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
-	"github.com/omacom/omarchy-maclab/internal/installed"
 )
 
 // heldServer is a labd on a clock the test moves.
@@ -293,18 +291,18 @@ func TestTheSilentFormAnswersOnlyOnTheLoopbackPort(t *testing.T) {
 // freeze-entry answers as a stream through the tunnel, and what goes wrong
 // on the Mac is in its last line.
 func TestFreezeEntryAnswersAsAStream(t *testing.T) {
-	l, _, _ := installedLab(t, func(_ string, o map[string]any) {
-		e := o["installer_entry"].(installed.Entry)
-		e.UKISections = maps.Clone(e.UKISections)
-		e.UKISections[".cmdline"] = installed.Section{SHA256: "cc", Text: e.Cmdline}
-		o["installer_entry"] = e
-	})
+	l, _, _ := installedLab(t, nil)
 	dir := l.s.frozenDir("9.9")
 	for _, f := range []string{"installer-entry/sim-mac.json", "PINS.installer-entry.sim-mac"} {
 		if err := os.Remove(filepath.Join(dir, f)); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// The freeze is its caller's, under their own Lease.
+	v := l.s.dev("sim-mac")
+	v.mu.Lock()
+	v.d.Lease = &api.Lease{Holder: "ada@laptop", Maintainer: "ada", Expires: time.Now().Add(time.Hour)}
+	v.mu.Unlock()
 	freeze := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "/", nil)
 		req.SetPathValue("release", "9.9")
@@ -314,22 +312,17 @@ func TestFreezeEntryAnswersAsAStream(t *testing.T) {
 		return rec
 	}
 
-	l.sim.OnExec = func(string) (string, bool) { return "not what the collector writes", true }
+	observes := l.sim.InstalledObs
+	l.sim.SetInstalledObs(func(string, string, string, string, string) []byte { return []byte("not what the collector writes") })
 	rec := freeze()
 	if ct := rec.Header().Get("Content-Type"); rec.Code != 200 || ct != "application/x-ndjson" {
 		t.Fatalf("a failed freeze: %d %q %q", rec.Code, ct, rec.Body)
 	}
-	if hl := heldLast(t, rec.Body.String()); hl.Status != 502 || !strings.Contains(hl.Error, "collector output") || hl.Result != nil {
+	if hl := heldLast(t, rec.Body.String()); hl.Status != 502 || !strings.Contains(hl.Error, "cannot read") || hl.Result != nil {
 		t.Fatalf("a failed freeze's last line: %+v", hl)
 	}
 
-	l.sim.OnExec = func(cmd string) (string, bool) {
-		if !strings.Contains(cmd, "MACLAB_FREEZE_EOF") {
-			return "", false
-		}
-		d := l.s.dev("sim-mac").snapshot()
-		return string(l.sim.InstalledObs("freeze", "", d.BootID, d.Kernel, "")), true
-	}
+	l.sim.SetInstalledObs(observes)
 	rec = freeze()
 	var out struct {
 		Device string `json:"device"`

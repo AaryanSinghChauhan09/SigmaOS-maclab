@@ -926,6 +926,103 @@ type InstalledResult struct {
 	Frozen         string            `json:"frozen_copy,omitempty"`
 }
 
+// A Release's state is the verdict it carries now.
+const (
+	ReleaseNoVerdict    = "no_verdict"
+	ReleaseQualified    = "qualified"
+	ReleaseNotQualified = "not_qualified"
+	ReleaseRevoked      = "revoked"
+)
+
+// PromotedFromRevoked marks a Mac promoted from a Release whose
+// Qualification was revoked afterwards: revoking undoes nothing.
+const PromotedFromRevoked = "promoted from a revoked Release"
+
+// Release is a Release as the lab lists it, from the moment its manifest is
+// frozen: what it is and its Macs, fixed then, and what happened since.
+type Release struct {
+	Name           string           `json:"name"`
+	FrozenBy       string           `json:"frozen_by"`
+	FrozenByID     int64            `json:"frozen_by_id,omitempty"`
+	FrozenAt       time.Time        `json:"frozen_at"`
+	ManifestSHA256 string           `json:"manifest_sha256"`
+	Kernel         string           `json:"kernel"`
+	Packages       []ReleasePackage `json:"packages"`
+	Macs           []ReleaseMac     `json:"macs"`
+	State          string           `json:"state"`
+	StateAt        *time.Time       `json:"state_at,omitempty"`
+	// Passed of Configurations have a passed Installed run.
+	Configurations int `json:"configurations"`
+	Passed         int `json:"configurations_passed"`
+	// Promoted is how many Macs were promoted from it.
+	Promoted int `json:"promoted"`
+	// Warnings: an Installed run that failed after the verdict. It changes
+	// nothing by itself.
+	Warnings []string `json:"warnings,omitempty"`
+	// Verdicts is the history, newest first.
+	Verdicts []ReleaseVerdict `json:"verdicts,omitempty"`
+}
+
+type ReleasePackage struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// ReleaseMac is one of a Release's Macs. Mac, DeviceID, Board and
+// Configuration are as they were when the manifest was frozen.
+type ReleaseMac struct {
+	Mac           string            `json:"mac"`
+	DeviceID      string            `json:"device_id,omitempty"`
+	Board         string            `json:"board"`
+	Configuration string            `json:"configuration"`
+	EntryFrozenBy string            `json:"entry_frozen_by,omitempty"`
+	EntryFrozenAt *time.Time        `json:"entry_frozen_at,omitempty"`
+	Runs          int               `json:"runs"`
+	LatestRun     string            `json:"latest_run,omitempty"`
+	LatestOutcome string            `json:"latest_outcome,omitempty"`
+	PassedRun     string            `json:"passed_run,omitempty"` // its latest passed Installed run
+	Promoted      *ReleasePromotion `json:"promoted,omitempty"`
+}
+
+// ReleaseVerdict is one line of a Release's verdict history. Warnings are
+// what the person confirmed with it.
+type ReleaseVerdict struct {
+	Time      time.Time `json:"time"`
+	State     string    `json:"state"`
+	Note      string    `json:"note"`
+	AccountID int64     `json:"account_id,omitempty"`
+	Handle    string    `json:"handle"`
+	Warnings  []string  `json:"warnings,omitempty"`
+}
+
+// ReleasePromotion is a Mac promoted from a Release, by whom and when.
+type ReleasePromotion struct {
+	Time      time.Time `json:"time"`
+	Mac       string    `json:"mac"`
+	Job       string    `json:"job"`
+	Kernel    string    `json:"kernel"`
+	AccountID int64     `json:"account_id,omitempty"`
+	Handle    string    `json:"handle"`
+	Mark      string    `json:"mark,omitempty"` // PromotedFromRevoked
+}
+
+// VerdictRequest records a verdict on a Release: qualified, not_qualified
+// or revoked, with a note every time. Without Confirm nothing is recorded
+// and the answer is the sentence to confirm.
+type VerdictRequest struct {
+	State   string `json:"state"`
+	Note    string `json:"note"`
+	Confirm bool   `json:"confirm,omitempty"`
+}
+
+// ReleaseAnswer answers a verdict: the sentence to confirm, with its
+// warnings, while nothing is recorded; the Release once it is.
+type ReleaseAnswer struct {
+	Confirm  string   `json:"confirm,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+	Release  *Release `json:"release,omitempty"`
+}
+
 // OMTResult summarizes an omarchy-m-test report (github.com/maralcbr/omarchy-m-testing)
 // and compares it with the same Mac's report on its known-good kernel.
 type OMTResult struct {

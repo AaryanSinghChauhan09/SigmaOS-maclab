@@ -85,12 +85,6 @@ func artifactsIn(c api.Command) []string {
 				shas = append(shas, p.SHA256)
 			}
 		}
-	case api.CmdInstall:
-		var a api.InstallArgs
-		json.Unmarshal(c.Args, &a)
-		for _, p := range a.Packages {
-			shas = append(shas, p.SHA256)
-		}
 	case api.CmdMesaStage:
 		var a api.MesaStageArgs
 		json.Unmarshal(c.Args, &a)
@@ -265,6 +259,10 @@ func (s *Server) hUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := agentDev(r)
+	if strings.HasPrefix(job, identityReadPrefix) {
+		s.takeObservation(w, r, v, job, name)
+		return
+	}
 	j, err := s.store.job(job)
 	if err != nil || s.mayDo(callerOf(r), s.dev(j.Spec.Device), actUpload) != nil || !v.ownsActiveJob(j) {
 		httpErr(w, 404, "no such job for this device")

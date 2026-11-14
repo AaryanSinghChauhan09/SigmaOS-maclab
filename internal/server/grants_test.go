@@ -43,10 +43,13 @@ func TestJobGrantsLastOnlyWhileTheJobIsActive(t *testing.T) {
 	}
 	now := time.Now()
 	may := func(v *dev, s string) bool { return v.mayFetchLocked(s, now) }
-	for _, c := range []byte("abcde") {
+	for _, c := range []byte("abce") {
 		if !may(m, sha(c)) {
 			t.Errorf("its job's artifact %c", c)
 		}
+	}
+	if may(m, sha('d')) {
+		t.Error("an Install operation, which labd never sends, granted its packages")
 	}
 	for _, p := range []string{mesa.GLProbeSHA, mesa.VKProbeSHA} {
 		if !may(m, p) {

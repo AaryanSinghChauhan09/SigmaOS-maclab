@@ -51,7 +51,11 @@ func pinsFor(dir string, rels ...string) string {
 // pre-install baseline (taken from a real sim baseline job), a frozen expected
 // manifest (through the HTTP freeze endpoint) and a frozen installer entry.
 func installedLab(t *testing.T, tamper func(phase string, o map[string]any)) (*lab, string, installed.Entry) {
-	l := newLab(t, false)
+	return installedLabWith(t, labConfig{}, tamper)
+}
+
+func installedLabWith(t *testing.T, c labConfig, tamper func(phase string, o map[string]any)) (*lab, string, installed.Entry) {
+	l := newLabWith(t, c)
 	l.s.cfg.OMT = true
 	l.waitDevice(func(d api.Device) bool { return d.Facts.AgentVersion != "" })
 	l.baseline()
@@ -96,7 +100,7 @@ func installedLab(t *testing.T, tamper func(phase string, o map[string]any)) (*l
 	lines := []string{"  //linux-aurora", "  protocol: efi", "  path: " + path, "  cmdline: root=UUID=sim rw quiet splash"}
 	entry := installed.Entry{Found: true, Name: "Omarchy / linux-aurora", Protocol: "efi", Path: path,
 		Cmdline: strings.Join(tokens, " "), CmdlineTokens: tokens, EntryLines: lines, EntrySHA256: installed.EntryDigest(lines), UKISHA256: tUKI, UKIBlake2b: tB2,
-		UKISections: map[string]installed.Section{".linux": {SHA256: tVml}, ".initrd": {SHA256: tIrd}, ".cmdline": {SHA256: "cc"}, ".uname": {SHA256: "uu", Text: tKrel}}}
+		UKISections: map[string]installed.Section{".linux": {SHA256: tVml}, ".initrd": {SHA256: tIrd}, ".cmdline": {SHA256: "cc", Text: strings.Join(tokens, " ")}, ".uname": {SHA256: "uu", Text: tKrel}}}
 	eb, _ := json.MarshalIndent(installed.InstallerEntry{Schema: "maclab.installer-entry/1", Device: "sim-mac", Release: "9.9", Entry: entry}, "", "  ")
 	os.MkdirAll(filepath.Join(dir, "installer-entry"), 0o755)
 	os.WriteFile(filepath.Join(dir, "installer-entry", "sim-mac.json"), eb, 0o444)
@@ -231,7 +235,7 @@ func TestInstalledJob(t *testing.T) {
 	// that succeeds below sends none)
 	grace := l.addMaintainer(harnessToken, "grace")
 	promote := func() (*http.Response, string) {
-		return l.as(grace.Token, "POST", "/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID, "accepted_by": "dave"})
+		return l.as(grace.Token, "POST", "/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID, "accepted_by": "dave", "confirm": true})
 	}
 	unchanged := func(why string) {
 		t.Helper()
@@ -326,7 +330,7 @@ func TestInstalledJob(t *testing.T) {
 		t.Fatalf("agent did not answer: %d FAILED ledger records, want 2", n)
 	}
 
-	resp, body := l.as(grace.Token, "POST", "/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID})
+	resp, body := l.as(grace.Token, "POST", "/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID, "confirm": true})
 	if resp.StatusCode != 200 || l.s.dev("sim-mac").snapshot().KnownGood != tKrel {
 		t.Fatalf("promote: %s %s", resp.Status, body)
 	}
@@ -373,7 +377,7 @@ func TestPromoteNeedsTheInstalledKernel(t *testing.T) {
 	kg := l.s.dev("sim-mac").snapshot().KnownGood
 	ledger := filepath.Join(l.s.frozenDir("9.9"), "promotions.log")
 	promote := func() (*http.Response, string) {
-		return l.post("/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID, "accepted_by": "dave"})
+		return l.post("/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID, "accepted_by": "dave", "confirm": true})
 	}
 	refused := func(why, want string) {
 		t.Helper()
@@ -513,7 +517,7 @@ func TestInstalledJobFailsClosedWithoutKernelLogs(t *testing.T) {
 			if err != nil || json.Unmarshal(b, &rec) != nil || rec.Outcome != api.OutcomeInfra || rec.State != api.JobDone {
 				t.Fatalf("frozen job.json: %v %s/%s", err, rec.State, rec.Outcome)
 			}
-			if resp, _ := l.post("/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID, "accepted_by": "dave"}); resp.StatusCode != 409 {
+			if resp, _ := l.post("/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID, "accepted_by": "dave", "confirm": true}); resp.StatusCode != 409 {
 				t.Fatalf("promoting a job without its kernel log: %s", resp.Status)
 			}
 		})
@@ -660,7 +664,7 @@ func TestPromotionDurability(t *testing.T) {
 			}
 			return saved(p)
 		}
-		resp, _ := l.post("/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID, "accepted_by": "dave"})
+		resp, _ := l.post("/api/installed/9.9/promote", map[string]any{"device": "sim-mac", "job": j.ID, "accepted_by": "dave", "confirm": true})
 		syncDir = saved
 		return resp.StatusCode, calls
 	}

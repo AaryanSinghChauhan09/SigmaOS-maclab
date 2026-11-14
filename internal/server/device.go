@@ -21,6 +21,7 @@ var errDeviceLost = errors.New("device stopped responding or rebooted")
 // dev is labd's live view of one Mac.
 type dev struct {
 	s            *Server
+	reading      *identityRead // the identity check a freeze reads the Mac with now, outside any job
 	secretHash   string
 	enrolledWith string // hash of the enrollment token that made this Mac, until it first checks in
 	// volunteeredBy is d.VolunteeredBy, which never changes: labd counts a

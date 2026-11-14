@@ -16,13 +16,10 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/installed"
 )
 
-// Installing a Release becomes a named lab operation (#34). An Installed run
-// on a Volunteer's Mac installs the Release itself, through one named
-// operation instead of a Maintainer's root command, so a Mac at the default
-// Qualification Access level takes it, and records it in its Audit log with
-// the Maintainer and the Release. The preinstall references come from the
-// Volunteer's system as it is when the run starts: nobody writes them by
-// hand, and nobody freezes the installer's entry with an exec.
+// Until Rollback exists on real Macs the lab refuses an Installed run on a
+// Volunteer's Mac, and with it freeze-entry and Promotion, through every
+// way in. Nothing on the Mac refuses one: only labd does, so labd sends no
+// Install operation to any Mac.
 
 // ioRelease is the Release these tests install.
 const ioRelease = "9.9"
@@ -76,11 +73,9 @@ func (r *ioRecorder) ioInstalls() []api.Command {
 
 // ioLab is a Volunteer's Mac at its default Access level, open to the lab
 // for two hours, with omarchy-m-test on, a lease held by "io-tester" and
-// Release 9.9's expected manifest frozen through labd's endpoint. Nothing
-// else of the Release is prepared: no preinstall references, no installer
-// entry, nothing installed. The Sim answers the identity checks as a Mac
-// that took the install would. It returns the manifest's sha256 and the
-// installer entry the Mac shows once the Release is installed.
+// Release 9.9's expected manifest frozen through labd's endpoint. The Sim
+// would answer the identity checks as a Mac with the Release installed. It
+// returns the manifest's sha256 and the installer entry the Mac would show.
 func ioLab(t *testing.T, c labConfig) (*lab, *agent.FakeClock, string, installed.Entry) {
 	t.Helper()
 	c.config = func(cfg *Config) { cfg.OMT = true }
@@ -129,292 +124,71 @@ func ioLab(t *testing.T, c labConfig) (*lab, *agent.FakeClock, string, installed
 	return l, clock, installed.SHA256(mb), entry
 }
 
-// ioRun is the Installed run of the Release on the Mac, as the holder of
-// token submits it through labd's API.
-func (l *lab) ioRun(token, msha string) string {
-	l.t.Helper()
-	r, body := l.as(token, "POST", "/api/jobs", api.JobSpec{Device: l.name, InstalledManifest: msha, Holder: "io-tester"})
-	var j api.Job
-	if r.StatusCode != 200 || json.Unmarshal([]byte(body), &j) != nil || j.ID == "" {
-		l.t.Fatalf("an Installed run on a Volunteer's Mac at Qualification was not accepted: %s %s", r.Status, body)
-	}
-	return j.ID
-}
-
-// ioInstallLine is the Audit log line that records the install of release
-// in job, or "".
-func ioInstallLine(log, job, release string) string {
-	for _, line := range strings.Split(log, "\n") {
-		if strings.Contains(strings.ToLower(line), "install") && strings.Contains(line, job) && strings.Contains(line, release) {
-			return line
-		}
-	}
-	return ""
-}
-
-func TestAnInstalledRunInstallsTheReleaseOnAVolunteersMacAtQualification(t *testing.T) {
-	l, _, msha, _ := ioLab(t, labConfig{})
-	if out := l.mustVolunteer("status"); alStatusLevel(out) != "qualification" {
-		t.Fatalf("the Mac is not at Qualification:\n%s", out)
-	}
-	j := l.jobAPI(l.ioRun(harnessToken, msha), 180*time.Second)
-	l.expect(j, api.OutcomePass)
-	if got := l.sim.Installs(); len(got) != 1 || got[0] != ioRelease {
-		t.Fatalf("the Mac's installer ran for %v, want once for %s", got, ioRelease)
-	}
-	ir := j.Result.Installed
-	if ir == nil || ir.Verdicts["before"] != "MATCH" || ir.Verdicts["booted"] != "MATCH" || ir.Verdicts["after"] != "MATCH" {
-		t.Fatalf("the Installed run's identity checks at Qualification: %+v", ir)
-	}
-	if j.Result.BootKernel != tKrel {
-		t.Fatalf("the Installed run booted %q, not the Release's %s", j.Result.BootKernel, tKrel)
-	}
-	if out := l.mustVolunteer("log"); strings.Contains(strings.ToLower(out), "refus") {
-		t.Fatalf("lab-agent refused part of an Installed run at Qualification:\n%s", out)
-	}
-}
-
-func TestTheInstallIsANamedLabOperationNotAnExecOrAScript(t *testing.T) {
+// The Volunteer's Mac is inside its Availability window and its caller
+// holds the Lease: the one thing in the way is that it is a Volunteer's.
+func TestAnInstalledRunAFreezeAndAPromotionAreRefusedOnAVolunteersMac(t *testing.T) {
 	rec := &ioRecorder{}
 	l, _, msha, _ := ioLab(t, labConfig{wrap: rec.wrap})
-	id := l.ioRun(harnessToken, msha)
-	l.expect(l.jobAPI(id, 180*time.Second), api.OutcomePass)
-	ins := rec.ioInstalls()
-	if len(ins) != 1 || ins[0].JobID != id || ins[0].Maintainer != harnessMaintainer || !strings.Contains(string(ins[0].Args), ioRelease) {
-		t.Fatalf("labd sent the Mac install commands %+v, want one %q command for job %s by %s naming %s", ins, api.CmdInstall, id, harnessMaintainer, ioRelease)
-	}
-	for _, c := range rec.commands() {
-		switch c.Kind {
-		case api.CmdExec:
-			t.Errorf("an Installed run sent the Mac an exec: %s", c.Args)
-		case api.CmdRunTest:
-			var ts api.TestSpec
-			json.Unmarshal(c.Args, &ts)
-			if ts.MaintainerScript() {
-				t.Errorf("an Installed run sent the Mac a script as test %s", ts.Name)
-			}
-		case api.CmdBootOnce:
-			var b api.BootOnceArgs
-			json.Unmarshal(c.Args, &b)
-			for _, ts := range b.Tests {
-				if ts.MaintainerScript() {
-					t.Errorf("an Installed run's Lab boot holds a script, test %s", ts.Name)
-				}
-			}
+	const sentence = "Volunteer's Mac"
+	refused := func(what string, r *http.Response, body string) {
+		t.Helper()
+		if r.StatusCode != http.StatusForbidden || !strings.Contains(body, sentence) || !strings.Contains(body, l.name) {
+			t.Errorf("%s on a Volunteer's Mac: %s %s", what, r.Status, body)
 		}
 	}
-}
+	for _, level := range []string{"qualification", "full"} {
+		l.alSetAccess(level)
+		r, body := l.as(harnessToken, "POST", "/api/jobs", api.JobSpec{Device: l.name, InstalledManifest: msha, Holder: "io-tester"})
+		refused("an Installed run at "+level, r, body)
+		r, body = l.as(harnessToken, "POST", "/api/installed/"+ioRelease+"/entry/"+l.name, nil)
+		refused("freeze-entry at "+level, r, body)
+		r, body = l.as(harnessToken, "POST", "/api/installed/"+ioRelease+"/promote", map[string]any{"device": l.name, "job": "j-any", "confirm": true})
+		refused("a Promotion at "+level, r, body)
+	}
+	// labd's own way in, with nobody asking, is refused the same.
+	if _, code, err := l.s.Submit(api.JobSpec{Device: l.name, InstalledManifest: msha, Holder: "io-tester"}); err == nil || code != http.StatusForbidden || !strings.Contains(err.Error(), sentence) {
+		t.Errorf("an Installed run queued inside labd: %d %v", code, err)
+	}
+	// A retry of an Installed run from before the refusal is refused too.
+	old := &api.Job{ID: "j-old-installed", Spec: api.JobSpec{Device: l.name, InstalledManifest: msha, Holder: "io-tester"}, State: api.JobDone, Outcome: api.OutcomePass, DeviceID: l.s.dev(l.name).snapshot().ID}
+	if err := l.s.store.saveJob(old); err != nil {
+		t.Fatal(err)
+	}
+	r, body := l.as(harnessToken, "POST", "/api/jobs/"+old.ID+"/retry", nil)
+	refused("a retry of an Installed run", r, body)
 
-func TestTheInstallIsRecordedInTheAuditLogWithTheMaintainerAndTheRelease(t *testing.T) {
-	l, clock, msha, _ := ioLab(t, labConfig{})
-	grace := l.addMaintainer(harnessToken, "grace")
-	// An Installed run needs its holder's lease, and naming ada's holder
-	// doesn't make it grace's: grace takes it.
-	if r, body := l.get("DELETE", "/api/devices/"+l.name+"/lease"); r.StatusCode != 200 {
-		t.Fatalf("release: %s %s", r.Status, body)
+	if jobs, _ := l.s.store.jobs(l.name, 100, true); len(jobs) != 0 {
+		t.Fatalf("a refused Installed run was queued: %+v", jobs[0])
 	}
-	if r, body := l.as(grace.Token, "POST", "/api/devices/"+l.name+"/lease", api.LeaseRequest{Holder: "io-tester", TTLSec: 3600}); r.StatusCode != 200 {
-		t.Fatalf("grace's lease: %s %s", r.Status, body)
-	}
-	id := l.ioRun(grace.Token, msha)
-	l.expect(l.jobAPI(id, 180*time.Second), api.OutcomePass)
-	out := l.alWaitLog(id, ioRelease)
-	line := ioInstallLine(out, id, ioRelease)
-	if line == "" || !strings.Contains(line, "grace") {
-		t.Fatalf("the Audit log has no entry for grace installing %s in job %s:\n%s", ioRelease, id, out)
-	}
-	if !alHasWhen(out, clock.Now()) {
-		t.Fatalf("the Audit log does not say when:\n%s", out)
-	}
-	var body string
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
-		if _, body = l.get("GET", "/api/devices/"+l.name+"/audit"); ioInstallLine(body, id, ioRelease) != "" {
-			break
-		}
-	}
-	if line := ioInstallLine(body, id, ioRelease); line == "" || !strings.Contains(line, "grace") {
-		t.Fatalf("labd's copy of the Audit log lacks grace's install of %s:\n%s", ioRelease, body)
-	}
-}
-
-// lab-agent writes the entry before it acts: an install still running is
-// already in the log.
-func TestTheInstallIsAuditedBeforeItRuns(t *testing.T) {
-	l, _, msha, _ := ioLab(t, labConfig{})
-	started, release := make(chan string, 1), make(chan struct{})
-	l.sim.SetInstallHook(func(r string) error {
-		started <- r
-		<-release
-		return nil
-	})
-	defer func() {
-		select {
-		case <-release:
-		default:
-			close(release)
-		}
-	}()
-	id := l.ioRun(harnessToken, msha)
-	select {
-	case <-started:
-	case <-time.After(90 * time.Second):
-		t.Fatal("the Mac's installer never ran")
-	}
-	if out := l.mustVolunteer("log"); ioInstallLine(out, id, ioRelease) == "" {
-		t.Fatalf("the install is running, yet the Audit log has no entry for it:\n%s", out)
-	}
-	close(release)
-	l.expect(l.jobAPI(id, 180*time.Second), api.OutcomePass)
-}
-
-func TestPreinstallReferencesAreTakenFromTheVolunteersCurrentSystem(t *testing.T) {
-	l, _, msha, _ := ioLab(t, labConfig{})
-	before := strings.Count(l.mustVolunteer("log"), "omarchy-m-test")
-	id := l.ioRun(harnessToken, msha)
-	j := l.jobAPI(id, 180*time.Second)
-	l.expect(j, api.OutcomePass)
-	if ir := j.Result.Installed; ir == nil || ir.OMT != "NO_REGRESSION" {
-		t.Fatalf("the Installed run was not compared with preinstall references: %+v", ir)
-	}
-
-	// The frozen store holds them, pinned, as the acceptance gate reads them.
-	dir := l.s.frozenDir(ioRelease)
-	pre := filepath.Join(dir, "preinstall", l.name)
-	rep, err := os.ReadFile(filepath.Join(pre, "omt-report.json"))
-	if err != nil {
-		t.Fatalf("no preinstall omarchy-m-test reference was taken: %v", err)
-	}
-	var r struct {
-		Machine struct{ Kernel string } `json:"machine"`
-	}
-	if json.Unmarshal(rep, &r) != nil || r.Machine.Kernel != agent.SimKnownGood {
-		t.Fatalf("the preinstall reference is of kernel %q, not the Volunteer's own %s", r.Machine.Kernel, agent.SimKnownGood)
-	}
-	if _, err := os.Stat(filepath.Join(pre, "dmesg-errors.txt")); err != nil {
-		t.Fatalf("no preinstall kernel error reference was taken: %v", err)
-	}
-	pins, _ := os.ReadFile(filepath.Join(dir, "PINS.preinstall"))
-	if !strings.Contains(string(pins), installed.SHA256(rep)+"  preinstall/"+l.name+"/omt-report.json") {
-		t.Fatalf("PINS.preinstall does not pin the reference:\n%s", pins)
-	}
-
-	// They were taken in this run, on the Volunteer's system, before the install.
-	out := l.alWaitLog(id, ioRelease)
-	line := ioInstallLine(out, id, ioRelease)
-	if line == "" {
-		t.Fatalf("the Audit log has no install entry for %s:\n%s", id, out)
-	}
-	if n := strings.Count(out[:strings.Index(out, line)], "omarchy-m-test"); n <= before {
-		t.Fatalf("no omarchy-m-test ran on the Volunteer's system between the run's start and the install:\n%s", out)
-	}
-}
-
-// The installer's entry is read on the Mac by the run itself, once the
-// Release is installed, not frozen beforehand through a Maintainer's exec.
-func TestTheInstalledRunTakesTheInstallerEntryFromTheMacItself(t *testing.T) {
-	l, _, msha, entry := ioLab(t, labConfig{})
-	id := l.ioRun(harnessToken, msha)
-	j := l.jobAPI(id, 180*time.Second)
-	l.expect(j, api.OutcomePass)
-	if ir := j.Result.Installed; ir == nil || ir.EntrySHA256 == "" {
-		t.Fatalf("the Installed run has no installer entry: %+v", ir)
-	}
-	b, err := os.ReadFile(filepath.Join(l.s.frozenDir(ioRelease), "installer-entry", l.name+".json"))
-	var ie installed.InstallerEntry
-	if err != nil || json.Unmarshal(b, &ie) != nil {
-		t.Fatalf("the installer entry was not frozen: %v", err)
-	}
-	if ie.Release != ioRelease || ie.Device != l.name || ie.Entry.Path != entry.Path || ie.Entry.EntrySHA256 != entry.EntrySHA256 {
-		t.Fatalf("the frozen installer entry is not the one the Mac shows: %+v", ie)
-	}
-}
-
-func TestAFailedInstallEndsTheRunBeforeAnyLabBoot(t *testing.T) {
-	l, _, msha, _ := ioLab(t, labConfig{})
-	l.sim.SetInstallHook(func(string) error { return os.ErrPermission })
-	boot, _, _ := l.sim.Identity()
-	id := l.ioRun(harnessToken, msha)
-	j := l.jobAPI(id, 120*time.Second)
-	if j.Outcome == api.OutcomePass || j.Result.Booted {
-		t.Fatalf("a run whose install failed: %s booted=%v (%s)", j.Outcome, j.Result.Booted, j.Summary)
-	}
-	if !strings.Contains(strings.ToLower(j.Summary), "install") {
-		t.Fatalf("the run's summary does not say the install failed: %s", j.Summary)
-	}
-	if b, k, _ := l.sim.Identity(); b != boot || k != agent.SimKnownGood {
-		t.Fatalf("the Mac rebooted after a failed install: now %s on boot %s", k, b)
-	}
-	if got := l.sim.Installs(); len(got) != 0 {
-		t.Fatalf("the Sim counts a failed install as installed: %v", got)
-	}
-	if out := l.mustVolunteer("log"); ioInstallLine(out, id, ioRelease) == "" {
-		t.Fatalf("the Audit log lacks the install that failed:\n%s", out)
-	}
-}
-
-// lab-agent holds the install to the Availability window like anything
-// else from the lab: labd's own install command, sent again once the
-// Volunteer paused, is refused.
-func TestLabAgentRefusesTheInstallOutsideAWindow(t *testing.T) {
-	rec, w := &ioRecorder{}, newALWire()
-	l, _, msha, _ := ioLab(t, labConfig{wrap: func(h http.Handler) http.Handler { return w.wrap(rec.wrap(h)) }})
-	l.expect(l.jobAPI(l.ioRun(harnessToken, msha), 180*time.Second), api.OutcomePass)
-	ins := rec.ioInstalls()
-	if len(ins) != 1 {
-		t.Fatalf("labd sent %d install commands, want 1", len(ins))
-	}
-	l.mustVolunteer("pause")
 	time.Sleep(time.Second)
-	res := w.result(t, w.send(ins[0].Kind, ins[0].JobID, ins[0].Maintainer, ins[0].Args))
-	if res.OK || !res.WindowClosed {
-		t.Fatalf("lab-agent took an install with its window closed: %+v", res)
-	}
-	if got := l.sim.Installs(); len(got) != 1 {
-		t.Fatalf("installs on the Mac: %v", got)
-	}
-}
-
-// An Installed run is Qualification work: the Volunteer lowering the
-// Access level to Qualification leaves it running.
-func TestLoweringTheAccessLevelLeavesAnInstalledRunRunning(t *testing.T) {
-	l, _, msha, _ := ioLab(t, labConfig{})
-	l.alSetAccess("full")
-	l.sim.SetTestLength(3 * time.Second)
-	id := l.ioRun(harnessToken, msha)
-	for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		j, _ := l.jobNow(id)
-		if j.State == api.JobTesting {
-			break
-		}
-		if j.State == api.JobDone || time.Now().After(deadline) {
-			t.Fatalf("the Installed run never got to its tests: %s %s %s", j.State, j.Outcome, j.Summary)
-		}
-	}
-	l.mustVolunteer("access", "qualification")
-	l.expect(l.jobAPI(id, 180*time.Second), api.OutcomePass)
-}
-
-// The install doesn't open a door: at Qualification labd still refuses
-// exec, and an Installed run that carries a Maintainer's script.
-func TestExecAndScriptsStayRefusedAtLabdAlongsideTheInstall(t *testing.T) {
-	l, _, msha, _ := ioLab(t, labConfig{})
-	if r, _, body := l.alExec(harnessToken, "pacman -U /tmp/linux-aurora-9.9.pkg.tar.zst"); !alIs4xx(r) {
-		t.Fatalf("lab exec of an installer at Qualification: %s %s", r.Status, body)
-	}
-	for _, gui := range []bool{false, true} {
-		spec := api.JobSpec{Device: l.name, InstalledManifest: msha, Holder: "io-tester",
-			Tests: []api.TestSpec{{Name: "io-extra", Script: l.artifact("echo as root"), GUI: gui}}}
-		if r, body := l.post("/api/jobs", spec); !alIs4xx(r) || !strings.Contains(strings.ToLower(body), "access level") {
-			t.Fatalf("an Installed run with a Maintainer's script (gui %v) at Qualification: %s %s", gui, r.Status, body)
+	for _, c := range rec.commands() {
+		var ts api.TestSpec
+		json.Unmarshal(c.Args, &ts)
+		if c.Kind == api.CmdInstall || c.Kind == api.CmdExec || c.Kind == api.CmdRunTest && ts.Identity != nil {
+			t.Errorf("labd sent the Volunteer's Mac %s: %s", c.Kind, c.Args)
 		}
 	}
 	if got := l.sim.Installs(); len(got) != 0 {
-		t.Fatalf("a refused job installed %v", got)
+		t.Fatalf("the Mac's installer ran: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(l.s.frozenDir(ioRelease), "installer-entry", l.name+".json")); err == nil {
+		t.Fatal("an installer entry was frozen for the Volunteer's Mac")
 	}
 }
 
-// Allowing the Installed run's identity checks doesn't let a Maintainer's
-// script through under their name.
+// A freeze is refused outside the Availability window too, and says so.
+func TestFreezeEntryIsRefusedOutsideTheAvailabilityWindow(t *testing.T) {
+	l, _, _, _ := ioLab(t, labConfig{})
+	l.mustVolunteer("pause")
+	l.waitDevice(func(d api.Device) bool { return d.Lease == nil })
+	r, body := l.as(harnessToken, "POST", "/api/installed/"+ioRelease+"/entry/"+l.name, nil)
+	if r.StatusCode != http.StatusConflict || !strings.Contains(body, "Availability window") {
+		t.Fatalf("freeze-entry outside the Availability window: %s %s", r.Status, body)
+	}
+}
+
+// Allowing the lab's identity checks doesn't let a Maintainer's script
+// through under their name.
 func TestLabAgentRefusesAScriptNamedLikeAnIdentityCheckAtQualification(t *testing.T) {
 	w := newALWire()
 	l, _, _, _ := ioLab(t, labConfig{wrap: w.wrap})

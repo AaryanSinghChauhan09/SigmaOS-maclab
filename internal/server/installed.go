@@ -10,12 +10,13 @@ package server
 //	installer-entry/<mac>.json      maclab.installer-entry/1, pinned by PINS.installer-entry.<mac>
 //	preinstall/<mac>/omt-report.json, omt-status.json, dmesg-errors.txt, ...
 //
-// On a Lab-owned Mac a Maintainer installs the Release and freezes its
-// preinstall references and installer entry by hand. On a Volunteer's Mac
-// only the expected manifest is frozen beforehand: the Installed run takes
-// the preinstall references from the Volunteer's own system, installs the
-// Release through the named install operation, and freezes the installer
-// entry from its identity-before check.
+// Qualification runs on Lab-owned Macs only. The Release is installed by
+// hand, its preinstall references are frozen by hand, and the installer
+// entry is frozen by `lab installed freeze-entry`, which reads the Mac
+// through the lab's read-only identity check, never an exec. Until Rollback
+// exists on real Macs labd refuses an Installed run, a freeze and a
+// Promotion on a Volunteer's Mac, and sends no Install operation to any
+// Mac: nothing on a Mac refuses one, only labd does.
 //	installed/<mac>/<job>/          append-only evidence copies
 //	promotions.log                  append-only
 //
@@ -30,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -76,8 +78,8 @@ type installedCtx struct {
 	dmesgPath     string
 	dmesgSHA      string
 	dmesg         string
-	// noPreinstall is why the device has no preinstall references yet: a
-	// Volunteer's Installed run takes them, a Lab-owned Mac's can't run.
+	// noPreinstall is why the device has no preinstall references yet, so
+	// no Installed run of the Release can run on it.
 	noPreinstall error
 }
 
@@ -211,8 +213,21 @@ func (s *Server) loadInstalled(manifestSHA, device string) (*installedCtx, error
 	return c, nil
 }
 
-// validateInstalled refuses everything an installed job can't take.
-func (s *Server) validateInstalled(spec api.JobSpec, d api.Device) (int, error) {
+// refusedOnVolunteers refuses what of Qualification on a Volunteer's Mac:
+// an Installed run, a freeze of the installer's entry, a Promotion. It is
+// the one refusal, said the same through every way in.
+func refusedOnVolunteers(what, mac string) error {
+	return refuse(403, "%s is refused on %s: it is a Volunteer's Mac, and until Rollback exists the lab runs no Installed run, freezes no installer entry and promotes nothing on a Volunteer's Mac", what, mac)
+}
+
+// validateInstalled refuses everything an installed job can't take. by is
+// who asked, and needs their own Lease on the Mac, a Maintainer too; labd
+// itself (nobody) goes by the holder label of the job.
+func (s *Server) validateInstalled(by Person, v *dev, spec api.JobSpec, d api.Device) (int, error) {
+	if d.IsVolunteer() {
+		err := refusedOnVolunteers("an Installed run", d.Name)
+		return statusOf(err), err
+	}
 	switch {
 	case !reSHA.MatchString(spec.InstalledManifest):
 		return 400, errors.New("installed_manifest must be the full sha256 of a frozen expected manifest")
@@ -222,7 +237,9 @@ func (s *Server) validateInstalled(spec api.JobSpec, d api.Device) (int, error) 
 		return 400, errors.New("an installed job boots the installer's own cmdline: --cmdline, --cmdline-base, --cmdline-strip and --verbose-boot are refused")
 	case spec.Baseline || spec.Crash != "" || spec.Publish || len(spec.OMTAllow) > 0:
 		return 400, errors.New("an installed job is not a baseline, crash test or publication, and takes no --omt-allow (exceptions belong to the gate)")
-	case d.Lease == nil || d.Lease.Holder != spec.Holder || s.now().After(d.Lease.Expires):
+	case by.Handle != "" && !s.holdsLease(v, by):
+		return 409, fmt.Errorf("an Installed run on %s needs your own Lease on it, a Maintainer's too: `lab lease %s`", d.Name, d.Name)
+	case by.Handle == "" && (d.Lease == nil || d.Lease.Holder != spec.Holder || s.now().After(d.Lease.Expires)):
 		return 409, fmt.Errorf("%s must be leased by the job's holder (%q) for an installed job", d.Name, spec.Holder)
 	case !versionAtLeast(d.Facts.AgentVersion, installedMinAgent):
 		return 409, fmt.Errorf("%s runs lab-agent %s; installed jobs need %s or later", d.Name, orStr(d.Facts.AgentVersion, "(unknown)"), installedMinAgent)
@@ -248,10 +265,6 @@ func (s *Server) validateInstalled(spec api.JobSpec, d api.Device) (int, error) 
 	c, err := s.loadInstalled(spec.InstalledManifest, d.Name)
 	if err != nil {
 		return 409, err
-	}
-	if d.IsVolunteer() {
-		// the run takes the rest from the Mac itself
-		return 0, nil
 	}
 	if c.noPreinstall != nil {
 		return 409, c.noPreinstall
@@ -311,28 +324,31 @@ func (r *jobRun) newInstalled() (*installedRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !r.v.snapshot().IsVolunteer() {
-		if c.noPreinstall != nil {
-			return nil, c.noPreinstall
-		}
-		if c.entry == nil {
-			return nil, errors.New("no frozen installer entry")
-		}
+	switch {
+	case r.v.snapshot().IsVolunteer():
+		return nil, refusedOnVolunteers("an Installed run", r.j.Spec.Device)
+	case c.noPreinstall != nil:
+		return nil, c.noPreinstall
+	case c.entry == nil:
+		return nil, errors.New("no frozen installer entry")
 	}
 	return &installedRun{r: r, c: c, serial: r.serialEnabled(),
 		res: api.InstalledResult{Release: c.release, ManifestSHA256: c.manSHA, EntrySHA256: c.entrySHA, Verdicts: map[string]string{}}}, nil
 }
 
 // test is the lab's own identity check of a phase, which lab-agent runs
-// with its read-only collector at any Access level. Before the installer
-// entry is frozen, the check finds the installer's entry itself.
+// with its read-only collector at any Access level.
 func (ir *installedRun) test(phase string) api.TestSpec {
-	ic := &api.IdentityCheck{Phase: phase, Device: ir.r.j.Spec.Device, Kernel: ir.c.man.Kernel.Release}
-	for _, a := range ir.c.man.Artifacts {
+	return identityTest(phase, ir.r.j.Spec.Device, ir.c.man, ir.c.entry.Path)
+}
+
+// identityTest is the identity check of a phase on a Mac for a Release's
+// manifest. With no entryPath the check finds the installer's entry itself:
+// that is how a freeze reads it.
+func identityTest(phase, device string, m *installed.Manifest, entryPath string) api.TestSpec {
+	ic := &api.IdentityCheck{Phase: phase, Device: device, Kernel: m.Kernel.Release, EntryPath: entryPath}
+	for _, a := range m.Artifacts {
 		ic.Packages = append(ic.Packages, a.Name)
-	}
-	if ir.c.entry != nil {
-		ic.EntryPath = ir.c.entry.Path
 	}
 	return api.TestSpec{Name: installed.TestName(phase), Identity: ic, TimeoutSec: 600}
 }
@@ -591,7 +607,7 @@ func (ir *installedRun) copyFrozen(dst string) error {
 	return nil
 }
 
-// --- freezing and promotion (Maintainers) ---
+// --- freezing (the M team and Maintainers) and Promotion (Maintainers) ---
 
 // writeOnce writes a file that must not exist yet, read-only and synced. The
 // create is exclusive, so two writers can't both succeed.
@@ -753,6 +769,14 @@ func (s *Server) hFreezeManifest(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "manifest: %v", err)
 		return
 	}
+	by, at := leaser(r), s.now()
+	if !by.isMaintainer() {
+		names := slices.Sorted(maps.Keys(m.Macs))
+		if !slices.ContainsFunc(names, func(name string) bool { return s.leasesMac(by, name) }) {
+			httpErr(w, 403, "an M team member freezes a Release's manifest under their own Lease on one of its Macs (%s): `lab lease <mac>` first", strings.Join(names, ", "))
+			return
+		}
+	}
 	dir := s.frozenDir(release)
 	if _, err := os.Stat(filepath.Join(dir, "PINS.expected")); err == nil {
 		httpErr(w, 409, "release %s already has a frozen expected manifest", release)
@@ -768,15 +792,127 @@ func (s *Server) hFreezeManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pins := fmt.Sprintf("# PINS.expected %s by maclab (approved by %s): do not rewrite\n%s  expected/manifest.json\n%s  %s\n",
-		s.now().Format(time.RFC3339), strings.Join(req.ApprovedBy, ", "), installed.SHA256(mb), installed.SHA256(pb), rel)
+		at.Format(time.RFC3339), strings.Join(req.ApprovedBy, ", "), installed.SHA256(mb), installed.SHA256(pb), rel)
 	if err := writeOnce(filepath.Join(dir, "PINS.expected"), []byte(pins)); err != nil {
 		httpErr(w, 409, "%v", err)
 		return
 	}
-	writeJSON(w, map[string]any{"release": release, "manifest_sha256": installed.SHA256(mb), "pins": pins, "pins_sha256": installed.SHA256([]byte(pins))})
+	if err := s.listRelease(&m, installed.SHA256(mb), by, at); err != nil {
+		httpErr(w, 500, "the manifest of Release %s is frozen, but the Release is not listed until labd starts again: %v", release, err)
+		return
+	}
+	writeJSON(w, map[string]any{"release": release, "frozen_by": by.Handle, "manifest_sha256": installed.SHA256(mb), "pins": pins, "pins_sha256": installed.SHA256([]byte(pins))})
 }
 
-// hFreezeEntry observes the installed Mac and freezes its installer boot entry.
+// mayFreeze is why p may not freeze v's installer entry now, or nil. labd
+// checks what it checks for an Installed run: the role, the caller's own
+// Lease on the Mac, a Maintainer's too, and the Availability window. A
+// Volunteer's Mac is refused for as long as Installed runs are.
+func (s *Server) mayFreeze(v *dev, p Person) error {
+	const what = "freeze-entry"
+	v.mu.Lock()
+	name, volunteers := v.d.Name, v.d.IsVolunteer()
+	closed := volunteers && v.openUntilLocked().IsZero()
+	v.mu.Unlock()
+	switch {
+	case !p.OnMTeam():
+		return refuse(403, "%s is for the M team and Maintainers", what)
+	case closed:
+		return refuse(409, "%s's Availability window is closed: %s reads a Mac only inside it", name, what)
+	case volunteers:
+		return refusedOnVolunteers(what, name)
+	case !s.holdsLease(v, p):
+		return refuse(409, "%s on %s needs your own Lease on it, a Maintainer's too: `lab lease %s`", what, name, name)
+	}
+	return nil
+}
+
+// identityRead is an identity check labd sent a Mac outside a job, for a
+// freeze. The Mac sends its observation under id, as it sends a job's
+// files, and it is kept here, never in a job.
+type identityRead struct {
+	id    string
+	files map[string][]byte
+}
+
+const (
+	identityReadPrefix = "freeze-"
+	identityReadMax    = 16 << 20
+)
+
+// readIdentity has v's lab-agent run the lab's read-only identity check
+// for the Release's manifest, outside any job, and returns what it saw. It
+// is a test of lab-agent's own, not an exec: the Mac's Audit log says so.
+func (s *Server) readIdentity(ctx context.Context, v *dev, m *installed.Manifest) (*installed.Observed, error) {
+	read := &identityRead{id: identityReadPrefix + randHex(6), files: map[string][]byte{}}
+	v.mu.Lock()
+	name := v.d.Name
+	if v.reading != nil {
+		v.mu.Unlock()
+		return nil, refuse(409, "another freeze is reading %s now", name)
+	}
+	v.reading = read
+	v.mu.Unlock()
+	defer func() {
+		v.mu.Lock()
+		v.reading = nil
+		v.mu.Unlock()
+	}()
+	t := identityTest(installed.PhaseBefore, name, m, "")
+	var tr api.TestResult
+	if err := v.call(ctx, api.CmdRunTest, read.id, t, time.Duration(t.TimeoutSec)*time.Second+2*time.Minute, &tr); err != nil {
+		return nil, err
+	}
+	if !tr.Passed {
+		return nil, refuse(502, "the identity check on %s did not pass: %s %s", name, testVerdict(tr), lastLine(tr.Tail))
+	}
+	v.mu.Lock()
+	raw := read.files["test-"+t.Name+"/observed.json"]
+	v.mu.Unlock()
+	var o installed.Observed
+	switch {
+	case raw == nil:
+		return nil, refuse(502, "the identity check on %s sent no observation", name)
+	case json.Unmarshal(raw, &o) != nil:
+		return nil, refuse(502, "the identity check on %s sent an observation labd cannot read", name)
+	case o.Job != read.id || o.Device != name:
+		return nil, refuse(502, "the observation %s sent is of %q for %q, not this freeze's", name, o.Device, o.Job)
+	}
+	return &o, nil
+}
+
+// takeObservation keeps a file the Mac sends for the identity check labd
+// is reading it with now; nothing else arrives outside a job.
+func (s *Server) takeObservation(w http.ResponseWriter, r *http.Request, v *dev, id, name string) {
+	reading := func() bool { return v.reading != nil && v.reading.id == id }
+	v.mu.Lock()
+	ok := reading()
+	v.mu.Unlock()
+	if !ok {
+		httpErr(w, 404, "no such job for this device")
+		return
+	}
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, identityReadMax))
+	if err != nil {
+		httpErr(w, 413, "an observation over %d bytes", identityReadMax)
+		return
+	}
+	v.mu.Lock()
+	if ok = reading(); ok {
+		v.reading.files[name] = b
+	}
+	v.mu.Unlock()
+	if !ok {
+		httpErr(w, 404, "no such job for this device")
+		return
+	}
+	w.Write([]byte("ok"))
+}
+
+// hFreezeEntry reads the installed Mac and freezes its installer boot
+// entry, for the caller under their own Lease. It is not an exec: the Mac
+// runs the lab's read-only identity check, and who froze the entry, and
+// when, is recorded with it. The answer is held until the Mac has answered.
 func (s *Server) hFreezeEntry(w http.ResponseWriter, r *http.Request) {
 	release, device := r.PathValue("release"), r.PathValue("device")
 	v := s.dev(device)
@@ -784,56 +920,72 @@ func (s *Server) hFreezeEntry(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, "no device %q or bad release", device)
 		return
 	}
+	by := leaser(r)
+	if err := s.mayFreeze(v, by); err != nil {
+		httpErr(w, statusOf(err), "%v", err)
+		return
+	}
 	dir := s.frozenDir(release)
-	exp, err := readPins(filepath.Join(dir, "PINS.expected"))
+	m, msha, err := frozenManifest(dir)
 	if err != nil {
-		httpErr(w, 409, "release %s has no frozen expected manifest", release)
+		httpErr(w, 409, "release %s has no frozen expected manifest: %v", release, err)
 		return
 	}
-	mb, msha, err := pinned(dir, "expected/manifest.json", exp)
-	if err != nil {
-		httpErr(w, 409, "%v", err)
+	if _, ok := m.Macs[device]; !ok {
+		httpErr(w, 409, "%s is not one of Release %s's Macs: they were fixed when its manifest was frozen", device, release)
 		return
 	}
-	var m installed.Manifest
-	json.Unmarshal(mb, &m)
 	if _, err := os.Stat(filepath.Join(dir, "PINS.installer-entry."+device)); err == nil {
 		httpErr(w, 409, "%s's installer entry for %s is already frozen", device, release)
 		return
 	}
-	script := installed.Script("freeze", device, m.Kernel.Release, "", nil, false)
-	cmd := "export MACLAB_OUT=$(mktemp -d); MACLAB_JOB= bash -s >&2 <<'MACLAB_FREEZE_EOF'\n" + script + "MACLAB_FREEZE_EOF\ncat \"$MACLAB_OUT/observed.json\"; rm -rf \"$MACLAB_OUT\""
+	v.mu.Lock()
+	d, alive := v.d, v.aliveLocked()
+	v.mu.Unlock()
+	switch {
+	case !alive:
+		httpErr(w, 409, "%s is not checking in, so its installer entry can't be read", device)
+		return
+	case d.ActiveJob != "":
+		httpErr(w, 409, "%s is running job %s: freeze its installer entry once that ends", device, d.ActiveJob)
+		return
+	case !versionAtLeast(d.Facts.AgentVersion, installedMinAgent):
+		httpErr(w, 409, "%s runs lab-agent %s; the identity check needs %s or later", device, orStr(d.Facts.AgentVersion, "(unknown)"), installedMinAgent)
+		return
+	}
+	session, done := s.underLease(r, v, by)
+	defer done()
 	s.held(w, r, func() (any, error) {
-		var res api.ExecResult
-		if err := v.call(r.Context(), api.CmdExec, "", api.ExecArgs{Command: cmd, TimeoutSec: 300}, 6*time.Minute, &res); err != nil {
-			return nil, err
+		o, err := s.readIdentity(session.Context(), v, m)
+		if err != nil {
+			return nil, leaseCut(session, r, v, err)
 		}
-		var o installed.Observed
-		if err := json.Unmarshal([]byte(res.Stdout), &o); err != nil {
-			return nil, refuse(502, "collector output: %v (stderr: %s)", err, lastLine(res.Stderr))
-		}
-		e, err := installed.FreezeEntry(&o, &m)
+		e, err := installed.FreezeEntry(o, m)
 		if err != nil {
 			return nil, refuse(409, "%v", err)
 		}
-		esha, pins, err := s.freezeEntry(dir, device, msha, e)
+		at := s.now()
+		esha, pins, err := s.freezeEntry(dir, device, msha, e, by, at)
 		if err != nil {
 			return nil, refuse(409, "%v", err)
 		}
-		return map[string]any{"device": device, "release": release, "entry": e, "entry_sha256": esha, "pins": pins}, nil
+		if err := s.store.addEntryFrozen(release, device, esha, at, by); err != nil {
+			s.log.Printf("who froze %s's installer entry for Release %s (%s) was not recorded: %v", device, release, by.Handle, err)
+		}
+		return map[string]any{"device": device, "release": release, "entry": e, "entry_sha256": esha, "pins": pins, "frozen_by": by.Handle, "frozen_at": at}, nil
 	})
 }
 
 // freezeEntry writes a device's installer entry into the frozen store, once,
 // with its pins.
-func (s *Server) freezeEntry(dir, device, manifestSHA string, e *installed.InstallerEntry) (entrySHA, pins string, err error) {
+func (s *Server) freezeEntry(dir, device, manifestSHA string, e *installed.InstallerEntry, by Person, at time.Time) (entrySHA, pins string, err error) {
 	eb, _ := json.MarshalIndent(e, "", "  ")
 	eb = append(eb, '\n')
 	if err := writeOnce(filepath.Join(dir, "installer-entry", device+".json"), eb); err != nil {
 		return "", "", err
 	}
-	pins = fmt.Sprintf("# PINS.installer-entry.%s %s by maclab, manifest %s: do not rewrite\n%s  installer-entry/%s.json\n",
-		device, s.now().Format(time.RFC3339), manifestSHA, installed.SHA256(eb), device)
+	pins = fmt.Sprintf("# PINS.installer-entry.%s %s by maclab, read for @%s, manifest %s: do not rewrite\n%s  installer-entry/%s.json\n",
+		device, at.Format(time.RFC3339), by.Handle, manifestSHA, installed.SHA256(eb), device)
 	if err := writeOnce(filepath.Join(dir, "PINS.installer-entry."+device), []byte(pins)); err != nil {
 		return "", "", err
 	}
@@ -841,50 +993,63 @@ func (s *Server) freezeEntry(dir, device, manifestSHA string, e *installed.Insta
 }
 
 type promoteReq struct {
-	Device string `json:"device"`
-	Job    string `json:"job"`
+	Device  string `json:"device"`
+	Job     string `json:"job"`
+	Confirm bool   `json:"confirm,omitempty"`
 }
 
 // hPromote makes an accepted installed run the device's reference and
 // known-good, accepted by the Maintainer whose token asked.
 func (s *Server) hPromote(w http.ResponseWriter, r *http.Request) {
-	release := r.PathValue("release")
 	var req promoteReq
 	if json.NewDecoder(r.Body).Decode(&req) != nil || req.Job == "" {
 		httpErr(w, 400, "need device and job")
 		return
 	}
+	out, err := s.promotion(r.Context(), leaser(r), r.PathValue("release"), req)
+	if err != nil {
+		httpErr(w, releaseStatus(err), "%v", err)
+		return
+	}
+	writeJSON(w, out)
+}
+
+// promotion is a Promotion asked by a Maintainer, through `lab` or the
+// Releases page: the Mac's own passed Installed run of the Release becomes
+// its reference and Known-good. It does not wait for the verdict. Before it
+// is confirmed it changes nothing and answers with the sentence to confirm,
+// which says so when the Release is not qualified or its Qualification was
+// revoked. A Volunteer's Mac is never promoted.
+func (s *Server) promotion(ctx context.Context, by Person, release string, req promoteReq) (map[string]any, error) {
+	if !by.isMaintainer() {
+		return nil, refuse(403, "Promotion stays with Maintainers")
+	}
+	if v := s.dev(req.Device); v != nil && v.snapshot().IsVolunteer() {
+		return nil, refusedOnVolunteers("a Promotion", req.Device)
+	}
 	j, err := s.store.job(req.Job)
 	if err != nil {
-		httpErr(w, 404, "%v", err)
-		return
+		return nil, refuse(404, "no Installed run %s: a Promotion needs %s's own passed Installed run of Release %s", req.Job, req.Device, release)
 	}
 	ir := j.Result.Installed
 	switch {
 	case j.Spec.Device != req.Device:
-		httpErr(w, 400, "job %s ran on %s, not %s", j.ID, j.Spec.Device, req.Device)
-		return
+		return nil, refuse(400, "job %s ran on %s, not %s", j.ID, j.Spec.Device, req.Device)
 	case ir == nil || ir.Release != release:
-		httpErr(w, 400, "job %s is not an installed job of release %s", j.ID, release)
-		return
+		return nil, refuse(400, "job %s is not an installed job of release %s", j.ID, release)
 	case j.State != api.JobDone || j.Outcome != api.OutcomePass || ir.Verdicts[installed.PhaseBefore] != "MATCH" ||
 		ir.Verdicts[installed.PhaseBooted] != "MATCH" || ir.Verdicts[installed.PhaseAfter] != "MATCH":
-		httpErr(w, 409, "job %s did not pass with matching identity (outcome %s, verdicts %v)", j.ID, j.Outcome, ir.Verdicts)
-		return
+		return nil, refuse(409, "job %s did not pass with matching identity (outcome %s, verdicts %v)", j.ID, j.Outcome, ir.Verdicts)
 	case ir.OMT != "NO_REGRESSION":
-		httpErr(w, 409, "job %s's omarchy-m-test comparison is %q, not NO_REGRESSION", j.ID, ir.OMT)
-		return
+		return nil, refuse(409, "job %s's omarchy-m-test comparison is %q, not NO_REGRESSION", j.ID, ir.OMT)
 	case ir.Dmesg != "NONE_NEW" && ir.Dmesg != "REVIEW_REQUIRED":
-		httpErr(w, 409, "job %s's kernel errors were not compared cleanly (%q)", j.ID, ir.Dmesg)
-		return
+		return nil, refuse(409, "job %s's kernel errors were not compared cleanly (%q)", j.ID, ir.Dmesg)
 	case ir.Frozen == "":
-		httpErr(w, 409, "job %s has no frozen evidence copy", j.ID)
-		return
+		return nil, refuse(409, "job %s has no frozen evidence copy", j.ID)
 	}
 	// the frozen copy must still be the job's evidence, byte for byte
 	if err := sameFiles(filepath.Join(s.jobDir(j.ID), "installed"), ir.Frozen); err != nil {
-		httpErr(w, 409, "job %s's frozen copy: %v", j.ID, err)
-		return
+		return nil, refuse(409, "job %s's frozen copy: %v", j.ID, err)
 	}
 	file := omtFile // jobs from before the report's place was recorded
 	if j.Result.OMT != nil && j.Result.OMT.Report != "" {
@@ -892,41 +1057,33 @@ func (s *Server) hPromote(w http.ResponseWriter, r *http.Request) {
 	}
 	report, err := os.ReadFile(filepath.Join(s.jobDir(j.ID), file))
 	if err != nil {
-		httpErr(w, 409, "job %s has no omarchy-m-test report: %v", j.ID, err)
-		return
+		return nil, refuse(409, "job %s has no omarchy-m-test report: %v", j.ID, err)
 	}
 	status, tool, kernel, err := installed.ReportStatus(report)
 	if err != nil {
-		httpErr(w, 409, "job %s's omarchy-m-test report: %v", j.ID, err)
-		return
+		return nil, refuse(409, "job %s's omarchy-m-test report: %v", j.ID, err)
 	}
 	dm, err := os.ReadFile(filepath.Join(ir.Frozen, "dmesg-errors.txt"))
 	if err != nil {
-		httpErr(w, 409, "job %s's frozen kernel errors: %v", j.ID, err)
-		return
+		return nil, refuse(409, "job %s's frozen kernel errors: %v", j.ID, err)
 	}
 	// what becomes the reference must be what the frozen comparisons judged
 	if err := s.promotionInputs(j, report, status, tool, kernel, dm); err != nil {
-		httpErr(w, 409, "job %s: %v", j.ID, err)
-		return
+		return nil, refuse(409, "job %s: %v", j.ID, err)
 	}
 	ob, err := json.MarshalIndent(omtBaseline{Job: j.ID, Time: s.now(), Kernel: kernel, Tool: tool, Status: status}, "", "  ")
 	if err != nil {
-		httpErr(w, 500, "%v", err)
-		return
+		return nil, refuse(500, "%v", err)
 	}
 	ledger := filepath.Join(s.frozenDir(release), "promotions.log")
 	if b, err := os.ReadFile(ledger); err == nil && promotedIn(b, j.ID) {
-		httpErr(w, 409, "job %s is already promoted in %s", j.ID, ledger)
-		return
+		return nil, refuse(409, "job %s is already promoted in %s", j.ID, ledger)
 	} else if err != nil && !os.IsNotExist(err) {
-		httpErr(w, 500, "reading %s: %v", ledger, err)
-		return
+		return nil, refuse(500, "reading %s: %v", ledger, err)
 	}
 	v := s.dev(req.Device)
 	if v == nil {
-		httpErr(w, 404, "no device %s", req.Device)
-		return
+		return nil, refuse(404, "no device %s", req.Device)
 	}
 	// the agent records the promoted kernel as its own known-good last, so the
 	// Mac must be on it now, idle, outside a lab boot
@@ -936,24 +1093,43 @@ func (s *Server) hPromote(w http.ResponseWriter, r *http.Request) {
 	v.mu.Unlock()
 	switch {
 	case !alive:
-		httpErr(w, 409, "%s is not checking in; promotion records the known-good on the Mac too", d.Name)
-		return
+		return nil, refuse(409, "%s is not checking in; promotion records the known-good on the Mac too", d.Name)
 	case !versionAtLeast(d.Facts.AgentVersion, promoteMinAgent):
-		httpErr(w, 409, "%s runs lab-agent %s; promotion needs %s or later to record the known-good on the Mac", d.Name, orStr(d.Facts.AgentVersion, "(unknown)"), promoteMinAgent)
-		return
+		return nil, refuse(409, "%s runs lab-agent %s; promotion needs %s or later to record the known-good on the Mac", d.Name, orStr(d.Facts.AgentVersion, "(unknown)"), promoteMinAgent)
 	case d.ActiveJob != "":
-		httpErr(w, 409, "%s is running job %s", d.Name, d.ActiveJob)
-		return
+		return nil, refuse(409, "%s is running job %s", d.Name, d.ActiveJob)
 	case d.Kernel != j.Result.BootKernel || strings.Contains(d.Cmdline, "maclab.job="):
-		httpErr(w, 409, "%s is running %s (cmdline %q), not the installed %s outside a lab boot: boot it first", d.Name, d.Kernel, d.Cmdline, j.Result.BootKernel)
-		return
+		return nil, refuse(409, "%s is running %s (cmdline %q), not the installed %s outside a lab boot: boot it first", d.Name, d.Kernel, d.Cmdline, j.Result.BootKernel)
 	}
-	line, err := s.promote(r.Context(), v, release, j, maintainerName(r), ledger, map[string][]byte{s.omtBaselinePath(req.Device): ob, s.baselinePath(req.Device): dm})
+	rel, err := s.releaseNow(release)
 	if err != nil {
-		httpErr(w, 500, "%v", err)
-		return
+		return nil, err
 	}
-	writeJSON(w, map[string]any{"promoted": req.Device, "job": j.ID, "known_good": j.Result.BootKernel, "log": strings.TrimSpace(line)})
+	var warnings []string
+	switch rel.State {
+	case api.ReleaseNoVerdict:
+		warnings = append(warnings, fmt.Sprintf("Release %s has no verdict yet", release))
+	case api.ReleaseNotQualified:
+		warnings = append(warnings, fmt.Sprintf("Release %s is not qualified", release))
+	case api.ReleaseRevoked:
+		warnings = append(warnings, fmt.Sprintf("the Qualification of Release %s was revoked", release))
+	}
+	if !req.Confirm {
+		sentence := fmt.Sprintf("Promote %s from Release %s as @%s? Its Installed run %s passed; kernel %s becomes its Known-good.", d.Name, release, by.Handle, j.ID, j.Result.BootKernel)
+		if len(warnings) > 0 {
+			sentence += " Warning: " + strings.Join(warnings, "; ") + "."
+		}
+		return map[string]any{"confirm": sentence, "warnings": warnings}, nil
+	}
+	line, err := s.promote(ctx, v, release, j, by.Handle, ledger, map[string][]byte{s.omtBaselinePath(req.Device): ob, s.baselinePath(req.Device): dm})
+	if err != nil {
+		return nil, refuse(500, "%v", err)
+	}
+	p := api.ReleasePromotion{Time: s.now(), Mac: d.Name, Job: j.ID, Kernel: j.Result.BootKernel, AccountID: by.AccountID, Handle: by.Handle}
+	if err := s.store.addPromotion(release, d.ID, p); err != nil {
+		s.log.Printf("the Promotion of %s from Release %s by %s is in its ledger but not in the Release's record: %v", d.Name, release, by.Handle, err)
+	}
+	return map[string]any{"promoted": req.Device, "job": j.ID, "known_good": j.Result.BootKernel, "log": strings.TrimSpace(line), "warnings": warnings}, nil
 }
 
 // promotionInputs checks that the report and kernel errors a promotion would
@@ -1190,7 +1366,8 @@ func sameFiles(a, b string) error {
 	return nil
 }
 
-// hInstalledStatus lists a release's frozen files and their pins.
+// hInstalledStatus is a Release: its Macs, their Installed runs, its verdict
+// history, and its frozen files.
 func (s *Server) hInstalledStatus(w http.ResponseWriter, r *http.Request) {
 	release := r.PathValue("release")
 	if !reRelease.MatchString(release) {
@@ -1207,7 +1384,12 @@ func (s *Server) hInstalledStatus(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	sort.Strings(files)
-	writeJSON(w, map[string]any{"dir": dir, "files": files})
+	rel, err := s.releaseNow(release)
+	if err != nil && (statusOf(err) != 404 || len(files) == 0) {
+		httpErr(w, releaseStatus(err), "%v", err)
+		return
+	}
+	writeJSON(w, map[string]any{"release": rel, "dir": dir, "files": files})
 }
 
 func lastLine(s string) string {

@@ -189,6 +189,9 @@ type Server struct {
 	// leaseMu makes taking a Lease one step: the count of a person's Leases
 	// per Configuration is read on other Macs than the one leased.
 	leaseMu sync.Mutex
+	// releaseMu makes a verdict one step: whose turn it is depends on the
+	// history it is added to.
+	releaseMu sync.Mutex
 }
 
 // clock is where labd reads time: Config.Clock, or the wall clock when unset.
@@ -367,6 +370,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		s.attachOOB(v)
 		go s.deviceLoop(v)
 	}
+	s.adoptReleases()
 	// Jobs that were running when labd stopped cannot be resumed.
 	unfinished, _ := st.jobs("", 1000, true)
 	sort.Slice(unfinished, func(i, k int) bool { return unfinished[i].Created.Before(unfinished[k].Created) })
@@ -741,10 +745,15 @@ func (s *Server) routes() []route {
 		{"GET /api/builder/artifacts/{sha}", builder, s.hBuilderGetArtifact},
 		{"GET /api/builder/self", builder, s.hBuilderSelf},
 		{"POST /api/builds", teamBuilds, s.hCreateBuild},
-		{"POST /api/installed/{release}/manifest", maintainers, s.hFreezeManifest},
-		{"POST /api/installed/{release}/entry/{device}", maintainers, s.hFreezeEntry},
+		// Releases (releases.go, installed.go). The M team freezes a
+		// manifest and a Mac's entry and records the first verdict;
+		// Promotion, and every later verdict, stay with Maintainers.
+		{"GET /api/installed", team, s.hReleases},
+		{"POST /api/installed/{release}/manifest", team, s.hFreezeManifest},
+		{"POST /api/installed/{release}/entry/{device}", team, s.hFreezeEntry},
+		{"POST /api/installed/{release}/verdict", team, s.hVerdict},
 		{"POST /api/installed/{release}/promote", maintainers, s.hPromote},
-		{"GET /api/installed/{release}", maintainers, s.hInstalledStatus},
+		{"GET /api/installed/{release}", team, s.hInstalledStatus},
 		{"GET /api/builds", maintainers, s.hBuilds},
 		{"GET /api/builds/{id}", maintainers, s.hBuild},
 		{"GET /api/builds/{id}/log", maintainers, s.hBuildLog},
@@ -1739,7 +1748,7 @@ func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...st
 		return nil, 409, fmt.Errorf("%s has not passed a baseline yet: run `lab baseline %s` first", d.Name, d.Name)
 	}
 	if spec.InstalledManifest != "" {
-		if code, err := s.validateInstalled(spec, d.Device); err != nil {
+		if code, err := s.validateInstalled(by, v, spec, d.Device); err != nil {
 			return nil, code, err
 		}
 	}

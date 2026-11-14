@@ -445,28 +445,11 @@ func (r *jobRun) execute(ctx context.Context) (string, string) {
 			return api.OutcomeInfra, "installed job: " + err.Error()
 		}
 		r.ir = ir
-		if v.snapshot().IsVolunteer() {
-			r.ev("installed %s: manifest %s", ir.c.release, short(ir.c.manSHA))
-			if o, sum := ir.volunteerInstall(ctx); o != "" {
-				return o, sum
-			}
-		} else {
-			r.ev("installed %s: manifest %s, installer entry %s", ir.c.release, short(ir.c.manSHA), short(ir.c.entrySHA))
-		}
+		r.ev("installed %s: manifest %s, installer entry %s", ir.c.release, short(ir.c.manSHA), short(ir.c.entrySHA))
 		// identity-before runs on whatever boot is current; it is not one of the job's tests
 		r.state(api.JobTesting)
 		tr := r.runTest(ctx, ir.test(installed.PhaseBefore))
-		reason := ""
-		if ir.c.entry == nil && !tr.Passed {
-			reason = "identity-before did not observe the installer's entry: " + testVerdict(tr) + " " + tr.Error
-		} else if ir.c.entry == nil {
-			if err := ir.freezeObservedEntry(); err != nil {
-				reason = "the installer's entry on the Mac can't be frozen: " + err.Error()
-			}
-		}
-		if reason == "" {
-			reason = ir.identity(installed.PhaseBefore, &tr)
-		}
+		reason := ir.identity(installed.PhaseBefore, &tr)
 		ir.res.Before = &tr
 		r.s.updateJob(j, func(j *api.Job) { j.Result.Installed = &ir.res })
 		if reason != "" {
@@ -900,10 +883,6 @@ func (r *jobRun) expectedLength() time.Duration {
 	if r.j.Spec.InstalledManifest != "" && r.ir == nil {
 		const identityChecks = 3
 		d += identityChecks * r.testTimeout(api.TestSpec{})
-		if r.v.snapshot().IsVolunteer() {
-			// the preinstall references and the install itself
-			d += r.testTimeout(omtSpec()) + collectTimeout + api.InstallTimeout
-		}
 	}
 	return d
 }
