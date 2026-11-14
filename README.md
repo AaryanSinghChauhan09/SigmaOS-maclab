@@ -668,6 +668,30 @@ starts the controller once a build is Deployed. `sudo scripts/mini/ports`
 checks all three ports with no reset: what the mini sees, the tool's answer,
 the controller's, and that a bad RID is refused by both.
 
+### The Signal sender on the mini
+
+labd tells two Signal groups what happens, a line for each event: the Lab
+group ("Omarchy Mac Lab") hears of Leases, of every event of lending a Mac
+and, at 08:00 Brisbane, the daily summary; the owner's group "Agents" hears
+of each change of who someone is, each new Lab token, each cut a Maintainer
+makes and the lab's alerts. Every line is recorded in `labd.db` first. A
+line goes at most once, and a send that fails holds nothing up. The lab only
+sends: it reads nothing from a group and keeps no phone number.
+
+- The sender is `signal-cli`, a LaunchDaemon of the `lab` account
+  (`deploy/org.omarchy-mac.lab.signal-cli.plist`), run from the root-owned
+  copy of the Homebrew tools. labd reaches it over a socket only `lab` can
+  open (`--signal-socket`). Its number is the lab's own, linked to nobody's
+  phone; its keys are files of the `lab` account.
+- labd reads each group's id from a file in the folder `--signal` names:
+  `signal-lab-group` and `signal-agents-group`. A group with no file gets
+  nothing: its lines are recorded and not posted, then or later.
+
+`sudo scripts/mini/setup` installs the LaunchDaemon file and starts the
+sender. `sudo scripts/mini/signal` does the rest at a prompt: `register` the
+number, list the `groups` it was added to, give labd a `group`'s id, and
+`test` with one line to each group.
+
 ## Live data: stream, screen, logs, shell
 
 Everything a UI needs is on the API. The web UI uses it now, and a TUI can use it later.

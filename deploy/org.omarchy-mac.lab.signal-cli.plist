@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The lab's Signal sender on the mini: signal-cli as the unprivileged lab
+     account, run from the copy of the Homebrew tools only root can write.
+     labd hands it lines over the socket, which only lab can open. It holds
+     the lab's own number and no other: what members write in a group it
+     receives, to keep the account alive, and passes on to nobody, neither
+     to its log nor to a file. No number and no group id is named here: the
+     account's keys are files of the lab account in the folder named.
+     scripts/mini/setup installs this file and starts it. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.signal-cli</string>
+  <key>UserName</key><string>lab</string>
+  <key>GroupName</key><string>lab</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/tools/current/signal-cli/bin/signal-cli</string>
+    <string>--data-dir</string><string>/var/lab/secrets/signal-cli</string>
+    <string>--scrub-log</string>
+    <string>daemon</string>
+    <string>--socket</string><string>/var/lab/run/signal-cli.sock</string>
+    <string>--receive-mode</string><string>on-start</string>
+    <string>--no-receive-stdout</string>
+    <string>--ignore-attachments</string>
+    <string>--ignore-stories</string>
+    <string>--ignore-avatars</string>
+    <string>--ignore-stickers</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/lab</string>
+  <key>Umask</key><integer>63</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>/var/lab/log/signal-cli.log</string>
+  <key>StandardErrorPath</key><string>/var/lab/log/signal-cli.log</string>
+</dict>
+</plist>

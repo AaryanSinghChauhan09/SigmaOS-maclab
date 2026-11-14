@@ -9,9 +9,11 @@
 # which is where every daemon runs them from. Makes the Out-of-band
 # controller's token, installs the controller's LaunchDaemon file and, once
 # a build is Deployed, starts it. Starts the tunnel once it has a credential
-# and a Deployed build to read its routes from. Safe to run again: it
-# changes only what is not yet as it should be. It never starts labd: Deploy
-# does. Needs only what macOS has, and Homebrew for its own formulae.
+# and a Deployed build to read its routes from. Installs the Signal sender's
+# LaunchDaemon file and starts signal-cli from the copy; its number is
+# registered with scripts/mini/signal. Safe to run again: it changes only
+# what is not yet as it should be. It never starts labd: Deploy does. Needs
+# only what macOS has, and Homebrew for its own formulae.
 #
 #   --dry-run           say what would change, and change nothing
 #   --release-key FILE  the allowed_signers file Deploy checks a bundle
@@ -28,7 +30,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
@@ -418,6 +420,46 @@ tunnel() {
   change "start the tunnel ($CLOUDFLARED_LABEL) under $plist" start_tunnel
 }
 
+# The lab's Signal sender: signal-cli as the lab account, from the copy of
+# the Homebrew tools. Its account's keys are files of the lab account; the
+# number is registered with scripts/mini/signal, and until then the sender
+# runs with no account and labd's lines are recorded and not posted.
+
+install_sender() {
+  cp "$deploy/$SIGNAL_LABEL.plist" "$SIGNAL_PLIST"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$SIGNAL_PLIST"
+  chmod 0644 "$SIGNAL_PLIST"
+}
+
+sender() {
+  local again=$TOOLS_COPIED
+  formulae | grep -qx signal-cli || return 0
+  [[ -f $deploy/$SIGNAL_LABEL.plist ]] || fail "no deploy/$SIGNAL_LABEL.plist beside scripts/"
+  if [[ "$(looks "$SIGNAL_DATA")" != "$(shape d 700) $LAB_OWNER:$LAB_GROUP" ]] && [[ ! -d $LAB_HOME/secrets || -r $LAB_HOME/secrets ]]; then
+    change "make $SIGNAL_DATA ($LAB_OWNER:$LAB_GROUP, 700)" lab_folder "$SIGNAL_DATA" 700
+  fi
+  if ! cmp -s "$deploy/$SIGNAL_LABEL.plist" "$SIGNAL_PLIST" || [[ "$(looks "$SIGNAL_PLIST")" != "$(shape - 644) $ROOT_OWNER:$ROOT_GROUP" ]]; then
+    change "install $SIGNAL_PLIST" install_sender
+    again=1
+  fi
+  if [[ ! -x $SIGNAL_CLI ]]; then
+    (( DRY )) || fail "no signal-cli in the copy of the Homebrew tools ($SIGNAL_CLI)"
+    change "start $SIGNAL_LABEL, from $SIGNAL_CLI" true
+    return 0
+  fi
+  if [[ "$(head -c 2 "$SIGNAL_CLI")" == '#!' ]] && grep -q -e "$BREW_PREFIX" -e /opt/homebrew "$SIGNAL_CLI"; then
+    fail "$SIGNAL_CLI is a script that runs files under Homebrew, which the admin account can write: the sender was not started. Its LaunchDaemon file has to name what the script runs, in the copy"
+  fi
+  if (( again )) && loaded "$SIGNAL_LABEL"; then
+    change "start $SIGNAL_LABEL again, for its new file or the new copy of the tools" start_sender
+  elif ! loaded "$SIGNAL_LABEL"; then
+    change "start $SIGNAL_LABEL, from $SIGNAL_CLI" start_sender
+  fi
+  if [[ -r $SIGNAL_DATA && -z "$(ls -A "$SIGNAL_DATA")" ]]; then
+    say "the Signal sender has no number yet: scripts/mini/signal register"
+  fi
+}
+
 no_planted_link
 account
 folders
@@ -427,6 +469,7 @@ pins
 oobd_token
 controller
 tunnel
+sender
 
 if (( CHANGES == 0 )); then
   say "nothing to change"

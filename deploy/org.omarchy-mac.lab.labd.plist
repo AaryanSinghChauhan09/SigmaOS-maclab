@@ -23,6 +23,8 @@
     <string>--oobd</string><string>http://127.0.0.1:7780</string>
     <string>--oobd-token-file</string><string>/var/lab/secrets/oobd.token</string>
     <string>--machine-id-key</string><string>/var/lab/secrets/machine-id-key</string>
+    <string>--signal-socket</string><string>/var/lab/run/signal-cli.sock</string>
+    <string>--signal</string><string>/var/lab/secrets</string>
   </array>
   <key>WorkingDirectory</key><string>/var/lab</string>
   <key>Umask</key><integer>63</integer>

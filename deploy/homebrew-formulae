@@ -6,3 +6,7 @@
 # Versions follow Homebrew and change only in a Maintenance run.
 
 cloudflared   # the tunnel: deploy/org.omarchy-mac.lab.cloudflared.plist
+
+# The lab's Signal sender. Homebrew builds it as one native program, with no
+# Java beside it; should it need one again, the set-up copies that too.
+signal-cli

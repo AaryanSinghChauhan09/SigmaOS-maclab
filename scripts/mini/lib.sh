@@ -17,6 +17,7 @@ OOBD_LISTEN="127.0.0.1:7780"
 RESET_TOOL_NAME="macvdmtool"
 CLOUDFLARED_LABEL="org.omarchy-mac.lab.cloudflared"
 FRONT_DOOR="https://$LAB_HOST"
+SIGNAL_LABEL="org.omarchy-mac.lab.signal-cli"
 
 ROOT_OWNER=root
 ROOT_GROUP=wheel
@@ -59,6 +60,12 @@ LABD_OOBD_TOKEN="$LAB_HOME/secrets/oobd.token"
 TUNNEL_TOKEN="$LAB_HOME/secrets/cloudflared.token"
 LAUNCHD_DIR="$SYSROOT/Library/LaunchDaemons"
 OOBD_PLIST="$LAUNCHD_DIR/$OOBD_LABEL.plist"
+# The lab's Signal sender: signal-cli from the copy of the Homebrew tools,
+# its account's keys and the two groups' ids as files of the lab account.
+SIGNAL_PLIST="$LAUNCHD_DIR/$SIGNAL_LABEL.plist"
+SIGNAL_CLI="$LAB_TOOLS/current/signal-cli/bin/signal-cli"
+SIGNAL_DATA="$LAB_HOME/secrets/signal-cli"
+SIGNAL_SOCKET="$LAB_HOME/run/signal-cli.sock"
 BREW_PREFIX="$SYSROOT/opt/homebrew"
 
 umask 022
@@ -178,4 +185,13 @@ fetch() {
 # verified FILE: whether FILE.sig is the pinned release key's signature of FILE.
 verified() {
   ssh-keygen -Y verify -f "$LAB_SIGNERS" -I "$RELEASE_SIGNER" -n "$RELEASE_NAMESPACE" -s "$1.sig" < "$1" >/dev/null 2>&1
+}
+
+stop_sender() { stopped "$SIGNAL_LABEL" || fail "$SIGNAL_LABEL did not stop (20 s)"; }
+
+start_sender() {
+  stop_sender
+  launchctl enable "system/$SIGNAL_LABEL" || true
+  launchctl bootstrap system "$SIGNAL_PLIST" || fail "launchd did not take $SIGNAL_PLIST"
+  loaded "$SIGNAL_LABEL" || fail "$SIGNAL_LABEL is not loaded after its start: see $LAB_HOME/log/signal-cli.log"
 }

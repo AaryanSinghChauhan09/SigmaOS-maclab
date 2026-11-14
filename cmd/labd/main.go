@@ -49,8 +49,24 @@ func main() {
 	omtEvery := flag.Duration("omt-every", 0, "re-run omarchy-m-test on each idle Mac's known-good kernel this often, e.g. 24h (reboots the Mac); 0 never")
 	oobd := flag.String("oobd", "http://127.0.0.1:7780", "the Out-of-band controller's address, on this machine")
 	oobdTokenFile := flag.String("oobd-token-file", "", "labd's copy of the Out-of-band controller's token: a file only the account labd runs as reads. With none, no Mac gets a Hard reset")
+	signalSocket := flag.String("signal-socket", "", "signal-cli's daemon socket on this machine, the lab's Signal sender. With none, every line for the two groups is recorded and none is posted")
+	signalDir := flag.String("signal", "", `the folder with the ids of the lab's two Signal groups, one id in each file: signal-lab-group (the Lab group, "Omarchy Mac Lab") and signal-agents-group (the owner's "Agents"). A group with no file gets nothing: its lines are recorded and not posted`)
+	signalTest := flag.Bool("signal-test", false, "send one test line to each Signal group that has an id, say what became of it, and stop")
 	rebootWarning := flag.Duration("reboot-warning", 5*time.Minute, "how long before a Volunteer job's first reboot its Mac shows the Volunteer a notice, which the job then waits for; 0 shows none and waits for none")
 	flag.Parse()
+	var sender server.Sender
+	if *signalSocket != "" {
+		sender = server.NewSignalSender(*signalSocket)
+	}
+	if *signalTest {
+		if sender == nil {
+			log.Fatal("--signal-test needs --signal-socket and --signal")
+		}
+		if err := server.SignalTest(context.Background(), sender, *signalDir, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if *partsAtOnce != 1 && *partsAtOnce != 4 {
 		log.Fatalf("--parts-at-once is 1 or 4, not %d", *partsAtOnce)
 	}
@@ -124,7 +140,7 @@ func main() {
 	// ./volunteer downloads the lab-agent built alongside labd.
 	exe, _ := os.Executable()
 	s, err := server.New(ctx, server.Config{DataDir: *data, FirstMaintainer: *maintainer, FirstMaintainerToken: tok,
-		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms, GitHub: app, Admins: admins, OOB: controller, MachineIDKey: idKey,
+		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms, GitHub: app, Admins: admins, OOB: controller, MachineIDKey: idKey, Signal: sender, SignalDir: *signalDir,
 		OMT: *omt, OMTSite: *omtSite, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
 		BootTimeout: *bootTimeout, OfflineAfter: *offlineAfter, AliveWindow: *aliveWindow, QuietGrace: *quietGrace, StageTimeout: *stageTimeout, WatchdogOpenTimeout: *watchdogOpenTimeout, RebootWarning: *rebootWarning, NtfyURL: *ntfy, NotifyCmd: *notifyCmd,
 		BuilderToken: strings.TrimSpace(string(btok)), ArtifactBudget: *artifactGB << 30, Transfers: server.Transfers{AtOnce: *partsAtOnce},
@@ -171,6 +187,9 @@ func main() {
 		log.Printf("reports are refused: the lab is in Preview")
 	case idKey == nil:
 		log.Printf("reports are refused: no machine-id key (--machine-id-key <file>)")
+	}
+	if sender == nil {
+		log.Printf("no Signal sender (--signal-socket): lines for the Lab group and \"Agents\" are recorded and not posted")
 	}
 	if err := server.Serve(hs, lns...); err != http.ErrServerClosed {
 		log.Fatal(err)

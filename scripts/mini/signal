@@ -1,0 +1,154 @@
+#!/bin/bash
+# The lab's Signal sender: its number, its two groups, a test line.
+#
+#   sudo scripts/mini/signal [--dry-run] register
+#   sudo scripts/mini/signal [--dry-run] groups
+#   sudo scripts/mini/signal [--dry-run] accept GROUP-ID
+#   sudo scripts/mini/signal [--dry-run] group lab|agents GROUP-ID
+#   sudo scripts/mini/signal [--dry-run] test
+#
+# register  asks for the sender's number, the captcha link and the code
+#           Signal sends by SMS, and registers the number with signal-cli.
+#           The number is the lab's own, linked to nobody's phone.
+# groups    lists the groups the sender was added to, with their ids. What
+#           members wrote there is fetched and thrown away, never shown.
+# accept    accepts the invitation to a group, when the sender was invited
+#           and not added.
+# group     gives labd a group's id: lab is the Lab group ("Omarchy Mac
+#           Lab"), agents is "Agents". From then on labd posts that group's
+#           lines; until then it records them and posts none.
+# test      has labd's own sender post one test line to each group.
+#
+# signal-cli runs as the lab account, from the copy of the Homebrew tools
+# that only root can write; the account's keys are files of the lab account.
+# The sender's daemon is stopped while register, groups and accept run, and
+# started again after.
+#
+#   --dry-run  say what would be asked and run, and change nothing
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+
+usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+while [[ ${1:-} == --dry-run ]]; do
+  DRY=1
+  shift
+done
+verb="${1:-}"
+[[ -n $verb ]] || usage
+shift
+(( DRY )) || need_root
+
+GROUP_ID='^[A-Za-z0-9+/]{43}=$'
+secrets="$LAB_HOME/secrets"
+no_planted_link
+
+cli() { as_lab "$SIGNAL_CLI" --data-dir "$SIGNAL_DATA" "$@"; }
+
+ready() {
+  [[ -x $SIGNAL_CLI && -d $SIGNAL_DATA && -f $SIGNAL_PLIST ]] || fail "the Signal sender is not set up: run scripts/mini/setup first"
+}
+
+# ask PROMPT: one line from the terminal, into $answer.
+ask() {
+  answer=""
+  printf '%s: ' "$1" >&2
+  IFS= read -r answer || true
+}
+
+# The daemon holds the account's files: it is stopped while signal-cli runs
+# by hand, and started again however that ends.
+WAS_LOADED=0
+alone() {
+  if loaded "$SIGNAL_LABEL"; then
+    WAS_LOADED=1
+    say "stopping $SIGNAL_LABEL while signal-cli runs here"
+    stop_sender
+  fi
+  trap back EXIT
+}
+back() {
+  if (( WAS_LOADED )); then
+    say "starting $SIGNAL_LABEL again"
+    start_sender
+  fi
+}
+
+register() {
+  local number captcha code
+  ask "The sender's number, with its country code (+61...)"
+  number="$answer"
+  [[ $number =~ ^\+[1-9][0-9]{6,14}$ ]] || fail "that is not a number with its country code. Nothing was changed"
+  ask "The captcha link: solve https://signalcaptchas.org/registration/generate.html, then copy the address of \"Open Signal\" (signalcaptcha://...)"
+  captcha="$answer"
+  [[ $captcha == signalcaptcha://* ]] || fail "that is not a captcha link: it starts with signalcaptcha://. Nothing was changed"
+  alone
+  cli -a "$number" register --captcha "$captcha" || fail "signal-cli did not register the number"
+  ask "The code Signal sent to that number by SMS"
+  code="${answer//[- ]/}"
+  [[ $code =~ ^[0-9]{6}$ ]] || fail "that is not a six-digit code. Run register again for a new one"
+  cli -a "$number" verify "$code" || fail "signal-cli did not verify the number"
+  cli -a "$number" updateProfile --given-name "Omarchy Mac Lab" || say "the profile name was not set: members see the number alone"
+  say "registered. Add the number to \"Agents\" and to the group \"Omarchy Mac Lab\", then: scripts/mini/signal groups"
+}
+
+groups() {
+  alone
+  cli receive --ignore-attachments --ignore-stories --ignore-avatars --ignore-stickers >/dev/null || fail "signal-cli could not fetch what waits for the sender"
+  cli listGroups || fail "signal-cli could not list the groups"
+  say "give labd each id: scripts/mini/signal group lab ID, scripts/mini/signal group agents ID"
+}
+
+accept() {
+  [[ ${1:-} =~ $GROUP_ID ]] || fail "that is not a group id as scripts/mini/signal groups prints it"
+  alone
+  cli updateGroup -g "$1" || fail "signal-cli did not accept the invitation"
+}
+
+# put NAME VALUE: the file NAME in the secrets folder, for the lab account alone.
+put() { printf '%s\n' "$2" | lab_file "$secrets/$1"; }
+
+group() {
+  local file
+  case "${1:-}" in
+    lab) file=signal-lab-group ;;
+    agents) file=signal-agents-group ;;
+    *) usage ;;
+  esac
+  [[ ${2:-} =~ $GROUP_ID ]] || fail "that is not a group id as scripts/mini/signal groups prints it. Nothing was changed"
+  [[ -d $secrets ]] || fail "no $secrets: run scripts/mini/setup first"
+  change "give labd the id of the $1 group in $secrets/$file" put "$file" "$2"
+  (( DRY )) || say "labd posts that group's lines from now on: scripts/mini/signal test"
+}
+
+test_line() {
+  [[ -x $LAB_CURRENT/bin/labd ]] || fail "no build is Deployed: the test line is sent by labd's own sender"
+  loaded "$SIGNAL_LABEL" || fail "$SIGNAL_LABEL is not running: run scripts/mini/setup"
+  as_lab "$LAB_CURRENT/bin/labd" --signal-socket "$SIGNAL_SOCKET" --signal "$secrets" --signal-test
+}
+
+case "$verb" in
+  register | groups | accept | test)
+    if (( DRY )); then
+      case "$verb" in
+        register) say "would stop $SIGNAL_LABEL, ask for the number, the captcha link and the SMS code, register the number with signal-cli as $LAB_OWNER, and start $SIGNAL_LABEL again" ;;
+        groups) say "would stop $SIGNAL_LABEL, fetch and throw away what waits for the sender, list its groups with their ids, and start $SIGNAL_LABEL again" ;;
+        accept) say "would stop $SIGNAL_LABEL, accept the invitation to the group, and start $SIGNAL_LABEL again" ;;
+        test) say "would have labd's sender post one test line to each group that has an id" ;;
+      esac
+      exit 0
+    fi
+    ready
+    case "$verb" in
+      register) register ;;
+      groups) groups ;;
+      accept) accept "$@" ;;
+      test) test_line ;;
+    esac
+    ;;
+  group) group "$@" ;;
+  *) usage ;;
+esac
