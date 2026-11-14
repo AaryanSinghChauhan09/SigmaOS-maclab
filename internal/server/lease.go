@@ -28,7 +28,7 @@ func leaseIsOf(l *api.Lease, a asker) bool {
 	if l.AccountID != 0 {
 		return l.AccountID == a.AccountID
 	}
-	return l.Owner() == "" || l.Owner() == a.Handle
+	return l.Owner() != "" && l.Owner() == a.Handle
 }
 
 // liveLeaseLocked is the Mac's Lease while it runs, else nil. Caller holds

@@ -61,7 +61,8 @@ func (n *Night) Run(ctx context.Context) error {
 	if d.Volunteer {
 		return fmt.Errorf("%s is a Volunteer's Mac: week 1 runs on Lab-owned Macs only", n.Device)
 	}
-	if _, err := n.Lab.Lease(ctx, n.Device, n.Holder, n.JobTimeout*time.Duration(len(n.Boots)+1)); err != nil {
+	// A Lease lasts 24 hours at most; a longer loop runs on past it.
+	if _, err := n.Lab.Lease(ctx, n.Device, n.Holder, min(n.JobTimeout*time.Duration(len(n.Boots)+1), 24*time.Hour)); err != nil {
 		return fmt.Errorf("lease %s: %w", n.Device, err)
 	}
 	defer n.Lab.Release(context.WithoutCancel(ctx), n.Device, n.Holder)

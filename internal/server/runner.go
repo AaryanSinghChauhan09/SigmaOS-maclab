@@ -397,6 +397,9 @@ func (r *jobRun) finishAt(outcome, summary string, at time.Time) {
 		j.Events = append(j.Events, api.JobEvent{Time: at, Msg: "done: " + outcome + ": " + summary})
 	})
 	r.s.log.Printf("job %s done: %s: %s", r.j.ID, outcome, summary)
+	if r.v != nil {
+		r.s.configuration(r.v)
+	}
 	r.tellVolunteerJobDone(outcome)
 	if outcome != api.OutcomePass && outcome != api.OutcomeCanceled && outcome != api.OutcomeIncomplete {
 		r.s.notify(Notification{Device: r.j.Spec.Device, Title: fmt.Sprintf("job %s on %s: %s", r.j.ID, r.j.Spec.Device, outcome), Body: summary, Priority: "low"})

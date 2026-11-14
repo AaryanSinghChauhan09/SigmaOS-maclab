@@ -14,7 +14,7 @@
 {{- else}}
 <div class="scroll">
 <table class="stack">
-<thead><tr><th>Mac</th><th>Kind</th><th>Configuration</th><th>State</th><th>Lease</th><th>Take it</th></tr></thead>
+<thead><tr><th>Mac</th><th>Kind</th><th>Configuration</th><th>State</th><th>Lease</th><th>Actions</th></tr></thead>
 <tbody>
 {{- range .Macs}}
 <tr id="mac-{{.Name}}">
@@ -26,7 +26,7 @@
 {{- end}}</td>
 <td data-label="State">{{.State}}</td>
 <td data-label="Lease">{{if .Holder}}@{{.Holder}}{{if .HolderKind}} <span class="badge {{.HolderClass}}">{{.HolderKind}}</span>{{end}} <span class="nowrap">until {{.Until}}</span>{{else}}<span class="dim">none</span>{{end}}</td>
-<td data-label="Take it">
+<td data-label="Actions">
 {{- if .Mine}}
 <form class="inline" method="post" action="{{href (print "/macs/" .Name "/renew")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><button class="button button-small" type="submit">Renew</button></form>
 {{template "take" ($.Take (print "/macs/" .Name "/release") "Release" (print "Release: your Lease on " .Name " ends now") "show" $.Data.Show)}}
