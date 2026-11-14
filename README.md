@@ -38,7 +38,7 @@ AI agents get the same operations over MCP (`lab mcp`).
 |---|---|---|
 | `labd` | any Linux box, or a Mac | Controller: devices, leases, job queue, recovery ladder, notifications, artifact and log store |
 | `lab-agent` | each test Mac (Omarchy/Asahi, aarch64) | Heartbeat. Stages kernels beside the known-good one, arms the one-shot boot, runs tests, uploads logs |
-| `oobd` | the controller host wired to a test Mac's DFU port | Hard reset and serial console. Today: a macOS Mac running `macvdmtool`. Later: a Linux box with a Central Scrutinizer |
+| `oobd` | the mini, as a root LaunchDaemon | The Out-of-band controller: a Hard reset for a Lab-owned Mac cabled to one of the mini's three rear USB-C ports, through the pinned `macvdmtool` |
 | `lab` | your machine | CLI, and `lab mcp` for agents |
 
 ## How a job runs
@@ -636,22 +636,37 @@ of every report published so far.
 A Mac enrolled with `./volunteer` (see [Volunteer a Mac](#volunteer-a-mac)) is a
 Volunteer's too, named and reached by the tailnet login that ran it.
 
-### Out-of-band control from a macOS host
+### Out-of-band control on the mini
 
-On the controller Mac, build `macvdmtool` (Xcode command line tools).
-Connect its DFU port to the test Mac's DFU port with a USB-C cable that isn't
-USB 2.0-only.
+One Out-of-band controller, `oobd`, runs on the mini as a root LaunchDaemon
+(`deploy/com.maclab.oobd.plist`) and sends a Hard reset through one of the
+mini's three rear USB-C ports: RID 0 is the middle one, 1 the left, 2 the
+right, facing the back. Any Lab-owned Mac goes on any port, with a
+Thunderbolt-capable cable, and nothing else goes on those ports.
 
-**Step zero:** check that `sudo macvdmtool nop` reports a connection and that
-`sudo macvdmtool reboot serial` resets the target. Only then install `oobd` using
-`deploy/com.maclab.oobd.plist`, and point labd at it:
+- **The tool** is the lab's fork `omacom/macvdmtool`, whose `--rid` is
+  required and strictly parsed. `deploy/pins` names its commit and the
+  checksum of its source; the release workflow's macOS job builds it
+  (`release/reset-tool.sh`) and it reaches the mini in the server bundle.
+- **Every request names its port**: `GET /v1/ports/<rid>/status` and
+  `POST /v1/ports/<rid>/reset`. A RID that is not 0, 1 or 2 is refused by
+  the controller before the tool, which refuses it too. One tool run happens
+  at a time, so two resets asked together run one after the other.
+- **Status** says, for a port: connected or not, the name the Mac shows over
+  Thunderbolt, the partner's product id and the plug count. It runs no tool;
+  `?probe=1` adds the tool's own answer (`nop`), still with no reset.
+- **A reset may carry the port's state as it was last seen** (product id and
+  plug count). The controller looks once more, under its lock, and refuses
+  with 409 when the port no longer shows it.
+- **Loopback only**, on `127.0.0.1:7780`. The token is in two files and on
+  no command line: `/usr/local/lab/secrets/oobd.token`, which only root
+  reads, for the controller, and `/var/lab/secrets/oobd.token`, which only
+  the `lab` account reads, for labd (`--oobd-token-file`).
 
-```sh
-lab device m1air --oob-url http://<controller-host>:7780 --oob-token <token>
-lab oob m1air
-```
-
-`macvdmtool` only drives one port, so it's one controller Mac per test Mac.
+`sudo scripts/mini/setup` makes the token, installs the LaunchDaemon file and
+starts the controller once a build is Deployed. `sudo scripts/mini/ports`
+checks all three ports with no reset: what the mini sees, the tool's answer,
+the controller's, and that a bad RID is refused by both.
 
 ## Live data: stream, screen, logs, shell
 

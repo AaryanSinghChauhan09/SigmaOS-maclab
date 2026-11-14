@@ -63,18 +63,20 @@ func TestTheTokenIsReadFromAFileOnlyItsAccountReads(t *testing.T) {
 	}
 }
 
-// A file of another account's is refused: root's copy is not labd's, and
-// labd's is not root's. Only root can make such a file, so the test needs it.
+// A file of another account's is refused: root's copy is not labd's to
+// read, and labd's is not root's to trust.
 func TestATokenFileOfAnotherAccountIsRefused(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("needs root to make a file that belongs to another account")
-	}
 	path := tokenFile(t, token, 0o600)
-	if err := os.Chown(path, 12345, 12345); err != nil {
-		t.Fatal(err)
+	if got, err := readToken(path, os.Geteuid()); err != nil || got != token {
+		t.Fatalf("its own file: %v", err)
 	}
-	if _, err := ReadToken(path); err == nil {
-		t.Fatal("a file of another account's was read")
+	for _, uid := range []int{0, os.Geteuid() + 1} {
+		if uid == os.Geteuid() {
+			continue
+		}
+		if _, err := readToken(path, uid); err == nil || !strings.Contains(err.Error(), "does not belong") {
+			t.Errorf("read as uid %d: %v", uid, err)
+		}
 	}
 }
 

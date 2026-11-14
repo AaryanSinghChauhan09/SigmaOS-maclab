@@ -328,7 +328,8 @@ start_oobd() {
   done
   ! oobd_loaded || fail "$OOBD_LABEL did not stop ($n s)"
   launchctl enable "system/$OOBD_LABEL" || true
-  launchctl bootstrap system "$OOBD_PLIST"
+  launchctl bootstrap system "$OOBD_PLIST" || fail "launchd did not take $OOBD_PLIST"
+  oobd_loaded || fail "$OOBD_LABEL is not loaded after its start: see /var/log/oobd.log"
 }
 
 controller() {
