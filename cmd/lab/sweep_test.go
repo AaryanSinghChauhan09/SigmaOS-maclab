@@ -281,6 +281,15 @@ func TestTheToolsOfLabMCPFollowTheCommandsOneForOne(t *testing.T) {
 		}
 		t.Errorf("lab mcp lacks the tools %v and has the tools %v that follow no command", missing, extra)
 	}
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range want {
+		if !strings.Contains(string(readme), "`"+name+"`") {
+			t.Errorf("the README's list of tools lacks %s", name)
+		}
+	}
 	for name, text := range texts {
 		low := strings.ToLower(text)
 		for _, gone := range []string{"lab_serial", "lab_devices", "lab_log\"", "lab_screenshot", "lab_build_status", "./volunteer", "lab forget", "tailscale", "serial"} {
