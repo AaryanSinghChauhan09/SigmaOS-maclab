@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# End-to-end smoke test against production (or SITE=...):
-#   1. install the latest release with the site's one-line installer
+# End-to-end smoke test against Omarchy Mac Lab (or SITE=...):
+#   1. install the latest release with the lab's one-line installer
 #   2. run it with --dry-run (on a machine that isn't an Apple Silicon Mac it
 #      must refuse, run nothing and exit 2; on a Mac it writes the report)
-#   3. upload a golden report, fetch its page, then delete it via its deletion link
-# Needs curl, python3, ssh-keygen. Leaves nothing on the site.
+#   3. upload a saved report with --upload, fetch its page, see the same
+#      report refused as already uploaded, then delete it via its deletion link
+# Needs curl, python3, ssh-keygen. Leaves no report on the lab, only the digest
+# it keeps of a deleted one.
 set -euo pipefail
 
-site="${SITE:-https://omarchy-m-testing.org}"
+site="${SITE:-https://lab.omarchy-mac.org}"
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 t="$(mktemp -d)"
 trap 'rm -rf "$t"' EXIT
@@ -31,24 +33,40 @@ else
 fi
 grep -q "^Uploaded\. Your report" "$t/run.log" && fail "--dry-run uploaded something"
 
-echo "== upload a golden report"
+echo "== upload a saved report with --upload"
+# The golden report, signed by this run's own new key: the lab keeps a digest of
+# every report it held, so the same one would be refused the second time.
 golden="${GOLDEN:-$repo/schema/golden/signed/m2-max-image2.json}"
-code="$(curl -sS -o "$t/upload.json" -w '%{http_code}' -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  --data-binary "@$golden" "$site/api/v1/reports")"
-[[ $code == 201 ]] || fail "upload answered $code: $(cat "$t/upload.json")"
-read -r report_url deletion_url < <(python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); print(b["report_url"], b["deletion_url"])' "$t/upload.json")
+HOME="$t/home" XDG_STATE_HOME= python3 - "$t/home/.local/share/omarchy-m-test" "$golden" > "$t/saved.json" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from omarchy_m_test import report, signing
+from omarchy_m_test.host import RealHost
+with open(sys.argv[2], encoding="utf-8") as f:
+    unsigned = {name: value for name, value in json.load(f).items() if name != "signature"}
+signed, unsigned_because = signing.sign(RealHost(), unsigned)
+if unsigned_because:
+    sys.exit(unsigned_because)
+sys.stdout.write(report.to_text(signed))
+PY
+HOME="$t/home" "$cli" --upload "$t/saved.json" --site "$site" > "$t/upload.log" 2>&1 || fail "upload: $(cat "$t/upload.log")"
+report_url="$(sed -n 's/^Uploaded\. Your report: //p' "$t/upload.log")"
+deletion_url="$(sed -n 's/^Keep this link to delete it later: //p' "$t/upload.log")"
+[[ -n $report_url && -n $deletion_url ]] || fail "upload: $(cat "$t/upload.log")"
 echo "report: $report_url"
 curl -fsS -o /dev/null "$report_url" || fail "report page not reachable"
 
+echo "== the same report again is already uploaded"
+again="$(HOME="$t/home" "$cli" --upload "$t/saved.json" --site "$site" 2>&1)" || fail "a repeat failed: $again"
+[[ $again == "Already uploaded. Your report: $report_url" ]] || fail "a repeat answered: $again"
+
 echo "== delete it via its deletion link"
-jar="$t/cookies"
-curl -fsS -c "$jar" -o "$t/deletion.html" "$deletion_url"
-csrf="$(python3 -c 'import re,sys; print(re.search(r"name=\"authenticity_token\" value=\"([^\"]+)\"", open(sys.argv[1]).read()).group(1))' "$t/deletion.html")"
+curl -fsS -o "$t/deletion.html" "$deletion_url"
+curl -fsS -o /dev/null "$report_url" || fail "opening the deletion link deleted the report"
 token="${deletion_url##*token=}"
-curl -fsS -b "$jar" -o "$t/deleted.html" -X POST "${report_url}" \
-  --data-urlencode "_method=delete" --data-urlencode "authenticity_token=$csrf" --data-urlencode "token=$token"
+curl -fsS -o "$t/deleted.html" -X POST "${report_url}" --data-urlencode "_method=delete" --data-urlencode "token=$token"
 grep -q "Report deleted" "$t/deleted.html" || fail "deletion didn't confirm"
 code="$(curl -sS -o /dev/null -w '%{http_code}' "$report_url")"
 [[ $code == 404 ]] || fail "deleted report still answers $code"
 
-echo "smoke ok: installed $("$cli" --version), dry run as expected, golden report uploaded and deleted"
+echo "smoke ok: installed $("$cli" --version), dry run as expected, a saved report uploaded, refused the second time and deleted"
