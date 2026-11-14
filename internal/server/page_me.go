@@ -299,7 +299,7 @@ func (s *Server) personNamed(w http.ResponseWriter, r *http.Request) (Person, bo
 	id, err := strconv.ParseInt(r.PathValue("account"), 10, 64)
 	if err == nil {
 		var p Person
-		if p, err = s.personNow(id); err == nil {
+		if p, err = s.person(id); err == nil {
 			return p, true
 		}
 		if !errors.Is(err, sql.ErrNoRows) {

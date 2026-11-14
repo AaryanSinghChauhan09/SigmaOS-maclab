@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -104,7 +103,7 @@ func tokenConnKey(id int64) string      { return "token:" + strconv.FormatInt(id
 // labTokenRequest finds the person r's Lab token belongs to and passes them
 // on (see tokenUseOf). A use is written down with its time and address, and
 // pushes the token's date out; an expired token is passed on as expired and
-// is not a use.
+// is not a use, and neither is the token of a Blocked person.
 func (s *Server) labTokenRequest(r *http.Request) *http.Request {
 	secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || !strings.HasPrefix(secret, labTokenPrefix) {
@@ -114,10 +113,10 @@ func (s *Server) labTokenRequest(r *http.Request) *http.Request {
 	if err != nil {
 		return r
 	}
-	p.Admin = slices.Contains(s.cfg.Admins, p.AccountID)
+	s.fillIn(&p)
 	now := s.now()
 	u := &tokenUse{Person: p, token: t, expired: t.expired(now)}
-	if !u.expired {
+	if !u.expired && !p.Blocked {
 		if addr := callerAddr(r); t.LastUsed.IsZero() || addr != t.Address || now.Sub(t.LastUsed) >= labTokenTouch {
 			if err := s.store.useLabToken(t, now, addr); err != nil {
 				s.log.Printf("Lab token %q of %s: %v", t.Name, p.Handle, err)
@@ -199,8 +198,8 @@ func scanLabToken(scan func(...any) error, more ...any) (t labToken, err error) 
 
 // labTokenByHash is the token with this hash and the person it belongs to.
 func (st *store) labTokenByHash(hash string) (p Person, t labToken, err error) {
-	t, err = scanLabToken(st.db.QueryRow(`SELECT `+labTokenColumns+`, p.handle, p.maintainer FROM lab_tokens t
-		JOIN people p ON p.account_id = t.account_id WHERE t.hash = ?`, hash).Scan, &p.Handle, &p.Maintainer)
+	t, err = scanLabToken(st.db.QueryRow(`SELECT `+labTokenColumns+`, p.handle, p.maintainer, p.m_team, p.leave_to_lend, p.blocked_at IS NOT NULL FROM lab_tokens t
+		JOIN people p ON p.account_id = t.account_id WHERE t.hash = ?`, hash).Scan, &p.Handle, &p.Maintainer, &p.MTeam, &p.Lend, &p.Blocked)
 	p.AccountID = t.AccountID
 	return p, t, err
 }
@@ -318,14 +317,6 @@ func (st *store) peopleCalled(handle string) ([]Person, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
-}
-
-// personNow is the Person under this account id with their roles at this
-// moment.
-func (s *Server) personNow(accountID int64) (Person, error) {
-	p, err := s.store.person(accountID)
-	p.Admin = slices.Contains(s.cfg.Admins, p.AccountID)
-	return p, err
 }
 
 // revokeLabToken is the first cut: the token stops on the next request and

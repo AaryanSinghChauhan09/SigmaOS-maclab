@@ -110,6 +110,9 @@ func (s *Server) hStream(w http.ResponseWriter, r *http.Request) {
 			if (e.kind == "serial" && !serial) || !s.sees(c, e.device) {
 				continue
 			}
+			if e.kind == "device" && c.team != "" {
+				e.data = forTeam(e.data)
+			}
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.kind, e.data)
 		}
 		fl.Flush()
@@ -245,7 +248,7 @@ func (s *Server) hScreenshot(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) hScreen(w http.ResponseWriter, r *http.Request) {
 	v := s.devOr404(w, r)
-	if v == nil {
+	if v == nil || !s.teamMayWatch(w, r, v) {
 		return
 	}
 	name := r.PathValue("file")
@@ -267,13 +270,28 @@ func (s *Server) hScreen(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hScreens(w http.ResponseWriter, r *http.Request) {
-	if v := s.devOr404(w, r); v != nil {
+	if v := s.devOr404(w, r); v != nil && s.teamMayWatch(w, r, v) {
 		l := s.screens(v.d.Name)
 		if l == nil {
 			l = []screenFile{}
 		}
 		writeJSON(w, l)
 	}
+}
+
+// teamMayWatch answers w and reports false for an M team member asking for
+// a Mac's kept screens: they see the fleet, and a Mac's screen only as
+// mayDo lets them watch it.
+func (s *Server) teamMayWatch(w http.ResponseWriter, r *http.Request, v *dev) bool {
+	c := callerOf(r)
+	if c.team == "" {
+		return true
+	}
+	if err := s.mayDo(c, v, actWatch); err != nil {
+		httpErr(w, 409, "%v", err)
+		return false
+	}
+	return true
 }
 
 // hLogs reads the journal or kernel log live from the Mac.

@@ -95,6 +95,35 @@ func (g *GitHubApp) user(ctx context.Context, token string) (githubIdentity, err
 	return id, nil
 }
 
+// errNoSuchAccount is GitHub saying it has no account under a handle.
+var errNoSuchAccount = errors.New("GitHub knows no such account")
+
+// lookup is the account a handle names on GitHub now: its id, and the
+// handle as GitHub writes it. It needs no token and sends none.
+func (g *GitHubApp) lookup(ctx context.Context, handle string) (githubIdentity, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", g.APIURL+"/users/"+url.PathEscape(handle), nil)
+	if err != nil {
+		return githubIdentity{}, err
+	}
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	var id githubIdentity
+	if err := githubDo(req, &id); err != nil {
+		if errors.Is(err, githubStatus(http.StatusNotFound)) {
+			return githubIdentity{}, errNoSuchAccount
+		}
+		return githubIdentity{}, err
+	}
+	if id.ID <= 0 || !reHandle.MatchString(id.Login) || !strings.EqualFold(id.Login, handle) {
+		return githubIdentity{}, errors.New("it didn't say whose handle that is")
+	}
+	return id, nil
+}
+
+// githubStatus is GitHub answering with a status that is no success.
+type githubStatus int
+
+func (s githubStatus) Error() string { return fmt.Sprintf("GitHub answered HTTP %d", int(s)) }
+
 func githubDo(req *http.Request, into any) error {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "omarchy-mac-lab")
@@ -108,7 +137,7 @@ func githubDo(req *http.Request, into any) error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		return fmt.Errorf("GitHub answered HTTP %d", res.StatusCode)
+		return githubStatus(res.StatusCode)
 	}
 	if json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(into) != nil {
 		return errors.New("GitHub's answer wasn't JSON")

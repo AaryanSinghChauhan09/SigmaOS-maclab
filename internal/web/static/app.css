@@ -847,6 +847,22 @@ form.inline { display: inline; }
 .record .when { color: var(--comment); display: block; font-size: 0.9em; }
 
 .scroll { max-width: 100%; overflow-x: auto; }
+
+/* People: the table, a row opened in place, the record beside it */
+
+.split { display: grid; gap: 0 1.5rem; }
+.you { color: var(--comment); font-size: 0.85em; }
+.person-toggle { color: var(--white); text-decoration: none; }
+.person-toggle:hover b { color: var(--green); }
+.person-row.open td { background: rgb(65 72 104 / 0.18); }
+.person-detail > td { background: var(--deep); padding: 1rem; white-space: normal; }
+.person-blocks { display: grid; gap: 1rem 2rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
+.person-blocks .wide { grid-column: 1 / -1; }
+.person-blocks h3 { margin-top: 0; }
+.person-blocks ul { list-style: none; margin: 0; padding: 0; }
+.person-blocks li { margin-bottom: 0.35em; }
+.person-blocks p { font-size: 0.9em; margin: 0.4em 0 0; }
+@media (min-width: 1520px) { .split { align-items: start; grid-template-columns: minmax(0, 1fr) 22rem; } }
 .list .actions { justify-content: flex-end; white-space: nowrap; }
 
 /* phone width: each row of the header scrolls sideways, tables stack */
@@ -865,5 +881,7 @@ form.inline { display: inline; }
   .stack td[data-label]::before { color: var(--comment); content: attr(data-label); font-size: 0.85em; left: 0.3em; position: absolute; top: 0.25em; }
   .stack td:first-child { font-size: 1.05em; padding-left: 0.3em; }
   .stack td:first-child::before { display: none; }
+  .stack tr.person-detail { padding: 0; }
+  .stack tr.person-detail > td { padding: 1rem 0.6rem; }
   .stack .actions { justify-content: flex-start; padding: 0.4em 0.3em 0; white-space: normal; }
 }

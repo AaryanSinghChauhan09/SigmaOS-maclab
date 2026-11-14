@@ -74,6 +74,12 @@ func (s *Server) maintainer(h http.HandlerFunc) http.HandlerFunc {
 			httpErr(w, 403, "%s may only look; this needs a Maintainer", who)
 		case signedInAccess:
 			httpErr(w, 403, "@%s is signed in with no role in the lab; this needs a Maintainer", who)
+		case teamAccess:
+			httpErr(w, 403, "@%s is an M team member; this needs a Maintainer", who)
+		case ownAccess:
+			httpErr(w, 403, "@%s lends a Mac and sees their own Macs; this needs a Maintainer", who)
+		case blockedAccess:
+			httpErr(w, 403, "%s", blockedSentence)
 		default:
 			s.noCredential(w, r)
 		}
@@ -89,8 +95,14 @@ func (s *Server) viewer(h http.HandlerFunc) http.HandlerFunc {
 			s.asMaintainer(w, r, who, h)
 		case viewAccess:
 			asPerson(w, r, who, h)
+		case teamAccess:
+			s.asSignedIn(w, r, teamKey{}, h)
+		case ownAccess:
+			s.asSignedIn(w, r, personKey{}, h)
 		case signedInAccess:
 			httpErr(w, 403, "@%s is signed in with no role in the lab, which shows the public site only", who)
+		case blockedAccess:
+			httpErr(w, 403, "%s", blockedSentence)
 		default:
 			s.noCredential(w, r)
 		}
@@ -104,29 +116,27 @@ const (
 	viewAccess
 	adminAccess
 	signedInAccess // signed in with a browser, with no role: the public site only
+	teamAccess     // an M team member: reads the whole fleet
+	ownAccess      // an External volunteer: reads their own Macs
+	blockedAccess  // a Blocked person: nothing, and the one sentence
 )
 
 // access decides what a request may do. A Lab token and a browser's session
 // both act as their person, with the person's roles at this moment: an
-// Admin or a Maintainer gets admin, and who is their handle; anyone else
-// opens no route here. A person labd knows any other way (Config.Person) is
-// a viewer, and who is their login. A Mac, Lab-owned or a Volunteer's,
-// talks to labd with its own device secret.
+// Admin or a Maintainer gets admin, and who is their handle; an M team
+// member reads the fleet, an External volunteer their own Macs, and anyone
+// else opens no route here. A person labd knows any other way
+// (Config.Person) is a viewer, and who is their login. A Mac, Lab-owned or a
+// Volunteer's, talks to labd with its own device secret.
 func (s *Server) access(r *http.Request) (a access, who string) {
 	if u := tokenUseOf(r); u != nil {
-		switch {
-		case u.expired:
+		if u.expired && !u.Blocked {
 			return noAccess, ""
-		case u.isMaintainer():
-			return adminAccess, u.Handle
 		}
-		return signedInAccess, u.Handle
+		return u.access(), u.Handle
 	}
 	if si := signedInOf(r); si != nil {
-		if si.isMaintainer() {
-			return adminAccess, si.Handle
-		}
-		return signedInAccess, si.Handle
+		return si.access(), si.Handle
 	}
 	if s.cfg.Person != nil {
 		if login := s.cfg.Person(r); login != "" {
@@ -152,14 +162,29 @@ func (s *Server) noCredential(w http.ResponseWriter, r *http.Request) {
 func (s *Server) asMaintainer(w http.ResponseWriter, r *http.Request, name string, h http.HandlerFunc) {
 	noteCaller(r, "person:"+name)
 	ctx, cancel := context.WithCancel(context.WithValue(r.Context(), maintainerKey{}, name))
-	var keys []string
-	if u := tokenUseOf(r); u != nil {
-		keys = []string{accountConnKey(u.AccountID), tokenConnKey(u.token.ID)}
-	} else if si := signedInOf(r); si != nil {
-		keys = si.connKeys()
-	}
-	defer s.conns.add(cancel, keys...)()
+	defer s.conns.add(cancel, connKeysOf(r)...)()
 	h(w, r.WithContext(ctx))
+}
+
+// connKeysOf are the names r is open under: those of the Lab token or the
+// browser session it came with.
+func connKeysOf(r *http.Request) []string {
+	if u := tokenUseOf(r); u != nil {
+		return []string{accountConnKey(u.AccountID), tokenConnKey(u.token.ID)}
+	}
+	if si := signedInOf(r); si != nil {
+		return si.connKeys()
+	}
+	return nil
+}
+
+// credentialOf is the person r's Lab token or browser session belongs to,
+// nil for neither.
+func credentialOf(r *http.Request) *Person {
+	if u := tokenUseOf(r); u != nil {
+		return &u.Person
+	}
+	return PersonOf(r)
 }
 
 // maintainerName is the Maintainer who made a request on a Maintainer route.

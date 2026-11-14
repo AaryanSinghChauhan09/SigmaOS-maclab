@@ -180,6 +180,10 @@ func (s *Server) hSignInCallback(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 502, "GitHub didn't sign you in (%v). %s", err, again)
 		return
 	}
+	if k, err := s.store.knownPerson(who.ID); err == nil && k.Blocked {
+		httpErr(w, 403, "%s", blockedSentence)
+		return
+	}
 	id, now := randHex(32), s.now()
 	if err = s.store.signedInAs(who.ID, who.Login, now); err == nil {
 		err = s.store.addSession(hashSecret(id), who.ID, now)

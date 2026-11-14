@@ -11,7 +11,6 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
-	"slices"
 	"time"
 )
 
@@ -23,17 +22,18 @@ type Person struct {
 	// labd's configuration, on no screen; an Admin is a Maintainer.
 	Maintainer bool
 	Admin      bool
+	// MTeam is the M team's mark, Lend an Invite or an approved Request to
+	// lend, and Volunteer lending at least one Mac that is enrolled now.
+	// Blocked shuts the account out (see roles.go).
+	MTeam, Lend, Volunteer, Blocked bool
 }
 
 // Kind is the person's kind in the words of the interface.
 func (p *Person) Kind() string {
-	switch {
-	case p.Admin:
-		return "Admin"
-	case p.Maintainer:
-		return "Maintainer"
+	if p.Blocked {
+		return "Blocked"
 	}
-	return "Signed in, no role"
+	return p.Role().String()
 }
 
 func (p *Person) isMaintainer() bool { return p.Admin || p.Maintainer }
@@ -99,7 +99,11 @@ func (s *Server) sessionOf(value string) *signedIn {
 			s.log.Printf("browser session of %s: %v", p.Handle, err)
 		}
 	}
-	p.Admin = slices.Contains(s.cfg.Admins, p.AccountID)
+	if p.Blocked {
+		s.store.endSession(hash)
+		return nil
+	}
+	s.fillIn(&p)
 	return &signedIn{Person: p, hash: hash, csrf: csrfToken(value)}
 }
 
@@ -112,7 +116,7 @@ func (s *Server) setMaintainer(accountID int64, on bool) error {
 	}
 	s.conns.end(accountConnKey(accountID))
 	if !on {
-		if p, err := s.personNow(accountID); err == nil && !p.Admin {
+		if p, err := s.person(accountID); err == nil && !p.Admin {
 			s.endLeasesOf(p.Handle, "ended: @"+p.Handle+" is no longer a Maintainer")
 		}
 	}
@@ -146,8 +150,8 @@ func (st *store) addSession(hash string, accountID int64, now time.Time) error {
 
 func (st *store) session(hash string) (p Person, lastUsed time.Time, err error) {
 	var used int64
-	err = st.db.QueryRow(`SELECT p.account_id, p.handle, p.maintainer, s.last_used FROM browser_sessions s
-		JOIN people p ON p.account_id = s.account_id WHERE s.hash = ?`, hash).Scan(&p.AccountID, &p.Handle, &p.Maintainer, &used)
+	err = st.db.QueryRow(`SELECT `+personColumns+`, s.last_used FROM browser_sessions s
+		JOIN people p ON p.account_id = s.account_id WHERE s.hash = ?`, hash).Scan(append(personFields(&p), &used)...)
 	return p, time.UnixMicro(used), err
 }
 

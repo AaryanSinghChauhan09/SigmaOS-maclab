@@ -1,0 +1,101 @@
+{{define "names"}}{{if .}}{{len .}} <span class="dim">{{range $i, $name := .}}{{if $i}}, {{end}}<span class="nowrap">{{$name}}</span>{{end}}</span>{{else}}<span class="dim">0</span>{{end}}{{end}}
+
+{{define "record"}}{{if .}}<ol class="record">
+{{range .}}<li><span class="when">{{.When}}</span> {{.Line}}</li>
+{{end}}</ol>{{else}}<p class="dim">Nothing recorded.</p>{{end}}{{end}}
+
+{{define "main"}}{{with .Data}}<h1>People</h1>
+<p class="subtitle">Everyone the lab knows. {{if .Admin}}As Admin you also add and remove Maintainers.{{else}}Only an Admin adds or removes a Maintainer.{{end}}</p>
+{{with .Refused}}<p class="flash flash-alert" role="alert">{{.}}</p>
+{{end}}<div class="split">
+<div>
+<section class="card">
+<h2 class="card-title">requests</h2>
+<p class="dim">No request is waiting.</p>
+</section>
+<section class="card">
+<h2 class="card-title">people ({{len .Rows}})</h2>
+<p class="chips">{{range .Chips}}<a class="chip{{if .Current}} current{{end}}" href="{{href .Path}}">{{.Label}} {{.Count}}</a>
+{{end}}</p>
+<div class="scroll"><table class="list stack people">
+<thead><tr><th>Person</th><th>Kind</th><th>Their Macs</th><th>Leases held</th><th>Signed in for Verified runs</th><th>Last seen</th></tr></thead>
+<tbody>
+{{range $row := .Rows}}<tr class="person-row{{if .Open}} open{{end}}" id="person-{{.AccountID}}">
+<td data-label="Person" class="nowrap"><a class="person-toggle" href="{{href .Path}}" aria-expanded="{{if .Open}}true{{else}}false{{end}}">{{if .Open}}▾{{else}}▸{{end}} <b>@{{.Handle}}</b></a>{{if .You}} <span class="you">you</span>{{end}}</td>
+<td data-label="Kind"><span class="badge {{.BadgeClass}}">{{.Badge}}</span></td>
+<td data-label="Their Macs">{{template "names" .Macs}}</td>
+<td data-label="Leases held">{{template "names" .Leases}}</td>
+<td data-label="Signed in for Verified runs"><span class="dim">0</span></td>
+<td data-label="Last seen" class="nowrap{{if .LastSeen.IsZero}} dim{{end}}">{{.Seen}}</td>
+</tr>
+{{with .Open}}<tr class="person-detail"><td colspan="6"><div class="person-blocks">
+<div>
+<h3>Role</h3>
+{{if $row.You}}<p class="dim">This is you.</p>
+{{end}}{{if $row.Blocked}}<p class="dim">Blocked: no mark, no role and no Invite until someone unblocks.</p>
+{{else if $row.Admin}}<p class="dim">Admins are named in the server's configuration, not here.</p>
+{{else if $row.Maintainer}}{{if .ViewerAdmin}}{{template "take" ($.Take (printf "/people/%d/maintainer/remove" $row.AccountID) "Remove Maintainer" "Remove: stays on the M team")}}
+{{else}}<p class="dim">Only an Admin removes a Maintainer.</p>
+{{end}}{{else if $row.MTeam}}{{if .ViewerAdmin}}<form class="inline" method="post" action="{{href (printf "/people/%d/maintainer" $row.AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Make Maintainer</button></form>
+{{else}}<p class="dim">Only an Admin makes a Maintainer.</p>
+{{end}}{{template "take" ($.Take (printf "/people/%d/m-team/remove" $row.AccountID) "Remove from M team" .LeavesTeam)}}
+<p class="dim">Removing ends their Leases at once. Earlier runs stay Verified runs; later ones are Community runs. Macs they lend stay enrolled.</p>
+{{else}}<form class="inline" method="post" action="{{href (printf "/people/%d/m-team" $row.AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Mark as M team</button></form>
+<p class="dim">For members of the Omarchy M team Signal group. Nothing syncs with the group.{{if $row.Lend}} Has leave to lend.{{end}}</p>
+{{end}}</div>
+<div>
+<h3>Their Macs</h3>
+{{if $row.Macs}}<ul>{{range $row.Macs}}<li>{{.}}</li>{{end}}</ul>{{else}}<p class="dim">Lends no Mac.</p>{{end}}
+</div>
+<div>
+<h3>Leases held</h3>
+{{if $row.Leases}}<ul>{{range $row.Leases}}<li>{{.}}</li>{{end}}</ul>{{else}}<p class="dim">Holds no Lease.</p>{{end}}
+</div>
+<div>
+<h3>Signed in for Verified runs</h3>
+<p class="dim">No Mac signed in.</p>
+</div>
+<div>
+<h3>Lab tokens</h3>
+{{if $row.Blocked}}<p class="dim">None works while Blocked, and none comes back.</p>
+{{else}}{{if .Tokens}}<ul>{{range .Tokens}}<li>{{.Name}} <span class="dim">{{if .Expired}}expired {{.Expires}}{{else if .LastUsed}}last used {{.LastUsed}}{{if .Address}} from {{.Address}}{{end}}{{else}}never used{{end}}</span> {{template "take" ($.Take (printf "/people/%d/tokens/%d/revoke" $row.AccountID .ID) "Revoke" (printf "Revoke “%s” of @%s: whatever uses it stops now" .Name $row.Handle))}}</li>{{end}}</ul>
+{{else}}<p class="dim">Has no Lab token.</p>
+{{end}}{{if .EndAll}}<p>{{template "take" ($.Take (printf "/people/%d/end-all-access" $row.AccountID) "End all access" .EndAll)}}</p>
+{{else}}<p class="dim">Only an Admin uses "End all access" on a Maintainer.</p>
+{{end}}{{end}}</div>
+<div>
+<h3>Block</h3>
+{{if $row.Blocked}}<p>Blocked {{.BlockedAt}}{{if .BlockedBy}} by @{{.BlockedBy}}{{end}}{{if $row.BlockedReason}}: {{$row.BlockedReason}}{{end}}</p>
+<form class="inline" method="post" action="{{href (printf "/people/%d/unblock" $row.AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Unblock</button></form>
+<p class="dim">Unblock gives back sign-in and nothing else.</p>
+{{else if .MayBlock}}<form class="form form-inline take" method="post" action="{{href (printf "/people/%d/block" $row.AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="text" name="reason" maxlength="200" placeholder="reason (optional)" aria-label="Reason (optional)" autocomplete="off"> <button class="button button-danger button-small" type="submit" data-sentence="{{.BlockSentence}}">Block</button></form>
+{{else if $row.Admin}}<p class="dim">An Admin cannot be Blocked.</p>
+{{else if $row.You}}<p class="dim">Nobody blocks themselves.</p>
+{{else}}<p class="dim">Only an Admin blocks a Maintainer.</p>
+{{end}}</div>
+<div class="wide">
+<h3>Record</h3>
+{{template "record" .Record}}
+</div>
+</div></td></tr>
+<tr class="person-end" id="person-{{$row.AccountID}}-end" hidden><td colspan="6"></td></tr>
+{{end}}{{end}}</tbody>
+</table></div>
+<form class="form form-inline" method="post" action="{{href "/people/mark"}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">
+<label for="mark-handle">A GitHub handle, signed in or not</label>
+<input type="text" id="mark-handle" name="handle" required maxlength="40" placeholder="handle" autocomplete="off" spellcheck="false">
+<button class="button button-small" type="submit" name="as" value="m-team">Mark as M team</button>
+<button class="button button-small button-plain" type="submit" name="as" value="invite">Give an Invite</button>
+</form>
+<p class="dim">The lab asks GitHub whose handle it is and keeps the account, so a rename changes nothing. An Invite gives leave to lend from the first sign-in.</p>
+</section>
+</div>
+<aside>
+<section class="card">
+<h2 class="card-title">record</h2>
+<p class="dim">Who did what, newest first.</p>
+{{template "record" .Record}}
+</section>
+</aside>
+</div>
+{{end}}{{end}}

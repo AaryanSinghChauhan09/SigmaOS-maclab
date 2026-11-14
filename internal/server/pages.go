@@ -51,22 +51,13 @@ func (s *Server) pageHandler(p pageRoute) http.HandlerFunc {
 	}
 }
 
-// viewerOf is who r's page is rendered for. The M team's mark and leave to
-// lend are not kept yet: until they are, a person is an Admin, a Maintainer
-// or has no role.
+// viewerOf is who r's page is rendered for.
 func (s *Server) viewerOf(r *http.Request) web.Viewer {
 	p := PersonOf(r)
 	if p == nil {
 		return web.Viewer{}
 	}
-	v := web.Viewer{Kind: web.NoRole, Handle: p.Handle, CSRF: CSRFToken(r)}
-	switch {
-	case p.Admin:
-		v.Kind = web.Admin
-	case p.Maintainer:
-		v.Kind = web.Maintainer
-	}
-	return v
+	return web.Viewer{Kind: p.Role(), Handle: p.Handle, CSRF: CSRFToken(r)}
 }
 
 // render writes the page whose template is name.

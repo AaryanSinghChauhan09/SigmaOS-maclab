@@ -720,6 +720,10 @@ func bearer(r *http.Request) string {
 // (Config.Person), there is nothing to say: labd answers 404.
 func (s *Server) hAuth(w http.ResponseWriter, r *http.Request) {
 	if u := tokenUseOf(r); u != nil {
+		if u.Blocked {
+			httpErr(w, 403, "%s", blockedSentence)
+			return
+		}
 		if u.expired {
 			s.noCredential(w, r)
 			return
@@ -1229,6 +1233,9 @@ type DeviceView struct {
 	Alive    bool      `json:"alive"`
 	Queued   int       `json:"queued"`
 	ScreenAt time.Time `json:"screen_at,omitempty"`
+	// VolunteerHandle is the handle, as it is now, of the person who lends
+	// the Mac; "" for a Lab-owned Mac and on the stream.
+	VolunteerHandle string `json:"volunteer_handle,omitempty"`
 }
 
 func (s *Server) view(v *dev) DeviceView {
@@ -1243,7 +1250,7 @@ func (s *Server) hDevices(w http.ResponseWriter, r *http.Request) {
 	out := []DeviceView{}
 	for _, v := range s.allDevs() {
 		if s.sees(c, v.d.Name) {
-			out = append(out, s.view(v))
+			out = append(out, s.viewFor(c, v))
 		}
 	}
 	writeJSON(w, out)
@@ -1262,7 +1269,7 @@ func (s *Server) hDevice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, struct {
 			DeviceView
 			Events []api.KernelEvent `json:"recent_events"`
-		}{s.view(v), v.eventsSince(s.now().Add(-24 * time.Hour))})
+		}{s.viewFor(callerOf(r), v), v.eventsSince(s.now().Add(-24 * time.Hour))})
 	}
 }
 
@@ -1890,7 +1897,7 @@ func (s *Server) hJobs(w http.ResponseWriter, r *http.Request) {
 		err  error
 	)
 	switch {
-	case c.maintainer != "":
+	case c.reads():
 		jobs, err = s.store.jobs(device, n, false)
 	default:
 		// By enrollment, not name: a Mac's name may have been someone else's

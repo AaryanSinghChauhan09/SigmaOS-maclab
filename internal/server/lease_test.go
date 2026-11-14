@@ -182,7 +182,7 @@ func TestEndAllAccessEndsThePersonsLeases(t *testing.T) {
 	l.baseline()
 	joshua := l.addMaintainer(harnessToken, "joshua")
 	mine := l.setAside(joshua.Token, "joshua@mini", harnessToken, "ada@laptop")
-	p, err := l.s.personNow(testAccount("joshua"))
+	p, err := l.s.person(testAccount("joshua"))
 	if err != nil {
 		t.Fatal(err)
 	}

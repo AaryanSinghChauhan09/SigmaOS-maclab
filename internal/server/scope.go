@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,11 +28,21 @@ import (
 type caller struct {
 	maintainer string // a Maintainer's name, by their token
 	login      string // a person's login, without a token
+	team       string // an M team member's handle: they read the whole fleet
+	account    int64  // the GitHub account id of a signed-in person who is no Maintainer
 	mac        string // a Mac's name, by its device secret
 	labd       bool   // labd itself (see labdItself)
 }
 
-type personKey struct{}
+type (
+	personKey  struct{}
+	teamKey    struct{}
+	accountKey struct{}
+)
+
+// reads reports whether c reads every Mac and every job: a Maintainer, or
+// an M team member, who sees the fleet and whose each Mac is.
+func (c caller) reads() bool { return c.maintainer != "" || c.team != "" }
 
 // callerOf is who made r.
 func callerOf(r *http.Request) caller { return callerOfCtx(r.Context()) }
@@ -41,6 +52,8 @@ func callerOf(r *http.Request) caller { return callerOfCtx(r.Context()) }
 func callerOfCtx(ctx context.Context) caller {
 	c := caller{maintainer: maintainerOf(ctx)}
 	c.login, _ = ctx.Value(personKey{}).(string)
+	c.team, _ = ctx.Value(teamKey{}).(string)
+	c.account, _ = ctx.Value(accountKey{}).(int64)
 	if v, ok := ctx.Value(ctxKey{}).(*dev); ok {
 		c.mac = v.d.Name
 	}
@@ -52,6 +65,9 @@ func callerOfCtx(ctx context.Context) caller {
 func (s *Server) sees(c caller, name string) bool {
 	if c.maintainer != "" {
 		return true
+	}
+	if c.team != "" {
+		return name != ""
 	}
 	if c.login == "" || name == "" {
 		return false
@@ -66,10 +82,14 @@ func (s *Server) sees(c caller, name string) bool {
 }
 
 // seesLocked is sees for a person and a Mac whose v.mu the caller holds:
-// the Mac they volunteered, or one a Maintainer linked to their login.
+// the Mac they volunteered, or one a Maintainer linked to their login. A
+// signed-in person is known by account id, and sees the Macs they lend.
 func (s *Server) seesLocked(c caller, v *dev) bool {
 	if c.login == "" || v.forgotten || v.d.State == api.StateLeft {
 		return false
+	}
+	if c.account != 0 {
+		return v.d.VolunteerID == c.account
 	}
 	return v.volunteeredBy != "" && strings.EqualFold(v.volunteeredBy, c.login) ||
 		v.d.LinkedLogin != "" && strings.EqualFold(v.d.LinkedLogin, c.login)
@@ -101,7 +121,7 @@ func volunteerLogin(raw string) (string, error) {
 // name can be taken again, by anyone, and the old enrollment's jobs stay with
 // the Maintainers.
 func (s *Server) seesJob(c caller, j *api.Job) bool {
-	if c.maintainer != "" {
+	if c.reads() {
 		return true
 	}
 	if !s.sees(c, j.Spec.Device) {
@@ -180,7 +200,9 @@ func (s *Server) register(m *http.ServeMux, rt route) {
 		h = s.joinToken(h)
 	case maintainers:
 		h = s.maintainer(h)
-	case people, scoped:
+	case people:
+		h = s.viewer(notSignedIn(h))
+	case scoped:
 		h = s.viewer(h)
 	case macNamed:
 		h = s.viewer(s.macInScope(h))
@@ -212,12 +234,70 @@ func (s *Server) macInScope(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) jobInScope(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, id := callerOf(r), r.PathValue("id")
-		if c.maintainer == "" {
+		if !c.reads() {
 			if j, err := s.store.job(id); err != nil || !s.seesJob(c, j) {
 				s.log.Printf("%s asked for %s %s, a job they don't see", c.login, r.Method, r.URL.Path)
 				httpErr(w, 404, "no job %s", id)
 				return
 			}
+		}
+		h(w, r)
+	}
+}
+
+// volunteersOwn are the fields of a Mac's view that are for its Volunteer
+// and the Maintainers: how to reach the Volunteer, and the topic the Mac's
+// notices go to. The M team sees whose Mac it is and no more of them.
+var volunteersOwn = []string{"contact", "ntfy_topic", "ntfy_own_url", "linked_login"}
+
+// viewFor is the Mac as c may see it.
+func (s *Server) viewFor(c caller, v *dev) DeviceView {
+	d := s.view(v)
+	if d.VolunteerID != 0 {
+		if k, err := s.store.knownPerson(d.VolunteerID); err == nil {
+			d.VolunteerHandle = k.Handle
+		}
+	}
+	if c.team != "" {
+		d.Contact, d.NtfyTopic, d.NtfyOwnURL, d.LinkedLogin = "", "", "", ""
+	}
+	return d
+}
+
+// forTeam is a Mac's view as the stream carries it, without what is its
+// Volunteer's own.
+func forTeam(view []byte) []byte {
+	var d map[string]json.RawMessage
+	if json.Unmarshal(view, &d) != nil {
+		return []byte("{}")
+	}
+	for _, field := range volunteersOwn {
+		delete(d, field)
+	}
+	out, _ := json.Marshal(d)
+	return out
+}
+
+// asSignedIn serves r for the person whose browser session or Lab token it
+// came with, who is no Maintainer, under key: an M team member (teamKey) or
+// an External volunteer (personKey). It ends when their role goes, or the
+// session or the token.
+func (s *Server) asSignedIn(w http.ResponseWriter, r *http.Request, key any, h http.HandlerFunc) {
+	p := credentialOf(r)
+	noteCaller(r, "person:"+p.Handle)
+	ctx := context.WithValue(context.WithValue(r.Context(), key, p.Handle), accountKey{}, p.AccountID)
+	ctx, cancel := context.WithCancel(ctx)
+	defer s.conns.add(cancel, connKeysOf(r)...)()
+	h(w, r.WithContext(ctx))
+}
+
+// notSignedIn keeps a route of the retired ./volunteer from a person who
+// signed in on the site: a Mac is lent from "Lend a Mac" there.
+func notSignedIn(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c := callerOf(r); c.account != 0 {
+			httpErr(w, 403, "a Mac is lent from the site: sign in and open Lend a Mac")
+			return
 		}
 		h(w, r)
 	}
@@ -298,6 +378,8 @@ func (s *Server) mayDoLocked(c caller, v *dev, a action) error {
 			return nil
 		}
 		return fmt.Errorf("a Mac may not ask for %s on %s", a.what, d.Name)
+	case c.team != "":
+		return fmt.Errorf("an M team member needs their own Lease on %s for %s", d.Name, a.what)
 	case c.login != "":
 		if !s.seesLocked(c, v) {
 			return errNotSeen
