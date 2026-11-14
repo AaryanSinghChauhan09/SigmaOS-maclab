@@ -1,0 +1,156 @@
+#!/bin/bash
+# The Front door's test 16: the four performance targets, measured with no
+# script in a page (spec section 6, "Performance targets"; section 16,
+# Ready item 1).
+#
+#   fd16-performance [--dry-run]
+#   fd16-performance --lab --mini USER@HOST --job ID --link-up MBIT --link-down MBIT [--size BYTES]
+#   fd16-performance --local [--size BYTES]
+#
+#   1. A signed-out public page is an edge HIT and its first byte comes in
+#      under 100 ms. Twenty requests for / with curl; the time is from the
+#      request sent to the first byte, at the 95th percentile; the first two
+#      requests may fill the cache and are not counted.
+#   2. Any page the server renders takes under 100 ms at the 95th
+#      percentile: labd's own times, read on the mini by
+#      scripts/mini/page-times (over SSH as the lab account: the owner types
+#      the password sudo asks for).
+#   3. Transfers through the tunnel reach at least 80% of the slower end's
+#      link speed: 1 GiB up with lab upload and as much down with lab logs,
+#      against --link-up and --link-down.
+#   4. cloudflared stays under one core at full rate: its CPU seconds over
+#      those two transfers, from its metrics on the mini's loopback.
+#
+#   --mini USER@HOST   the mini, as the owner reaches it over SSH with a key
+#   --job ID           the job whose file is downloaded (fd05-outside-transfers
+#                      --lab --prepare makes and names it)
+#   --link-up MBIT     the slower of the two ends' links for an upload: this
+#                      machine's up or the mini's down, from a speed test
+#   --link-down MBIT   the same for a download: the mini's up or this machine's down
+#
+# --local runs the same measuring against a labd on this machine's
+# loopback: there is no edge, so target 1's HIT is not looked for, there is
+# no link to compare target 3 with, and labd's CPU stands in for
+# cloudflared's.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+link_up=""
+link_down=""
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --link-up) (( $# >= 2 )) || usage; link_up="$2"; shift ;;
+    --link-down) (( $# >= 2 )) || usage; link_down="$2"; shift ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+for n in "$link_up" "$link_down"; do
+  [[ -z $n || $n =~ ^[0-9]+(\.[0-9]+)?$ ]] || fail "\"$n\" is not a link speed in Mbit/s"
+done
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login, it would:
+  1. curl $ADDRESS/ twenty times, signed out: cf-cache-status HIT and the first byte under 100 ms (95th percentile)
+  2. ssh -t MINI sudo -u lab $MINI_SCRIPTS/page-times: labd's own render times, under 100 ms (95th percentile)
+  3. lab upload FILE (${SIZE:-$GIB} bytes) and lab logs JOB $JOB_FILE (as many): each at least 80% of --link-up and --link-down
+  4. ssh MINI curl $TUNNEL_METRICS around each transfer: cloudflared under one core
+  5. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-16.md
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+workspace
+if [[ $MODE == local ]]; then
+  [[ -n $SIZE ]] || SIZE=$((48 << 20))
+  JOB_FILE_BYTES=$((8 << 20))
+  local_lab
+  local_mac
+  transfer_job
+else
+  [[ -n $MINI ]] || fail "--lab needs --mini USER@HOST"
+  [[ -n $JOB ]] || fail "--lab needs --job ID: fd05-outside-transfers --lab --prepare makes the job and names it"
+  [[ -n $link_up && -n $link_down ]] || fail "--lab needs --link-up and --link-down: the slower end's link speed each way, in Mbit/s"
+  [[ -n $SIZE ]] || SIZE=$GIB
+  logged_in
+fi
+record_start 16 "the four performance targets"
+failed=0
+# target pass|fail N WORDS
+target() {
+  if [[ $1 == pass ]]; then
+    rec "target $2: pass. $3"
+  else
+    rec "target $2: FAIL. $3"
+    failed=1
+  fi
+}
+# p95: the 95th percentile of the numbers on stdin.
+p95() { sort -n | awk '{ v[NR] = $1 } END { if (NR) { i = int(NR * 0.95); if (i < NR * 0.95) i++; print v[i] } }'; }
+
+# 1. The signed-out public page.
+: > "$WORK/first-bytes"
+hits=0
+answered=200
+for n in $(seq 20); do
+  line="$(curl -s -o /dev/null -D "$WORK/head" --max-time 30 -w '%{http_code} %{time_starttransfer} %{time_pretransfer}' "$ADDRESS/" || true)"
+  read -r code first pre <<<"${line:-000 0 0}"
+  if [[ $code != 200 ]]; then answered="$code"; break; fi
+  (( n > 2 )) || continue
+  calc "($first - $pre) * 1000" >> "$WORK/first-bytes"
+  echo >> "$WORK/first-bytes"
+  if tr -d '\r' < "$WORK/head" | grep -qi '^cf-cache-status: HIT$'; then hits=$((hits + 1)); fi
+done
+if [[ $answered != 200 ]]; then
+  target fail 1 "the signed-out page answered $answered"
+else
+  first_byte="$(p95 < "$WORK/first-bytes")"
+  word=pass
+  if [[ $MODE == local ]]; then
+    cache="$(tr -d '\r' < "$WORK/head" | sed -n 's/^[Cc]ache-[Cc]ontrol: //p' | head -n 1)"
+    is "$first_byte < 100" || word=fail
+    target "$word" 1 "first byte in $first_byte ms at the 95th percentile of 18 requests. No edge here: a HIT was not looked for; labd says Cache-Control: ${cache:-nothing}"
+  else
+    is "$first_byte < 100" && (( hits == 18 )) || word=fail
+    target "$word" 1 "first byte in $first_byte ms at the 95th percentile of 18 requests; $hits of 18 were an edge HIT"
+  fi
+fi
+
+# 2. labd's own render times.
+field() { sed -n "s/^$1=\\([0-9]*\\)\$/\\1/p" "$WORK/pages" | head -n 1; }
+if mini_page_times > "$WORK/pages" && [[ -n "$(field probe_p95_ms)" && -n "$(field day_p95_ms)" ]]; then
+  word=pass
+  (( $(field probe_p95_ms) < 100 && $(field day_p95_ms) < 100 )) || word=fail
+  target "$word" 2 "labd took $(field probe_p95_ms) ms at the 95th percentile over $(field probe_requests) requests for $(field probe_pages) signed-out pages (slowest $(field probe_max_ms) ms), and $(field day_p95_ms) ms over the day's $(field day_requests) page requests"
+else
+  target fail 2 "labd's render times could not be read; what the mini said is above"
+fi
+
+# 3 and 4. The transfers, and the tunnel's CPU while they ran.
+both_ways "$SIZE"
+if [[ $MODE == local ]]; then
+  target pass 3 "up $UP_MBIT Mbit/s and down $DOWN_MBIT Mbit/s on loopback: there is no link here to compare with"
+else
+  up_share="$(calc "$UP_MBIT / $link_up * 100")"
+  down_share="$(calc "$DOWN_MBIT / $link_down * 100")"
+  word=pass
+  is "$up_share >= 80 && $down_share >= 80" || word=fail
+  target "$word" 3 "up $UP_MBIT Mbit/s, ${up_share%.*}% of a $link_up Mbit/s link; down $DOWN_MBIT Mbit/s, ${down_share%.*}% of a $link_down Mbit/s link ($SIZE bytes up, $DOWN_BYTES down)"
+fi
+word=pass
+is "$UP_CORES < 1 && $DOWN_CORES < 1" || word=fail
+who=cloudflared
+[[ $MODE != local ]] || who="labd, standing in for cloudflared,"
+target "$word" 4 "$who used $UP_CORES of a core while uploading and $DOWN_CORES while downloading"
+
+if (( failed )); then
+  record_done fail
+  exit 1
+fi
+record_done pass

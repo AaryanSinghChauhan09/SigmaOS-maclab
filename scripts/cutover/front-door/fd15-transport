@@ -1,0 +1,102 @@
+#!/bin/bash
+# The Front door's test 15: QUIC against HTTP/2 on the tunnel, 1 GB each
+# way, with cloudflared's CPU recorded (spec section 16, Ready item 1;
+# section 6, "The tunnel").
+#
+#   fd15-transport [--dry-run]
+#   fd15-transport --lab --mini USER@HOST --job ID [--size BYTES]
+#   fd15-transport --local [--size BYTES]
+#
+# Under the saved login, from a machine in the house. For each transport it
+# has the mini restart the tunnel under it (scripts/mini/transport, over
+# SSH with sudo: the owner types the password), waits for the lab to answer,
+# then sends 1 GiB with lab upload and fetches as much with lab logs, and
+# reads the CPU seconds cloudflared used for each from its metrics on the
+# mini's loopback. The tunnel then goes back under the Deployed files. The
+# faster transport is written in deploy/cloudflared.yml; within 10% QUIC
+# stays (scripts/cutover/front-door/settle transport).
+#
+#   --mini USER@HOST   the mini, as the owner reaches it over SSH with a key
+#   --job ID           the job whose file is downloaded: fd05-outside-transfers
+#                      --lab --prepare makes and names it
+#
+# The lab is Dark for a few seconds at each restart of the tunnel: three in
+# all. --local runs the same steps against a labd on this machine's
+# loopback, where there is no tunnel to switch: it proves the measuring and
+# writes nothing.
+set -euo pipefail
+# shellcheck source=scripts/cutover/front-door/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+fd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login, it would:
+  for each of quic and http2:
+    1. ssh -t MINI sudo $MINI_SCRIPTS/transport quic|http2     (the tunnel restarts; the owner types the password)
+    2. wait for $ADDRESS/healthz
+    3. ssh MINI curl $TUNNEL_METRICS                            (cloudflared's CPU seconds, around each transfer)
+    4. lab upload FILE                                           (${SIZE:-$GIB} random bytes)
+    5. lab logs JOB $JOB_FILE                                    (until ${SIZE:-$GIB} bytes have come)
+  then:
+    6. ssh -t MINI sudo $MINI_SCRIPTS/transport deployed
+    7. settle transport QUIC_UP QUIC_DOWN HTTP2_UP HTTP2_DOWN    (the faster; within 10% QUIC stays) in deploy/cloudflared.yml
+    8. write docs/acceptance/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door-15.md
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+workspace
+settle=(--deploy "$DEPLOY")
+if [[ $MODE == local ]]; then
+  [[ -n $SIZE ]] || SIZE=$((48 << 20))
+  JOB_FILE_BYTES=$((8 << 20))
+  local_lab
+  local_mac
+  transfer_job
+  settle+=(--dry-run)
+else
+  [[ -n $MINI ]] || fail "--lab needs --mini USER@HOST"
+  [[ -n $JOB ]] || fail "--lab needs --job ID: fd05-outside-transfers --lab --prepare makes the job and names it"
+  [[ -n $SIZE ]] || SIZE=$GIB
+  logged_in
+fi
+record_start 15 "QUIC against HTTP/2 on the tunnel, the same bytes each way, cloudflared's CPU recorded"
+
+# Whatever ends the run, the tunnel goes back under the Deployed files.
+switched=0
+back() {
+  if (( switched )); then
+    switched=0
+    mini_transport deployed || say "the tunnel was NOT put back: run sudo $MINI_SCRIPTS/transport deployed on the mini"
+  fi
+}
+trap 'back; cleanup' EXIT
+
+who=cloudflared
+[[ $MODE != local ]] || who="labd, standing in for cloudflared,"
+for protocol in quic http2; do
+  [[ $MODE == local ]] || switched=1
+  mini_transport "$protocol"
+  front_door_answers
+  both_ways "$SIZE"
+  rec "$protocol, up: $SIZE bytes in $UP_SECONDS s, $UP_MBIT Mbit/s, $who at $UP_CORES of a core"
+  rec "$protocol, down: $DOWN_BYTES bytes in $DOWN_SECONDS s, $DOWN_MBIT Mbit/s, $who at $DOWN_CORES of a core"
+  printf -v "${protocol}_up" '%s' "$UP_MBIT"
+  printf -v "${protocol}_down" '%s' "$DOWN_MBIT"
+done
+if (( switched )); then
+  switched=0
+  mini_transport deployed
+  front_door_answers
+fi
+
+# shellcheck disable=SC2154
+"$FD_HERE/settle" transport "$quic_up" "$quic_down" "$http2_up" "$http2_down" "${settle[@]}" > "$WORK/settle.out" \
+  || { rec "the rule could not be applied: $(plain "$WORK/settle.out")"; record_done fail; exit 1; }
+while IFS= read -r line; do rec "${line#settle: }"; done < "$WORK/settle.out"
+record_done pass

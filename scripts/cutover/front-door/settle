@@ -1,0 +1,133 @@
+#!/bin/bash
+# The rules that turn the Front door's measurements into the lab's two
+# settings, and write them in deploy/ (spec section 6):
+#
+#   settle outside ONE FOUR DOWN
+#       The transfers from outside the house, in Mbit/s: uploads with 1 part
+#       and with 4 parts at a time, and downloads. Under 50 Mbit/s it says
+#       so and stops with status 3: that is the owner's to look at, and
+#       nothing is written.
+#   settle parts ONE FOUR
+#       How many parts of an upload go at once: 4 only when 4 at a time were
+#       at least 20% faster than 1, else 1. Written as labd's
+#       --parts-at-once in deploy/org.omarchy-mac.lab.labd.plist.
+#   settle transport QUIC_UP QUIC_DOWN HTTP2_UP HTTP2_DOWN
+#       The tunnel's transport: the faster for the same bytes up and down;
+#       within 10% QUIC stays. Written as protocol in deploy/cloudflared.yml.
+#
+#   --deploy DIR   the folder to write in (default: this checkout's deploy/)
+#   --dry-run      say the decision, write nothing
+#
+# Every number is Mbit/s. The change is to the checkout: commit it, cut a
+# Release candidate and Deploy it for the mini to run it.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ME=settle
+deploy="$here/../../../deploy"
+dry=0
+args=()
+
+usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+say() { echo "$ME: $*"; }
+fail() { echo "$ME: $*" >&2; exit 1; }
+is() { awk "BEGIN { exit !($1) }"; }
+calc() { awk "BEGIN { printf \"%.1f\", $1 }"; }
+
+while (( $# )); do
+  case "$1" in
+    --deploy) (( $# >= 2 )) || usage; deploy="$2"; shift ;;
+    --dry-run) dry=1 ;;
+    -h|--help) usage ;;
+    -*) fail "an option it does not take: $1. Nothing was done." ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+(( ${#args[@]} )) || usage
+what="${args[0]}"
+
+# numbers N: the arguments after the first are N speeds, each above zero.
+numbers() {
+  (( ${#args[@]} == $1 + 1 )) || usage
+  local n
+  for n in "${args[@]:1}"; do
+    if [[ ! $n =~ ^[0-9]+(\.[0-9]+)?$ ]] || ! is "$n > 0"; then
+      fail "\"$n\" is not a speed in Mbit/s. Nothing was done."
+    fi
+  done
+}
+
+# put FILE PATTERN LINE: replace the one line of FILE that matches PATTERN.
+put() {
+  local file="$1" pattern="$2" line="$3" tmp
+  [[ -f $file ]] || fail "no $file"
+  [[ "$(grep -cE "$pattern" "$file")" == 1 ]] || fail "$file does not have exactly one line for this setting; it was left alone"
+  if grep -qxF -- "$line" "$file"; then
+    say "$file already says so"
+    return 0
+  fi
+  if (( dry )); then
+    say "would write it in $file"
+    return 0
+  fi
+  tmp="$(mktemp "$file.XXXXXX")"
+  awk -v pattern="$pattern" -v line="$line" '$0 ~ pattern { print line; next } { print }' "$file" > "$tmp"
+  chmod 0644 "$tmp"
+  mv "$tmp" "$file"
+  say "written in $file. Commit it; it takes effect with the next Deploy"
+}
+
+case "$what" in
+  outside)
+    numbers 3
+    one="${args[1]}" four="${args[2]}" down="${args[3]}"
+    best="$one"
+    if is "$four > $one"; then best="$four"; fi
+    slow=0
+    if is "$down < 50"; then
+      say "STOP: downloads from outside the house came at $down Mbit/s, under 50. The spec's next step for that is moving downloads to R2 (section 6); it is not built. This is for the owner to decide: nothing was written."
+      slow=1
+    fi
+    if is "$best < 50"; then
+      say "STOP: uploads from outside the house came at $best Mbit/s at best, under 50. The member's own link may be the limit: ask what it is, or ask another member. This is for the owner to decide: nothing was written."
+      slow=1
+    fi
+    (( ! slow )) || exit 3
+    say "outside the house: uploads $one Mbit/s with 1 part at a time and $four with 4, downloads $down. None under 50."
+    ;;
+  parts)
+    numbers 2
+    one="${args[1]}" four="${args[2]}"
+    gain="$(calc "($four / $one - 1) * 100")"
+    if is "$four >= $one * 1.2"; then
+      parts=4
+      say "4 parts at a time: $four Mbit/s against $one with 1, $gain% faster, which is at least 20%"
+    else
+      parts=1
+      say "1 part at a time: 4 at a time gave $four Mbit/s against $one, $gain%, which is not 20% faster"
+    fi
+    put "$deploy/org.omarchy-mac.lab.labd.plist" '^ *<string>--parts-at-once</string><string>[0-9]+</string>$' \
+      "    <string>--parts-at-once</string><string>$parts</string>"
+    ;;
+  transport)
+    numbers 4
+    qu="${args[1]}" qd="${args[2]}" hu="${args[3]}" hd="${args[4]}"
+    # The same bytes each way: the rate of the whole is what the time of both gives.
+    quic="$(calc "2 / (1 / $qu + 1 / $qd)")"
+    http2="$(calc "2 / (1 / $hu + 1 / $hd)")"
+    gain="$(calc "($http2 / $quic - 1) * 100")"
+    if is "2 / (1 / $hu + 1 / $hd) > 1.1 * 2 / (1 / $qu + 1 / $qd)"; then
+      protocol=http2
+      say "HTTP/2: $http2 Mbit/s over both directions against QUIC's $quic, $gain% faster, which is more than 10%"
+    else
+      protocol=quic
+      say "QUIC stays: $quic Mbit/s over both directions against HTTP/2's $http2 ($gain%), which is not more than 10% faster"
+    fi
+    put "$deploy/cloudflared.yml" '^protocol: [a-z0-9]+$' "protocol: $protocol"
+    if [[ $protocol == quic ]]; then
+      say "under QUIC the mini's set-up raises the UDP buffer limit: run scripts/mini/setup there after the Deploy"
+    fi
+    ;;
+  *) usage ;;
+esac
