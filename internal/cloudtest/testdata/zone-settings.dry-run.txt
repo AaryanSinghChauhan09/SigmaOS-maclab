@@ -1,0 +1,81 @@
+zone-settings.sh: a dry run. These are the calls --apply makes; nothing is sent.
+A write is sent only for what has drifted.
+
+the zone
+  GET /zones?name=omarchy-mac.org
+off: Bot Fight Mode
+  GET /zones/{zone}/bot_management
+  PUT /zones/{zone}/bot_management {"fight_mode":false,"ai_bots_protection":"disabled","crawler_protection":"disabled"}
+off: AI-bot blocking
+  GET /zones/{zone}/bot_management
+  PUT /zones/{zone}/bot_management {"fight_mode":false,"ai_bots_protection":"disabled","crawler_protection":"disabled"}
+off: AI Labyrinth
+  GET /zones/{zone}/bot_management
+  PUT /zones/{zone}/bot_management {"fight_mode":false,"ai_bots_protection":"disabled","crawler_protection":"disabled"}
+off: Rocket Loader
+  GET /zones/{zone}/settings/rocket_loader
+  PATCH /zones/{zone}/settings/rocket_loader {"value":"off"}
+off: email obfuscation
+  GET /zones/{zone}/settings/email_obfuscation
+  PATCH /zones/{zone}/settings/email_obfuscation {"value":"off"}
+off: Always Online
+  GET /zones/{zone}/settings/always_online
+  PATCH /zones/{zone}/settings/always_online {"value":"off"}
+off: automatic HTTPS rewrites
+  GET /zones/{zone}/settings/automatic_https_rewrites
+  PATCH /zones/{zone}/settings/automatic_https_rewrites {"value":"off"}
+off: Cloudflare Fonts
+  GET /zones/{zone}/settings/fonts
+  PATCH /zones/{zone}/settings/fonts {"value":"off"}
+off: the analytics script injection
+  GET /zones/{zone}/settings/rum
+  PATCH /zones/{zone}/settings/rum {"value":"off"}
+on: Always Use HTTPS
+  GET /zones/{zone}/settings/always_use_https
+  PATCH /zones/{zone}/settings/always_use_https {"value":"on"}
+on: HTTP/3
+  GET /zones/{zone}/settings/http3
+  PATCH /zones/{zone}/settings/http3 {"value":"on"}
+on: TLS 1.3
+  GET /zones/{zone}/settings/tls_1_3
+  PATCH /zones/{zone}/settings/tls_1_3 {"value":"on"}
+on: 0-RTT
+  GET /zones/{zone}/settings/0rtt
+  PATCH /zones/{zone}/settings/0rtt {"value":"on"}
+on: Early Hints
+  GET /zones/{zone}/settings/early_hints
+  PATCH /zones/{zone}/settings/early_hints {"value":"on"}
+on: Smart Tiered Cache (tiered caching)
+  GET /zones/{zone}/argo/tiered_caching
+  PATCH /zones/{zone}/argo/tiered_caching {"value":"on"}
+on: Smart Tiered Cache (the Smart topology)
+  GET /zones/{zone}/cache/tiered_cache_smart_topology_enable
+  PATCH /zones/{zone}/cache/tiered_cache_smart_topology_enable {"value":"on"}
+on: Speed Brain
+  GET /zones/{zone}/settings/speed_brain
+  PATCH /zones/{zone}/settings/speed_brain {"value":"on"}
+the skip rule on /api/*
+  GET /zones/{zone}/rulesets/phases/http_request_firewall_custom/entrypoint
+  PUT /zones/{zone}/rulesets/phases/http_request_firewall_custom/entrypoint {"rules":[{"description":"Under /api/: no Browser Integrity Check, no managed rules","expression":"(http.host eq \"lab.omarchy-mac.org\" and starts_with(http.request.uri.path, \"/api/\"))","action":"skip","action_parameters":{"phases":["http_request_firewall_managed"],"products":["bic"]},"logging":{"enabled":true},"enabled":true}]}
+the rate rule
+  GET /zones/{zone}/rulesets/phases/http_ratelimit/entrypoint
+  PUT /zones/{zone}/rulesets/phases/http_ratelimit/entrypoint {"rules":[{"description":"Flood cap: 300 requests in 10 s per address, whole site","expression":"true","action":"block","ratelimit":{"characteristics":["cf.colo.id","ip.src"],"period":10,"requests_per_period":300,"mitigation_timeout":10},"enabled":true}]}
+the cache rules
+  GET /zones/{zone}/rulesets/phases/http_request_cache_settings/entrypoint
+  PUT /zones/{zone}/rulesets/phases/http_request_cache_settings/entrypoint {"rules":[{"description":"Public pages, for a request without the session cookie, may be cached as labd says","expression":"(http.host eq \"lab.omarchy-mac.org\" and not http.cookie contains \"lab_session=\" and not ends_with(http.request.uri.path, \"/deletion\") and (http.request.uri.path in {\"/\" \"/matrix\" \"/models\" \"/features\" \"/gaps\" \"/aurora\" \"/benchmarks\" \"/candidates\" \"/reports\" \"/data\" \"/install\" \"/terms\" \"/privacy\"} or starts_with(http.request.uri.path, \"/models/\") or starts_with(http.request.uri.path, \"/features/\") or starts_with(http.request.uri.path, \"/candidates/\") or starts_with(http.request.uri.path, \"/reports/\")))","action":"set_cache_settings","action_parameters":{"cache":true},"enabled":true},{"description":"Under /api/: never cached","expression":"(http.host eq \"lab.omarchy-mac.org\" and starts_with(http.request.uri.path, \"/api/\"))","action":"set_cache_settings","action_parameters":{"cache":false},"enabled":true}]}
+no redirect rule
+  GET /zones/{zone}/rulesets/phases/http_request_dynamic_redirect/entrypoint
+  PUT /zones/{zone}/rulesets/phases/http_request_dynamic_redirect/entrypoint {"rules":[]}
+the mail forwarding rule: privacy@omarchy-mac.org to the mailbox of --forward-to
+  GET /accounts/{account}/email/routing/addresses?per_page=50
+  POST /accounts/{account}/email/routing/addresses {"email":"<MAILBOX>"}
+  GET /zones/{zone}/email/routing
+  POST /zones/{zone}/email/routing/dns {"name":"omarchy-mac.org"}
+  GET /zones/{zone}/email/routing/rules?per_page=50
+  POST /zones/{zone}/email/routing/rules {"name":"privacy","enabled":true,"matchers":[{"type":"literal","field":"to","value":"privacy@omarchy-mac.org"}],"actions":[{"type":"forward","value":["<MAILBOX>"]}]}
+checked, the owner's to set: DNSSEC
+  GET /zones/{zone}/dnssec
+checked, the owner's to set: the tunnel-health alert
+  GET /accounts/{account}/alerting/v3/policies
+checked, the owner's to set: the "tunnel created or deleted" alert
+  GET /accounts/{account}/alerting/v3/policies

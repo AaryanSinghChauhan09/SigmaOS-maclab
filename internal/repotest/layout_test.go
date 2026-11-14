@@ -23,6 +23,7 @@ installer
 release
 deploy
 scripts/mini
+scripts/cloud
 scripts/cutover
 scripts/boot-test
 scripts/workflow

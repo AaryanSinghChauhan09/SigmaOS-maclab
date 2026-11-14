@@ -1,0 +1,9 @@
+nameservers.sh: a dry run. These are the calls --apply makes; nothing is sent.
+
+the zone's pair, from Cloudflare
+  GET /zones?name=omarchy-mac.org
+the registrar's set, from Porkbun
+  POST https://api.porkbun.com/api/json/v3/domain/listAll {}
+  POST https://api.porkbun.com/api/json/v3/dns/getDnssecRecords/omarchy-mac.org {}
+  POST https://api.porkbun.com/api/json/v3/domain/getNs/omarchy-mac.org {}
+  POST https://api.porkbun.com/api/json/v3/domain/updateNs/omarchy-mac.org {"ns":[<the zone's pair>]}

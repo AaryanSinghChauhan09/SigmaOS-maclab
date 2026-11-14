@@ -1,0 +1,8 @@
+verify-delegation.sh: a dry run. These are the calls --check makes; nothing is sent.
+
+the zone's pair and its state, from Cloudflare
+  GET /zones?name=omarchy-mac.org
+  PUT /zones/{zone}/activation_check    (with --recheck)
+the delegation, from the .org registry
+  dig +short NS org.
+  dig +norecurse @<a .org nameserver> omarchy-mac.org NS

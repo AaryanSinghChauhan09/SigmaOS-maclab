@@ -33,3 +33,6 @@ omarchy-m-test-report.json
 /site/config/master.key
 /site/config/credentials/*.key
 /site/.env*
+
+# The cloud scripts' local names (scripts/cloud/lab.env.example)
+/scripts/cloud/lab.env

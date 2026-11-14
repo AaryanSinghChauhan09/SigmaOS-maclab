@@ -1,0 +1,12 @@
+tunnel.sh: a dry run. These are the calls --apply makes; nothing is sent.
+A write is sent only for what is missing or has drifted.
+
+the zone
+  GET /zones?name=omarchy-mac.org
+the tunnel omarchy-mac-lab
+  GET /accounts/{account}/cfd_tunnel?name=omarchy-mac-lab&is_deleted=false
+  POST /accounts/{account}/cfd_tunnel {"name":"omarchy-mac-lab","config_src":"local","tunnel_secret":"<32 random bytes made here, never shown>"}
+the record of lab.omarchy-mac.org
+  GET /zones/{zone}/dns_records?name=lab.omarchy-mac.org
+  POST /zones/{zone}/dns_records {"type":"CNAME","name":"lab.omarchy-mac.org","content":"<tunnel id>.cfargotunnel.com","proxied":true,"ttl":1,"comment":"the lab's tunnel"}
+  PUT /zones/{zone}/dns_records/{record} {"type":"CNAME","name":"lab.omarchy-mac.org","content":"<tunnel id>.cfargotunnel.com","proxied":true,"ttl":1,"comment":"the lab's tunnel"}

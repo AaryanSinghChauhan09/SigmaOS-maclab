@@ -1,0 +1,9 @@
+register-domain.sh: a dry run. These are the calls --apply makes; nothing is sent.
+
+whether the account holds omarchy-mac.org already
+  POST https://api.porkbun.com/api/json/v3/domain/listAll {}
+the price, and a rehearsal that charges nothing
+  POST https://api.porkbun.com/api/json/v3/domain/checkDomain/omarchy-mac.org {}
+  POST https://api.porkbun.com/api/json/v3/domain/create/omarchy-mac.org {"cost":0,"agreeToTerms":"yes","dryRun":true}
+the purchase, with --apply --cost and only at that price
+  POST https://api.porkbun.com/api/json/v3/domain/create/omarchy-mac.org {"cost":<--cost>,"agreeToTerms":"yes"}

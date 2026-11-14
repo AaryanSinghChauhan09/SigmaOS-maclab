@@ -1,0 +1,5 @@
+cloudflare-zone.sh: a dry run. These are the calls --apply makes; nothing is sent.
+
+the zone omarchy-mac.org
+  GET /zones?name=omarchy-mac.org
+  POST /zones {"name":"omarchy-mac.org","type":"full","account":{"id":"<CLOUDFLARE_ACCOUNT_ID>"}}

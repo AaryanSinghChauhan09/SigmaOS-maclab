@@ -1,0 +1,13 @@
+Make the token at https://dash.cloudflare.com/profile/api-tokens:
+Create Token > Custom token. Labels may differ a little from these.
+  Zone, for omarchy-mac.org only, Edit on each of:
+    Zone Settings, Bot Management, Zone WAF, Cache Rules,
+    Dynamic Redirect, DNS, Email Routing Rules; and Zone: Read
+  Account, Edit on each of:
+    Cloudflare Tunnel, Email Routing Addresses; and Notifications: Read
+  TTL: an end date a day or two away.
+A call the token may not make is named by the script that made it:
+add that row and run the script again.
+
+owner-setup.sh: a dry run. --apply asks for the token and makes this one call:
+  GET /user/tokens/verify
