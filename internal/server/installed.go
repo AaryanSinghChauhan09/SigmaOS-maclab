@@ -39,8 +39,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/installed"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/installed"
 )
 
 const installedMinAgent = "0.8.0" // the lab's own identity checks, the install operation

@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // A Class is the set of modes the evidence on a Mac can't tell apart. The

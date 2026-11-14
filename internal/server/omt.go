@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // omtPackagingChecks look for the running kernel among the installed packages
@@ -501,7 +501,7 @@ func (s *Server) publishOMT(ctx context.Context, j *api.Job) (string, error) {
 	site := strings.TrimRight(s.cfg.OMTSite, "/")
 	req, _ := http.NewRequestWithContext(ctx, "POST", site+"/api/v1/reports", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "maclab (github.com/iconidentify/maclab)")
+	req.Header.Set("User-Agent", "maclab (github.com/omacom/omarchy-maclab)")
 	resp, err := (&http.Client{Timeout: time.Minute}).Do(req)
 	if err != nil {
 		return "", err

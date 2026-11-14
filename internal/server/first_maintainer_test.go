@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // startLabd starts a labd with cfg behind httptest and returns its URL and a

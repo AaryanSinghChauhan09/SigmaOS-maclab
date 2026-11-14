@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/iconidentify/maclab/internal/agent"
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 func (l *lab) adminDo(method, path string) int {

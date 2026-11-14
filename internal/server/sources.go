@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 var reHex40 = regexp.MustCompile(`^[0-9a-f]{40}$`)

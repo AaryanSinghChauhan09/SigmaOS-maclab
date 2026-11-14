@@ -2,8 +2,8 @@ package agent
 
 import (
 	"encoding/json"
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/mesa"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/mesa"
 	"os"
 	"path/filepath"
 	"testing"

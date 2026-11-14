@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // leaveLayout is where the lab put things on a Mac, as paths, so the plan of

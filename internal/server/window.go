@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/window"
+	"github.com/omacom/omarchy-maclab/internal/window"
 )
 
 // windowHoldLocked is why a job expected to take d may not start on the Mac

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // m1air: /boot lives on the btrfs root in subvolume @, the ESP is FAT at /boot/efi.

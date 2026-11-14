@@ -11,8 +11,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/client"
 )
 
 // builderCmd handles `lab builder ...`: the named builder hosts, each with a

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 type sourceReplayBackend struct{ job *api.Job }

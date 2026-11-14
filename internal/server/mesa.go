@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/mesa"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/mesa"
 )
 
 // First-class Mesa jobs test pinned split packages (see api.MesaSpec).

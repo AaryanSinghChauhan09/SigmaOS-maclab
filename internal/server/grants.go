@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // fetchGrant is a Maintainer's explicit grant: the Mac may fetch shas until

@@ -16,8 +16,8 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/iconidentify/maclab/internal/agent"
-	"github.com/iconidentify/maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
 const usage = `lab-agent: the Mac side of the test lab

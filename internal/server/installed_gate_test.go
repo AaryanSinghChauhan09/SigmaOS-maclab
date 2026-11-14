@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/agent"
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/installed"
+	"github.com/omacom/omarchy-maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/installed"
 )
 
 // TestInstalledGateEndToEnd hands labd's own installed-mode output to Aurora's

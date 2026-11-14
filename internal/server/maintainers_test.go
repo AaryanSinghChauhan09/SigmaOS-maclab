@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // apiClient bounds every call, so a stream labd wrongly opens fails the

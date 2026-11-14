@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/agent"
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
 // wire is a flaky link in front of labd: it can cut an artifact response

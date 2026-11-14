@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // submitAs queues a job on the lab's Mac with the token of a Maintainer and

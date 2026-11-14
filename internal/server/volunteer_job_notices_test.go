@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // jobNotice is whether a post is the "a job is starting on your Mac" notice for job id.

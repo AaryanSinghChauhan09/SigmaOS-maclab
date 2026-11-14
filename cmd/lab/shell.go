@@ -7,7 +7,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/iconidentify/maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/client"
 )
 
 // shell attaches the terminal to a Mac's serial console through its

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // rearmSystem is a Sim whose arming fails from its nth call on, as arming

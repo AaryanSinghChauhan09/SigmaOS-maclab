@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
 // tailnet joins this Mac to the lab's tailnet. Commands and the reachability

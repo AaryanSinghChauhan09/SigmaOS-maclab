@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/iconidentify/maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/agent"
 )
 
 func main() {

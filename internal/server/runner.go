@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/agent"
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/detect"
-	"github.com/iconidentify/maclab/internal/installed"
-	"github.com/iconidentify/maclab/internal/mesa"
-	"github.com/iconidentify/maclab/internal/window"
+	"github.com/omacom/omarchy-maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/detect"
+	"github.com/omacom/omarchy-maclab/internal/installed"
+	"github.com/omacom/omarchy-maclab/internal/mesa"
+	"github.com/omacom/omarchy-maclab/internal/window"
 )
 
 type jobRun struct {

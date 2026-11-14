@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // The m3pro's known-good and stock cmdlines, 2026-10-03.

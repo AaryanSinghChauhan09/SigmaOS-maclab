@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // auditFile is a Volunteer Mac's Audit log under the work directory: one JSON

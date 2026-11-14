@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // The head of Omarchy's Apple Silicon limine.conf, as limine-update writes it.

@@ -2,7 +2,7 @@
 // It never installs packages or changes a user's desktop/session environment.
 package mesa
 
-import "github.com/iconidentify/maclab/internal/api"
+import "github.com/omacom/omarchy-maclab/internal/api"
 
 const Schema = 1
 const GLProbeSHA = "24007754c92e05220edc4645702853ac86c0ff5d98c084da126955ccdd4d6e82"

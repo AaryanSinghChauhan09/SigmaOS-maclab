@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/detect"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/detect"
 )
 
 // Chip families a release must pass on, by SoC compatible in the device tree.

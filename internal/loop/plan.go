@@ -13,7 +13,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // A Mode is one fault the night can inject, chosen with an opaque

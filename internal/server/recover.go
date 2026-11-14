@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/detect"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/detect"
 )
 
 // Serial-based early detection: don't sit out the whole boot timeout when the

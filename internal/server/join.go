@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 var reEnrollToken = regexp.MustCompile(`^enr_[0-9a-f]{32}$`)

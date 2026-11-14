@@ -24,9 +24,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/detect"
-	"github.com/iconidentify/maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/detect"
+	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
 const Version = "0.9.0"

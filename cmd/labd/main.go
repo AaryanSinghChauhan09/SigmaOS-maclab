@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/server"
+	"github.com/omacom/omarchy-maclab/internal/server"
 )
 
 func main() {

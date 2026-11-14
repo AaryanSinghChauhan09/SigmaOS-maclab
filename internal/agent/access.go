@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // accessFile holds what the Volunteer allows Maintainers on the Mac, under

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/labhttp"
-	"github.com/iconidentify/maclab/internal/testpki"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/testpki"
 )
 
 func loadWith(t *testing.T, env map[string]string) (*Client, error) {

@@ -11,8 +11,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/iconidentify/maclab/internal/client"
-	"github.com/iconidentify/maclab/internal/workflow"
+	"github.com/omacom/omarchy-maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/workflow"
 )
 
 func main() {

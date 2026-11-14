@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/detect"
-	"github.com/iconidentify/maclab/internal/oob"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/detect"
+	"github.com/omacom/omarchy-maclab/internal/oob"
 )
 
 // aliveWindow is how stale the last heartbeat may be before a device counts as unresponsive.

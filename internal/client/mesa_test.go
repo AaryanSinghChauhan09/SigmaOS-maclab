@@ -3,7 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 	"net/http"
 	"net/http/httptest"
 	"testing"

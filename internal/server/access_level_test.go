@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/agent"
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // The Access level and Audit log (#28). A Volunteer's Mac starts at

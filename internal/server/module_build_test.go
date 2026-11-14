@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 func TestKernelModuleBuildOutputs(t *testing.T) {

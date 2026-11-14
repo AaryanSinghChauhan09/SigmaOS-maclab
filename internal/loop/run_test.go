@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // flakyLab is a fakeLab whose Wait can fail: wait, when set, runs first and

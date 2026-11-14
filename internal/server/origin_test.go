@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // labdAt is where the tests' browsers and scripts reach labd: by an IP

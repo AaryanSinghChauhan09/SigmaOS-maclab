@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // hLeave is lab-agent uninstall saying, before it undoes anything, that the

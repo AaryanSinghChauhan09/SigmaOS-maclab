@@ -32,7 +32,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // builderCred is who a builder request comes from: a named builder's

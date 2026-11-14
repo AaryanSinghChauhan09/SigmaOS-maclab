@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // maintainerRoutes is a sample of routes behind Maintainer auth, old and new.

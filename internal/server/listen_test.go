@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/labhttp"
-	"github.com/iconidentify/maclab/internal/testpki"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/testpki"
 )
 
 // The whole path over https under a prefix: the simulated Mac reads the

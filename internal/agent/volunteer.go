@@ -9,7 +9,7 @@ import (
 
 	"rsc.io/qr"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // A volunteerCommand is one of the commands a Volunteer types on their own

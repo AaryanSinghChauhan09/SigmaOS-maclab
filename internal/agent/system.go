@@ -5,7 +5,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // Fetcher downloads an artifact by sha256 into dst and verifies it.

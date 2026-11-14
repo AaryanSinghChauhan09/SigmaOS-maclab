@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // joinLab is a labd at https://chonkbase.net/maclab with a lab-agent to hand

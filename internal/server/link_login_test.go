@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // volunteerLogin takes a tailnet login, user@github or an email, and

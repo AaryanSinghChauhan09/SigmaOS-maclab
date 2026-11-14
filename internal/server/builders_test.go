@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // builderLab is a labd with no Macs, for builder tests: the shared builder

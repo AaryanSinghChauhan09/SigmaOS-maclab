@@ -3,8 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/mesa"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/mesa"
 	"os"
 	"os/exec"
 	"path/filepath"

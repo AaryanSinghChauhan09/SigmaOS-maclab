@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // A report over labd's limit gets a 413, and sending it again gets the same:

@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // labMac is what setup leaves on a Limine Mac, under a temp root.

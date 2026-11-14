@@ -24,9 +24,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/client"
-	"github.com/iconidentify/maclab/internal/loop"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/loop"
 )
 
 var reSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)

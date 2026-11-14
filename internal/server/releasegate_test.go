@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/client"
-	"github.com/iconidentify/maclab/internal/detect"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/detect"
 )
 
 func TestChipFamily(t *testing.T) {

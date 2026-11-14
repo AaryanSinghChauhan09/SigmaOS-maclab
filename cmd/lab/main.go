@@ -22,9 +22,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/client"
-	"github.com/iconidentify/maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
 const usage = `lab: run kernels and tests on Omarchy Macs

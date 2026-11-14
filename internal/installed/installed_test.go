@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iconidentify/maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/agent"
 )
 
 const (

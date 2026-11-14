@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
 // How lab-agent reaches labd: labhttp's policy, from what setup recorded in

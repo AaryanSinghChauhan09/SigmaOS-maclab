@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // The identity checks of an Installed run are the lab's own: lab-agent runs

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // A soft reboot queued for a stuck boot must not reach the fresh boot that

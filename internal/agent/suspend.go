@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // suspendDevicesTest is the builtin that suspends and resumes the devices

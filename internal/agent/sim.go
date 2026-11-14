@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/mesa"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/mesa"
 )
 
 // Sim is a pretend Mac. A kernel artifact for it is a text file such as

@@ -8,8 +8,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/client"
 )
 
 // Lab is the part of labd the harness uses; *client.Client is one.

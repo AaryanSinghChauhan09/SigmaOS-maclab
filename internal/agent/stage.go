@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/crypto/blake2b"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // Kernel artifacts use the Arch package layout: exactly one

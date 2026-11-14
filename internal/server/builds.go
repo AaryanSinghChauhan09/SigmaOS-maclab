@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // recipe changes whenever kbuild changes what it produces, so old artifacts

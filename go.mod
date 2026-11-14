@@ -1,4 +1,4 @@
-module github.com/iconidentify/maclab
+module github.com/omacom/omarchy-maclab
 
 go 1.27.1
 

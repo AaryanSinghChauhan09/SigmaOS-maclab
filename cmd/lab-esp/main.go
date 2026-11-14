@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	esp "github.com/iconidentify/maclab/internal/esprotation"
+	esp "github.com/omacom/omarchy-maclab/internal/esprotation"
 	"os"
 	"path/filepath"
 	"time"

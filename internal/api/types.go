@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/window"
+	"github.com/omacom/omarchy-maclab/internal/window"
 )
 
 // DeviceState is where a device sits in the lab's lifecycle.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // A Volunteer's Mac never loses its lock screen to the lab. Tests need a

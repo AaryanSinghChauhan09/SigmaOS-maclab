@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // payloadMinAgent is the first lab-agent that puts payload files in $MACLAB_IN;

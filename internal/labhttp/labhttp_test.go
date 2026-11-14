@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/testpki"
+	"github.com/omacom/omarchy-maclab/internal/testpki"
 )
 
 // tlsServer serves h over TLS with a certificate for hosts signed by ca.

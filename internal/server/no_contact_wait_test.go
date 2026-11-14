@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/agent"
 )
 
 // labd waits for a Lab boot that never reached it until lab-agent's

@@ -25,11 +25,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/agent"
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/labhttp"
-	"github.com/iconidentify/maclab/internal/oob"
-	"github.com/iconidentify/maclab/internal/testpki"
+	"github.com/omacom/omarchy-maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/oob"
+	"github.com/omacom/omarchy-maclab/internal/testpki"
 )
 
 // fakeOOB is a Central-Scrutinizer-shaped controller wired to a simulated Mac.

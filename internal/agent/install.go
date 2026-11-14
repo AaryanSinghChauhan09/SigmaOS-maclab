@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // Installing a Release is a named lab operation, not a Maintainer's root

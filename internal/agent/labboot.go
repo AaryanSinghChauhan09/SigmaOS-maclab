@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/window"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/window"
 )
 
 // A Lab boot comes back to the Mac's own entry by itself, whatever breaks.

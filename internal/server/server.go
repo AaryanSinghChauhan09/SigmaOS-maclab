@@ -29,10 +29,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/agent"
-	"github.com/iconidentify/maclab/internal/api"
-	"github.com/iconidentify/maclab/internal/oob"
-	"github.com/iconidentify/maclab/internal/web"
+	"github.com/omacom/omarchy-maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/oob"
+	"github.com/omacom/omarchy-maclab/internal/web"
 )
 
 type Config struct {

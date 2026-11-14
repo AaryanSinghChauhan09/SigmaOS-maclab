@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iconidentify/maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/client"
 )
 
 // A second lab forget of the same Mac finds no such device, which means it

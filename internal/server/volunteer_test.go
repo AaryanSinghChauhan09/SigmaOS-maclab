@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/agent"
-	"github.com/iconidentify/maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/agent"
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 // volunteerLab is a labd under --tailscale whose tailnet has a tagged lab Mac

@@ -11,7 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/iconidentify/maclab/internal/oobd"
+	"github.com/omacom/omarchy-maclab/internal/oobd"
 )
 
 func main() {

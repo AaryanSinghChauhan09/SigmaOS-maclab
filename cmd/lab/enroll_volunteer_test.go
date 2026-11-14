@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iconidentify/maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/client"
 )
 
 // enrollTokenLab is a labd that only answers POST /api/enroll-tokens, and
