@@ -211,6 +211,29 @@ func TestResumeAsksWhichPartsLabdHoldsAndSendsTheRest(t *testing.T) {
 	}
 }
 
+// The Front door's test 4 cuts an upload once labd holds some parts: it is
+// told after each part how many labd holds, the ones a resume found there
+// counted in.
+func TestProgressSaysHowManyPartsLabdHoldsAfterEachPart(t *testing.T) {
+	f, ts := newFakeLab(t)
+	data := content(5 * testPart)
+	f.held[2] = data[testPart : 2*testPart]
+	var held []int
+	s := sender(ts)
+	s.Progress = func(n, total int) {
+		if total != 5 {
+			t.Errorf("total %d", total)
+		}
+		held = append(held, n)
+	}
+	if sha, err := s.File(context.Background(), fileOf(t, data)); err != nil || sha != sum(data) {
+		t.Fatalf("sha %q, %v", sha, err)
+	}
+	if fmt.Sprint(held) != "[2 3 4 5]" {
+		t.Errorf("progress said %v, want 2 3 4 5", held)
+	}
+}
+
 func TestAPartIsRetriedUpToEightTimes(t *testing.T) {
 	data := content(3 * testPart)
 	f, ts := newFakeLab(t)

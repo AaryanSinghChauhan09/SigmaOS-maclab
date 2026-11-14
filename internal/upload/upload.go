@@ -49,6 +49,9 @@ type Sender struct {
 	// AtOnce, when 1 or 4, is how many parts go at the same time whatever
 	// labd says: the measurement that sets labd's own number needs both.
 	AtOnce int
+	// Progress is told after each part how many of the upload's parts labd
+	// holds; nil is told nothing.
+	Progress func(held, total int)
 }
 
 // refused is labd turning a request down: sending it again cannot help.
@@ -120,6 +123,7 @@ func (s Sender) Send(ctx context.Context, f io.ReaderAt, size int64) (string, er
 		wg    sync.WaitGroup
 		mu    sync.Mutex
 		first error
+		held  = total - len(missing)
 	)
 	for range min(workers, len(missing)) {
 		wg.Add(1)
@@ -127,12 +131,17 @@ func (s Sender) Send(ctx context.Context, f io.ReaderAt, size int64) (string, er
 			defer wg.Done()
 			for n := range queue {
 				off := int64(n-1) * state.PartBytes
-				if err := s.part(ctx, f, sha, n, off, min(state.PartBytes, size-off)); err != nil {
-					mu.Lock()
-					if first == nil {
-						first = err
-					}
-					mu.Unlock()
+				err := s.part(ctx, f, sha, n, off, min(state.PartBytes, size-off))
+				mu.Lock()
+				if err != nil && first == nil {
+					first = err
+				}
+				if err == nil && s.Progress != nil {
+					held++
+					s.Progress(held, total)
+				}
+				mu.Unlock()
+				if err != nil {
 					cancel()
 				}
 			}

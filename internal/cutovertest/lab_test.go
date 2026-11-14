@@ -35,9 +35,10 @@ func TestFD04CutsAnUploadAndResumesIt(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	m := regexp.MustCompile(`resume: labd held (\d+) of 7 parts`).FindStringSubmatch(out)
-	if m == nil || m[1] == "0" || m[1] == "7" {
-		t.Errorf("no resume with some parts held and not all:\n%s", out)
+	cut := regexp.MustCompile(`cut: lab upload killed while it sent, with (\d) of 7 parts taken by labd and the next under way`).FindStringSubmatch(out)
+	m := regexp.MustCompile(`resume: labd held (\d) of 7 parts; the same command sent the other (\d) in`).FindStringSubmatch(out)
+	if cut == nil || m == nil || cut[1] < "2" || m[1] < cut[1] || m[1] == "7" || m[1][0]-'0'+m[2][0]-'0' != 7 {
+		t.Errorf("no cut with two parts held, or no resume from at least those and not all:\n%s", out)
 	}
 	for _, want := range []string{"file: 209715200 bytes, 7 parts of 32 MiB", "cut: lab upload killed while it sent", "checksum: the SHA-256 labd stored is the file's", ": pass"} {
 		if !strings.Contains(out, want) {
@@ -54,13 +55,13 @@ func TestFD04CutsAnUploadAndResumesIt(t *testing.T) {
 			t.Errorf("the record lacks %q:\n%s", want, record)
 		}
 	}
-	if out, code := local(t, "fd04-upload-resume", "--size", fmt.Sprint(40*mib)); code == 0 || !strings.Contains(out, "longer than two parts") {
+	if out, code := local(t, "fd04-upload-resume", "--size", fmt.Sprint(100*mib)); code == 0 || !strings.Contains(out, "longer than four parts") {
 		t.Errorf("a file a cut cannot split was taken: exit %d\n%s", code, out)
 	}
 }
 
-// With resuming turned off the test fails: a lab that never says it
-// resumed sends file after file whole, and the run gives up.
+// With resuming turned off the test fails: the run after the cut does not
+// say it resumed.
 func TestFD04FailsWhenNoRunResumes(t *testing.T) {
 	real := bins(t)
 	dir := t.TempDir()
@@ -69,12 +70,12 @@ func TestFD04FailsWhenNoRunResumes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	wrapper := "#!/bin/bash\nif [[ $1 == upload ]]; then exec \"" + real + "/lab\" \"$@\" 2> >(grep -v resuming >&2); fi\nexec \"" + real + "/lab\" \"$@\"\n"
+	wrapper := "#!/bin/bash\nif [[ $1 == upload ]]; then exec \"" + real + "/lab\" \"$@\" 2> >(grep --line-buffered -v resuming >&2); fi\nexec \"" + real + "/lab\" \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "lab"), []byte(wrapper), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out, code := run(t, nil, "", frontDoor(t, "fd04-upload-resume"), "--local", "--bin", dir, "--size", fmt.Sprint(70*mib))
-	if code != 1 || !strings.Contains(out, ": fail") || strings.Contains(out, "checksum") {
+	out, code := run(t, nil, "", frontDoor(t, "fd04-upload-resume"), "--local", "--bin", dir, "--size", fmt.Sprint(200*mib))
+	if code != 1 || !strings.Contains(out, ": fail") || !strings.Contains(out, "did not say it resumed") || strings.Contains(out, "checksum") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
@@ -585,7 +586,7 @@ func TestFD15SwitchesTheTunnelMeasuresBothAndPutsItBack(t *testing.T) {
 
 	for _, lacking := range [][]string{{"--job", job}, {"--mini", "owner@mini"}, {"--mini", "owner@mini; reboot", "--job", job}, {"--mini", "owner@mini", "--job", "../etc"}} {
 		env, state := l.mini(l.url)
-		if out, code := run(t, env, "", frontDoor(t, "fd15-transport"), append([]string{"--lab"}, lacking...)...); code == 0 || calls(t, state)[0] != "" {
+		if out, code := run(t, env, "", frontDoor(t, "fd15-transport"), append([]string{"--lab", "--records", t.TempDir()}, lacking...)...); code == 0 || calls(t, state)[0] != "" {
 			t.Errorf("fd15 --lab %v: exit %d, calls %v\n%s", lacking, code, calls(t, state), out)
 		}
 	}
@@ -620,7 +621,7 @@ func TestFD15SwitchesTheTunnelMeasuresBothAndPutsItBack(t *testing.T) {
 	// is measured and the mini is asked nothing.
 	env, state = l.mini(l.url)
 	env = append(env, "LAB_ADDRESS=http://127.0.0.1:9")
-	if out, code := run(t, env, "", frontDoor(t, "fd15-transport"), "--lab", "--mini", "owner@mini", "--job", job); code == 0 || calls(t, state)[0] != "" || !strings.Contains(out, "not logged in to Omarchy Mac Lab at http://127.0.0.1:9") {
+	if out, code := run(t, env, "", frontDoor(t, "fd15-transport"), "--lab", "--mini", "owner@mini", "--job", job, "--records", t.TempDir()); code == 0 || calls(t, state)[0] != "" || !strings.Contains(out, "not logged in to Omarchy Mac Lab at http://127.0.0.1:9") {
 		t.Errorf("a login for another address: exit %d, calls %v\n%s", code, calls(t, state), out)
 	}
 
