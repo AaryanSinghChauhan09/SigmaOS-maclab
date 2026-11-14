@@ -24,9 +24,11 @@ type issuesLab struct {
 	maintainer *browser
 }
 
-func newIssuesLab(t *testing.T) *issuesLab {
+func newIssuesLab(t *testing.T) *issuesLab { return newIssuesLabWith(t, nil) }
+
+func newIssuesLabWith(t *testing.T, config func(*Config)) *issuesLab {
 	t.Helper()
-	people := rolesLab(t, nil)
+	people := rolesLab(t, config)
 	db, err := sql.Open("sqlite", filepath.Join(people.s.cfg.DataDir, "reports.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)

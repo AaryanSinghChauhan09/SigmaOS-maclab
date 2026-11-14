@@ -232,10 +232,20 @@ func (s *Store) Around(cat *Catalogue, publicID string) (*Published, *Run, error
 	if err != nil {
 		return nil, nil, err
 	}
+	p, err := s.around(cat, report)
+	if err != nil {
+		return nil, nil, err
+	}
+	return p, p.Run(publicID), nil
+}
+
+// around counts what a report's page says of it: the report, unless it is
+// Hidden, the Verified runs on its model and stack, and the set names.
+func (s *Store) around(cat *Catalogue, report *Report) (*Published, error) {
 	doc := report.Document()
 	list, err := s.VerifiedOn(text(member(doc, "machine", "board")), text(member(doc, "system", "stack")))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	among := false
 	for _, other := range list {
@@ -246,12 +256,12 @@ func (s *Store) Around(cat *Catalogue, publicID string) (*Published, *Run, error
 	}
 	names, err := s.CandidateSetNames()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	p := NewPublished(cat, list)
 	p.sets = map[string]bool{}
 	for _, name := range names {
 		p.sets[name] = true
 	}
-	return p, p.Run(publicID), nil
+	return p, nil
 }

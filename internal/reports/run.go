@@ -56,7 +56,12 @@ func (s *Store) Published(cat *Catalogue) (*Published, error) {
 
 // publishedWhere reads the published reports a condition picks, oldest first.
 func (s *Store) publishedWhere(where string, args ...any) ([]*Report, error) {
-	rows, err := s.db.Query(`SELECT `+reportColumns+` FROM reports WHERE hidden_at IS NULL AND `+where+` ORDER BY created_at, id`, args...)
+	return s.reportsWhere(`hidden_at IS NULL AND `+where, args...)
+}
+
+// reportsWhere reads the reports a condition picks, Hidden or not, oldest first.
+func (s *Store) reportsWhere(where string, args ...any) ([]*Report, error) {
+	rows, err := s.db.Query(`SELECT `+reportColumns+` FROM reports WHERE `+where+` ORDER BY created_at, id`, args...)
 	if err != nil {
 		return nil, err
 	}

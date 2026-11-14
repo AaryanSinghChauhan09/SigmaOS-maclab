@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -13,6 +14,9 @@ import (
 
 func init() {
 	addPage("GET /reports", web.Anyone, (*Server).pReports)
+	addPage("POST /reports/{id}/hide", web.Maintainers, (*Server).pHideReport)
+	addPage("POST /reports/{id}/show", web.Maintainers, (*Server).pShowReport)
+	addPage("POST /reports/{id}/delete", web.Maintainers, (*Server).pDeleteReport)
 }
 
 type reportsPage struct {
@@ -20,6 +24,52 @@ type reportsPage struct {
 	Count   string
 	Any     bool
 	Reports []runView
+	// Every is every report, Hidden ones too, with who uploaded each and the
+	// actions on it: a Maintainer's, nil for anyone else.
+	Every *everyReport
+}
+
+type everyReport struct {
+	Count string
+	Rows  []maintainerRow
+}
+
+// maintainerRow is a report as a Maintainer lists it.
+type maintainerRow struct {
+	runView
+	Short, Uploader string
+	Hidden          bool
+}
+
+// maintains reports whether r comes from a Maintainer, who hides, shows and
+// deletes reports, reads the Hidden ones and sees who uploaded each.
+func (s *Server) maintains(r *http.Request) bool {
+	return web.Maintainers.Allows(s.viewerOf(r).Kind)
+}
+
+// uploader is who a report's Mac was signed in as when the report came.
+func uploader(report *reports.Report) string {
+	if report.Handle == "" {
+		return "nobody signed in"
+	}
+	return "@" + report.Handle
+}
+
+// everyReport is the Maintainers' list, newest first.
+func (s *Server) everyReport(w http.ResponseWriter) *everyReport {
+	every, err := s.reports.Every(s.catalogue)
+	if err != nil {
+		s.pageFailed(w, err)
+		return nil
+	}
+	runs := every.Runs()
+	list := &everyReport{Count: reports.Plural(len(runs), "report")}
+	for i := len(runs) - 1; i >= 0; i-- {
+		run := runs[i]
+		list.Rows = append(list.Rows, maintainerRow{runView: s.runList(every, []*reports.Run{run}, false)[0],
+			Short: run.PublicID[:min(8, len(run.PublicID))], Uploader: uploader(run.Report), Hidden: run.Hidden})
+	}
+	return list
 }
 
 // pReports is every published run, newest first, that the filters pass:
@@ -42,7 +92,73 @@ func (s *Server) pReports(w http.ResponseWriter, r *http.Request) {
 		linkView{"reports.json", s.href("/api/v1/reports.json") + params},
 		linkView{"reports.csv", s.href("/api/v1/reports.csv") + params},
 		linkView{"checks.csv", s.href("/api/v1/checks.csv") + params})
+	if s.maintains(r) {
+		if page.Every = s.everyReport(w); page.Every == nil {
+			return
+		}
+	}
 	s.render(w, r, "reports/index", web.Page{Title: "Reports", Nav: "reports", Data: page})
+}
+
+// A Maintainer's three actions on a report. Hide takes it off everything
+// the public reads and Show puts it back; Delete removes it and its
+// evidence for good, asked twice. Each writes a record line.
+
+func (s *Server) pHideReport(w http.ResponseWriter, r *http.Request) {
+	if report := s.reportAt(w, r); report != nil {
+		s.reportChanged(w, r, report, !report.Hidden, s.reports.Hide(report.PublicID, s.now()), "hid the report %s", "/reports#admin-report-"+report.PublicID)
+	}
+}
+
+func (s *Server) pShowReport(w http.ResponseWriter, r *http.Request) {
+	if report := s.reportAt(w, r); report != nil {
+		s.reportChanged(w, r, report, report.Hidden, s.reports.Show(report.PublicID, s.now()), "showed the report %s again", "/reports#admin-report-"+report.PublicID)
+	}
+}
+
+func (s *Server) pDeleteReport(w http.ResponseWriter, r *http.Request) {
+	report := s.reportAt(w, r)
+	if report == nil || !s.sure(w, r, "Delete this report and its evidence for good", "/reports#admin-report-"+report.PublicID) {
+		return
+	}
+	s.reportChanged(w, r, report, true, s.reports.Delete(report.PublicID), "deleted the report %s", "/reports#all-reports")
+}
+
+// reportAt is the report an action's address names, Hidden or not; nil when
+// there is none and it has answered w.
+func (s *Server) reportAt(w http.ResponseWriter, r *http.Request) *reports.Report {
+	report, err := s.reports.Report(r.PathValue("id"))
+	switch {
+	case errors.Is(err, reports.ErrNoReport):
+		s.notFound(w, r)
+		return nil
+	case err != nil:
+		s.pageFailed(w, err)
+		return nil
+	}
+	return report
+}
+
+// reportChanged answers a Maintainer's action on a report, which ended with
+// err: an action that changed something writes its record line, did with
+// the report's id and Mac in place of %s, and the Maintainer goes back to
+// the list at to.
+func (s *Server) reportChanged(w http.ResponseWriter, r *http.Request, report *reports.Report, changed bool, err error, did, to string) {
+	switch {
+	case errors.Is(err, reports.ErrNoReport):
+		s.notFound(w, r)
+		return
+	case err != nil:
+		s.pageFailed(w, err)
+		return
+	}
+	if changed {
+		model := strings.TrimPrefix(words(member(report.Document(), "machine", "model")), "Apple ")
+		if err := s.record(r, fmt.Sprintf(did, report.PublicID+" ("+model+")"), nil); err != nil {
+			s.log.Printf("Reports, %s: %v", r.URL.Path, err)
+		}
+	}
+	http.Redirect(w, r, s.basePath()+to, http.StatusSeeOther)
 }
 
 // issueView is a Maintainer's prefilled GitHub issue, opened in a new tab.
@@ -81,6 +197,10 @@ type reportPage struct {
 	Sections                                []*reportSection
 	Inventory                               *inventoryView
 	ModelHref                               string
+	// For a Maintainer alone: whether the report is Hidden, and who its Mac
+	// was signed in as ("" for anyone else).
+	Hidden   bool
+	Uploader string
 }
 
 type reportPackage struct{ Name, Version string }
@@ -160,6 +280,13 @@ func (s *Server) reportPage(r *http.Request, p *reports.Published, run *reports.
 		page.Packages = append(page.Packages, reportPackage{words(member(pkg, "name")), words(member(pkg, "version"))})
 	}
 	issues := s.issues(r, p)
+	if r != nil && s.maintains(r) {
+		page.Hidden, page.Uploader = run.Hidden, uploader(run.Report)
+	}
+	if run.Hidden {
+		// A Hidden report's link opens for nobody the issue would reach.
+		issues = nil
+	}
 	sections := map[string]*reportSection{}
 	for _, check := range run.Checks() {
 		c := reportCheck{ID: check.ID, StatusClass: check.Status, StatusLabel: strings.ToUpper(check.Status), Outcome: check.Outcome}

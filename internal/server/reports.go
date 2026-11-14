@@ -41,10 +41,15 @@ func (s *Server) hUploadReport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// hReportPage is a published report's page. A Hidden report is not found.
-// It reads the report and what its page says of it, not every report.
+// hReportPage is a published report's page. A Hidden report is not found,
+// but by a Maintainer. It reads the report and what its page says of it,
+// not every report.
 func (s *Server) hReportPage(w http.ResponseWriter, r *http.Request) {
-	p, run, err := s.reports.Around(s.catalogue, r.PathValue("id"))
+	around := s.reports.Around
+	if s.maintains(r) {
+		around = s.reports.AroundAny
+	}
+	p, run, err := around(s.catalogue, r.PathValue("id"))
 	if err != nil {
 		s.pageFailed(w, err)
 		return
