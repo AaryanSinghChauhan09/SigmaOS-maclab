@@ -48,6 +48,21 @@ run() {
 }
 skip() { printf 'skip  %-9s %-56s %s\n' "$STEP" "$1" "$2"; }
 in_dir() { ( cd "$1" && shift && "$@" ); }
+# away COMMAND...: the command with an empty folder for a home and no login
+# for a lab in its environment, so that nothing it starts (lab, labd,
+# omarchy-m-test) reads or writes the files of whoever runs this. Go's own
+# folders stay where they are.
+AWAY="$LOGS/home"
+mkdir -p "$AWAY"
+GO_FOLDERS=()
+if command -v go >/dev/null 2>&1; then
+  for name in GOCACHE GOMODCACHE GOPATH GOENV; do GO_FOLDERS+=("$name=$(go env "$name")"); done
+fi
+away() {
+  env -u MACLAB_URL -u MACLAB_TOKEN -u MACLAB_BUILDER_TOKEN ${GO_FOLDERS[@]+"${GO_FOLDERS[@]}"} HOME="$AWAY" \
+    XDG_CONFIG_HOME="$AWAY/.config" XDG_STATE_HOME="$AWAY/.local/state" \
+    XDG_DATA_HOME="$AWAY/.local/share" XDG_CACHE_HOME="$AWAY/.cache" "$@"
+}
 have() { command -v "$1" >/dev/null 2>&1; }
 linux() { [[ "$OS" == Linux ]]; }
 
@@ -55,11 +70,11 @@ step_go() {
   run "go vet" go vet ./...
   run "go vet for linux/arm64" env GOOS=linux GOARCH=arm64 go vet ./...
   # shellcheck disable=SC2086
-  run "go test${RACE:+ -race}" go test $RACE -timeout 40m ./...
+  run "go test${RACE:+ -race}" away go test $RACE -timeout 40m ./...
   run "make all" make all
-  run "omarchy-m-test against labd" in_dir cli env OMARCHY_M_TEST_LABD="$PWD/bin/labd" OMARCHY_M_TEST_FAKE_GITHUB="$PWD/bin/fake-github" python3 -m unittest tests.test_lab_wire
-  run "labd smoke on its own host" bash .github/scripts/labd-smoke.sh bin
-  run "labd smoke under a prefix" bash .github/scripts/labd-smoke.sh bin https://example.org/lab
+  run "omarchy-m-test against labd" in_dir cli away env OMARCHY_M_TEST_LABD="$PWD/bin/labd" OMARCHY_M_TEST_FAKE_GITHUB="$PWD/bin/fake-github" python3 -m unittest tests.test_lab_wire
+  run "labd smoke on its own host" away bash .github/scripts/labd-smoke.sh bin
+  run "labd smoke under a prefix" away bash .github/scripts/labd-smoke.sh bin https://example.org/lab
 }
 
 step_tools() {
@@ -70,7 +85,7 @@ step_tools() {
   if linux; then
     run "lab-only-autounlock" "$py" scripts/test-lab-only-autounlock.py
     if "$py" -c 'import sys; sys.exit(sys.version_info < (3, 14))'; then
-      run "tools/bt2" in_dir tools/bt2 "$py" -B -E -s -m unittest discover -s tests
+      run "tools/bt2" in_dir tools/bt2 away "$py" -B -E -s -m unittest discover -s tests
     else
       skip "tools/bt2" "needs Python 3.14"
     fi
@@ -90,14 +105,14 @@ step_cli() {
     if have "python$v"; then
       found=1
       run "host boundary, Python $v" "python$v" cli/scripts/check_boundary.py
-      run "tests, Python $v" in_dir cli "python$v" -m unittest discover -s tests -t .
+      run "tests, Python $v" in_dir cli away "python$v" -m unittest discover -s tests -t .
     else
       skip "Python $v" "python$v is not installed"
     fi
   done
   if (( ! found )); then
     run "host boundary, $(python3 --version)" python3 cli/scripts/check_boundary.py
-    run "tests, $(python3 --version)" in_dir cli python3 -m unittest discover -s tests -t .
+    run "tests, $(python3 --version)" in_dir cli away python3 -m unittest discover -s tests -t .
   fi
 }
 
@@ -153,14 +168,14 @@ step_gpu() {
 step_site() {
   if have pg_isready && pg_isready -q 2>/dev/null && have ruby && [[ "$(ruby -e 'print RUBY_VERSION')" == "$(tr -d 'ruby-\n' < site/.ruby-version)" ]]; then
     local parity="$LOGS/report-parity"
-    run "report parity: the port writes the corpus" env REPORT_PARITY_DIR="$parity" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
+    run "report parity: the port writes the corpus" away env REPORT_PARITY_DIR="$parity" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
     run "Rails: prepare the test database" in_dir site env RAILS_ENV=test bin/rails db:test:prepare
     local pages="$LOGS/page-parity"
-    run "page parity: the port writes the seeded corpus" env PAGE_PARITY_DIR="$pages" go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
+    run "page parity: the port writes the seeded corpus" away env PAGE_PARITY_DIR="$pages" go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
     run "Rails: tests" in_dir site env RAILS_ENV=test REPORT_PARITY_DIR="$parity" PAGE_PARITY_DIR="$pages" bin/rails test
-    run "report parity: the port and the site agree" env REPORT_PARITY_VERDICTS="$parity/rails-verdicts.jsonl" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
-    run "page parity: the port and the site count alike" env PAGE_PARITY_AGGREGATION="$pages/rails-aggregation.json" go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
-    run "page parity: the port's pages pin what the site's pin, and its exports are the site's" env PAGE_PARITY_DIR="$pages" go test -count=1 -run 'TestThePagesPinWhatTheOldSitesPin|TestTheExportsAreTheOldSites' ./internal/server
+    run "report parity: the port and the site agree" away env REPORT_PARITY_VERDICTS="$parity/rails-verdicts.jsonl" go test -count=1 -run TestVerdictsAreTheOldSites ./internal/reports
+    run "page parity: the port and the site count alike" away env PAGE_PARITY_AGGREGATION="$pages/rails-aggregation.json" go test -count=1 -run TestTheCountsAreTheOldSites ./internal/reports
+    run "page parity: the port's pages pin what the site's pin, and its exports are the site's" away env PAGE_PARITY_DIR="$pages" go test -count=1 -run 'TestThePagesPinWhatTheOldSitesPin|TestTheExportsAreTheOldSites' ./internal/server
   else
     skip "Rails reference" "needs Postgres running and Ruby $(tr -d 'ruby-\n' < site/.ruby-version)"
   fi

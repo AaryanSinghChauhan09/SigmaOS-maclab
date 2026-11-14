@@ -153,3 +153,26 @@ func TestEveryTestBinaryThatCanReachAHomeHasItsOwn(t *testing.T) {
 		}
 	}
 }
+
+// scripts/ci-local starts the tests, labd and omarchy-m-test with an empty
+// folder for a home (its away).
+func TestTheLocalRunStartsItsProgramsAwayFromHome(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(root(t), "scripts", "ci-local"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := regexp.MustCompile(`\bgo test\b|labd-smoke\.sh|-m unittest (discover -s tests|tests\.)`)
+	n := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "run ") || !starts.MatchString(line) {
+			continue
+		}
+		n++
+		if !regexp.MustCompile(`\baway\b`).MatchString(line) {
+			t.Errorf("not away from home: %s", strings.TrimSpace(line))
+		}
+	}
+	if n < 5 {
+		t.Fatalf("only %d of ci-local's steps were seen to start the tests or labd", n)
+	}
+}
