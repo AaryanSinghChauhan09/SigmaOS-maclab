@@ -95,6 +95,13 @@ grep -qi '^set-cookie' <<<"$fwd" && fail "the Alias set a cookie"
 [ "$(code "${FWD[@]}" "${AUTH[@]}" "http://$ALIAS$PREFIX/api/devices")" = 421 ] || fail "the API on the Alias"
 [ "$(c "${FWD[@]}" "${AUTH[@]}" "http://$ALIAS$PREFIX/api/devices")" = "Omarchy Mac Lab is at $PUB: use that address" ] || fail "the Alias's line"
 
+# Sign-in is off until the OAuth app's files are there, and a labd behind the
+# tunnel never takes a stand-in for GitHub.
+[ "$(code "${FWD[@]}" "$B/sign-in")" = 404 ] || fail "sign-in without an OAuth app"
+head_of "${FWD[@]}" "$B/sign-in" | grep -qi '^set-cookie' && fail "a signed-out answer set a cookie"
+"$BIN/labd" --listen="127.0.0.1:$PORT" --socket="$WORK/other.sock" --public-url="$PUB" --data="$WORK/other" --maintainer=ci \
+	--sign-in="$WORK" --github-url=http://127.0.0.1:1 >/dev/null 2>&1 && fail "labd took a stand-in for GitHub behind the tunnel"
+
 # Early data can be replayed.
 [ "$(code "${FWD[@]}" "${AUTH[@]}" -H 'Early-Data: 1' "$B/api/devices")" = 425 ] || fail "early data under the API"
 

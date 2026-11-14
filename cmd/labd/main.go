@@ -25,6 +25,8 @@ func main() {
 	publicURL := flag.String("public-url", "", "the Lab address people and Macs reach labd at, e.g. https://lab.omarchy-mac.org: every link labd builds names it, and through the tunnel labd answers to no other name but --alias")
 	alias := flag.String("alias", "", "the Alias, e.g. maclab.omarchy.org: the one other name the tunnel carries. A page request on it gets a 308 to the same path at the Lab address; anything under /api/ is refused")
 	preview := flag.Bool("preview", false, "the lab is in Preview: answering at the Lab address, closed, before it opens. Every answer tells crawlers not to index it")
+	signIn := flag.String("sign-in", "", "the folder with the lab's sign-in configuration: github-client-id and github-client-secret (the OAuth app; the secret readable by labd's account alone) and admins (the Admins' GitHub account ids, one a line). Without the app's two files sign-in is off")
+	githubURL := flag.String("github-url", "", "a stand-in for GitHub on this machine, for a lab under development, e.g. http://127.0.0.1:7791 (tools/fake-github): a loopback address only, and never beside --socket")
 	termsFile := flag.String("terms-file", "", "participation terms a Mac's owner accepts before it joins (default: labd's built-in terms)")
 	data := flag.String("data", filepath.Join(home, ".local/share/maclab"), "data directory")
 	ntfy := flag.String("ntfy", os.Getenv("MACLAB_NTFY"), "ntfy topic URL for notifications, e.g. https://ntfy.sh/<secret-topic>")
@@ -60,6 +62,13 @@ func main() {
 	}
 	if *socket != "" && pub == nil {
 		log.Fatal("--socket needs --public-url: through the tunnel labd answers to its Lab address")
+	}
+	if *githubURL != "" && *socket != "" {
+		log.Fatal("--github-url is for a lab under development: a labd behind the tunnel (--socket) signs people in with GitHub itself")
+	}
+	app, admins, err := server.ReadSignIn(*signIn, *githubURL)
+	if err != nil {
+		log.Fatal(err)
 	}
 	var terms string
 	if *termsFile != "" {
@@ -98,7 +107,7 @@ func main() {
 	// ./volunteer downloads the lab-agent built alongside labd.
 	exe, _ := os.Executable()
 	s, err := server.New(ctx, server.Config{DataDir: *data, FirstMaintainer: *maintainer, FirstMaintainerToken: tok,
-		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms,
+		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms, GitHub: app, Admins: admins,
 		OMT: *omt, OMTSite: *omtSite, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
 		BootTimeout: *bootTimeout, OfflineAfter: *offlineAfter, AliveWindow: *aliveWindow, QuietGrace: *quietGrace, StageTimeout: *stageTimeout, WatchdogOpenTimeout: *watchdogOpenTimeout, RebootWarning: *rebootWarning, NtfyURL: *ntfy, NotifyCmd: *notifyCmd,
 		BuilderToken: strings.TrimSpace(string(btok)), ArtifactBudget: *artifactGB << 30,
@@ -131,6 +140,14 @@ func main() {
 		log.Printf("labd listening on %s, served as %s, data in %s", where, pub, *data)
 	default:
 		log.Printf("labd listening on %s, data in %s", where, *data)
+	}
+	switch {
+	case app == nil:
+		log.Printf("sign-in is off: no OAuth app (--sign-in <folder> with github-client-id and github-client-secret)")
+	case *githubURL != "":
+		log.Printf("sign-in goes to a stand-in for GitHub at %s, not to GitHub: this labd is under development; %d Admin(s)", *githubURL, len(admins))
+	default:
+		log.Printf("sign-in with GitHub is on; %d Admin(s) named in %s", len(admins), filepath.Join(*signIn, "admins"))
 	}
 	if err := server.Serve(hs, lns...); err != http.ErrServerClosed {
 		log.Fatal(err)
