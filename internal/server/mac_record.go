@@ -102,6 +102,8 @@ const (
 	leftByVolunteer  = "volunteer"
 	leftByMaintainer = "maintainer"
 	leftBlocked      = "blocked"
+	// A record of the old lab, Retired when its data was carried in (oldlab.go).
+	retiredAtImport = "import"
 )
 
 // RetiredMac is the record of a Mac whose enrollment ended, kept for

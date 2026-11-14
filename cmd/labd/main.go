@@ -1,7 +1,8 @@
 // Command labd is the Mac test lab controller. `labd break-glass` is the
 // command run on the server itself that mints a Lab token for a named
 // person (breakglass.go). `labd import` carries the old site's reports into
-// the lab (import.go).
+// the lab (import.go). `labd old-lab` upgrades the old lab's data directory
+// (oldlab.go).
 package main
 
 import (
@@ -28,6 +29,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "import" {
 		os.Exit(runImport(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "old-lab" {
+		os.Exit(runOldLab(os.Args[2:]))
 	}
 	home, _ := os.UserHomeDir()
 	listen := flag.String("listen", envOr("MACLAB_LISTEN", "127.0.0.1:7770"), "the loopback port, for callers on this machine (the Builder, the Out-of-band controller's client side, break-glass): it believes nothing a caller forwards, and labd listens on no other network address")

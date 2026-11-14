@@ -24,6 +24,15 @@ func openStore(path string) (*store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := migrateStore(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &store{db}, nil
+}
+
+// migrateStore brings a labd.db, maclab's or this lab's, to today's tables.
+func migrateStore(db *sqlitedb.DB) error {
 	migrations, err := fs.Sub(labdMigrations, "migrations")
 	if err == nil {
 		err = fromMaclab(db)
@@ -31,11 +40,7 @@ func openStore(path string) (*store, error) {
 	if err == nil {
 		err = db.Migrate(migrations)
 	}
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	return &store{db}, nil
+	return err
 }
 
 // fromMaclab gives a labd.db from before numbered migrations the columns its
