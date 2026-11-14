@@ -353,3 +353,23 @@ func TestLitestreamsConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// The same for the two folders: each file found in one is removed from it
+// once it is in place.
+func TestSetupRefusesItsOwnFoldersAsTheSource(t *testing.T) {
+	m, k := watched(t)
+	m.ok("setup", "--release-key", k.signers, "--backup-guest", "192.168.0.186",
+		"--backup-keys", keysFolder(t, houseSecrets, offsiteSecrets), "--checks", checksCarried(t, "dead-man", "backup", "restore-drill"))
+	for flag, c := range map[string]struct{ folder, file, want string }{
+		"--backup-keys": {backupKeys, "restic-password", "is where the set-up keeps the backups' keys"},
+		"--checks":      {checksFolder, "dead-man", "is where the set-up keeps the checks"},
+	} {
+		before := read(t, m.path(c.folder+"/"+c.file))
+		if out := m.refused("setup", flag, m.path(c.folder)); !strings.Contains(out, c.want) {
+			t.Errorf("setup %s with its own folder does not say why:\n%s", flag, out)
+		}
+		if entries, _ := os.ReadDir(m.path(c.folder)); len(entries) < 3 || read(t, m.path(c.folder+"/"+c.file)) != before {
+			t.Errorf("setup %s with its own folder removed what was in place: %d files left", flag, len(entries))
+		}
+	}
+}

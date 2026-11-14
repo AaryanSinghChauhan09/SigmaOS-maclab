@@ -118,6 +118,7 @@ if [[ -n $guest ]]; then
 fi
 if [[ -n $keys ]]; then
   [[ -d $keys ]] || fail "no folder $keys"
+  [[ ! $keys -ef $BACKUP_KEYS ]] || fail "$keys is where the set-up keeps the backups' keys: they are in place, and a file given here is removed once taken. Leave --backup-keys out"
   found=0
   for name in $BACKUP_KEYS_HOUSE $BACKUP_KEYS_OFFSITE; do
     [[ -e $keys/$name ]] || continue
@@ -145,6 +146,7 @@ if [[ -n $keys ]]; then
 fi
 if [[ -n $checks ]]; then
   [[ -d $checks ]] || fail "no folder $checks"
+  [[ ! $checks -ef $CHECKS ]] || fail "$checks is where the set-up keeps the checks: they are in place, and a file given here is removed once taken. Leave --checks out"
   found=0
   for name in $CHECK_NAMES; do
     [[ -e $checks/$name || -L $checks/$name ]] || continue
