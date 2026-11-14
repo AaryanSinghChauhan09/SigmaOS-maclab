@@ -1310,6 +1310,9 @@ func showDevice(ctx context.Context, c *client.Client, name string) error {
 		fmt.Printf("  lab-agent:   %s\n", orDash(d.Facts.AgentVersion, "unknown"))
 	}
 	fmt.Printf("  last seen:   %s, uptime %.0fs, systemd %s\n", ago(d.LastSeen), d.Health.Uptime, d.Health.SystemState)
+	if d.BootID != "" {
+		fmt.Printf("  boot:        %s\n", d.BootID)
+	}
 	tiers := []string{"panic reboot + one-shot fallback", "+ hardware watchdog", "+ out-of-band reset"}
 	fmt.Printf("  recovery:    tier %d (%s)\n", d.Tier, tiers[d.Tier])
 	if d.Cable != nil {

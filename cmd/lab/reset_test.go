@@ -201,3 +201,15 @@ func TestStatusAndOOBSaySightedNotSightedOrNoCable(t *testing.T) {
 		t.Errorf("lab oob of a Volunteer's Mac: %q", out)
 	}
 }
+
+// lab status <mac> names the Mac's boot: a reset is seen to have landed, and
+// another Mac to have been left alone, by the boot id.
+func TestStatusOfAMacNamesItsBoot(t *testing.T) {
+	c := labAt(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(client.Device{Device: api.Device{Name: "m1-pro", State: api.StateReady, BootID: "c26ce0d9-0000-4000-8000-000000000001", Enrollment: api.Enrollment{Kind: api.KindLabOwned}}})
+	})
+	out, err := printed(t, c, "status", "m1-pro")
+	if err != nil || !strings.Contains(out, "  boot:        c26ce0d9-0000-4000-8000-000000000001\n") {
+		t.Fatalf("lab status m1-pro: %v\n%s", err, out)
+	}
+}
