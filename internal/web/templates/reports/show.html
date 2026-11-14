@@ -28,8 +28,11 @@
       <dt>uploaded by</dt><dd id="uploader" title="Who the Mac was signed in as when the report came. Maintainers alone see this.">{{.Uploader}}</dd>
       {{- end}}
       <dt>results</dt><dd>{{with .Counts}}<span class="ok">{{.Pass}} pass</span> · <span class="bad">{{.Fail}} fail</span>{{if .Gap}} · <span class="gap" title="Failures the feature catalogue expects on this Mac: not yet supported, or no such hardware">{{.Gap}} gap</span>{{end}} · <span class="dim">{{.Skip}} skip</span>{{end}}</dd>
-      {{- if or .Unattended .ByLab}}
-      <dt>run</dt><dd>{{if .Unattended}}<span id="unattended">unattended: nobody was at the Mac, so only the automatic checks ran</span>{{end}}{{if and .Unattended .ByLab}} · {{end}}{{if .ByLab}}<span id="run-by-the-lab">run by the lab</span>{{end}}</dd>
+      {{- if .Unattended}}
+      <dt>run</dt><dd id="unattended">unattended: nobody was at the Mac, so only the automatic checks ran</dd>
+      {{- end}}
+      {{- if .ByLab}}
+      <dt>run</dt><dd id="run-by-the-lab">run by the lab</dd>
       {{- end}}
     </dl>
     <details class="packages" id="packages" open>

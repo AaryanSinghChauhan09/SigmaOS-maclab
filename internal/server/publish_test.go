@@ -735,14 +735,12 @@ func TestHowAReportArrivedIsOnReportsAndThePublicPageSaysRunByTheLab(t *testing.
 			}
 		}
 	}
-	// Beside "unattended", in the same line of the machine's facts.
-	page := parseHTML(t, visitor.page("/reports/"+byItself))
-	if !strings.Contains(page.sole(t, "#unattended").words(), "unattended") {
-		t.Error("the unattended line went")
+	// Beside "unattended": the line after it among the machine's facts.
+	if !regexp.MustCompile(`<dd id="unattended">[^<]*nobody was at the Mac[^<]*</dd>\s*<dt>run</dt><dd id="run-by-the-lab">run by the lab</dd>`).MatchString(visitor.page("/reports/" + byItself)) {
+		t.Error("run by the lab is not beside unattended")
 	}
-	run := regexp.MustCompile(`(?s)<dt>run</dt><dd[^>]*>.*?</dd>`).FindAllString(visitor.page("/reports/"+byItself), -1)
-	if len(run) != 1 || !strings.Contains(run[0], `id="unattended"`) || !strings.Contains(run[0], `id="run-by-the-lab"`) {
-		t.Errorf("run by the lab is not beside unattended: %q", run)
+	if page := visitor.page("/reports/" + byHand); strings.Contains(page, `id="unattended"`) || !strings.Contains(page, `<dt>run</dt><dd id="run-by-the-lab">run by the lab</dd>`) {
+		t.Error("an attended lab run's line")
 	}
 	// A Maintainer's own view of the page names nobody either.
 	if text := ravi.page("/reports/" + byHand); !strings.Contains(text, "run by the lab") || strings.Contains(text, "asked by") {
