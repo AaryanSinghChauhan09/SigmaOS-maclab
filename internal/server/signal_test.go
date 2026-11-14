@@ -287,8 +287,9 @@ func TestTheLabReadsNothingFromAGroupAndKeepsNoPhoneNumber(t *testing.T) {
 			t.Fatal(err)
 		}
 		if busy == 0 {
-			if sent != 3 || failed != 1 {
-				t.Fatalf("%d lines sent and %d failed, want 3 and 1", sent, failed)
+			// The fourth sent is the line for the lab's own Mac, which Joined.
+			if sent != 4 || failed != 1 {
+				t.Fatalf("%d lines sent and %d failed, want 4 and 1", sent, failed)
 			}
 			break
 		}
@@ -341,7 +342,8 @@ func TestAHangingSendHoldsNoRequest(t *testing.T) {
 		t.Fatalf("with a send hanging: %s %s", r.Status, body)
 	}
 	var n int
-	if err := l.s.store.db.QueryRow(`SELECT count(*) FROM lines`).Scan(&n); err != nil || n != 2 {
-		t.Fatalf("%d lines recorded (%v), want 2", n, err)
+	// Two, and the line for the lab's own Mac, which Joined.
+	if err := l.s.store.db.QueryRow(`SELECT count(*) FROM lines`).Scan(&n); err != nil || n != 3 {
+		t.Fatalf("%d lines recorded (%v), want 3", n, err)
 	}
 }

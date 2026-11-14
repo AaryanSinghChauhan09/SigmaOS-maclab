@@ -115,15 +115,17 @@ func (l *lab) wantLeaseEvents(want ...string) {
 	}
 }
 
-// labLines waits for the Lab group to have got exactly these lines, each
-// starting as given, and returns them.
+// labLines waits for the Lab group to have got exactly these lines about
+// Leases, each starting as given, and returns them. The lines for the Mac's
+// own Join and for what its Volunteer set on it, which a lab here starts
+// with, are not among them.
 func (e *endsLab) labLines(want ...string) []string {
 	e.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var got []string
 		for _, line := range e.sig.lines() {
-			if line.group == testLabGroup {
+			if line.group == testLabGroup && (strings.Contains(line.text, "Lease") || strings.Contains(line.text, "leased") || strings.Contains(line.text, "released")) {
 				got = append(got, line.text)
 			}
 		}

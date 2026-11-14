@@ -100,7 +100,7 @@ func TestLeaveMidJob(t *testing.T) {
 		t.Fatalf("queued job: %s: %s", q.Outcome, q.Summary)
 	}
 	d := l.s.dev(l.name).snapshot()
-	if d.State != api.StateLeft || !strings.Contains(d.StateReason, "lab forget "+l.name) {
+	if d.State != api.StateLeft || !strings.Contains(d.StateReason, "lab remove "+l.name) {
 		t.Fatalf("device %s: %s", d.State, d.StateReason)
 	}
 

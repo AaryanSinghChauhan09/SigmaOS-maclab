@@ -731,7 +731,9 @@ Release's `omarchy` package (`internal/reports/candidate_sets.yml`).
 
 ### Leaving
 
-A Volunteer can leave at any time, and the Maintainers can end an enrollment.
+A Volunteer can leave at any time, at the Mac or with Leave on My Macs (it
+asks twice); a Maintainer can end an enrollment, with `lab remove` or with
+"End enrollment" on People; and a Block ends every enrollment of the person.
 Either way nothing of the lab is left on the Mac.
 
 ```sh
@@ -739,16 +741,26 @@ sudo lab-agent leave          # asks first; --yes answers for you (scripts)
 lab remove ada-mbp            # a Maintainer ends the enrollment in labd
 ```
 
+In the lab the Mac's record is Retired at once: it is out of the fleet, its
+name is free and it counts toward nobody's cap. Its screenshots, serial log
+and baselines are deleted. Its jobs with their results, labd's copy of its
+Audit log and the Mac's record stay, for Maintainers (`GET /api/retired`). A
+Mac the lab could not reach when it was ended learns of it when it next
+reaches the lab, and removes the lab then. The leaving is one line of the
+Mac's record, of the People record and for the Lab group, which names the Mac
+only.
+
 `leave` is immediate and works with labd down. It stops any job (the job ends
 `incomplete`), reboots a Lab boot to the Known-good kernel, removes the lab's
 boot entries (its block in `limine.conf`, or its hook in GRUB's `custom.cfg`,
 leaving every other line as it was, and the staged kernels), its systemd
 units, the Lab-boot autologin drop-in, sysctl and watchdog files and the device
 secret, and tells labd. If labd can't be reached, lab-agent keeps trying
-and finishes leaving once it has told labd. Then it prints what is left to
-remove by hand: the lab-agent package. The Audit log
-(`/var/lib/maclab/audit.log`) and Access level stay, and `log` still reads
-them. Only a Volunteer's Mac has `leave`; a Lab-owned Mac's enrollment is
+and finishes leaving once it has told labd. Then it prints what stays, which is
+the Volunteer's: the lab-agent package, the Audit log
+(`/var/lib/maclab/audit.log`, which `log` still reads), the Availability
+window and the Access level; and the one command that removes the last
+three, `sudo lab-agent uninstall`. Only a Volunteer's Mac has `leave`; a Lab-owned Mac's enrollment is
 ended by the Maintainers.
 
 `lab remove` (`POST /api/devices/{name}/end-enrollment`) takes the Mac out of labd at once:
@@ -759,16 +771,39 @@ which Maintainer ended it. At that check-in lab-agent does what `leave` does
 and appends the Maintainer to the Audit log. To enroll the Mac again, a
 Maintainer makes a new token (`lab enroll`); the Mac's Kind follows that token.
 
-These are not `lab-agent uninstall` and `lab forget` (see [Setup](#setup)
-above), which stay as they were. `uninstall` is the full
-teardown of a Mac set up for the lab: labd lists the Mac as `left` until `lab
-forget` drops its record, and `lab reset` (or an uninstall that stops early)
-can bring it back. `leave` is the Volunteer's one-step exit: labd forgets the
-Mac and refuses its secret at once (`POST /api/agent/left`), and there is
-nothing to undo. Likewise `lab forget` drops the record of a Mac that has
-already gone, refusing one whose agent still checks in, while `lab remove`
-ends the enrollment of a live Volunteer's Mac, which then removes the lab
-itself.
+This is not `lab-agent uninstall` (see [Setup](#setup) above), which stays as
+it was: the full teardown of a Mac set up for the lab. labd lists the Mac as
+`left` until `lab remove` Retires its record, and `lab reset` (or an
+uninstall that stops early) can bring it back. `leave` is the Volunteer's
+one-step exit: labd Retires the Mac and refuses its secret at once (`POST
+/api/agent/left`), and there is nothing to undo.
+
+### Arriving, and what the site can take away
+
+A Mac that Joined is at Qualification with publishing off, whatever it had in
+another lab, and with no Availability window it takes nothing. The lab queues
+its first baseline itself; it runs in the Mac's first open window. My Macs
+reads "no window yet", then "first check pending (restarts twice)", then
+"ready"; a first baseline that fails is shown and posted, and a Maintainer
+looks.
+
+Only the Mac gives: Open now, the weekly schedule, raising to Full and turning
+publishing on are `sudo lab-agent …` at the Mac, and labd has no route for
+them. The site only takes away, for the Mac's own Volunteer, and undoes only
+what it took:
+
+- **Pause**, until a time or until Resume. The Mac is closed to the lab
+  whatever its own window says, an Open now included.
+- **Limit to Qualification**, until "Remove limit". The lab treats the Mac as
+  at Qualification whatever Access level it has.
+- **Leave**, above.
+
+Pause and Limit stop a running job as a closing window does (it ends
+`incomplete`) and end a Lease. `lab-agent` is told nothing of them: labd
+applies both under what the Mac's check-ins carry. Each event (Joined, first
+baseline, a new weekly window, Pause, Open now, Resume, Access level, Limit,
+publishing, leaving) is a line of the Mac's record and for the Lab group. A
+window opening or closing on schedule is no event.
 
 Publishing omarchy-m-test reports is off on a Volunteer's Mac until its
 Volunteer runs `publish on`, whatever `--omt-publish` or a job's `--publish`

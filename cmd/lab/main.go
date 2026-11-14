@@ -751,7 +751,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		if err := c.EndEnrollment(ctx, pos[0]); err != nil {
 			return err
 		}
-		fmt.Printf("ended %s's enrollment; its device secret no longer works\n", pos[0])
+		fmt.Printf("ended %s's enrollment: its record is Retired, its name is free and its device secret no longer works\n", pos[0])
 		return nil
 
 	case "audit":
