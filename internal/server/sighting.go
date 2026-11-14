@@ -25,10 +25,6 @@ import (
 // sightEvery is how often labd asks the controller what its ports show.
 const sightEvery = 15 * time.Second
 
-// troubleController is the trouble "Agents" is told of while the
-// Out-of-band controller is not healthy.
-const troubleController = "oob"
-
 // sighting is the lab knowing a Mac's port, and the port as it was then.
 type sighting struct {
 	rid  int
@@ -48,9 +44,7 @@ type cables struct {
 	// lost is why a Mac has no Sighting, where there is something to say.
 	lost map[string]string
 	// down is why the controller is not healthy; "" while it answers.
-	// answered: it has answered a look since labd started.
-	down     string
-	answered bool
+	down string
 	// proving is held for the length of a Proving reset: one at a time.
 	proving sync.Mutex
 }
@@ -399,13 +393,13 @@ func (c *cables) apply(ports map[int]oob.Port, macs []labOwned, now time.Time) (
 	return said
 }
 
-// controllerDown records that the controller is not healthy, and tells
-// "Agents" once. A controller that was never set up is no trouble.
+// controllerDown records that the controller is not healthy, and why: until
+// it answers again no Mac has a Hard reset. "Agents" is told by labd's watch
+// of the lab's own parts, once the trouble has lasted (watch.go).
 func (s *Server) controllerDown(err error) {
 	why := "the Out-of-band controller is not healthy: " + err.Error()
-	setUp := true
 	if _, lerr := os.Lstat(s.cfg.OOB.TokenFile); errors.Is(lerr, os.ErrNotExist) {
-		why, setUp = "the Out-of-band controller is not set up: its token is not at "+s.cfg.OOB.TokenFile+" yet", false
+		why = "the Out-of-band controller is not set up: its token is not at " + s.cfg.OOB.TokenFile + " yet"
 	}
 	s.cables.mu.Lock()
 	was := s.cables.down
@@ -414,23 +408,15 @@ func (s *Server) controllerDown(err error) {
 	if was != why {
 		s.log.Printf("no Hard reset: %s", why)
 	}
-	if setUp {
-		s.agents.Trouble(troubleController, "The Out-of-band controller on the mini is not healthy: it does not answer as it should. No Mac gets a Hard reset until it does; jobs still run.")
-	}
 }
 
-// controllerUp records that the controller answers, and tells "Agents" when
-// it had been told otherwise: by this labd, or by the one before it.
 func (s *Server) controllerUp() {
 	s.cables.mu.Lock()
-	was, first := s.cables.down, !s.cables.answered
-	s.cables.down, s.cables.answered = "", true
+	was := s.cables.down
+	s.cables.down = ""
 	s.cables.mu.Unlock()
 	if was != "" {
 		s.log.Printf("the Out-of-band controller answers again")
-	}
-	if was != "" || first {
-		s.agents.Recovered(troubleController, "The Out-of-band controller on the mini answers again.")
 	}
 }
 

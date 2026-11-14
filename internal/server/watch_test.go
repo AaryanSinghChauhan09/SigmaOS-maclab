@@ -399,11 +399,12 @@ func TestTheOutOfBandControllerUnhealthyIsToldOnce(t *testing.T) {
 	o.once(2*time.Minute, set(true), set(false),
 		"The Out-of-band controller on the mini is not healthy: it does not answer as it should. No Mac gets a Hard reset until it does; jobs still run.",
 		"The Out-of-band controller on the mini answers again.")
-	// labd asks what a port shows and never has the reset tool run.
+	// labd asks what a port shows, for its health and for the Sightings,
+	// and never has the reset tool run.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, a := range c.asked {
-		if a != "GET /v1/ports/0/status" {
+		if a != "GET /v1/ports/0/status" && a != "GET /v1/ports/1/status" && a != "GET /v1/ports/2/status" {
 			t.Fatalf("labd asked the controller %q to see whether it is healthy", a)
 		}
 	}

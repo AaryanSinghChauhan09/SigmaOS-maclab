@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/oob"
 )
@@ -447,15 +450,29 @@ func TestAProvingResetCountsOnlyIfThatMacReturnsAndEveryOtherKeepsItsBootID(t *t
 // Mac is shown as having no Hard reset, jobs still run, and a line is
 // written for "Agents", once.
 func TestWithTheControllerUnhealthyNoMacGetsAHardResetAndJobsStillRun(t *testing.T) {
-	l := sightLab(t, labConfig{})
+	clock := agent.NewFakeClock(time.Now())
+	l := sightLab(t, labConfig{clock: clock, config: func(c *Config) {
+		// labd's watch of its own parts, looking when the test says so.
+		c.Watch = &Watch{ByHand: true, Disk: func() (uint64, uint64, error) { return 50, 100, nil }}
+	}})
+	t.Cleanup(pumpClock(clock))
 	l.baseline()
-	const unhealthy = "The Out-of-band controller on the mini is not healthy"
-	if lines := l.agentsLines(); has(lines, "Out-of-band controller") {
+	told := func() (lines []string) {
+		for _, line := range l.agentsLines() {
+			if strings.Contains(line, "Out-of-band controller") {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
+	l.s.look(l.ctx)
+	if lines := told(); len(lines) != 0 {
 		t.Fatalf("a healthy controller was told of: %q", lines)
 	}
 
 	l.oob.stop(true)
 	l.sight()
+	l.s.look(l.ctx)
 	l.wantCable(l.name, api.CableSighted, "the Out-of-band controller is not healthy")
 	if tier := l.deviceJSON(l.name)["tier"]; tier == float64(2) {
 		t.Fatal("the Mac is still shown as having a Hard reset")
@@ -467,29 +484,25 @@ func TestWithTheControllerUnhealthyNoMacGetsAHardResetAndJobsStillRun(t *testing
 	if r, body := l.resetAs(harnessToken, l.name, "left"); r.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "not healthy") {
 		t.Fatalf("a Proving reset with the controller stopped: %s %s", r.Status, body)
 	}
-	l.sight()
-	l.sight()
-	var told int
-	for _, line := range l.agentsLines() {
-		if strings.Contains(line, unhealthy) {
-			told++
-			if !strings.Contains(line, "No Mac gets a Hard reset until it does; jobs still run.") {
-				t.Fatalf("the line: %q", line)
-			}
-		}
-	}
-	if told != 1 {
-		t.Fatalf("\"Agents\" was told %d times, want once: %q", told, l.agentsLines())
-	}
 
 	// Jobs still run.
 	l.expect(l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-while-unhealthy behavior=ok")}), api.OutcomePass)
 	l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
 
+	// "Agents" is told once the trouble has lasted, and once only.
+	clock.Advance(3 * time.Minute)
+	for range 3 {
+		l.sight()
+		l.s.look(l.ctx)
+	}
+	if lines := told(); len(lines) != 1 || lines[0] != "The Out-of-band controller on the mini is not healthy: it does not answer as it should. No Mac gets a Hard reset until it does; jobs still run." {
+		t.Fatalf("what \"Agents\" was told: %q", lines)
+	}
+
 	// The ladder skips the rung and says why.
 	v := l.s.dev(l.name)
 	go l.sim.Quiet(time.Minute)
-	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+	l.waitDevice(func(d api.Device) bool { return l.s.since(d.LastSeen) > 2*aliveWindow })
 	steps, ok := v.ladder(context.Background(), "lost during a test", time.Second, false)
 	if ok || !has(steps, "no Hard reset: the Out-of-band controller is not healthy") {
 		t.Fatalf("the ladder with the controller stopped: %v %v", ok, steps)
@@ -500,11 +513,12 @@ func TestWithTheControllerUnhealthyNoMacGetsAHardResetAndJobsStillRun(t *testing
 	l.wantResets("the controller was stopped")
 
 	l.oob.stop(false)
-	l.sight()
-	l.sight()
+	for range 2 {
+		l.sight()
+		l.s.look(l.ctx)
+	}
 	l.wantCable(l.name, api.CableSighted)
-	lines := l.agentsLines()
-	if last := lines[len(lines)-1]; last != "The Out-of-band controller on the mini answers again." || told != 1 {
+	if lines := told(); len(lines) != 2 || lines[1] != "The Out-of-band controller on the mini answers again." {
 		t.Fatalf("after it answered again: %q", lines)
 	}
 }
@@ -580,5 +594,41 @@ func TestTheLabSaysSightedNotSightedOrNoCable(t *testing.T) {
 	}
 	if st = status(harnessToken, l.name); st.Cable.State != api.CableSighted || st.Cable.Port != "right" {
 		t.Fatalf("the first Mac: %+v", st.Cable)
+	}
+}
+
+// A Mac's record that still names the old lab's controller of its own gets
+// no reset through it: nothing is ever sent to an address a record carries,
+// and no record takes one any more.
+func TestAControllerNamedInAMacsRecordIsNeverAsked(t *testing.T) {
+	var asked atomic.Int32
+	old := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { asked.Add(1) }))
+	defer old.Close()
+	l := newLab(t, false)
+	l.baseline()
+	v := l.s.dev(l.name)
+	v.mu.Lock()
+	v.d.OOB = &api.OOBConfig{Driver: "oobd", URL: old.URL, Token: "t"}
+	v.saveLocked()
+	v.mu.Unlock()
+
+	l.wantCable(l.name, api.CableNone, "labd was given no Out-of-band controller")
+	if d := l.deviceJSON(l.name); d["oob"] != nil || d["tier"] == float64(2) {
+		t.Fatalf("the Mac as shown: oob %v, tier %v", d["oob"], d["tier"])
+	}
+	if r, body := l.resetAs(harnessToken, l.name, ""); r.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a Hard reset: %s %s", r.Status, body)
+	}
+	go l.sim.Quiet(time.Minute)
+	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+	if steps, ok := v.ladder(context.Background(), "lost during a test", time.Second, false); ok || !has(steps, "no Hard reset: labd was given no Out-of-band controller") {
+		t.Fatalf("the ladder: %v %v", ok, steps)
+	}
+	if n := asked.Load(); n != 0 {
+		t.Fatalf("the record's address was asked %d times", n)
+	}
+	r, body := l.as(harnessToken, "PATCH", "/api/devices/"+l.name, api.DevicePatch{OOB: &api.OOBConfig{Driver: "oobd", URL: old.URL, Token: "t"}})
+	if r.StatusCode != http.StatusBadRequest || !strings.Contains(body, "a Mac's record names no controller and no port") {
+		t.Fatalf("a record given a controller of its own: %s %s", r.Status, body)
 	}
 }

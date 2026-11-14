@@ -12,7 +12,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
 const token = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
@@ -217,17 +216,24 @@ func TestTheControllerIsOnThisMachineOnly(t *testing.T) {
 	}
 }
 
-// A Mac's record that still names the old lab's controller gets no reset:
-// nothing is sent to an address the record carries.
-func TestAControllerNamedInAMacsRecordIsRefused(t *testing.T) {
-	hit := false
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
-	defer srv.Close()
-	ctl, err := New(&api.OOBConfig{Driver: "oobd", URL: srv.URL, Token: "t"})
-	if err == nil || ctl != nil || !strings.Contains(err.Error(), "sighted") {
-		t.Fatalf("%v, %v", ctl, err)
+// The ports are the mini's three rear ones as people name them, facing its
+// back: left is RID 1, middle RID 0, right RID 2.
+func TestThePortsAreLeftMiddleAndRight(t *testing.T) {
+	want := map[string]int{"left": 1, "middle": 0, "right": 2}
+	if len(RIDs) != len(want) {
+		t.Fatalf("the ports: %v", RIDs)
 	}
-	if hit {
-		t.Fatal("the record's address was asked")
+	for i, name := range []string{"left", "middle", "right"} {
+		if rid, ok := RIDOf(name); !ok || rid != want[name] || PortName(rid) != name || RIDs[i] != rid {
+			t.Errorf("the %s port: RID %d %v, named %q, listed as RID %d", name, rid, ok, PortName(rid), RIDs[i])
+		}
+	}
+	for _, name := range []string{"", "front", "Left", "0", "1", "RID 1"} {
+		if rid, ok := RIDOf(name); ok {
+			t.Errorf("%q is taken for the port with RID %d", name, rid)
+		}
+	}
+	if got := PortName(7); got != "RID 7" {
+		t.Errorf("a port the mini has not is named %q", got)
 	}
 }

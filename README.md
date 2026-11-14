@@ -857,7 +857,7 @@ keeps it in memory.
   cable) or no cable, and why no Hard reset reaches it.
 - **The controller unhealthy.** A reset is refused with the reason, each Mac
   is shown as having no Hard reset, jobs still run, and "Agents" gets one
-  line, and one when it answers again.
+  line once that has lasted 2 minutes, and one when it answers again.
 - **After labd starts**, it gives each Lab-owned Mac that was up when it
   stopped its own watchdog's time and a boot, runs the ladder on whichever
   did not return, and writes the result for "Agents".
