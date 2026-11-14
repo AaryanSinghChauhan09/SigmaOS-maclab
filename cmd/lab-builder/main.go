@@ -400,6 +400,10 @@ func (b *builder) download(ctx context.Context, sha string, w *work, name string
 	if err != nil {
 		return fmt.Errorf("the build's input was not written: %w", err)
 	}
+	if err := f.Chmod(0o644); err != nil {
+		f.Close()
+		return err
+	}
 	if _, err := io.Copy(f, resp.Body); err != nil {
 		f.Close()
 		return err
@@ -639,9 +643,17 @@ func (b *builder) work(id string) (*work, error) {
 }
 
 // folders makes in/ and io/ in a build's folder and hands io/, itself and
-// never what a link there names, to the account the VM runs under.
+// never what a link there names, to the account the VM runs under. That
+// account reaches both whatever umask lab-builder was started with: the
+// Builder's LaunchDaemon file gives it 077.
 func (b *builder) folders(dir *os.Root) error {
+	if err := dir.Chmod(".", 0o755); err != nil {
+		return err
+	}
 	if err := dir.Mkdir("in", 0o755); err != nil {
+		return err
+	}
+	if err := dir.Chmod("in", 0o755); err != nil {
 		return err
 	}
 	if err := dir.Mkdir("io", 0o700); err != nil {

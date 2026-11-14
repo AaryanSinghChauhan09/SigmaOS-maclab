@@ -16,6 +16,7 @@ const (
 	builderLabel   = "org.omarchy-mac.lab.builder"
 	builderToken   = "usr/local/lab/secrets/builder.token"
 	madeUpToken    = "bldr_0123456789abcdef0123456789abcdef01234567"
+	builderIO      = "usr/local/lab/io"
 )
 
 // container plays Apple's container: its server is up while the file "up"
@@ -153,15 +154,19 @@ func TestTheBuildersLaunchDaemons(t *testing.T) {
 		}
 	}
 	want := "/usr/local/lab/current/scripts/mini/container wait CONTAINER_USER -- /usr/local/lab/current/bin/lab-builder" +
-		" --server http://" + shell(t, "LABD_LISTEN") + " --token-file /usr/local/lab/secrets/builder.token --as-user CONTAINER_USER --cpus BUILDER_CPUS"
+		" --server http://" + shell(t, "LABD_LISTEN") + " --token-file /usr/local/lab/secrets/builder.token --as-user CONTAINER_USER --io /usr/local/lab/io --cpus BUILDER_CPUS"
 	if got := strings.Join(arrays["ProgramArguments"], " "); got != want {
 		t.Errorf("the Builder is started as:\n %s\nwant\n %s", got, want)
 	}
 	main := read(t, filepath.Join(repo(t), "cmd", "lab-builder", "main.go"))
-	for _, flag := range []string{"server", "token-file", "as-user", "cpus"} {
+	for _, flag := range []string{"server", "token-file", "as-user", "io", "cpus"} {
 		if !regexp.MustCompile(`fl\.\w+\((&[\w.]+, )?"` + flag + `"`).MatchString(main) {
 			t.Errorf("lab-builder has no flag --%s", flag)
 		}
+	}
+	// The scratch folder is the one the set-up makes: root's, in no home.
+	if shell(t, "BUILDER_IO") != "$LAB_ROOT/io" || shell(t, "LAB_ROOT") != "$SYSROOT/usr/local/lab" || !strings.Contains(main, `miniScratch = "/usr/local/lab/io"`) {
+		t.Errorf("the set-up's scratch folder is %s, and lab-builder's is another", shell(t, "BUILDER_IO"))
 	}
 	for _, f := range []string{watch, file} {
 		text := read(t, f)
@@ -374,6 +379,9 @@ func TestSetupBringsTheBuilderUp(t *testing.T) {
 	if !strings.Contains(out, "once a build is Deployed") || !exists(containerPlist) || loaded(containerLabel) || strings.Contains(m.calls(), "container ") {
 		t.Fatalf("before a Deploy:\n%s", out)
 	}
+	if info, err := os.Lstat(m.path(builderIO)); err != nil || !info.IsDir() || info.Mode().Perm() != 0o755 {
+		t.Fatalf("the Builder's scratch folder was not made for the account to reach: %v %v", info, err)
+	}
 	m.builderBuild("v0.2.0")
 
 	token := tokenFile(t, madeUpToken+"\n", 0o600)
@@ -414,7 +422,7 @@ func TestSetupBringsTheBuilderUp(t *testing.T) {
 	}
 	for file, wants := range map[string][]string{
 		containerPlist: {"<string>watch</string>\n    <string>" + user + "</string>"},
-		builderPlist:   {"<string>--as-user</string><string>" + user + "</string>", "<string>--cpus</string><string>10</string>", "<string>wait</string>\n    <string>" + user + "</string>"},
+		builderPlist:   {"<string>--as-user</string><string>" + user + "</string>", "<string>--io</string><string>/usr/local/lab/io</string>", "<string>--cpus</string><string>10</string>", "<string>wait</string>\n    <string>" + user + "</string>"},
 	} {
 		text := read(t, file)
 		for _, want := range wants {
@@ -452,6 +460,24 @@ func TestSetupBringsTheBuilderUp(t *testing.T) {
 	m.ok("setup")
 	if !m.serverUp() {
 		t.Fatal("the set-up left the server stopped")
+	}
+}
+
+// The scratch folder is root's own. A link at its name is refused: root
+// would hand every build's folder to whatever the link names.
+func TestSetupRefusesALinkAtTheBuildersScratchFolder(t *testing.T) {
+	need(t, "openssl")
+	m := builderMini(t)
+	k := newKey(t)
+	v := m.victim()
+	plant(t, m.path(builderIO), v.dir)
+
+	out := m.refused("setup", "--release-key", k.signers, "--container-user", account(t))
+
+	v.intact("a link at the Builder's scratch folder")
+	saysLink(t, out, m.path(builderIO))
+	if exists(m.path("Library/LaunchDaemons/" + builderLabel + ".plist")) {
+		t.Errorf("the Builder's LaunchDaemon file was installed all the same:\n%s", out)
 	}
 }
 

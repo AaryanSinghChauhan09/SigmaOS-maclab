@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
@@ -32,6 +33,7 @@ done
 [ -n "$in" ] && [ -n "$io" ] || { echo "the VM was given no /in and /io" >&2; exit 64; }
 [ ! -e "$io/config" ] || { echo "the input is in the folder the VM writes" >&2; exit 65; }
 grep -q CONFIG_X=y "$in/config" || { echo "no config in /in" >&2; exit 66; }
+ls -ld "$in/.." "$in" "$in/config" "$io" | cut -c1-10 | tr '\n' ' ' > "$(dirname "$0")/modes"
 mkdir "$io/out" && echo kernel > "$io/out/kernel.tar.zst" && echo kernel.tar.zst > "$io/kernel" && echo 7.2.0-lab-x > "$io/release"
 `
 
@@ -82,7 +84,8 @@ func builtIn(t *testing.T, scratch, script string, asked func()) (api.BuildResul
 	mu.Lock()
 	defer mu.Unlock()
 	calls, _ := os.ReadFile(filepath.Join(bin, "calls"))
-	return result, string(calls)
+	modes, _ := os.ReadFile(filepath.Join(bin, "modes"))
+	return result, string(calls) + string(modes)
 }
 
 func holds(t *testing.T, dir string) []string {
@@ -113,6 +116,20 @@ func TestABuildReadsItsInputAndLeavesItsOutputs(t *testing.T) {
 	}
 	if left := holds(t, scratch); len(left) != 0 {
 		t.Errorf("the scratch folder still holds %v", left)
+	}
+}
+
+// The Builder's LaunchDaemon file gives lab-builder a umask of 077, and the
+// build VM runs under another account: that account still reaches the
+// build's folder, reads the input and has the output folder to itself.
+func TestTheVMsAccountReachesItsBuildUnderUmask077(t *testing.T) {
+	defer syscall.Umask(syscall.Umask(0o077))
+	res, seen := builtIn(t, t.TempDir(), buildingContainer, nil)
+	if res.Error != "" {
+		t.Fatalf("the build ended %+v\n%s", res, seen)
+	}
+	if want := "drwxr-xr-x drwxr-xr-x -rw-r--r-- drwx------ "; !strings.HasSuffix(seen, want) {
+		t.Errorf("the build's folder, in/, the input and io/ are\n%s\nwant\n%s", seen[strings.LastIndex(seen, "\n")+1:], want)
 	}
 }
 

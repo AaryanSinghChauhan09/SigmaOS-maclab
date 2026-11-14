@@ -4,6 +4,8 @@
      cores a build (10, then 8, then 6 if the gate test fails). It waits
      until container's server answers, then becomes lab-builder, which runs
      container in the session of CONTAINER_USER and never starts the server.
+     Its scratch folder is root's, made by the set-up: that account gets one
+     folder a build inside it.
      It reaches labd on the loopback port. Nothing here is a secret: the
      builder's token is in the file named, which only root reads.
      scripts/mini/setup writes the account and the cores in and installs
@@ -22,6 +24,7 @@
     <string>--server</string><string>http://127.0.0.1:7770</string>
     <string>--token-file</string><string>/usr/local/lab/secrets/builder.token</string>
     <string>--as-user</string><string>CONTAINER_USER</string>
+    <string>--io</string><string>/usr/local/lab/io</string>
     <string>--cpus</string><string>BUILDER_CPUS</string>
   </array>
   <key>WorkingDirectory</key><string>/var/empty</string>

@@ -967,6 +967,8 @@ builder() {
   cpus="${builder_cpus:-$(installed_cpus)}"
   cpus="${cpus:-10}"
 
+  [[ ! -L $BUILDER_IO ]] || fail "$BUILDER_IO is a symbolic link (to $(readlink "$BUILDER_IO")), and the Builder's scratch folder is a folder of $ROOT_OWNER's own: nothing was written through it. Look at who put it there, remove the link and run this again"
+  folder "$BUILDER_IO" "$ROOT_OWNER" "$ROOT_GROUP" 755
   if rendered "$CONTAINER_LABEL" "$user" "$cpus"; then again=1; fi
   if rendered "$BUILDER_LABEL" "$user" "$cpus"; then BUILDER_AGAIN=1; fi
   if [[ ! -x $watch || ! -x $LAB_CURRENT/bin/lab-builder ]]; then
