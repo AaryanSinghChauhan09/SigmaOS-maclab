@@ -829,6 +829,14 @@ form.inline { display: inline; }
 .kind-none { color: var(--comment); }
 .kind-blocked { color: var(--red); }
 
+.state-qualified { color: var(--green); }
+.state-not-qualified { color: var(--red); }
+.state-revoked { color: var(--orange); }
+.state-none { color: var(--comment); }
+.lab-verdict { color: var(--fg-dim); display: block; font-size: 0.9em; }
+.asking { border: 1px solid var(--yellow); padding: 0.8rem 1rem; }
+.release-warning { color: var(--yellow); }
+
 .button-plain { border-color: var(--border); color: var(--white); font-weight: 400; }
 .button-plain:hover { background: transparent; border-color: var(--green); color: var(--green); }
 .button-danger.armed { background: var(--red); color: var(--night); white-space: normal; }

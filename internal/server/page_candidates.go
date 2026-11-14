@@ -17,9 +17,12 @@ func init() {
 
 type candidateRow struct {
 	Name, Href, Verdict, Words string
-	Latest                     string
-	Runs, Verified             int
-	Models                     string
+	// Lab is the lab's verdict on the Release whose packages are the set's:
+	// its state and date, "" when no Release with a verdict matches.
+	Lab            string
+	Latest         string
+	Runs, Verified int
+	Models         string
 }
 
 type buildRow struct {
@@ -69,8 +72,9 @@ func (s *Server) pCandidates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var page candidatesPage
+	lab := s.labVerdicts(p)
 	for _, set := range p.CandidateSets() {
-		page.Sets = append(page.Sets, candidateRow{Name: set.Name, Href: s.href("/candidates/" + set.Name), Verdict: set.Verdict(), Words: set.VerdictWords(),
+		page.Sets = append(page.Sets, candidateRow{Name: set.Name, Href: s.href("/candidates/" + set.Name), Verdict: set.Verdict(), Words: set.VerdictWords(), Lab: lab[set.Name],
 			Latest: uploadedAtRun(set.Latest()), Runs: len(set.Runs), Verified: len(set.VerifiedRuns()), Models: sortedUniq(set.Runs, (*reports.Run).ShortModel)})
 	}
 	for _, on := range reports.RunsByBuild(p.Runs()) {
@@ -98,7 +102,7 @@ type findingView struct {
 
 type candidatePage struct {
 	Name, Runs, VerifiedRuns string
-	Verdict, Words           string
+	Verdict, Words, Lab      string
 	Failures, Partials       []findingView
 	Tested                   bool
 	Matrix                   matrixView
@@ -151,7 +155,7 @@ func (s *Server) pCandidate(w http.ResponseWriter, r *http.Request) {
 	}
 	tested := set.TestedRows()
 	page := candidatePage{Name: set.Name, Runs: reports.Plural(len(set.Runs), "run"), VerifiedRuns: reports.Plural(len(set.VerifiedRuns()), "Verified run"),
-		Verdict: set.Verdict(), Words: set.VerdictWords(), Failures: s.findings(set.Failures()), Partials: s.findings(set.Partials()), Tested: len(tested) > 0,
+		Verdict: set.Verdict(), Words: set.VerdictWords(), Lab: s.labVerdicts(p)[set.Name], Failures: s.findings(set.Failures()), Partials: s.findings(set.Partials()), Tested: len(tested) > 0,
 		Legend: legend(), Reports: s.runList(p, newestRuns(set.Runs), false), Matched: s.runList(p, newestRuns(set.MatchedBy()), false)}
 	if page.Tested {
 		page.Matrix = s.matrixOf(set.Matrix().Features(), tested)

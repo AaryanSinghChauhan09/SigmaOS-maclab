@@ -1,5 +1,5 @@
 {{define "main"}}<h1>Candidate sets</h1>
-<p class="subtitle">Runs on candidate images, grouped by the candidate set they were built from. Only Verified runs count for a set.</p>
+<p class="subtitle">Runs on candidate images, grouped by the candidate set they were built from. Only Verified runs count for a set. Where the lab has judged the Release a set was built into, its verdict is beside the set's result.</p>
 {{with .Data}}<section class="card">
 <h2 class="card-title">candidate sets</h2>
 {{if .Sets}}<table class="list">
@@ -11,7 +11,7 @@
 <td>{{.Runs}}</td>
 <td>{{.Verified}}</td>
 <td>{{.Models}}</td>
-<td><span class="verdict verdict-{{.Verdict}}">{{.Words}}</span></td>
+<td><span class="verdict verdict-{{.Verdict}}">{{.Words}}</span>{{if .Lab}} <span class="lab-verdict">{{.Lab}}</span>{{end}}</td>
 </tr>
 {{end}}</tbody>
 </table>

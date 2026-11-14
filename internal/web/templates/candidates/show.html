@@ -5,7 +5,8 @@
 <section class="card">
 <h2 class="card-title">result</h2>
 <p class="verdict verdict-{{.Verdict}}" id="verdict" data-verdict="{{.Verdict}}">{{.Words}}</p>
-{{if .Failures}}<ul class="links" id="failures">
+{{if .Lab}}<p class="lab-verdict" id="lab-verdict">{{.Lab}}</p>
+{{end}}{{if .Failures}}<ul class="links" id="failures">
 {{range .Failures}}<li class="finding" data-state="{{.State}}">{{template "state_badge" .Badge}} {{.Model}} ({{.Label}}): <a href="{{.FeatureHref}}">{{.FeatureName}}</a>, {{.Summary}}</li>
 {{end}}</ul>
 {{end}}{{if .Partials}}<p class="dim">Partial (some checks or machines disagree):</p>

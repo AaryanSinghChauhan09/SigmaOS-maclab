@@ -1,0 +1,74 @@
+{{define "state"}}<span class="badge {{.Class}}">{{.Words}}</span>{{end}}
+
+{{define "main"}}{{with .Data}}<h1>Releases</h1>
+<p class="subtitle">Every Release whose manifest is frozen, newest first. Freezing a Release and starting an Installed run stay in <code>lab</code>.</p>
+{{with .Refused}}<p class="flash flash-alert" role="alert">{{.}}</p>
+{{end}}<section class="card">
+<h2 class="card-title">releases ({{len .Rows}})</h2>
+{{if .Rows}}<div class="scroll"><table class="list stack releases">
+<thead><tr><th>Release</th><th>Frozen</th><th>Verdict</th><th>Coverage</th><th>Promoted</th><th>Candidate set</th></tr></thead>
+<tbody>
+{{range $row := .Rows}}<tr class="person-row release-row{{if .Open}} open{{end}}" id="release-{{.Name}}">
+<td data-label="Release" class="nowrap"><a class="person-toggle" href="{{href .Path}}" aria-expanded="{{if .Open}}true{{else}}false{{end}}">{{if .Open}}▾{{else}}▸{{end}} <b>{{.Name}}</b></a></td>
+<td data-label="Frozen">{{if .FrozenBy}}@{{.FrozenBy}}{{else}}<span class="dim">not known</span>{{end}}{{if .FrozenAt}} <span class="dim nowrap">{{.FrozenAt}}</span>{{end}}</td>
+<td data-label="Verdict" class="nowrap">{{template "state" .State}}{{if .StateDay}} <span class="dim">{{.StateDay}}</span>{{end}}</td>
+<td data-label="Coverage">{{.Coverage}}</td>
+<td data-label="Promoted">{{.Promoted}}</td>
+<td data-label="Candidate set">{{range $i, $set := .Sets}}{{if $i}}, {{end}}<a href="{{href $set.Path}}">{{$set.Name}}</a>{{else}}<span class="dim">–</span>{{end}}</td>
+</tr>
+{{with .Open}}<tr class="person-detail release-detail"><td colspan="6"><div class="person-blocks">
+{{with .Asking}}<div class="wide asking">
+<h3>Asking twice</h3>
+<p>Nothing has changed yet.</p>
+<form method="post" action="{{href .Action}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">{{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}<input type="hidden" name="sure" value="yes">
+<p><button class="button button-danger armed" type="submit">{{.Sentence}}</button></p>
+</form>
+<p><a href="{{href .Back}}">Leave it as it is</a></p>
+</div>
+{{end}}<div class="release-what">
+<h3>What it is</h3>
+<p>Kernel {{if .Kernel}}{{.Kernel}}{{else}}<span class="dim">not named</span>{{end}}</p>
+{{if .Packages}}<ul>{{range .Packages}}<li class="release-package">{{.Name}} <span class="dim">{{.Version}}</span></li>{{end}}</ul>
+{{else}}<p class="dim">No package.</p>
+{{end}}</div>
+<div class="wide release-macs">
+<h3>Its Macs</h3>
+<p class="coverage">{{.Coverage}}</p>
+{{if .Macs}}<table class="list stack">
+<thead><tr><th>Mac</th><th>Configuration</th><th>Latest Installed run</th><th>Runs</th><th>Promoted</th></tr></thead>
+<tbody>
+{{range .Macs}}<tr class="release-mac" id="{{.ID}}">
+<td data-label="Mac" class="nowrap">{{.Mac}}</td>
+<td data-label="Configuration">{{.Configuration}}</td>
+<td data-label="Latest Installed run">{{if .Run}}<a href="{{href .RunPath}}">{{.Run}}</a> <span title="{{.RunOutcome}}">{{.RunWords}}</span>{{else}}<span class="dim">none</span>{{end}}</td>
+<td data-label="Runs">{{.Runs}}</td>
+<td data-label="Promoted">{{if .Promoted}}{{.Promoted}}{{if .Mark}} <span class="badge state-revoked">{{.Mark}}</span>{{end}}{{else}}<span class="dim">not promoted</span>{{end}}{{if .Never}} <span class="dim">{{.Never}}</span>{{end}}{{if .PromoteAction}} <form class="inline" method="post" action="{{href .PromoteAction}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Promote</button></form>{{end}}</td>
+</tr>
+{{end}}</tbody>
+</table>
+{{else}}<p class="dim">Its manifest names no Mac.</p>
+{{end}}</div>
+<div class="wide release-verdict">
+<h3>Verdict</h3>
+{{range .Warnings}}<p class="release-warning">Warning: {{.}}. Nothing changes by itself.</p>
+{{end}}{{if or .Record .Change}}<form class="form form-inline" method="post" action="{{href .VerdictAction}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">
+<input type="text" name="note" required maxlength="1000" size="40" placeholder="note: say why (required)" aria-label="Note (required)" autocomplete="off">
+{{if .Change}}<button class="button button-small" type="submit" name="state" value="qualified">Change to qualified</button>
+<button class="button button-small" type="submit" name="state" value="not_qualified">Change to not qualified</button>
+<button class="button button-small button-danger" type="submit" name="state" value="revoked">Revoke</button>
+{{else}}<button class="button button-small" type="submit" name="state" value="qualified">Record qualified</button>
+<button class="button button-small" type="submit" name="state" value="not_qualified">Record not qualified</button>
+{{end}}</form>
+<p class="dim">The lab states what the verdict rests on, and asks again, before it records anything.</p>
+{{end}}{{with .Told}}<p class="dim">{{.}}</p>
+{{end}}{{if .History}}<ol class="record verdict-history">
+{{range .History}}<li>{{template "state" .State}} @{{.By}} <span class="when">{{.When}}</span> {{.Note}}</li>
+{{end}}</ol>
+{{else}}<p class="dim">No verdict yet.</p>
+{{end}}</div>
+</div></td></tr>
+{{end}}{{end}}</tbody>
+</table></div>
+{{else}}<p class="dim">No Release yet: one is listed once its manifest is frozen.</p>
+{{end}}</section>
+{{end}}{{end}}
