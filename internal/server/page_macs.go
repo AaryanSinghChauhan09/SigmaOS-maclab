@@ -131,6 +131,9 @@ func (s *Server) macRow(v *dev, d DeviceView, p Person, mine bool) macRow {
 	}
 	if l := d.Lease; l != nil {
 		row.Holder, row.Until = orStr(l.Owner(), l.Holder), when(l.Expires)
+		if l.Extended {
+			row.Until += ", extended until its job ends"
+		}
 		if holder, err := s.person(l.AccountID); err == nil {
 			// Who is an Admin is on no screen: here an Admin is a Maintainer.
 			kind := min(holder.Role(), web.Maintainer)

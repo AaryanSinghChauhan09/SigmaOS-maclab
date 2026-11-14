@@ -4,6 +4,12 @@ package server
 // account id here, the handle in the field the agent's commands already
 // carry, the free-text holder label inside it. Everything about it is
 // labd's; the running agent knows nothing of Leases.
+//
+// A Lease fences jobs, lab exec, screenshots, the live journal and reset
+// (fence, and mayDo for the two views). How it ends decides what becomes of
+// its holder's work (endLease, lapse). Every event is in the Lease record
+// (lease_record.go) and, except a renewal and an extension, a line for the
+// Lab group.
 
 import (
 	"context"
@@ -135,7 +141,7 @@ func (s *Server) mayLease(v *dev, p Person, holder string) (leaseAsked, error) {
 	case v.d.IsVolunteer() && v.openUntilLocked().IsZero():
 		err = refuse(409, "%s's Availability window is closed: a Lease on a Volunteer's Mac lasts only inside it", name)
 	case l != nil && !(leaseIsOf(l, p) && l.Holder == holder):
-		err = refuse(409, "%s is leased by %s until %s", name, l.Who(), l.Expires.Format(time.TimeOnly))
+		err = refuse(409, "%s is leased by %s %s", name, l.Who(), until(l))
 	case l != nil:
 		found.renews = true
 	}
@@ -238,7 +244,7 @@ func (s *Server) releaseLease(v *dev, p Person, holder string, force bool, why s
 			return changed()
 		}
 	case !force && !leaseIsOf(l, p):
-		return refuse(409, "%s is leased by %s until %s; only %s can release it, or a Maintainer with `lab release %s --force`", name, l.Who(), l.Expires.Format(time.TimeOnly), orStr(l.Owner(), l.Holder), name)
+		return refuse(409, "%s is leased by %s %s; only %s can release it, or a Maintainer with `lab release %s --force`", name, l.Who(), until(l), orStr(l.Owner(), l.Holder), name)
 	case !force:
 		return refuse(409, "leased by %s, not %s", l.Holder, holder)
 	case !p.isMaintainer():
@@ -333,11 +339,19 @@ func (s *Server) fence(v *dev, p Person, f fenced) error {
 	case !p.isMaintainer():
 		return refuse(403, "@%s needs their own Lease on %s for %s: `lab lease %s`%s", p.Handle, name, f.what, name, leasedBy(l))
 	case l != nil:
-		return refuse(409, "%s is leased by %s until %s; its holder does that, or a Maintainer ends the Lease first (`lab release %s --force`)", name, l.Who(), l.Expires.Format(time.TimeOnly), name)
+		return refuse(409, "%s is leased by %s %s; its holder does that, or a Maintainer ends the Lease first (`lab release %s --force`)", name, l.Who(), until(l), name)
 	case f.own:
 		return refuse(409, "%s needs your own Lease on %s, a Maintainer's too: `lab lease %s`", f.what, name, name)
 	}
 	return nil
+}
+
+// until says when l ends: at its end, or, extended past it, with its job.
+func until(l *api.Lease) string {
+	if l.Extended {
+		return "until its job " + l.Job + " ends (extended: it ran out at " + l.Expires.Format(time.TimeOnly) + ")"
+	}
+	return "until " + l.Expires.Format(time.TimeOnly)
 }
 
 // leasedBy says, after a refusal, who holds the Mac instead; "" when free.
@@ -345,7 +359,7 @@ func leasedBy(l *api.Lease) string {
 	if l == nil {
 		return ""
 	}
-	return " (it is leased by " + l.Who() + " until " + l.Expires.Format(time.TimeOnly) + ")"
+	return " (it is leased by " + l.Who() + " " + until(l) + ")"
 }
 
 // leaseConnKey names the sessions a person has open under their Lease on a
@@ -427,7 +441,7 @@ func (v *dev) leaseHoldsBackLocked(o jobOwner) string {
 	if l == nil || leaseCovers(l, o) {
 		return ""
 	}
-	return fmt.Sprintf("%s is leased by %s until %s", v.d.Name, l.Who(), l.Expires.Format(time.TimeOnly))
+	return fmt.Sprintf("%s is leased by %s %s", v.d.Name, l.Who(), until(l))
 }
 
 // park sets a queued job aside while someone else's lease holds the Mac, so
