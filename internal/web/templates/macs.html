@@ -22,7 +22,7 @@
 {{- range .Macs}}
 <tr id="mac-{{.Name}}">
 <td data-label="Mac"><a href="{{href (print "/macs/" .Name)}}">{{.Name}}</a></td>
-<td data-label="Kind">{{.Kind}}{{if .Volunteer}} of @{{.Volunteer}}{{end}}</td>
+<td data-label="Kind">{{.Kind}}{{if .Volunteer}} of @{{.Volunteer}}{{end}}{{if .Cable}} <span class="badge">{{.Cable}}</span>{{if and .NoHardReset (eq .Cable "sighted")}} <span class="dim">no Hard reset</span>{{end}}{{end}}</td>
 <td data-label="Configuration">{{.Configuration}}{{if .SetBy}} <span class="dim">set by @{{.SetBy}}</span>{{end}}
 {{- if $.Data.Maintainer}}
 <form class="form-inline" method="post" action="{{href (print "/macs/" .Name "/configuration")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><label>CPU <input name="cpu" inputmode="numeric" size="3" value="{{.CPU}}"></label> <label>GPU <input name="gpu" inputmode="numeric" size="3" value="{{.GPU}}"></label> <button class="button button-small button-plain" type="submit">Set</button></form>

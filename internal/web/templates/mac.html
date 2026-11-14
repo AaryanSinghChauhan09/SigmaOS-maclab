@@ -37,6 +37,9 @@
 <dl class="facts">
 <dt>Configuration</dt><dd>{{.Mac.Configuration}}{{if .Mac.SetBy}} <span class="dim">set by @{{.Mac.SetBy}}</span>{{end}}</dd>
 <dt>Kind</dt><dd>{{.Mac.Kind}}{{if .Mac.Volunteer}} of @{{.Mac.Volunteer}}{{end}}</dd>
+{{- if .Facts.Cable}}
+<dt>Cable</dt><dd>{{.Facts.Cable}}{{if .Facts.NoHardReset}} <span class="dim">No Hard reset: {{.Facts.NoHardReset}}.</span>{{end}}</dd>
+{{- end}}
 <dt>State</dt><dd>{{.Mac.State}}{{if .Facts.Reason}} <span class="dim">{{.Facts.Reason}}</span>{{end}}{{if .Facts.Queued}} <span class="dim">{{.Facts.Queued}} queued</span>{{end}}</dd>
 <dt>Access level</dt><dd>{{.Facts.AccessLevel}}{{if not .Facts.Volunteers}} <span class="dim">a Lab-owned Mac</span>{{end}}</dd>
 {{- if .Facts.Volunteers}}
@@ -108,6 +111,17 @@
 <pre class="term" data-log>Reading the last 500 lines from {{$.Data.Mac.Name}}.</pre>
 {{- end}}
 </section>
+{{- with .Reset}}
+<section class="card" id="live-reset">
+<h2 class="card-title">hard reset</h2>
+<p class="dim">A Hard reset forces {{$.Data.Mac.Name}} to restart through its cable to the lab server, whatever its own system is doing.</p>
+{{- if .Why}}
+<p id="no-hard-reset">No Hard reset from here now: {{.Why}}.</p>
+{{- else}}
+{{template "take" ($.Take (print $.Data.Path "/hard-reset") "Hard reset" .Sentence "back" "live")}}
+{{- end}}
+</section>
+{{- end}}
 {{- end}}
 {{- if eq .Tab "records"}}
 <section class="card" id="lease-record">

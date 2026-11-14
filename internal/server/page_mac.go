@@ -22,6 +22,7 @@ import (
 
 func init() {
 	addPage("GET /macs/{name}", web.SignedIn, (*Server).pMac)
+	addPage("POST /macs/{name}/hard-reset", web.MTeamUp, (*Server).pMacHardReset)
 }
 
 const (
@@ -68,6 +69,9 @@ type macFacts struct {
 	KnownGood, Kernel, Agent, LastSeen string
 	Reason                             string
 	Queued                             int
+	// Cable is a Lab-owned Mac's place on the lab server's cables, and
+	// NoHardReset why no Hard reset can reach it now.
+	Cable, NoHardReset string
 }
 
 type macJobRow struct {
@@ -92,6 +96,19 @@ type liveData struct {
 	Screen, ScreenAt string
 	Logs             string
 	Events           []recordShownLine
+	// Reset is the Hard reset of a Lab-owned Mac, for who may send one.
+	Reset *liveReset
+}
+
+type liveReset struct {
+	// Why is why the viewer can send none now; "" shows the button, which
+	// turns into Sentence.
+	Why, Sentence string
+}
+
+// hardResetSentence is what the Hard reset button turns into.
+func hardResetSentence(name string) string {
+	return "Hard reset: " + name + " is forced to restart now, whatever it is doing"
 }
 
 // whenDay is a time as a record says it, in Brisbane.
@@ -188,6 +205,9 @@ func (s *Server) renderMac(w http.ResponseWriter, r *http.Request, v *dev, tab s
 func (s *Server) macFacts(v *dev, d DeviceView) macFacts {
 	f := macFacts{Volunteers: d.IsVolunteer(), AccessLevel: "Full", KnownGood: d.KnownGood, Kernel: d.Kernel,
 		Agent: d.Facts.AgentVersion, Reason: d.StateReason, Queued: d.Queued}
+	if d.Cable != nil {
+		f.Cable, f.NoHardReset = d.Cable.String(), d.Cable.NoHardReset
+	}
 	if !d.LastSeen.IsZero() {
 		f.LastSeen = whenDay(d.LastSeen)
 	}
@@ -257,6 +277,12 @@ func (s *Server) macLive(r *http.Request, v *dev, d DeviceView, c caller, row ma
 	}
 	if kept := s.screens(d.Name); len(kept) > 0 {
 		live.Screen, live.ScreenAt = base+"/screens/"+url.PathEscape(kept[0].Name), whenDay(kept[0].Time)
+	}
+	if d.Cable != nil && !live.ViewOnly {
+		live.Reset = &liveReset{Why: d.Cable.NoHardReset, Sentence: hardResetSentence(d.Name)}
+		if err := s.fence(v, leaser(r), fenceReset); err != nil {
+			live.Reset.Why = err.Error()
+		}
 	}
 	if live.Logs == logsEvents {
 		events := v.eventsSince(s.now().Add(-24 * time.Hour))
@@ -328,4 +354,19 @@ func (s *Server) execRecordFor(v *dev, p Person) []recordShownLine {
 		out = append(out, recordShownLine{whenDay(e.Time), e.Line()})
 	}
 	return out
+}
+
+// pMacHardReset is the Hard reset button of a Lab-owned Mac's Live.
+func (s *Server) pMacHardReset(w http.ResponseWriter, r *http.Request) {
+	v := s.macOr404(w, r)
+	if v == nil {
+		return
+	}
+	name := v.snapshot().Name
+	if !s.sure(w, r, hardResetSentence(name), macPagePath(name, tabLive)) {
+		return
+	}
+	p := leaser(r)
+	_, err := s.hardResetBy(r.Context(), v, p, p.Handle)
+	s.backToMacs(w, r, err)
 }

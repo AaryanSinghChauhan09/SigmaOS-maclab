@@ -234,7 +234,7 @@ func TestAnMTeamMemberSeesLiveOnlyUnderTheirOwnLease(t *testing.T) {
 	lease := l.leaseOn("m1-pro")
 
 	page = grace.macPage("m1-pro", "live")
-	if got := cards(page); got != "live-screen live-logs" {
+	if got := cards(page); got != "live-screen live-logs live-reset" {
 		t.Fatalf("Live under the member's own Lease: %q", got)
 	}
 	live := part(t, page, "<div data-live", ">")
@@ -260,7 +260,7 @@ func TestAnMTeamMemberSeesLiveOnlyUnderTheirOwnLease(t *testing.T) {
 		t.Errorf("the fence under another's Lease: %s", fence)
 	}
 	// A Maintainer still looks.
-	if got := cards(ravi.macPage("m1-pro", "live")); got != "live-screen live-logs" {
+	if got := cards(ravi.macPage("m1-pro", "live")); got != "live-screen live-logs live-reset" {
 		t.Errorf("a Maintainer's Live under another's Lease: %q", got)
 	}
 

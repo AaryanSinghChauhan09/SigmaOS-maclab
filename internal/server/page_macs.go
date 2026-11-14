@@ -47,7 +47,10 @@ type macRow struct {
 	// Kind is whose Mac it is in words; Volunteer its Volunteer's handle,
 	// when the lab knows it.
 	Kind, Volunteer string
-	Configuration   string
+	// Cable is a Lab-owned Mac as sighted, not sighted or no cable, and
+	// NoHardReset why no Hard reset can reach it now.
+	Cable, NoHardReset string
+	Configuration      string
 	// CPU and GPU are the counts a Maintainer set, for the control.
 	CPU, GPU string
 	SetBy    string
@@ -118,6 +121,9 @@ func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string,
 
 func (s *Server) macRow(v *dev, d DeviceView, p Person, mine bool) macRow {
 	row := macRow{Name: d.Name, Kind: "Lab-owned", State: s.macState(v, d), Mine: mine}
+	if d.Cable != nil {
+		row.Cable, row.NoHardReset = d.Cable.State, d.Cable.NoHardReset
+	}
 	if d.IsVolunteer() {
 		row.Kind = "Volunteer's"
 		if volunteer, err := s.person(d.VolunteerID); err == nil {
