@@ -632,22 +632,51 @@ Reports carry new entries to labd, whose copy Maintainers read with `lab audit
 latest entries.
 
 An Installed run (`lab run <mac> --installed <manifest>`) is Qualification
-work: on a Volunteer's Mac only the Release's expected manifest is frozen
-beforehand (`lab installed freeze-manifest`), and its package files are
-uploaded (`lab upload`) so lab-agent can fetch them by sha256. The run takes
-the preinstall references from the Volunteer's own system (an omarchy-m-test
-run and the boot's kernel error lines, frozen and pinned in
-`PINS.preinstall`), then installs the Release through one named install
-operation: lab-agent fetches exactly the manifest's packages and installs
-them with `pacman -U`, as the Omarchy installer does. The Audit log records
-the install, with the Maintainer, the Release and the job, before it runs. A
-failed install ends the run before any Lab boot. The identity checks before,
-booted and after are lab-agent's own read-only collector, not a script, and
-identity-before freezes the installer's entry the Mac shows. A Mac at
+work, and it runs on Lab-owned Macs only. Until Rollback exists on real Macs
+labd refuses an Installed run on a Volunteer's Mac, and with it `lab
+installed freeze-entry` and `lab installed promote`, through `lab`, the site
+and a direct request; labd sends no Install operation to any Mac. Nothing on
+the Mac refuses one: only the server does. The identity checks before, booted
+and after are lab-agent's own read-only collector, not a script. A Mac at
 Qualification still refuses any script, even one named `identity-*`, and
-`lab exec`. Lab-owned Macs keep the hand-run flow: a Maintainer installs the
-Release, freezes the preinstall references and runs `lab installed
-freeze-entry`.
+`lab exec`.
+
+### Releases, verdicts and Promotion
+
+A Release is listed from the moment its manifest is frozen (`lab installed
+freeze-manifest`): its name, who froze it and when, its packages and its
+Macs, fixed at that moment. `lab installed list` shows every Release with its
+verdict; `lab installed status --release R` adds its Macs, their Installed
+runs, the verdict history and the frozen files.
+
+An M team member or a Maintainer freezes a manifest and a Mac's installer
+entry and runs Installed runs, each under their own Lease on that Mac.
+`lab installed freeze-entry <mac> --release R` is not an exec: labd has the
+Mac run the read-only identity check and freezes the entry it finds, with who
+froze it and when. It is refused without the caller's own Lease.
+
+A Release carries one of four states: no verdict, qualified, not qualified,
+revoked.
+
+```sh
+lab installed verdict --release 12.0 qualified --note "passed on j316s and j413"
+lab installed verdict --release 12.0 not-qualified --note "display stays dark on j314"
+lab installed verdict --release 12.0 --revoke --note "recorded against the wrong Release"
+```
+
+The first verdict is any M team member's; every later one (a change, a
+revoke, a new one after a revoke) is a Maintainer's. A note is required every
+time. "qualified" with no passed Installed run of the Release is refused;
+everything else is a warning in the sentence `lab` shows and asks about once
+(`--yes` answers it). Every verdict stays in the history with who, when and
+the note. Nothing changes by itself: an Installed run that fails later adds a
+warning to the Release.
+
+Promotion (`lab installed promote <mac> --release R --job <id>`, Maintainers)
+does not wait for the verdict: it needs that Mac's own passed Installed run
+of the Release, and its sentence says so when the Release is not qualified or
+its Qualification was revoked. Revoking undoes nothing: a Mac already
+promoted stays promoted, marked "promoted from a revoked Release".
 
 ### Leaving
 
@@ -1212,9 +1241,9 @@ emergency mode.
 - The serial console from an M3 host. A USB 2.0 cable (no SBU wires) carried no serial data either
   way, so it is still open whether serial mode works from an M3 host with a SuperSpeed cable. Reset
   needs only CC.
-- The named install operation (`pacman -U` of the Release's packages) and
-  omarchy-m-test's preinstall run on a Volunteer's own, possibly locked,
-  session.
+- `lab installed freeze-entry` on a real Mac: the identity check sent outside
+  a job, and its observation coming back. labd sends no Install operation, so
+  lab-agent's install path stays unproven on hardware.
 - Whether `apple_wdt` can be armed before the kernel starts (m1n1/U-Boot).
   If it can, tier 1 would also cover early-boot hangs.
 
