@@ -1,0 +1,61 @@
+{{define "main"}}{{with .Data}}<p class="dim"><a href="{{href "/jobs"}}">Jobs</a> /</p>
+<h1>Boot a kernel</h1>
+<p class="subtitle">Stage, boot once, test, restore. The job appears under Jobs.</p>
+{{if .Flash}}<p class="flash flash-alert" role="alert">{{.Flash}}</p>
+{{end}}<section class="card narrow">
+<h2 class="card-title">boot a kernel</h2>
+{{if .NotOffered}}<p class="job-warn">{{.NotOffered}}</p>
+{{end}}{{if not .Macs}}{{if .Maintainer}}<p><b>No Mac takes a job now.</b> Each is leased, outside its Availability window or has not passed its baseline.</p>
+{{else}}<p><b>You hold no Lease.</b> Lease a Mac first: a job runs only on a Mac you hold.</p>
+{{end}}<p><a class="button button-small" href="{{href "/macs"}}">Macs</a></p>
+{{else}}<form class="boot" method="post" action="{{href "/boot"}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">
+<fieldset>
+<legend>Mac <span class="dim">{{if .Maintainer}}free, or leased by you{{else}}those you lease{{end}}</span></legend>
+<select name="mac">
+{{range .Macs}}<option value="{{.Name}}"{{if .Chosen}} selected{{end}}>{{.Name}} · {{.About}}</option>
+{{end}}</select>
+</fieldset>
+<fieldset>
+<legend>Kernel</legend>
+<label><input type="radio" name="kernel" value="artifact"{{if eq .Kernel "artifact"}} checked{{end}}> An uploaded artifact, by its sha256</label>
+<input type="text" name="sha" value="{{.SHA}}" placeholder="sha256 of an uploaded artifact" spellcheck="false" autocomplete="off">
+<p class="dim">A kernel tarball from <code>lab pack</code>, or a linux-*.pkg.tar.zst as it is. <code>lab upload FILE{{if not .Maintainer}} --for MAC{{end}}</code> uploads it and prints its sha256.</p>
+<label><input type="radio" name="kernel" value="current"{{if eq .Kernel "current"}} checked{{end}}> The current kernel</label>
+<p class="dim">Restarts once into a lab entry on the Known-good kernel: for trying kernel arguments.</p>
+{{if .Maintainer}}<label><input type="radio" name="kernel" value="source"{{if eq .Kernel "source"}} checked{{end}}> Build from GitHub</label>
+<input type="text" name="source" value="{{.Source}}" placeholder="https://github.com/owner/repo/tree/branch · /commit/sha · /pull/N" spellcheck="false" autocomplete="off">
+<p class="dim">Built on the lab's Builder with this Mac's own config, then booted. An identical build is reused.</p>
+{{else}}<p class="dim">Build from GitHub: {{.BuildsClosed}}.</p>
+{{end}}</fieldset>
+<fieldset>
+<legend>Extra kernel arguments</legend>
+<input type="text" name="cmdline" value="{{.Cmdline}}" placeholder="nvme_apple.flush_interval=0" spellcheck="false" autocomplete="off">
+<p class="dim">Added to the Known-good kernel's arguments.</p>
+</fieldset>
+<fieldset>
+<legend>Tests</legend>
+<label><input type="checkbox" checked disabled> boot-health <span class="dim">always: systemd state, failed units, kernel errors, boot time</span></label>
+{{range .Offered}}<label><input type="checkbox" name="test" value="{{.Name}}"{{if .Checked}} checked{{end}}> {{.Name}} <span class="dim">{{.About}}</span></label>
+{{end}}</fieldset>
+<fieldset>
+<legend>Your own scripts</legend>
+<textarea name="scripts" rows="3" placeholder="name sha256" spellcheck="false">{{.Scripts}}</textarea>
+<p class="dim">One line each: a name, then the sha256 <code>lab upload</code> printed for the script. A script writes what it keeps to <code>$MACLAB_OUT</code>. On a Volunteer's Mac only at Access level Full.</p>
+<label><input type="checkbox" name="scripts_gui"{{if .ScriptsGUI}} checked{{end}}> Run them in the GUI session <span class="dim">as the Mac's GUI user, inside Hyprland</span></label>
+</fieldset>
+<fieldset>
+<legend>Boot timeout</legend>
+<p><input type="text" name="timeout" value="{{.Timeout}}" inputmode="numeric" size="5" autocomplete="off"> s</p>
+</fieldset>
+<p class="boot-actions"><button class="button" type="submit">Boot it</button>{{if .Maintainer}} <button class="button button-danger button-small" type="submit" name="crash" value="panic" data-sentence="{{.CrashSentence}}">Crash test</button>{{end}}</p>
+</form>
+{{end}}</section>
+<section class="card narrow">
+<h2 class="card-title">artifacts and agents</h2>
+<p class="dim">A kernel artifact is a tarball with one <code>usr/lib/modules/&lt;release&gt;/</code>. The same from a terminal or an agent:</p>
+<pre class="command"><span class="prompt">$ </span>lab pack --build ~/aurora-build/…/build/base
+<span class="prompt">$ </span>lab run {{.GuideMac}} --kernel kernel-7.2.0-lab1.tar.zst --gui-test gui-smoke
+<span class="prompt">$ </span>lab mcp</pre>
+<p class="dim"><code>lab run</code> uploads the file and waits for the job. <code>lab mcp</code> gives an agent the same commands as tools.</p>
+</section>
+{{end}}{{end}}
