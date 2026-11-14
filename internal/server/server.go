@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/installer"
@@ -159,8 +160,14 @@ type Server struct {
 	uploads   *reports.Uploads
 	catalogue *reports.Catalogue
 	// installScript and installLabScript are what /install and
-	// /install/lab serve (install_line.go).
+	// /install/lab serve while the lab is in Preview (install_line.go);
+	// installOpen and installLabOpen are what they serve once it is not.
 	installScript, installLabScript []byte
+	installOpen, installLabOpen     []byte
+	// openedAt is when the lab opened, in microseconds; 0 while it has
+	// not (opening.go). opening lets one opening run at a time.
+	openedAt atomic.Int64
+	opening  sync.Mutex
 	// macOSReference gives a board's macOS numbers; nil is the catalogue's.
 	macOSReference func(board string) *reports.MacOSReference
 	log            *log.Logger
@@ -311,6 +318,16 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	open := cfg
+	open.Preview = false
+	installOpen, err := installScript(open, installer.Script)
+	if err != nil {
+		return nil, err
+	}
+	installLabOpen, err := installScript(open, installer.LabScript)
+	if err != nil {
+		return nil, err
+	}
 	var rules *reports.Rules
 	if cfg.MachineIDKey != nil {
 		if rules, err = reports.NewRules(cfg.MachineIDKey); err != nil {
@@ -330,8 +347,20 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		st.db.Close()
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, installScript: installLine, installLabScript: installLabLine, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, cancelWhy: map[string]string{}, callers: callers}
+	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, installScript: installLine, installLabScript: installLabLine, installOpen: installOpen, installLabOpen: installLabOpen, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, cancelWhy: map[string]string{}, callers: callers}
 	s.start = s.now()
+	opened, err := st.liveAt()
+	if err != nil {
+		st.db.Close()
+		rep.Close()
+		return nil, err
+	}
+	if !opened.IsZero() {
+		s.openedAt.Store(opened.UnixMicro())
+		if cfg.Preview {
+			logger.Printf("the lab is Live, opened %s: --preview is not obeyed, and nothing closes an open lab", opened.In(brisbane).Format("2006-01-02 15:04 MST"))
+		}
+	}
 	s.cables = newCables(cfg.OOB)
 	s.lines = newGroupLines(st, s.clock(), logger, cfg.Signal, cfg.SignalDir)
 	s.labGroup = labGroupLines{l: s.lines, link: s.pageAddress}

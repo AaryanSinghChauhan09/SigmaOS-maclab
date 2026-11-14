@@ -57,12 +57,21 @@ func installScript(cfg Config, script []byte) ([]byte, error) {
 
 // hInstall is GET /install, the test tool's install line.
 func (s *Server) hInstall(w http.ResponseWriter, r *http.Request) {
-	serveInstall(w, r, "install.sh", s.installScript)
+	serveInstall(w, r, "install.sh", s.served(s.installScript, s.installOpen))
 }
 
 // hInstallLab is GET /install/lab, lab's install line.
 func (s *Server) hInstallLab(w http.ResponseWriter, r *http.Request) {
-	serveInstall(w, r, "install-lab.sh", s.installLabScript)
+	serveInstall(w, r, "install-lab.sh", s.served(s.installLabScript, s.installLabOpen))
+}
+
+// served is the form of an install script for the lab as it is now: from
+// the opening on, the one that takes the latest Lab release.
+func (s *Server) served(preview, open []byte) []byte {
+	if s.Preview() {
+		return preview
+	}
+	return open
 }
 
 func serveInstall(w http.ResponseWriter, r *http.Request, name string, script []byte) {

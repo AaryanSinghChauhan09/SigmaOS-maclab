@@ -198,8 +198,9 @@ func (s *Server) labName(r *http.Request) string {
 
 // Preview reports whether the lab is in Preview: answering at the Lab
 // address, closed, before it opens. It is the one switch for everything
-// Preview changes.
-func (s *Server) Preview() bool { return s.cfg.Preview }
+// Preview changes. Once the lab has opened (opening.go) it is never in Preview
+// again, whatever labd was started with.
+func (s *Server) Preview() bool { return s.cfg.Preview && s.openedAt.Load() == 0 }
 
 // asked is which of labd's names a request asked for.
 type asked int

@@ -2,7 +2,8 @@
 // command run on the server itself that mints a Lab token for a named
 // person (breakglass.go). `labd import` carries the old site's reports into
 // the lab (import.go). `labd old-lab` upgrades the old lab's data directory
-// (oldlab.go).
+// (oldlab.go). `labd stage` says whether a data directory's lab has opened
+// (stage.go).
 package main
 
 import (
@@ -32,6 +33,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "old-lab" {
 		os.Exit(runOldLab(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "stage" {
+		os.Exit(stage(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	home, _ := os.UserHomeDir()
 	listen := flag.String("listen", envOr("MACLAB_LISTEN", "127.0.0.1:7770"), "the loopback port, for callers on this machine (the Builder, the Out-of-band controller's client side, break-glass): it believes nothing a caller forwards, and labd listens on no other network address")
@@ -191,7 +195,7 @@ func main() {
 		where += " and the tunnel's socket " + *socket
 	}
 	switch {
-	case pub != nil && *preview:
+	case pub != nil && s.Preview():
 		log.Printf("labd listening on %s, served as %s, in Preview, data in %s", where, pub, *data)
 	case pub != nil:
 		log.Printf("labd listening on %s, served as %s, data in %s", where, pub, *data)
@@ -207,7 +211,7 @@ func main() {
 		log.Printf("sign-in with GitHub is on; %d Admin(s) named in %s", len(admins), filepath.Join(*signIn, "admins"))
 	}
 	switch {
-	case *preview:
+	case s.Preview():
 		log.Printf("reports are refused: the lab is in Preview")
 	case idKey == nil:
 		log.Printf("reports are refused: no machine-id key (--machine-id-key <file>)")

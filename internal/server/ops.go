@@ -51,6 +51,12 @@ func (s *Server) OpsServer() *http.Server {
 //	GET /parts                    "builder ok|silent|none" and
 //	                              "controller ok|bad|none"
 //
+//	POST /open?m-team=N           the opening (opening.go): N is how many M
+//	                              team members are marked; "live <time>"
+//	GET /stage                    "preview", "live <time>", or "open" for a
+//	                              labd that never was in Preview
+//	POST /summary                 the daily summary for the Lab group, now
+//
 // The answer to a line says whether it was recorded.
 func (s *Server) OpsHandler() http.Handler {
 	m := http.NewServeMux()
@@ -83,6 +89,12 @@ func (s *Server) OpsHandler() http.Handler {
 	m.HandleFunc("POST /drain", s.opsDrain)
 	m.HandleFunc("DELETE /drain", s.opsLift)
 	m.HandleFunc("GET /parts", s.opsParts)
+	m.HandleFunc("POST /open", s.opsOpen)
+	m.HandleFunc("GET /stage", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, s.stage()+"\n") })
+	m.HandleFunc("POST /summary", func(w http.ResponseWriter, r *http.Request) {
+		s.postDailySummary(s.now())
+		io.WriteString(w, "recorded\n")
+	})
 	return m
 }
 

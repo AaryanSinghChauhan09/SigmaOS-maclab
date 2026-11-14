@@ -13,6 +13,10 @@ func init() {
 }
 
 type homePage struct {
+	// MovedHere puts the banner naming the old site on the page: for 30
+	// days from the lab's opening.
+	MovedHere  bool
+	OldSite    string
 	InstallURL string
 	Empty      bool
 	Matrix     matrixView
@@ -27,7 +31,7 @@ func (s *Server) pHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	matrix := p.Matrix(reports.ByModel, nil)
-	s.render(w, r, "home", web.Page{Data: homePage{InstallURL: s.publicBase(r) + "/install", Empty: matrix.Empty(),
+	s.render(w, r, "home", web.Page{Data: homePage{MovedHere: s.movedHere(), OldSite: oldSite, InstallURL: s.publicBase(r) + "/install", Empty: matrix.Empty(),
 		Matrix: s.matrixTable(matrix, p.Matrix(reports.ByBuild, nil).History()), Legend: legend()}})
 }
 

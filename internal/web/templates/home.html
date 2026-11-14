@@ -1,6 +1,7 @@
 {{define "head"}}{{template "results_scripts" .}}{{template "model_scripts" .}}{{end}}
 
-{{define "main"}}<section class="hero">
+{{define "main"}}{{with .Data}}{{if .MovedHere}}<p class="preview-banner moved-here" role="status">{{.OldSite}} is now here. Old links still work.</p>
+{{end}}{{end}}<section class="hero">
 <img class="hero-logo" src="{{asset "omarchy-logo.svg"}}" alt="Omarchy" width="96" height="96">
 <div>
 <h1>Omarchy Mac Lab</h1>
