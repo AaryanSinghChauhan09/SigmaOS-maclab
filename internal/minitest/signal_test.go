@@ -105,10 +105,9 @@ func TestTheSendersLaunchDaemon(t *testing.T) {
 	}
 }
 
-// withSender gives the made-up machine's bundle the sender's files.
+// withSender has the made-up machine's set-up install the sender.
 func (m *mini) withSender() {
 	m.t.Helper()
-	write(m.t, m.tree+"/deploy/"+signalLabel+".plist", read(m.t, filepath.Join(repo(m.t), "deploy", signalLabel+".plist")), 0o644)
 	write(m.t, m.tree+"/deploy/homebrew-formulae", "signal-cli\n", 0o644)
 }
 

@@ -197,6 +197,7 @@ func newMini(t *testing.T) *mini {
 	write(t, m.tree+"/deploy/"+oobdLabel+".plist", read(t, filepath.Join(repo(t), "deploy", oobdLabel+".plist")), 0o644)
 	write(t, m.tree+"/deploy/homebrew-formulae", "# none\n", 0o644)
 	write(t, m.tree+"/deploy/"+cloudflaredLabel+".plist", read(t, filepath.Join(repo(t), "deploy", cloudflaredLabel+".plist")), 0o644)
+	write(t, m.tree+"/deploy/"+signalLabel+".plist", read(t, filepath.Join(repo(t), "deploy", signalLabel+".plist")), 0o644)
 	write(t, m.tree+"/deploy/pins", "# none\n", 0o644)
 	m.env = append(os.Environ(),
 		"LAB_SYSROOT="+m.root,
