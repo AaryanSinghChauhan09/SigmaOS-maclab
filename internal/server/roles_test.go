@@ -899,3 +899,26 @@ func TestBlockedEndsLabTokensAndLabIsToldTheSentence(t *testing.T) {
 		t.Errorf("Unblock gave %d Lab tokens back", n)
 	}
 }
+
+// A handle one account left and another took reads the same on two rows
+// until the first signs in again: People tells the two accounts apart.
+func TestPeopleTellsApartTwoAccountsUnderOneHandle(t *testing.T) {
+	l := rolesLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	l.gh.AddUser(edithID, "edith-lovelace")
+	l.gh.AddUser(graceID, "edith")
+	ravi.did("/people/mark", "handle", "edith", "as", "m-team")
+	if p := l.who(graceID); !p.MTeam || l.who(edithID).MTeam {
+		t.Fatalf("the mark went to the account that left the handle: %+v", p)
+	}
+	page := ravi.do("GET", "/people", "").Body.String()
+	for id, want := range map[int64]string{edithID: "account 7<", graceID: "account 8<"} {
+		if row := part(t, page, fmt.Sprintf(`id="person-%d"`, id), `</tr>`); !strings.Contains(row, "@edith<") || !strings.Contains(row, want) {
+			t.Errorf("the row of account %d does not say which account it is:\n%s", id, row)
+		}
+	}
+	if row := part(t, page, `id="person-3003"`, `</tr>`); strings.Contains(row, "account 3003") {
+		t.Error("a handle only one account goes by is shown with its account id")
+	}
+}

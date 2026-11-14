@@ -21,7 +21,7 @@
 <thead><tr><th>Person</th><th>Kind</th><th>Their Macs</th><th>Leases held</th><th>Signed in for Verified runs</th><th>Last seen</th></tr></thead>
 <tbody>
 {{range $row := .Rows}}<tr class="person-row{{if .Open}} open{{end}}" id="person-{{.AccountID}}">
-<td data-label="Person" class="nowrap"><a class="person-toggle" href="{{href .Path}}" aria-expanded="{{if .Open}}true{{else}}false{{end}}">{{if .Open}}▾{{else}}▸{{end}} <b>@{{.Handle}}</b></a>{{if .You}} <span class="you">you</span>{{end}}</td>
+<td data-label="Person" class="nowrap"><a class="person-toggle" href="{{href .Path}}" aria-expanded="{{if .Open}}true{{else}}false{{end}}">{{if .Open}}▾{{else}}▸{{end}} <b>@{{.Handle}}</b></a>{{if .You}} <span class="you">you</span>{{end}}{{if .Twin}} <span class="dim" title="Two accounts go by this handle here: one was renamed and has not signed in since">account {{.AccountID}}</span>{{end}}</td>
 <td data-label="Kind"><span class="badge {{.BadgeClass}}">{{.Badge}}</span></td>
 <td data-label="Their Macs">{{template "names" .Macs}}</td>
 <td data-label="Leases held">{{template "names" .Leases}}</td>

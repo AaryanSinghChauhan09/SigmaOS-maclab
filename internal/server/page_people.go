@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/web"
@@ -51,7 +52,10 @@ type peopleChip struct {
 
 type personRow struct {
 	knownPerson
-	You        bool
+	You bool
+	// Twin marks a handle the lab keeps for more than one account, as it
+	// does after a rename until the account that left it signs in again.
+	Twin       bool
 	Badge      string
 	BadgeClass string
 	Macs       []string
@@ -132,16 +136,17 @@ func (s *Server) showPeople(w http.ResponseWriter, r *http.Request, status int, 
 	for _, c := range peopleKinds {
 		page.Chips = append(page.Chips, peopleChip{c.label, "/people?kind=" + c.id, counts[c.id], kind == c.id})
 	}
-	handles := map[int64]string{}
+	handles, called := map[int64]string{}, map[string]int{}
 	for _, k := range people {
 		handles[k.AccountID] = k.Handle
+		called[strings.ToLower(k.Handle)]++
 	}
 	for _, k := range people {
 		id := strconv.FormatInt(k.AccountID, 10)
 		if kind != "" && kindID(k) != kind && id != open {
 			continue
 		}
-		row := personRow{knownPerson: k, You: k.AccountID == me.AccountID, Badge: k.Role().Badge(), BadgeClass: k.Role().BadgeClass(),
+		row := personRow{knownPerson: k, You: k.AccountID == me.AccountID, Twin: called[strings.ToLower(k.Handle)] > 1, Badge: k.Role().Badge(), BadgeClass: k.Role().BadgeClass(),
 			Macs: s.macsLentBy(k.AccountID), Leases: s.leasesHeldBy(k.Handle), Seen: "not signed in yet"}
 		if k.Blocked {
 			row.Badge, row.BadgeClass = "Blocked", "kind-blocked"
