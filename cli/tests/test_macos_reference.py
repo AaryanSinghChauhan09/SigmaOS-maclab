@@ -71,7 +71,7 @@ class ProblemsTest(unittest.TestCase):
                 self.assertTrue(self.broken(**change))
 
     def test_it_refuses_anything_private(self):
-        self.assertTrue(self.broken(conditions={"power": "ac", "brightness": "/Users/maralc", "displays": 1}))
+        self.assertTrue(self.broken(conditions={"power": "ac", "brightness": "/Users/owner", "displays": 1}))
 
     def test_a_file_that_isnt_sound_is_treated_as_absent(self):
         real = bundled.macos_reference_text
