@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -203,6 +204,27 @@ func TestOnlyAGoodAnswerToAReadIsKept(t *testing.T) {
 		t.Errorf("GET %s with the store closed: %d, want 500", report, w.Code)
 	}
 	neverKept(t, "GET "+report+" failing", w, "no-store")
+}
+
+// A deletion link's pages are a secret's own: never kept, with the right
+// secret too, and neither is the answer to the confirmation.
+func TestADeletionLinkIsNeverKept(t *testing.T) {
+	l := newCacheLab(t, nil)
+	got := l.reportsLab.upload("m2-max-image2")
+	w := l.do("GET", pathOf(t, got.DeletionURL), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("the deletion link: %d %s", w.Code, w.Body)
+	}
+	neverKept(t, "the deletion link", w, "no-store")
+	if !kept(t, "the report", l.do("GET", pathOf(t, got.ReportURL), "")) {
+		t.Error("the report's own page may not be kept")
+	}
+	body := url.Values{"_method": {"delete"}, "token": {got.token(t)}}.Encode()
+	w = l.do("POST", pathOf(t, got.ReportURL), body, "Content-Type", "application/x-www-form-urlencoded")
+	if w.Code != http.StatusOK {
+		t.Fatalf("the confirmation: %d %s", w.Code, w.Body)
+	}
+	neverKept(t, "the confirmation, sent", w, "no-store")
 }
 
 // net/http takes Cache-Control off a file it could not serve; the answer
