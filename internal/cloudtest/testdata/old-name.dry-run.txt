@@ -1,0 +1,23 @@
+old-name.sh: a dry run. These are the calls --apply makes; nothing is sent.
+
+the zone omarchy-m-testing.org, in the lab's account
+  GET /zones?name=omarchy-m-testing.org
+  POST /zones {"name":"omarchy-m-testing.org","type":"full","account":{"id":"<CLOUDFLARE_ACCOUNT_ID>"}}
+the records the registrar serves today, from Porkbun
+  POST https://api.porkbun.com/api/json/v3/dns/retrieve/omarchy-m-testing.org {}
+each of them, when the zone lacks it; the apex and www proxied
+  GET /zones/{zone}/dns_records?per_page=500
+  POST /zones/{zone}/dns_records {"type":"<TYPE>","name":"<NAME>","content":"<CONTENT>","ttl":1}
+checked: the zone is active and its certificate issued
+  GET /zones/{zone}/ssl/certificate_packs?status=active
+old-name.sh: a dry run. These are the calls --apply makes; nothing is sent.
+
+the one redirect rule of omarchy-m-testing.org
+  GET /zones?name=omarchy-m-testing.org
+  GET /zones/{zone}/rulesets/phases/http_request_dynamic_redirect/entrypoint
+  PUT /zones/{zone}/rulesets/phases/http_request_dynamic_redirect/entrypoint {"rules":[{"description":"omarchy-m-testing.org is now lab.omarchy-mac.org: everything, path and query kept","expression":"(http.host eq \"omarchy-m-testing.org\" or http.host eq \"www.omarchy-m-testing.org\")","action":"redirect","action_parameters":{"from_value":{"status_code":308,"target_url":{"expression":"concat(\"https://lab.omarchy-mac.org\", http.request.uri.path)"},"preserve_query_string":true}},"enabled":true}]}
+old-name.sh: a dry run. These are the calls --apply makes; nothing is sent.
+
+checked, the owner's to set: DNSSEC on omarchy-m-testing.org
+  GET /zones?name=omarchy-m-testing.org
+  GET /zones/{zone}/dnssec

@@ -23,6 +23,8 @@ SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ME="$(basename "$0")"
 LAB_DOMAIN="omarchy-mac.org"
 LAB_HOST="lab.$LAB_DOMAIN"
+# The old site's name: from the lab's opening a redirect and nothing else.
+OLD_DOMAIN="omarchy-m-testing.org"
 DOMAIN="${DOMAIN:-$LAB_DOMAIN}"
 USER_AGENT="omarchy-mac-lab-scripts"
 KEYCHAIN_SERVICE="${KEYCHAIN_SERVICE:-omarchy-mac-lab}"

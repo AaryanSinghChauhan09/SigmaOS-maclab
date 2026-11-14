@@ -1,0 +1,5 @@
+purge-cache.sh: a dry run. These are the calls --apply makes; nothing is sent.
+
+everything the edge keeps for omarchy-mac.org
+  GET /zones?name=omarchy-mac.org
+  POST /zones/{zone}/purge_cache {"purge_everything":true}

@@ -11,9 +11,13 @@ import (
 
 // The scripts that run, and lib.sh, which they share.
 var runnable = []string{
-	"alias.sh", "cloudflare-zone.sh", "nameservers.sh", "owner-setup.sh", "register-domain.sh",
+	"alias.sh", "cloudflare-zone.sh", "nameservers.sh", "owner-setup.sh", "purge-cache.sh", "register-domain.sh",
 	"rehearsal-record.sh", "tunnel.sh", "verify-delegation.sh", "zone-settings.sh",
 }
+
+// old-name.sh runs the three ways too, for the part of the old name it is
+// told: its dry runs are in oldname_test.go.
+var checked = append([]string{"old-name.sh"}, runnable...)
 
 func source(t *testing.T, name string) string {
 	t.Helper()
@@ -33,7 +37,7 @@ func TestTheCloudFolderHoldsTheseScripts(t *testing.T) {
 	for _, e := range entries {
 		got = append(got, e.Name())
 	}
-	want := "alias.sh cloudflare-zone.sh edge.json lab.env.example lib.sh nameservers.sh owner-setup.sh register-domain.sh rehearsal-record.sh tunnel.sh verify-delegation.sh zone-settings.sh"
+	want := "alias.sh cloudflare-zone.sh edge.json lab.env.example lib.sh nameservers.sh old-name.sh owner-setup.sh purge-cache.sh register-domain.sh rehearsal-record.sh tunnel.sh verify-delegation.sh zone-settings.sh"
 	if strings.Join(got, " ") != want {
 		t.Errorf("scripts/cloud holds %s\nwant %s", strings.Join(got, " "), want)
 	}
@@ -41,7 +45,7 @@ func TestTheCloudFolderHoldsTheseScripts(t *testing.T) {
 
 func TestTheCloudScriptsParseAndPassShellcheck(t *testing.T) {
 	var files []string
-	for _, name := range append([]string{"lib.sh"}, runnable...) {
+	for _, name := range append([]string{"lib.sh"}, checked...) {
 		file := filepath.Join(repo(t), "scripts", "cloud", name)
 		files = append(files, file)
 		// macOS's own bash is 3.2, and is what /bin/bash is there.
@@ -134,7 +138,7 @@ func TestTheZoneScriptsDryRunCoversEdgeJSON(t *testing.T) {
 }
 
 func TestEveryCloudScriptRunsTheThreeWays(t *testing.T) {
-	for _, name := range runnable {
+	for _, name := range checked {
 		text := source(t, name)
 		for _, want := range []string{"--check", "$MODE == dry-run", "parse_mode \"$@\"", "send nothing"} {
 			if !strings.Contains(text, want) {
@@ -191,7 +195,7 @@ func TestTheTokenIsNotPrintedWhenTraced(t *testing.T) {
 // read from a pipe, and curl is run only by lib.sh.
 func TestTheTokenReachesCurlOnlyThroughAPipe(t *testing.T) {
 	header := regexp.MustCompile(`(?i)-H\s+["']?authorization`)
-	for _, name := range append([]string{"lib.sh"}, runnable...) {
+	for _, name := range append([]string{"lib.sh"}, checked...) {
 		for n, line := range strings.Split(source(t, name), "\n") {
 			code := line
 			if i := strings.Index(code, "#"); i == 0 {

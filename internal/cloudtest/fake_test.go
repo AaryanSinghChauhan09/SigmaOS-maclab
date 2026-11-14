@@ -125,7 +125,10 @@ type fake struct {
 	fallback  map[string]any   // the zone's fallback origin; nil when none is set
 	hostnames []map[string]any // the zone's custom hostnames
 	noSaaS    bool             // Cloudflare for SaaS is not enabled on the zone
-	broken    string           // a path that answers with a web error page
+	old       *oldZone         // omarchy-m-testing.org's zone; nil while the account has none
+	porkbun   []map[string]any
+	purges    []string
+	broken    string // a path that answers with a web error page
 	seq       int
 }
 
@@ -243,6 +246,10 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "<html><body><h1>502 Bad Gateway</h1>cloudflare, a whole page of it</body></html>")
 		return
 	}
+	if strings.HasPrefix(path, "/porkbun/") {
+		f.registrar(w, r, strings.TrimPrefix(path, "/porkbun/"))
+		return
+	}
 	if r.Header.Get("Authorization") != "Bearer "+f.token {
 		f.refuse(w, http.StatusForbidden, 10000, "Authentication error")
 		return
@@ -256,6 +263,24 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	switch {
+	case path == "/zones" && r.Method == "GET" && q.Get("name") == oldDomain:
+		if f.old == nil {
+			f.ok(w, []any{})
+			return
+		}
+		f.ok(w, []any{f.old.zone()})
+	case path == "/zones" && r.Method == "POST":
+		if in["name"] != oldDomain || in["type"] != "full" || in["account"].(map[string]any)["id"] != accountID || f.old != nil {
+			f.refuse(w, http.StatusBadRequest, 1061, "the zone cannot be made")
+			return
+		}
+		f.old = &oldZone{status: "pending"}
+		f.ok(w, f.old.zone())
+	case f.old != nil && strings.HasPrefix(path, "/zones/"+oldZoneID+"/"):
+		f.oldName(w, r, strings.TrimPrefix(path, "/zones/"+oldZoneID+"/"), in)
+	case path == "/zones/"+zoneID+"/purge_cache" && r.Method == "POST":
+		f.purges = append(f.purges, string(body))
+		f.ok(w, map[string]any{"id": zoneID})
 	case path == "/zones" && r.Method == "GET":
 		if f.noZone || q.Get("name") != labDomain {
 			f.ok(w, []any{})
