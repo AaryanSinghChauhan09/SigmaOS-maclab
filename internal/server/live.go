@@ -156,7 +156,10 @@ func (v *dev) viewLocked() DeviceView {
 	if p := d.SitePause; p != nil && !p.Active(v.s.now()) {
 		d.SitePause = nil // its time has passed
 	}
-	return DeviceView{Device: d, Tier: tier, Alive: v.aliveLocked(), Queued: len(v.queue) + len(v.parked), ScreenAt: v.screenAt, Cable: cable, Arrival: v.arrivalLocked()}
+	// labd's own note of which lab-agent the Volunteer was told of.
+	d.UpdateNoticed = ""
+	return DeviceView{Device: d, Tier: tier, Alive: v.aliveLocked(), Queued: len(v.queue) + len(v.parked), ScreenAt: v.screenAt, Cable: cable, Arrival: v.arrivalLocked(),
+		LabAgent: v.s.agentBehind(d)}
 }
 
 // publishLocked sends the device to the web UI, which adds a device it

@@ -44,8 +44,11 @@ type lab struct {
 	secret string // its device secret
 	ctx    context.Context
 	agent  *agent.Config // the simulated Mac's enrolled lab-agent
-	logs   *logBuf
-	hc     *http.Client // the harness's client for labd; nil is apiClient
+	// stopAgent stops the simulated Mac's lab-agent, as stopping
+	// lab-agent.service does.
+	stopAgent context.CancelFunc
+	logs      *logBuf
+	hc        *http.Client // the harness's client for labd; nil is apiClient
 	// changeReport edits the next reports the simulated Mac signs (labConfig.reports).
 	changeReport atomic.Pointer[func(map[string]any)]
 }
@@ -129,6 +132,8 @@ type labConfig struct {
 	// of its public URL. Either sets --public-url.
 	tls    *testpki.CA
 	prefix string
+	// agent adjusts the simulated Mac's lab-agent before it starts.
+	agent func(*agent.Config)
 }
 
 func newLabWith(t *testing.T, c labConfig) *lab {
@@ -239,8 +244,13 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	no := false
 	l.agent = &agent.Config{Server: l.url, DeviceID: resp.DeviceID, Name: resp.Name, Secret: resp.Secret, WorkDir: t.TempDir(), Clock: clock,
 		ServerCA: string(policy.CAPEM), AllowPlainHTTP: &no}
+	if c.agent != nil {
+		c.agent(l.agent)
+	}
 	a := agent.New(l.agent, sim, logger)
-	go a.Run(ctx)
+	actx, stop := context.WithCancel(ctx)
+	l.stopAgent = stop
+	go a.Run(actx)
 	if withOOB {
 		l.oob.plug(portRight, sim, name, productM1Pro)
 		l.sight()

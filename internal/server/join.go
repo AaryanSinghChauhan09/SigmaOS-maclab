@@ -6,7 +6,8 @@ package server
 // Mac. It downloads lab-agent with the enrollment token
 // (GET /api/join/lab-agent), which tests the token before anything changes:
 // a refusal is said once, by its case, and nothing is tried again. It checks
-// the download's sha256 against the one written into it, and runs
+// the download's sha256 against the one written into it and, in a Lab
+// release, its signature against the release key written into it, and runs
 // `sudo lab-agent setup`, the token going to it on stdin. Setup runs its
 // pre-checks, which reach no lab, then shows the lab's terms
 // (GET /api/join/terms), which the owner accepts by typing yes. Only then
@@ -29,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/web"
 )
@@ -154,6 +156,7 @@ const (
 	joinSaysTooMany    = "Too many refused attempts from this network: wait 15 minutes, then make a new Join command."
 	joinSaysChallenged = "The front door of the lab challenged this request instead of answering it: try again later or from another network."
 	joinSaysOther      = "The lab did not answer as expected"
+	joinSaysUnsigned   = "The lab-agent that came is not signed by the release key of Omarchy Mac Lab (or ssh-keygen is missing). Nothing was run."
 )
 
 // joinCommand is the one line that joins a Mac with token, "" when labd has
@@ -170,6 +173,22 @@ func (s *Server) joinCommand(r *http.Request, token string) string {
 	if !strings.HasPrefix(base, "https://") {
 		curl, plain = "curl -sS", " --allow-plain-http"
 	}
+	// With a signature beside the agent, as in a Lab release, the line
+	// checks it against the release key written here. A labd built as a
+	// Lab release never goes without; a build from a checkout has none.
+	signed := ""
+	if _, ok := s.agentSig(); ok {
+		key := s.releaseKey()
+		if !reReleaseKey.MatchString(key) {
+			return ""
+		}
+		signed = "printf 'Authorization: Bearer %s\\n' \"$T\" | " + curl + " -f -A lab-join -H @- -o \"$D/lab-agent.sig\" \"$U/api/join/lab-agent.sig\" && " +
+			"printf '%s\\n' '" + agent.ReleaseSigner + " namespaces=\"" + agent.ReleaseNamespace + "\" " + key + "' > \"$D/signers\" && " +
+			"{ ssh-keygen -Y verify -f \"$D/signers\" -I '" + agent.ReleaseSigner + "' -n '" + agent.ReleaseNamespace + "' -s \"$D/lab-agent.sig\" < \"$D/lab-agent\" >/dev/null 2>&1 || " +
+			"{ echo '" + joinSaysUnsigned + "' >&2; false; }; } && "
+	} else if reLabRelease.MatchString(s.cfg.Release) {
+		return ""
+	}
 	// The token is in no process's arguments: printf is the shell's own, and
 	// curl and setup read it on stdin. The leading space keeps the line out
 	// of the shell's history where it ignores such lines.
@@ -177,6 +196,6 @@ func (s *Server) joinCommand(r *http.Request, token string) string {
 		"C=\"$(printf 'Authorization: Bearer %s\\n' \"$T\" | " + curl + " -A lab-join -H @- -o \"$D/lab-agent\" -w '%{http_code}%header{cf-mitigated}' \"$U/api/join/lab-agent\")\" && " +
 		"case \"$C\" in 200) ;; 401) echo '" + joinSaysUsed + "' >&2; false ;; 429) echo '" + joinSaysTooMany + "' >&2; false ;; " +
 		"*challenge) echo '" + joinSaysChallenged + "' >&2; false ;; *) echo \"" + joinSaysOther + " ($C).\" >&2; false ;; esac && " +
-		"echo '" + sum + "  '\"$D/lab-agent\" | sha256sum -c --quiet && chmod +x \"$D/lab-agent\" && " +
+		"echo '" + sum + "  '\"$D/lab-agent\" | sha256sum -c --quiet && " + signed + "chmod +x \"$D/lab-agent\" && " +
 		"printf '%s\\n' \"$T\" | sudo \"$D/lab-agent\" setup --server \"$U\" --token-stdin --gui-user \"$USER\"" + plain
 }

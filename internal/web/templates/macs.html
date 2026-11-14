@@ -27,7 +27,7 @@
 {{- if $.Data.Maintainer}}
 <form class="form-inline" method="post" action="{{href (print "/macs/" .Name "/configuration")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><label>CPU <input name="cpu" inputmode="numeric" size="3" value="{{.CPU}}"></label> <label>GPU <input name="gpu" inputmode="numeric" size="3" value="{{.GPU}}"></label> <button class="button button-small button-plain" type="submit">Set</button></form>
 {{- end}}</td>
-<td data-label="State">{{.State}}</td>
+<td data-label="State">{{.State}}{{if .OldAgent}} <span class="dim">lab-agent {{.OldAgent}}, older than the lab's {{.LabAgent}}</span>{{end}}</td>
 <td data-label="Lease">{{if .Holder}}@{{.Holder}}{{if .HolderKind}} <span class="badge {{.HolderClass}}">{{.HolderKind}}</span>{{end}} <span class="nowrap">until {{.Until}}</span>{{else}}<span class="dim">none</span>{{end}}</td>
 <td data-label="Actions">
 {{- if .Mine}}

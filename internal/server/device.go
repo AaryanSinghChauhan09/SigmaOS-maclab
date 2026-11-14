@@ -333,6 +333,9 @@ func (v *dev) heartbeat(ci api.Checkin) {
 	if ci.Facts != nil {
 		v.d.Facts = *ci.Facts
 	}
+	if v.noticeUpdateLocked() {
+		persist = true
+	}
 	if rebooted {
 		// Whatever was executing on the previous boot is gone.
 		for id := range v.inflight {

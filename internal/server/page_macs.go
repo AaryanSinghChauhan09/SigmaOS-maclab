@@ -55,6 +55,9 @@ type macRow struct {
 	CPU, GPU string
 	SetBy    string
 	State    string
+	// OldAgent is the Mac's lab-agent when it is older than the lab's,
+	// which is LabAgent.
+	OldAgent, LabAgent string
 	// Holder is who holds its Lease, HolderKind their kind and Until its end.
 	Holder, HolderKind, HolderClass, Until string
 	// CanLease, or Mine: the viewer holds its Lease, and renews or releases.
@@ -121,6 +124,9 @@ func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string,
 
 func (s *Server) macRow(v *dev, d DeviceView, p Person, mine bool) macRow {
 	row := macRow{Name: d.Name, Kind: "Lab-owned", State: s.macState(v, d), Mine: mine}
+	if d.LabAgent != "" {
+		row.OldAgent, row.LabAgent = d.Facts.AgentVersion, d.LabAgent
+	}
 	if d.Cable != nil {
 		row.Cable, row.NoHardReset = d.Cable.State, d.Cable.NoHardReset
 	}

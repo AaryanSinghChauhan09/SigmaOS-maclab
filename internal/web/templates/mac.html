@@ -47,7 +47,13 @@
 {{- end}}
 <dt>Known-good kernel</dt><dd>{{if .Facts.KnownGood}}{{.Facts.KnownGood}}{{else}}<span class="dim">none: it has not passed its baseline</span>{{end}}</dd>
 <dt>Running</dt><dd>{{if .Facts.Kernel}}{{.Facts.Kernel}}{{else}}<span class="dim">unknown</span>{{end}}</dd>
-<dt>lab-agent</dt><dd>{{if .Facts.Agent}}{{.Facts.Agent}}{{else}}<span class="dim">unknown</span>{{end}}</dd>
+<dt>lab-agent</dt><dd>{{if .Facts.Agent}}{{.Facts.Agent}}{{else}}<span class="dim">unknown</span>{{end}}
+{{- if .Facts.LabAgent}} <span class="dim">older than the lab's {{.Facts.LabAgent}}</span>
+{{- if .Facts.UpdateLine}} <span class="nowrap">Update it at the Mac: <code>{{.Facts.UpdateLine}}</code></span>
+{{- else if .Facts.Volunteers}} <span class="dim">its Volunteer updates it at the Mac</span>
+{{- else if .Maintainer}} <code>lab agent-update {{.Mac.Name}}</code>
+{{- end}}
+{{- end}}</dd>
 <dt>Last seen</dt><dd>{{if .Facts.LastSeen}}{{.Facts.LastSeen}}{{else}}<span class="dim">never</span>{{end}}</dd>
 <dt>Lease</dt><dd>{{if .Mac.Holder}}@{{.Mac.Holder}}{{if .Mac.HolderKind}} <span class="badge {{.Mac.HolderClass}}">{{.Mac.HolderKind}}</span>{{end}} <span class="nowrap">until {{.Mac.Until}}</span>{{else}}<span class="dim">none</span>{{end}}
 {{- if .Mac.Mine}}

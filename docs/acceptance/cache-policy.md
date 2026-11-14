@@ -9,7 +9,7 @@ Chosen 2026-11-15 (Brisbane). The spec leaves the exact pair to the build and as
 | A public page or an export, read (`GET`, `HEAD`) with no session cookie and no `Authorization`, answered 200 and setting no cookie | `Cache-Control: public, max-age=0` and `Cloudflare-CDN-Cache-Control: max-age=60, stale-while-revalidate=86400, stale-if-error=86400` |
 | Anything asked for with the session cookie, known to labd or not, and any page rendered for a session | `Cache-Control: private, no-store` |
 | A fingerprinted file under `/assets/` | `Cache-Control: public, max-age=31536000, immutable` |
-| `/install` | `Cache-Control: public, max-age=300` |
+| `/install`, `/install/lab` | `Cache-Control: public, max-age=300` |
 | An artifact | `Cache-Control: private` |
 | Everything else: `/api/*` but the exports, `/status`, a deletion link, sign-in, every error, a forward on the Alias | `Cache-Control: no-store` |
 

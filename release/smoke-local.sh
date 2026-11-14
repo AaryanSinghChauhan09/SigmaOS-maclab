@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # release/smoke.sh against a labd started on this machine, open (Preview off):
 # install from its /install, upload a golden report, see it, see the repeat
-# refused, delete it by its link.
+# refused, delete it by its link. Then lab for this machine, installed from
+# its /install/lab.
 #
 # Builds the test tool's release and a labd as one Release candidate, both
 # carrying a key made here in a temporary folder and thrown away, so the
@@ -37,6 +38,11 @@ printf '%s namespaces="%s" %s\n' "$RELEASE_SIGNER" "$RELEASE_NAMESPACE" "$(cut -
 key="$(release_key "$t/allowed_signers")"
 LAB_RELEASE="$tag" RELEASE_ALLOWED_SIGNERS="$t/allowed_signers" "$repo/release/build.sh" "$t/release" >/dev/null 2>"$t/build.log" || { cat "$t/build.log" >&2; fail "release/build.sh"; }
 sign "$t/key" "$t/release/omarchy-m-test.tar.gz"
+# lab for this machine, as /install/lab takes it; none is built for macOS on x86-64.
+arch="$(uname -m)"
+case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+lab_file="lab-$(uname -s | tr '[:upper:]' '[:lower:]')-$arch"
+[[ ! -f $t/release/$lab_file ]] || sign "$t/key" "$t/release/$lab_file"
 rm -f "$t/key"
 (cd "$repo" && CGO_ENABLED=0 go build -ldflags "-X main.version=$tag -X 'main.releaseKey=$key'" -o "$t/labd" ./cmd/labd)
 [[ "$("$t/labd" --version)" == "$tag" ]] || fail "labd --version"
@@ -70,12 +76,31 @@ grep -qF 'releases/latest/download' "$t/install.sh" || fail "an open lab's /inst
 
 SITE="$site" OMARCHY_M_TEST_RELEASES="file://$t/release" "$repo/release/smoke.sh"
 
+curl -fsS -D "$t/install-lab.head" -o "$t/install-lab.sh" "$site/install/lab"
+tr -d '\r' < "$t/install-lab.head" | grep -qix 'cache-control: public, max-age=300' || fail "/install/lab is not public for five minutes"
+grep -qF "$key'" "$t/install-lab.sh" || fail "/install/lab does not pin the key this labd was built with"
+grep -qF 'releases/latest/download' "$t/install-lab.sh" || fail "an open lab's /install/lab does not take the latest Lab release"
+if [[ -f $t/release/$lab_file.sig ]]; then
+  mkdir "$t/home"
+  for round in Installed Reinstalled; do
+    env -i PATH="$PATH" HOME="$t/home" OMARCHY_LAB_RELEASES="file://$t/release" bash "$t/install-lab.sh" > "$t/install-lab.log" 2>&1 || { cat "$t/install-lab.log" >&2; fail "/install/lab"; }
+    grep -qxF "$round lab $tag." "$t/install-lab.log" || { cat "$t/install-lab.log" >&2; fail "/install/lab did not say: $round lab $tag."; }
+  done
+  [[ "$(env -i PATH="$PATH" HOME="$t/home" "$t/home/.local/bin/lab" version | head -1)" == "lab $tag" ]] || fail "the lab installed from /install/lab is not $tag"
+  printf '#!/bin/sh\necho "lab: run kernels and tests on real Macs"\nexit 2\n' > "$t/home/.local/bin/lab"
+  if env -i PATH="$PATH" HOME="$t/home" OMARCHY_LAB_RELEASES="file://$t/release" bash "$t/install-lab.sh" > "$t/install-lab.log" 2>&1; then fail "/install/lab replaced a lab that is not ours"; fi
+  grep -qF "is not Omarchy Mac Lab's lab" "$t/install-lab.log" || fail "/install/lab did not say why it stopped"
+fi
+
 echo "== labd, in Preview"
 start --preview
 curl -fsS -o "$t/install-preview.sh" "$site/install"
 grep -qF "releases/download/$tag}" "$t/install-preview.sh" || fail "in Preview /install does not take the Release candidate labd was built as"
 grep -qF 'releases/latest/download' "$t/install-preview.sh" && fail "in Preview /install takes the latest Lab release"
+curl -fsS -o "$t/install-lab-preview.sh" "$site/install/lab"
+grep -qF "releases/download/$tag}" "$t/install-lab-preview.sh" || fail "in Preview /install/lab does not take the Release candidate labd was built as"
+grep -qF 'releases/latest/download' "$t/install-lab-preview.sh" && fail "in Preview /install/lab takes the latest Lab release"
 code="$(curl -sS -o "$t/refused.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' "$site/api/v1/reports")"
 [[ $code == 403 ]] && grep -qF 'is not open yet' "$t/refused.json" || fail "a lab in Preview took a report ($code)"
 
-echo "local smoke ok: $tag installed from labd's /install with the key made here; uploaded, seen, refused the second time and deleted; in Preview the install line names $tag"
+echo "local smoke ok: $tag installed from labd's /install with the key made here; uploaded, seen, refused the second time and deleted; lab installed from /install/lab; in Preview both install lines name $tag"

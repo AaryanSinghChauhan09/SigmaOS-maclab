@@ -69,6 +69,9 @@ type macFacts struct {
 	KnownGood, Kernel, Agent, LastSeen string
 	Reason                             string
 	Queued                             int
+	// LabAgent is the lab's lab-agent when the Mac's is older, and
+	// UpdateLine the one line its own Volunteer runs at the Mac.
+	LabAgent, UpdateLine string
 	// Cable is a Lab-owned Mac's place on the lab server's cables, and
 	// NoHardReset why no Hard reset can reach it now.
 	Cable, NoHardReset string
@@ -197,6 +200,9 @@ func (s *Server) renderMac(w http.ResponseWriter, r *http.Request, v *dev, tab s
 		s.macRecords(&data, v, d, p, p.isMaintainer() || own)
 	default:
 		data.Facts, data.Jobs = s.macFacts(v, d), s.macJobs(c, d)
+		if data.Facts.LabAgent = d.LabAgent; own {
+			data.Facts.UpdateLine = agentUpdateLine(d)
+		}
 	}
 	page.Data = data
 	s.render(w, r, "mac", page)

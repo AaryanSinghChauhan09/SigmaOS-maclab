@@ -1,5 +1,6 @@
-// Package installer carries the test tool's install script into labd, which
-// serves it as the lab's install line.
+// Package installer carries the two install scripts into labd, which serves
+// them as the lab's install lines: /install for the test tool, /install/lab
+// for lab.
 package installer
 
 import _ "embed"
@@ -8,3 +9,8 @@ import _ "embed"
 //
 //go:embed install.sh
 var Script []byte
+
+// LabScript is install-lab.sh.
+//
+//go:embed install-lab.sh
+var LabScript []byte

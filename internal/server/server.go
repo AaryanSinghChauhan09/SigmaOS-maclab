@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/omacom/omarchy-maclab/installer"
 	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/oob"
@@ -100,9 +101,13 @@ type Config struct {
 	// (default 2 minutes); GUIGrace is how much longer for a GUI test (default
 	// 2 minutes, see guiWait). Tests shorten them.
 	TestGrace, GUIGrace time.Duration
-	// AgentBinary is the linux/arm64 lab-agent that ./volunteer and the join
-	// command download.
+	// AgentBinary is the linux/arm64 lab-agent labd hands out: to the Join
+	// command, and to an enrolled Mac that updates. Its signature is the
+	// file beside it with ".sig", as a Lab release's bundle holds them.
 	AgentBinary string
+	// LabAgent is the number of that lab-agent; "" is the one labd was
+	// built with, which is the one its bundle holds.
+	LabAgent string
 	// PublicURL is the Lab address, the URL people and Macs reach labd at,
 	// its path being labd's prefix (--public-url, see edge.go). Nil serves
 	// at / on the loopback port alone and takes each request's own origin.
@@ -153,8 +158,9 @@ type Server struct {
 	// uploads takes reports in; nil without the machine-id key.
 	uploads   *reports.Uploads
 	catalogue *reports.Catalogue
-	// installScript is what /install serves (install_line.go).
-	installScript []byte
+	// installScript and installLabScript are what /install and
+	// /install/lab serve (install_line.go).
+	installScript, installLabScript []byte
 	// macOSReference gives a board's macOS numbers; nil is the catalogue's.
 	macOSReference func(board string) *reports.MacOSReference
 	log            *log.Logger
@@ -297,7 +303,11 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	installLine, err := installScript(cfg)
+	installLine, err := installScript(cfg, installer.Script)
+	if err != nil {
+		return nil, err
+	}
+	installLabLine, err := installScript(cfg, installer.LabScript)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +330,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		st.db.Close()
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, installScript: installLine, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, cancelWhy: map[string]string{}, callers: callers}
+	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, installScript: installLine, installLabScript: installLabLine, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, cancelWhy: map[string]string{}, callers: callers}
 	s.start = s.now()
 	s.cables = newCables(cfg.OOB)
 	s.lines = newGroupLines(st, s.clock(), logger, cfg.Signal, cfg.SignalDir)
@@ -623,6 +633,7 @@ func (s *Server) routes() []route {
 		{"POST /api/v1/tester_bindings", anyone, s.hMacSignIn},
 		{"POST /api/v1/tester_requests", anyone, s.hMacRequest},
 		{"GET /install", anyone, s.hInstall},
+		{"GET /install/lab", anyone, s.hInstallLab},
 		{"GET /reports/{id}", anyone, s.hReportPage},
 		{"GET /reports/{id}/deletion", anyone, s.hReportDeletion},
 		{"POST /reports/{id}", anyone, s.hReportDelete},
@@ -662,6 +673,10 @@ func (s *Server) routes() []route {
 		{"POST /api/volunteer", anyone, s.hVolunteerGone},
 		{"GET /api/volunteer/lab-agent", anyone, s.hVolunteerGone},
 		{"GET /api/join/lab-agent", invited, s.hJoinAgent},
+		{"GET /api/join/lab-agent.sig", invited, s.hAgentSig},
+		{"GET /api/agent/lab-agent", ownMac, s.hJoinAgent},
+		{"GET /api/agent/lab-agent.sig", ownMac, s.hAgentSig},
+		{"POST /api/devices/{name}/agent-update", maintainers, s.hAgentUpdate},
 		{"GET /api/join/terms", invited, s.hJoinTerms},
 		{"POST /api/join/check", invited, s.hJoinCheck},
 		{"DELETE /api/enroll-tokens/{name}", maintainers, s.hRevokeEnrollTokens},
@@ -1192,6 +1207,9 @@ type DeviceView struct {
 	// Arrival is the stage a Volunteer's Mac has reached since it Joined:
 	// one of the Arrival words; "" for a Lab-owned Mac.
 	Arrival string `json:"arrival,omitempty"`
+	// LabAgent is the number of the lab's lab-agent when the Mac's is
+	// older; "" when it is not.
+	LabAgent string `json:"lab_agent,omitempty"`
 }
 
 func (s *Server) view(v *dev) DeviceView {
