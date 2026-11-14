@@ -58,6 +58,11 @@ type Lease struct {
 	// AccountID is 0 for a lease taken before labd kept people.
 	AccountID int64     `json:"account_id,omitempty"`
 	Expires   time.Time `json:"expires"`
+	// Job is the holder's job running on the Mac under the Lease. While it
+	// runs the Lease lasts past Expires, until that job ends and no further;
+	// Extended says it has done so.
+	Job      string `json:"job,omitempty"`
+	Extended bool   `json:"extended,omitempty"`
 	// Warning is said once, in the answer to taking the Lease: a Maintainer
 	// who already holds a Mac of the same Configuration is warned and goes on.
 	Warning string `json:"warning,omitempty"`
@@ -370,7 +375,10 @@ type AuditEntry struct {
 	Maintainer     string    `json:"maintainer,omitempty"`      // "" when labd acted on its own
 	VolunteerLogin string    `json:"volunteer_login,omitempty"` // the Mac's own Volunteer asked, through labd
 	Job            string    `json:"job,omitempty"`
-	Action         string    `json:"action"` // what was done, with the command or script text
+	// AccountID is the account of Maintainer, which labd adds to its copy:
+	// the Mac knows people by handle only.
+	AccountID int64  `json:"account_id,omitempty"`
+	Action    string `json:"action"` // what was done, with the command or script text
 	// Refused is why lab-agent refused the action instead; "" when it acted.
 	Refused string `json:"refused,omitempty"`
 	// End is where the entry ends in the Mac's own log, in bytes: labd's copy
@@ -961,8 +969,14 @@ type Job struct {
 	Events                []JobEvent `json:"events"`
 	Result                JobResult  `json:"result"`
 	Canceled              bool       `json:"canceled,omitempty"`
-	// Maintainer is who submitted it, from their token; empty when labd queued it.
+	// Maintainer is the handle, at the time, of who submitted it, a
+	// Maintainer or an M team member; empty when labd queued it. AccountID
+	// is their account, which a rename leaves alone.
 	Maintainer string `json:"maintainer,omitempty"`
+	AccountID  int64  `json:"account_id,omitempty"`
+	// UnderLease is set once the job has run under its submitter's Lease:
+	// labd never queues such a job again by itself.
+	UnderLease bool `json:"under_lease,omitempty"`
 	// DeviceID is the enrollment (Device.ID) of the Mac it was submitted for.
 	// Only that enrollment runs it, fetches its artifacts and adds its files;
 	// a job from before labd kept it is never run.
@@ -1109,6 +1123,62 @@ type LeaveResponse struct {
 
 // LeaseRequest takes a Lease, or renews the one the caller holds. TTLSec 0
 // asks for the lab's 4 hours.
+// The events of a Lease, as the Lease record keeps them.
+const (
+	LeaseTaken    = "taken"
+	LeaseRenewed  = "renewed"
+	LeaseExtended = "extended"
+	LeaseReleased = "released"
+	LeaseExpired  = "expired"
+	LeaseEnded    = "ended"
+)
+
+// LeaseEvent is one line of a Mac's Lease record: what happened to whose
+// Lease, with the handle the person had then.
+type LeaseEvent struct {
+	Time      time.Time `json:"time"`
+	Mac       string    `json:"mac"`
+	Event     string    `json:"event"`
+	AccountID int64     `json:"account_id,omitempty"`
+	Handle    string    `json:"handle"`
+	Holder    string    `json:"holder,omitempty"`
+	// Until is the Lease's end after the event: for an extension and an
+	// ending, the end it had.
+	Until time.Time `json:"until"`
+	// By is who did it when that is not the holder: the Maintainer who ended
+	// the Lease. Why is the reason given or the cause.
+	ByID int64  `json:"by_id,omitempty"`
+	By   string `json:"by,omitempty"`
+	Why  string `json:"why,omitempty"`
+}
+
+// Line is the event as the Lease record reads.
+func (e LeaseEvent) Line() string {
+	who := "@" + e.Handle
+	var out string
+	switch e.Event {
+	case LeaseTaken:
+		out = who + " took a Lease on " + e.Mac
+	case LeaseRenewed:
+		out = who + " renewed the Lease on " + e.Mac
+	case LeaseExtended:
+		out = who + "'s Lease on " + e.Mac + " was extended"
+	case LeaseReleased:
+		out = who + " released " + e.Mac
+	case LeaseExpired:
+		out = who + "'s Lease on " + e.Mac + " expired"
+	default:
+		out = who + "'s Lease on " + e.Mac + " was ended"
+		if e.By != "" {
+			out += " by @" + e.By
+		}
+	}
+	if e.Why != "" {
+		out += ": " + e.Why
+	}
+	return out
+}
+
 type LeaseRequest struct {
 	Holder string `json:"holder"`
 	TTLSec int    `json:"ttl_sec"`
