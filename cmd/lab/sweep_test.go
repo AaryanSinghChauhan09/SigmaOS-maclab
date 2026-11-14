@@ -6,6 +6,7 @@ import (
 	"flag"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -331,6 +332,12 @@ func TestAToolNeverAnswersWithAToken(t *testing.T) {
 		}
 		if res.IsError || strings.Contains(said, "SECRET") || !strings.Contains(said, dir) {
 			t.Errorf("%s answered (error %v):\n%s", tool, res.IsError, said)
+		}
+		file := args["out"].(string)
+		kept, err := os.ReadFile(file)
+		info, _ := os.Stat(file)
+		if err != nil || !strings.Contains(string(kept), "SECRET") || info.Mode().Perm() != 0o600 {
+			t.Errorf("%s left %q in its file (%v)", tool, kept, err)
 		}
 		delete(args, "out")
 		res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})

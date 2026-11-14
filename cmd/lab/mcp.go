@@ -98,24 +98,27 @@ func newMCP(c *client.Client) *mcp.Server {
 				return nil, nil, err
 			}
 			t, err := c.EnrollToken(ctx, api.EnrollTokenRequest{Name: a.Name, Label: a.Label, Model: cmpOr(a.Model, api.ModelLaptop)})
+			if err != nil {
+				f.Close()
+				os.Remove(a.Out)
+				return nil, nil, err
+			}
+			line := t.JoinCommand
+			if line == "" {
+				line = fmt.Sprintf("printf '%%s\\n' '%s' | sudo ./lab-agent setup --server %s --token-stdin --gui-user \"$USER\"", t.Token, c.URL)
+			}
+			_, err = f.WriteString(line + "\n")
 			if err == nil {
-				line := t.JoinCommand
-				if line == "" {
-					line = fmt.Sprintf("printf '%%s\\n' '%s' | sudo ./lab-agent setup --server %s --token-stdin --gui-user \"$USER\"", t.Token, c.URL)
-				}
-				if _, err = f.WriteString(line + "\n"); err == nil {
-					err = f.Sync()
-				}
+				err = f.Sync()
 			}
 			if cerr := f.Close(); err == nil {
 				err = cerr
 			}
 			if err != nil {
+				// The Join command this call made reached no file: nobody can use it.
 				os.Remove(a.Out)
-				if t != nil {
-					c.RevokeEnrollTokens(ctx, a.Name)
-				}
-				return nil, nil, err
+				c.RevokeEnrollTokens(ctx, a.Name)
+				return nil, nil, fmt.Errorf("writing the Join command to %s failed (%v); it was canceled", a.Out, err)
 			}
 			return text(fmt.Sprintf("The Join command for %s, a Lab-owned Mac, is in %s (mode 0600) and nowhere else. It joins one Mac, once, and expires %s. The person runs it in a terminal on the Mac, as themselves. Cancel it unused with lab_enroll revoke; then lab_baseline %s.",
 				a.Name, a.Out, t.Expires.Format(time.DateTime), a.Name)), nil, nil
