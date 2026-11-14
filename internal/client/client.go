@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -214,7 +216,10 @@ func (c *Client) Upload(ctx context.Context, path string) (string, error) {
 	if c.UploadForBuild {
 		q.Set("purpose", "build")
 	}
-	return upload.Sender{Client: c.http, URL: c.URL + "/api/artifacts", Query: q, Token: c.Token, PartBytes: c.partBytes, Pause: c.pause, Note: c.Note}.File(ctx, path)
+	// MACLAB_PARTS_AT_ONCE is for the Front door's transfer tests alone,
+	// which time the same upload with 1 part and with 4 at a time.
+	atOnce, _ := strconv.Atoi(os.Getenv("MACLAB_PARTS_AT_ONCE"))
+	return upload.Sender{Client: c.http, URL: c.URL + "/api/artifacts", Query: q, Token: c.Token, PartBytes: c.partBytes, Pause: c.pause, Note: c.Note, AtOnce: atOnce}.File(ctx, path)
 }
 
 func (c *Client) Submit(ctx context.Context, spec api.JobSpec) (*api.Job, error) {

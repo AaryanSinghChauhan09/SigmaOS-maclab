@@ -46,6 +46,9 @@ type Sender struct {
 	Pause func(ctx context.Context, n int) error
 	// Note is told when an upload resumes; nil says nothing.
 	Note func(format string, args ...any)
+	// AtOnce, when 1 or 4, is how many parts go at the same time whatever
+	// labd says: the measurement that sets labd's own number needs both.
+	AtOnce int
 }
 
 // refused is labd turning a request down: sending it again cannot help.
@@ -106,6 +109,9 @@ func (s Sender) Send(ctx context.Context, f io.ReaderAt, size int64) (string, er
 	workers := 1
 	if state.AtOnce == 4 {
 		workers = 4
+	}
+	if s.AtOnce == 1 || s.AtOnce == 4 {
+		workers = s.AtOnce
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

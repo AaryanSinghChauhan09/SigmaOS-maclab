@@ -257,6 +257,24 @@ func TestPartsGoOneAtATimeOrFourAsLabdSays(t *testing.T) {
 	}
 }
 
+// The measurement that sets labd's --parts-at-once sends the same kind of
+// file both ways from one machine, whatever labd says: AtOnce 1 or 4 is
+// obeyed, anything else leaves labd's word standing.
+func TestTheMeasurementSendsOneOrFourAtOnceWhateverLabdSays(t *testing.T) {
+	for _, c := range []struct{ labd, asked, want int }{{1, 4, 4}, {4, 1, 1}, {4, 0, 4}, {1, 3, 1}, {1, 16, 1}} {
+		f, ts := newFakeLab(t)
+		f.atOnce, f.waitFor = c.labd, c.want
+		s := sender(ts)
+		s.AtOnce = c.asked
+		if sha, err := s.File(context.Background(), fileOf(t, content(8*testPart))); err != nil || sha == "" {
+			t.Fatalf("labd said %d, asked %d: sha %q, %v", c.labd, c.asked, sha, err)
+		}
+		if f.peak != c.want {
+			t.Errorf("labd said %d, asked %d: %d went at once, want %d", c.labd, c.asked, f.peak, c.want)
+		}
+	}
+}
+
 func TestACloseThatNamesAnotherSHA256IsAnError(t *testing.T) {
 	f, ts := newFakeLab(t)
 	f.closeSHA = strings.Repeat("0", 64)
