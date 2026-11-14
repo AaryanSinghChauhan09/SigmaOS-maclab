@@ -172,6 +172,7 @@ func TestTheDeadManSwitchSendsNothingWhenTheLabDoesNotAnswer(t *testing.T) {
 	}{
 		"Cloudflare has no tunnel to send it to": {func(o *outside) { o.status = 530; o.body = "error code: 1033\n" }, "did not answer"},
 		"labd is down behind the tunnel":         {func(o *outside) { o.status = http.StatusBadGateway; o.body = "Bad gateway\n" }, "did not answer"},
+		"an error that reads ok":                 {func(o *outside) { o.status = http.StatusInternalServerError }, "did not answer"},
 		"something else answers there":           {func(o *outside) { o.body = "<html>parked</html>\n" }, "did not answer ok"},
 		"the answer did not cross Cloudflare":    {func(o *outside) { o.ray = "" }, "not through Cloudflare"},
 		"Cloudflare answered from its cache":     {func(o *outside) { o.cache = "HIT" }, "from Cloudflare's cache"},

@@ -76,6 +76,10 @@ func TestRealToolsTheNightlyRunAgainstRestServer(t *testing.T) {
 	os.Chmod(b.path(backupKeys+"/r2-repository"), 0o600)
 	write(t, b.path(backupKeys+"/r2-repository"), dir+"/offsite\n", 0o400)
 
+	// An artifact as labd keeps it, for the Restore drill below.
+	image := "a kernel image\n"
+	write(t, b.path("var/lab/data/artifacts/"+artifactOf(image)), image, 0o600)
+
 	b.ok("backup")
 	data := b.path("var/lab/data")
 	listed := b.ok("backup", "restic", "house", "ls", "latest")
@@ -107,6 +111,25 @@ func TestRealToolsTheNightlyRunAgainstRestServer(t *testing.T) {
 	b.ok("backup", "restic", "house", "restore", "latest", "--target", back)
 	if got := rows(t, filepath.Join(back, data, "snapshots/labd.db")); !same(got, []string{"in labd.db"}) {
 		t.Errorf("labd.db restored from the house copy holds %v", got)
+	}
+
+	// The Restore drill, from the same two repositories: restic's own
+	// listing, its times and what --include restores.
+	drill := b.ok("restore-drill")
+	for _, want := range []string{
+		"labd.db from the house copy: intact, tables: 1, rows: 1",
+		"reports.db from the house copy: intact",
+		"the artifact " + artifactOf(image) + " from the house copy: is what its name says, and the same as the live file",
+		"labd.db from the off-site copy: intact",
+		"reports.db from the off-site copy: intact",
+		"made 0 hours ago",
+	} {
+		if !strings.Contains(drill, want) {
+			t.Errorf("the Restore drill against restic does not say %q:\n%s", want, drill)
+		}
+	}
+	if left, _ := filepath.Glob(b.path("var/lab/run/restore-drill*")); len(left) != 0 {
+		t.Errorf("the Restore drill left %v", left)
 	}
 
 	// The guest's pruning: of 400 nights, 7 daily, 4 weekly, 6 monthly stay,
