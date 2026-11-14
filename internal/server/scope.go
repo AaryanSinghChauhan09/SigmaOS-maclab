@@ -254,7 +254,7 @@ func (s *Server) jobInScope(h http.HandlerFunc) http.HandlerFunc {
 // volunteersOwn are the fields of a Mac's view that are for its Volunteer
 // and the Maintainers: how to reach the Volunteer, and the topic the Mac's
 // notices go to. The M team sees whose Mac it is and no more of them.
-var volunteersOwn = []string{"contact", "ntfy_topic", "ntfy_own_url", "linked_login"}
+var volunteersOwn = []string{"contact", "ntfy_topic", "ntfy_own_url", "notice_topic_refused", "linked_login"}
 
 // viewFor is the Mac as c may see it.
 func (s *Server) viewFor(c caller, v *dev) DeviceView {
@@ -265,7 +265,7 @@ func (s *Server) viewFor(c caller, v *dev) DeviceView {
 		}
 	}
 	if c.team != "" {
-		d.Contact, d.NtfyTopic, d.NtfyOwnURL, d.LinkedLogin = "", "", "", ""
+		d.Contact, d.NtfyTopic, d.NtfyOwnURL, d.NoticeTopicRefused, d.LinkedLogin = "", "", "", "", ""
 	}
 	return d
 }

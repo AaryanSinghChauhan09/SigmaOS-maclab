@@ -138,6 +138,8 @@ func (s *Server) mayLease(v *dev, p Person, holder string) (leaseAsked, error) {
 		err = refuse(409, "%s has left the lab", name)
 	case v.d.KnownGood == "":
 		err = refuse(409, "%s has not passed its baseline yet, so it takes no Lease", name)
+	case v.termsWait:
+		err = refuse(409, "%s", termsWaitingLine(name))
 	case v.d.IsVolunteer() && v.openUntilLocked().IsZero():
 		err = refuse(409, "%s's Availability window is closed: a Lease on a Volunteer's Mac lasts only inside it", name)
 	case l != nil && !(leaseIsOf(l, p) && l.Holder == holder):

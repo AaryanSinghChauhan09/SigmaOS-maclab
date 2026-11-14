@@ -47,7 +47,7 @@ func main() {
 	machineIDKey := flag.String("machine-id-key", "", "the file with the machine-id key, which tells one Mac's reports from another's: 64 bytes as 128 hex digits, readable by labd's account alone. Without the file labd takes no reports")
 	githubURL := flag.String("github-url", "", "a stand-in for GitHub on this machine, for a lab under development, e.g. http://127.0.0.1:7791 (tools/fake-github): a loopback address only, and never beside --socket")
 	data := flag.String("data", filepath.Join(home, ".local/share/maclab"), "data directory")
-	ntfy := flag.String("ntfy", os.Getenv("MACLAB_NTFY"), "ntfy topic URL for notifications, e.g. https://ntfy.sh/<secret-topic>")
+	ntfy := flag.String("ntfy", os.Getenv("MACLAB_NTFY"), "the notice server's address, https://ntfy.sh: each Volunteer's Mac has its own topic there, which labd keeps, and a Notice goes only to it. No topic here: a topic is a secret, and labd posts nothing else")
 	notifyCmd := flag.String("notify-cmd", os.Getenv("MACLAB_NOTIFY_CMD"), `shell command run per notification with $MACLAB_TITLE/$MACLAB_BODY, e.g. 'notify-send "$MACLAB_TITLE" "$MACLAB_BODY"'`)
 	bootTimeout := flag.Duration("boot-timeout", 6*time.Minute, "default time a Mac gets to come back after a reboot")
 	offlineAfter := flag.Duration("offline-after", 3*time.Minute, "how long an idle Mac may be silent before labd marks it offline")
@@ -87,6 +87,11 @@ func main() {
 	}
 	if *partsAtOnce != 1 && *partsAtOnce != 4 {
 		log.Fatalf("--parts-at-once is 1 or 4, not %d", *partsAtOnce)
+	}
+	if *ntfy != "" {
+		if err := server.CheckNoticeServer(*ntfy); err != nil {
+			log.Fatal(err)
+		}
 	}
 	var pub *url.URL
 	if *publicURL != "" {

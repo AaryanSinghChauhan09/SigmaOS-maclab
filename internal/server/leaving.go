@@ -11,7 +11,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -142,10 +141,7 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 	}
 
 	if l.how != leftByVolunteer && e.IsVolunteer() {
-		by := l.by.Handle
-		s.notify(Notification{Device: name, Title: fmt.Sprintf("Enrollment of %s ended by %s", name, by),
-			Body:     fmt.Sprintf("The Maintainer %s ended your Mac's enrollment in the lab. Its lab-agent removes the lab from your Mac at its next check-in; `sudo lab-agent log` records it.", by),
-			Priority: "high", Volunteer: true, MacTopic: s.macTopicURL(e)})
+		s.notify(s.notice(d, noticeEnded, jobWording{}))
 	}
 	return nil
 }

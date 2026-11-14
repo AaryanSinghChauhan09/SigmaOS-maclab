@@ -65,10 +65,16 @@ func showStatus(ctx context.Context, cfg *Config, sys System, args []string, out
 		e = live
 	}
 	fmt.Fprintf(out, "%s, enrolled as %s%s\n", cfg.Name, kindName(e.Enrollment), from)
+	if e.TermsWaiting != "" {
+		fmt.Fprintf(out, "  Terms:          the lab's terms changed (%s): this Mac takes nothing from Omarchy Mac Lab until you accept them on My Macs, %s\n", e.TermsWaiting, e.MyMacs)
+	}
 	if e.IsVolunteer() {
 		fmt.Fprintf(out, "  ntfy topic:     %s\n", e.NtfyTopic)
 		if e.NtfyURL != "" {
 			fmt.Fprintf(out, "  subscribe to:   %s\n", e.NtfyURL)
+		}
+		if e.NoticeTopicRefused != "" {
+			fmt.Fprintf(out, "  your topic:     refused by the lab, so its Notices are dropped: %s\n", e.NoticeTopicRefused)
 		}
 		fmt.Fprintf(out, "  job notices:    %s (notify --jobs on|off)\n", map[bool]string{true: "on", false: "off"}[e.JobNotices])
 	}

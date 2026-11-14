@@ -34,9 +34,6 @@ const agentUpdateWait = 45 * time.Second
 const (
 	// volunteerUpdateLine is what a Volunteer runs at their Mac.
 	volunteerUpdateLine = "sudo lab-agent update"
-	// updateNotice is the fixed wording of the Notice about it.
-	updateNotice = "An update is waiting for this Mac. Open My Macs."
-	noticeTitle  = "Omarchy Mac Lab"
 )
 
 // labAgent is the number of the lab-agent this labd hands out: the one it
@@ -74,8 +71,7 @@ func (v *dev) noticeUpdateLocked() bool {
 		return false
 	}
 	v.d.UpdateNoticed = lab
-	v.s.notify(Notification{Device: v.d.Name, Volunteer: true, MacTopic: v.s.macTopicURL(v.d.Enrollment), Priority: "default",
-		Title: noticeTitle, Body: v.d.Name + ": " + updateNotice})
+	v.s.notify(v.s.notice(v.d, noticeUpdate, jobWording{}))
 	return true
 }
 

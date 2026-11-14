@@ -32,7 +32,6 @@ import (
 
 	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
-	"github.com/omacom/omarchy-maclab/internal/web"
 )
 
 var reEnrollToken = regexp.MustCompile(`^enr_[0-9a-f]{32}$`)
@@ -56,7 +55,7 @@ func (s *Server) joinToken(h http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) hJoinTerms(w http.ResponseWriter, r *http.Request) {
-	t := web.Terms()
+	t := s.termsText()
 	writeJSON(w, api.JoinTerms{SHA256: t.SHA256, Text: t.Body, Date: t.Date})
 }
 
@@ -95,7 +94,7 @@ func (s *Server) hJoinCheck(w http.ResponseWriter, r *http.Request) {
 	if t.Volunteer {
 		kind = api.KindVolunteer
 	}
-	terms := web.Terms()
+	terms := s.termsText()
 	writeJSON(w, api.JoinCheck{Name: t.Name, Kind: kind, Expires: t.Expires, Enrolled: t.ActivatedBy != "", TermsSHA256: terms.SHA256, TermsDate: terms.Date})
 }
 

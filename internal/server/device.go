@@ -31,7 +31,10 @@ type dev struct {
 	d  api.Device
 	// owedDone is a job's done notice that waited for the Mac to be back (needs hands or recovering at the job's end). It is memory
 	// only: if labd restarts while one is held, the job is already closed and that notice is lost.
-	owedDone      *Notification
+	owedDone *Notification
+	// termsWait is whether the Mac takes nothing from the lab until its
+	// Volunteer accepts the lab's changed terms (terms.go).
+	termsWait     bool
 	pending       []api.Command
 	inflight      map[string]time.Time
 	sent          map[string]api.Command
@@ -326,8 +329,9 @@ func (v *dev) heartbeat(ci api.Checkin) {
 		persist = true
 	}
 	if v.d.IsVolunteer() && ci.NtfyOwnURL != "" && v.d.NtfyOwnURL != ci.NtfyOwnURL { // a check-in without it (file unreadable) keeps the stored one
-		v.d.NtfyOwnURL = ci.NtfyOwnURL
+		v.d.NtfyOwnURL, v.d.NoticeTopicRefused = ci.NtfyOwnURL, ""
 		persist = true
+		go v.s.checkReportedTopic(v.d.Name, ci.NtfyOwnURL)
 	}
 	if v.d.IsVolunteer() && ci.JobNotices != nil && v.d.JobNotices != *ci.JobNotices { // a check-in without it keeps the stored choice
 		v.d.JobNotices = *ci.JobNotices

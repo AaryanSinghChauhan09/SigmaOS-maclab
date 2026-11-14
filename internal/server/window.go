@@ -23,6 +23,8 @@ func (v *dev) windowHoldLocked(d time.Duration) string {
 	now := v.s.now()
 	when := func(t time.Time) string { return t.In(s.Location()).Format("Mon 2 Jan 15:04 MST") }
 	switch {
+	case v.termsWait:
+		return termsWaitingLine(v.d.Name)
 	case v.d.SitePause.Active(now) && v.d.SitePause.Until.IsZero():
 		return fmt.Sprintf("%s is Paused by its Volunteer until they resume it", v.d.Name)
 	case v.d.SitePause.Active(now):

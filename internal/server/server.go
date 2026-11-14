@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -62,8 +64,16 @@ type Config struct {
 	// shows the Volunteer a notice, and how long the job waits after it; 0 is
 	// no notice and no wait. labd's flag defaults to 5m.
 	RebootWarning time.Duration
-	NtfyURL       string
-	NotifyCmd     string
+	// NtfyURL is the notice server's address (https://ntfy.sh): each
+	// Volunteer's Mac has its own topic there, which labd keeps. It carries
+	// no topic: labd posts nothing but a Notice, and only to a Mac's topic.
+	NtfyURL   string
+	NotifyCmd string
+	// noticeTLS and noticeAllow are for tests alone: the roots a Notice's
+	// https is checked against, and addresses a Volunteer's own topic may be
+	// at beside the public internet.
+	noticeTLS   *tls.Config
+	noticeAllow func(netip.AddrPort) bool
 	// Person names the person a request without a Maintainer's token or a
 	// browser session comes from, by their login, "" for nobody: such a
 	// person may look at their own Macs (see scope.go). labd itself sets
@@ -215,6 +225,10 @@ type Server struct {
 	// cables are the Sightings: which Lab-owned Mac is on which of the
 	// Out-of-band controller's ports (see sighting.go).
 	cables *cables
+
+	// shippedTerms, which only a test sets, stands in for the terms shipped
+	// with this Lab release.
+	shippedTerms atomic.Pointer[web.Text]
 
 	// execRecorded, which only a test sets, runs once a lab exec's line is
 	// in the Exec record and before its command is queued for the Mac.
@@ -427,6 +441,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		go s.deviceLoop(v)
 	}
 	s.adoptReleases()
+	s.termsTookEffect()
 	// Jobs that were running when labd stopped cannot be resumed.
 	unfinished, _ := st.jobs("", 1000, true)
 	sort.Slice(unfinished, func(i, k int) bool { return unfinished[i].Created.Before(unfinished[k].Created) })
@@ -1158,9 +1173,14 @@ func (s *Server) agentEnrollment(e api.Enrollment) api.AgentEnrollment {
 func (s *Server) hAgentEnrollment(w http.ResponseWriter, r *http.Request) {
 	v := agentDev(r)
 	v.mu.Lock()
-	e := v.d.Enrollment
+	e, waits, name, refused := v.d.Enrollment, v.termsWait, v.d.Name, v.d.NoticeTopicRefused
 	v.mu.Unlock()
-	writeJSON(w, s.agentEnrollment(e))
+	ae := s.agentEnrollment(e)
+	if waits {
+		ae.TermsWaiting, ae.MyMacs = s.termsText().Date, s.myMacsLink(name)
+	}
+	ae.NoticeTopicRefused = refused
+	writeJSON(w, ae)
 }
 
 func (s *Server) hCheckin(w http.ResponseWriter, r *http.Request) {
@@ -1239,6 +1259,9 @@ type DeviceView struct {
 	// LabAgent is the number of the lab's lab-agent when the Mac's is
 	// older; "" when it is not.
 	LabAgent string `json:"lab_agent,omitempty"`
+	// TermsWaiting is whether the Mac takes nothing from the lab until its
+	// Volunteer accepts the lab's changed terms on My Macs.
+	TermsWaiting bool `json:"terms_waiting,omitempty"`
 }
 
 func (s *Server) view(v *dev) DeviceView {
@@ -1761,6 +1784,9 @@ func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...st
 	d := s.view(v)
 	if d.State == api.StateLeft {
 		return nil, 409, fmt.Errorf("%s left the lab (lab-agent uninstall): `lab forget %s` takes it off the list", d.Name, d.Name)
+	}
+	if d.TermsWaiting {
+		return nil, 409, errors.New(termsWaitingLine(d.Name))
 	}
 	if code, err := s.validatePayload(spec, d.Device); err != nil {
 		return nil, code, err

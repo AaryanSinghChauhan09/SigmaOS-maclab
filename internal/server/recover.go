@@ -187,7 +187,7 @@ func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duratio
 	act := humanAction(v.d, reason, unreset, v.lastLogLocked(), v.s.now())
 	n := Notification{Device: v.d.Name, Title: act.Title, Body: act.Text(), Priority: "urgent"}
 	if v.d.IsVolunteer() {
-		n.Volunteer, n.MacTopic = true, v.s.macTopicURL(v.d.Enrollment)
+		n = v.s.notice(v.d, noticeRestart, jobWording{})
 	}
 	v.d.Action = act
 	v.restore = ""

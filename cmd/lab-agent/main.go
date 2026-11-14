@@ -30,7 +30,8 @@ const usage = `lab-agent: the Mac side of Omarchy Mac Lab
   sudo lab-agent update           take the lab's lab-agent from the lab server: its signature is checked against
                                   the release key this lab-agent pins, and one older than this one is refused
   sudo lab-agent status           what this Mac is enrolled as, its ntfy topic, its Availability window,
-                                  Access level, Installed-run eligibility and latest Audit log entries
+                                  Access level, Installed-run eligibility, latest Audit log entries, and
+                                  whether the lab's changed terms wait for you on My Macs
   sudo lab-agent window show|add|remove [<days> <HH:MM-HH:MM>]
                                   when the lab may use a Volunteer's Mac, e.g. window add mon-fri 19:00-07:00
   sudo lab-agent pause [--until YYYY-MM-DD]

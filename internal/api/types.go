@@ -200,6 +200,12 @@ type Device struct {
 	// UpdateNoticed is the number of the lab's lab-agent the Mac's Volunteer
 	// was last sent a Notice about. labd keeps it and shows it to nobody.
 	UpdateNoticed string `json:"update_noticed,omitempty"`
+	// TermsNoticed is the sha256 of the terms the Mac's Volunteer was last
+	// sent a Notice about. labd keeps it and shows it to nobody.
+	TermsNoticed string `json:"terms_noticed,omitempty"`
+	// NoticeTopicRefused is why labd refuses the Volunteer's own topic
+	// (NtfyOwnURL), "" while it does not: Notices to it are dropped.
+	NoticeTopicRefused string `json:"notice_topic_refused,omitempty"`
 	// RefreshPublished is when the lab queued the last scheduled refresh it
 	// published by itself: it publishes one a week.
 	RefreshPublished time.Time `json:"refresh_published,omitzero"`
@@ -1243,6 +1249,13 @@ type EnrollResponse struct {
 type AgentEnrollment struct {
 	Enrollment
 	NtfyURL string `json:"ntfy_url,omitempty"`
+	// TermsWaiting is the date of the lab's changed terms when the Mac
+	// takes nothing from the lab until its Volunteer accepts them on My
+	// Macs, at MyMacs.
+	TermsWaiting string `json:"terms_waiting,omitempty"`
+	MyMacs       string `json:"my_macs,omitempty"`
+	// NoticeTopicRefused is why labd refuses the Volunteer's own topic.
+	NoticeTopicRefused string `json:"notice_topic_refused,omitempty"`
 }
 
 // Subscribe is what a Volunteer subscribes to: the topic's URL, or the bare
