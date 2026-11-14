@@ -1,7 +1,9 @@
 {{define "main" -}}
+{{with .Data -}}
 <section class="card narrow">
   <h2 class="card-title">deleted</h2>
   <h1>Report deleted</h1>
   <p>The report and its evidence have been removed.</p>
 </section>
+{{- end}}
 {{- end}}

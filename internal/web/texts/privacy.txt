@@ -1,0 +1,63 @@
+PRIVACY
+Statement of 2026-11-14
+
+Omarchy Mac Lab is a volunteer project run by its Maintainers. Its server
+is in Brisbane, Australia, kept by @maralcbr. Write to
+privacy@omarchy-mac.org.
+
+Visiting. No cookie, no analytics, no tracking. The lab logs the internet
+address of each request for 30 days, to keep the lab safe. Pages reach you
+through Cloudflare, which sees your address, keeps its own logs for a
+limited time, and holds copies of public pages for up to a day, also while
+the lab cannot be reached.
+
+Signing in. Sign-in is by GitHub. From GitHub the lab keeps your account
+number and handle and nothing else: no email, no name, no picture. A cookie
+keeps your browser signed in until you sign out or 30 days pass unused. For
+a Lab token you make, the lab keeps when and from which address it was last
+used. Maintainers see your handle; so does the Omarchy M team if you lend
+or lease a Mac. The public never does.
+
+Reports. A report holds hardware facts and test results. The test tool
+strips serial numbers, addresses, host and user names and network names,
+shows you the report, and uploads only that. Published reports are public
+and free to copy (CC0). If the Mac is signed in with GitHub, your handle is
+stamped on its reports, for Maintainers only. A report run by the lab says
+so and names nobody. Each upload comes with a deletion link that removes
+the report for good; copies others already took are out of our reach, and
+Cloudflare's copy can show for up to a day. The lab keeps a fingerprint of
+every report file, deleted ones included, so the same file cannot be
+posted twice.
+
+Lending a Mac. Lend only a test machine with nothing personal on it. The
+lab keeps the Mac's name, hardware facts, settings and jobs, and what its
+tests collect: logs, test output, screenshots. Maintainers and the M team
+see them. The Mac's name and what happens to it are posted to the M team's
+Signal group. Notices to your phone go through ntfy.sh, which holds the
+Mac's name and what happened for 12 hours, and through Google's or Apple's
+push services. When a Mac leaves, its screenshots are deleted; its history
+stays, for Maintainers.
+
+Using a Mac. For the M team: Leases, jobs, builds and verdicts are recorded
+with your handle, and Leases are announced in the Signal group. Every root
+command is kept 12 months with its text, and the Mac's Volunteer can read
+it.
+
+How long. Request log: 30 days. Root commands: 12 months. Backups: 6
+months. Everything else: as long as the lab runs, or until you ask to be
+forgotten.
+
+Being forgotten. Ask on your own page, or write to us. Within 30 days a
+Maintainer removes your record, Lab tokens and sign-ins, your Macs leave,
+and your handle comes off your reports and every record. Four things stay:
+root commands you ran, until their 12 months are up; lines already sent to
+Signal, on its members' phones; the log a Mac keeps for its own Volunteer;
+backups, for 6 months. If your account was blocked, the lab keeps its
+number so that it stays blocked.
+
+Others who hold something. Cloudflare (delivery, a backup copy of the
+databases, mail to the address above). GitHub (sign-in; remove the lab
+under Settings, Applications). ntfy.sh. Signal.
+
+Changes. This page carries its date; earlier versions are in the lab's
+public repository.

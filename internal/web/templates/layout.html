@@ -1,14 +1,51 @@
-<!DOCTYPE html>
+{{define "layout"}}<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>{{.Title}} · Omarchy Mac Lab</title>
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-{{- block "head" .}}{{end}}
-  </head>
-  <body>
-    <main class="site-main">
+<head>
+<meta charset="utf-8">
+<title>{{if .Title}}{{.Title}} · {{end}}Omarchy Mac Lab</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="What works on each Apple Silicon Mac under Omarchy, tested by omarchy-m-test.">
+<meta name="theme-color" content="#1a1b26">
+{{if .Preview}}<meta name="robots" content="noindex">
+{{end}}<link rel="icon" href="{{asset "icon.png"}}" type="image/png">
+<link rel="icon" href="{{asset "icon.svg"}}" type="image/svg+xml">
+<link rel="apple-touch-icon" href="{{asset "icon.png"}}">
+<link rel="preload" href="{{asset "JetBrainsMono-Regular.woff2"}}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{asset "app.css"}}">
+<script src="{{asset "app.js"}}" defer></script>
+{{block "head" .}}{{end}}</head>
+<body>
+<header class="site-header">
+<div class="header-row">
+<a class="brand" href="{{href "/"}}"><img class="brand-logo" src="{{asset "omarchy-logo.svg"}}" alt="" width="24" height="24"><span class="brand-name">omarchy<span class="brand-suffix"> mac lab</span></span></a>
+<nav class="site-nav" aria-label="Results">
+{{range .Row1}}<a href="{{href .Path}}"{{if eq .ID $.Nav}} class="current" aria-current="page"{{end}}>{{.Label}}</a>
+{{end}}</nav>
+<a class="button button-install" href="{{href "/"}}#install">Install</a>
+{{if not .SignedIn}}<a class="sign-in" href="{{.SignInURL}}" rel="nofollow">Sign in</a>
+{{end}}</div>
+{{if .SignedIn}}<div class="lab-row">
+{{with .Row2}}<span class="lab-tag">lab</span>
+<nav class="lab-nav" aria-label="Lab">
+{{range .}}<a href="{{href .Path}}"{{if eq .ID $.Nav}} class="current" aria-current="page"{{end}}>{{.Label}}{{if .Count}}<b class="count">{{.Count}}</b>{{end}}</a>
+{{end}}</nav>
+{{end}}<span class="grow"></span>
+{{with .ShowFleet}}<span class="fleet">{{.Free}}/{{.Macs}} Macs free · {{.JobsRunning}} {{if eq .JobsRunning 1}}job{{else}}jobs{{end}} running{{if .NeedsHands}} · <b class="bad">{{.NeedsHands}} {{if eq .NeedsHands 1}}needs{{else}}need{{end}} hands</b>{{end}}</span>
+{{end}}<span class="viewer"><a class="handle" href="{{.OwnPage}}">@{{.Viewer.Handle}}</a> <span class="badge {{.Viewer.Kind.BadgeClass}}">{{.Viewer.Kind.Badge}}</span>
+<form class="inline" method="post" action="{{href "/sign-out"}}"><input type="hidden" name="csrf_token" value="{{.Viewer.CSRF}}"><button class="link-button" type="submit">Sign out</button></form></span>
+</div>
+{{end}}</header>
+{{if .Banner}}<p class="preview-banner" role="status">Preview: this lab is not open yet. The live site is <a href="https://{{.LiveSite}}">{{.LiveSite}}</a>.</p>
+{{end}}<main class="site-main">
 {{template "main" .}}
-    </main>
-  </body>
+</main>
+<footer class="site-footer">
+<p>Published data: <a href="{{href "/data"}}">CC0</a>. Asahi hardware states: <a href="https://asahilinux.org/docs/platform/feature-support/overview/">Asahi Linux feature support</a>, CC BY 3.0. <a href="https://github.com/omacom/omarchy-maclab">Source</a>.</p>
+<p><a href="{{href "/terms"}}">Terms</a> · <a href="{{href "/privacy"}}">Privacy</a></p>
+<p class="dim">The Omarchy name and logo belong to the Omarchy project and are used with permission. JetBrains Mono is under the SIL Open Font License.</p>
+</footer>
+</body>
 </html>
+{{end}}
+
+{{define "take"}}<form class="inline take" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}">{{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}<button class="button button-danger button-small" type="submit" data-sentence="{{.Sentence}}">{{.Label}}</button></form>{{end}}

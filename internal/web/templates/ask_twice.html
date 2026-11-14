@@ -1,0 +1,9 @@
+{{define "main"}}<section class="card narrow attention">
+<h2 class="card-title">asking twice</h2>
+<p>This takes something away. Nothing has changed yet.</p>
+<form method="post" action="{{.Data.Action}}"><input type="hidden" name="csrf_token" value="{{.Viewer.CSRF}}">{{range .Data.Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}<input type="hidden" name="sure" value="yes">
+<p><button class="button button-danger armed" type="submit">{{.Data.Sentence}}</button></p>
+</form>
+<p><a href="{{.Data.Back}}">Leave it as it is</a></p>
+</section>
+{{end}}

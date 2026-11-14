@@ -1,4 +1,5 @@
 {{define "main" -}}
+{{with .Data -}}
 <article class="report terminal">
   <div class="terminal-bar">
     <span class="terminal-title">omarchy-m-test</span>
@@ -51,4 +52,5 @@
   </div>
 </article>
 <p class="credit dim">Asahi hardware states: <a href="https://asahilinux.org/docs/platform/feature-support/overview/">Asahi Linux feature support</a>, CC BY 3.0.</p>
+{{- end}}
 {{- end}}

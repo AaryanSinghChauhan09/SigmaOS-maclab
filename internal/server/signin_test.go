@@ -435,7 +435,7 @@ func TestASignedOutPageCarriesNothingPerVisitor(t *testing.T) {
 	out.mustSignIn(ownerID)
 	out.write("POST", "/sign-out", "")
 	for who, b := range map[string]*browser{"a new visitor": l.browser(), "after a refused sign-in": failed, "after signing out": out} {
-		for _, target := range []string{"/", "/ui/", "/healthz", "/api/devices"} {
+		for _, target := range []string{"/", "/terms", "/privacy", "/no-such-page", "/healthz", "/api/devices"} {
 			w := b.do("GET", target, "")
 			if sc := w.Header().Values("Set-Cookie"); len(sc) != 0 {
 				t.Errorf("%s, GET %s set a cookie: %v", who, target, sc)

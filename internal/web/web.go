@@ -1,200 +1,324 @@
-// Package web serves the lab's browser UI and the Omarchy themes it wears.
+// Package web is the lab's interface: one header and one footer around
+// every page, the files those pages load, and the two texts of /terms and
+// /privacy. It is compiled into labd whole and knows nothing of labd's
+// data: the server says who is looking and hands each page its facts.
+//
+// A page is one file under templates/ that defines "main" and, if it wants
+// something in the document's head, "head"; it is named by its path there
+// without ".html", such as "reports/show". Files whose name starts with "_"
+// are shared pieces, parsed into every page.
 package web
 
 import (
-	"bufio"
+	"bytes"
 	"embed"
-	"encoding/json"
-	"html"
+	"fmt"
+	"html/template"
 	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
-	"regexp"
-	"sort"
+	"net/url"
+	"path"
 	"strings"
 )
 
-//go:embed static
-var static embed.FS
+//go:embed templates
+var templateFiles embed.FS
 
-// Theme is one Omarchy theme's color tokens, from its colors.toml.
-type Theme struct {
-	Name    string            `json:"name"`
-	Title   string            `json:"title"`
-	Mode    string            `json:"mode"`
-	Colors  map[string]string `json:"colors"`
-	Current bool              `json:"current"`
-	HasBG   bool              `json:"has_background"`
-	dir     string
+// Kind is who is looking at a page, in the order of the interface's table.
+type Kind int
+
+const (
+	SignedOut Kind = iota
+	NoRole
+	External
+	MTeam
+	Maintainer
+	Admin
+)
+
+// Kinds are the six viewers.
+var Kinds = []Kind{SignedOut, NoRole, External, MTeam, Maintainer, Admin}
+
+func (k Kind) String() string {
+	return [...]string{"Signed out", "Signed in, no role", "External volunteer", "M team member", "Maintainer", "Admin"}[k]
 }
 
-// Omarchy keeps shipped themes in the install and user themes in config;
-// a user theme with the same name wins, as it does in Omarchy.
-func themeDirs() []string {
-	home, _ := os.UserHomeDir()
-	return []string{
-		filepath.Join(home, ".local/share/omarchy/themes"),
-		filepath.Join(home, ".config/omarchy/themes"),
+// Badge is the kind as the header's outline badge says it.
+func (k Kind) Badge() string {
+	return [...]string{"", "no role", "External volunteer", "M team", "Maintainer", "Admin"}[k]
+}
+
+// BadgeClass colours the badge.
+func (k Kind) BadgeClass() string {
+	return [...]string{"", "kind-none", "kind-external", "kind-mteam", "kind-maintainer", "kind-admin"}[k]
+}
+
+// Access is the set of kinds that may open a page.
+type Access uint8
+
+func only(kinds ...Kind) Access {
+	var a Access
+	for _, k := range kinds {
+		a |= 1 << k
+	}
+	return a
+}
+
+var (
+	Anyone      = only(Kinds...)
+	SignedIn    = only(NoRole, External, MTeam, Maintainer, Admin)
+	NoRoleOnly  = only(NoRole)
+	Volunteers  = only(External)
+	MTeamUp     = only(MTeam, Maintainer, Admin)
+	Maintainers = only(Maintainer, Admin)
+	Admins      = only(Admin)
+)
+
+// Allows reports whether a viewer of kind k may open the page.
+func (a Access) Allows(k Kind) bool { return a&(1<<k) != 0 }
+
+// NavItem is one link of the header.
+type NavItem struct {
+	ID, Label, Path string
+	// Count is the number shown beside the label, when it is not zero.
+	Count int
+}
+
+// PublicNav is row 1, the same for every viewer.
+func PublicNav() []NavItem {
+	return []NavItem{
+		{ID: "matrix", Label: "Matrix", Path: "/matrix"},
+		{ID: "models", Label: "Models", Path: "/models"},
+		{ID: "features", Label: "Features", Path: "/features"},
+		{ID: "gaps", Label: "Kernel gaps", Path: "/gaps"},
+		{ID: "aurora", Label: "Aurora", Path: "/aurora"},
+		{ID: "benchmarks", Label: "Benchmarks", Path: "/benchmarks"},
+		{ID: "candidates", Label: "Candidates", Path: "/candidates"},
+		{ID: "reports", Label: "Reports", Path: "/reports"},
+		{ID: "data", Label: "Data", Path: "/data"},
 	}
 }
 
-func currentTheme() string {
-	home, _ := os.UserHomeDir()
-	b, _ := os.ReadFile(filepath.Join(home, ".local/state/omarchy/current/theme.name"))
-	return slug(strings.TrimSpace(string(b)))
+var (
+	navLend     = NavItem{ID: "lend", Label: "Lend a Mac", Path: "/lend"}
+	navMyMacs   = NavItem{ID: "my-macs", Label: "My Macs", Path: "/my-macs"}
+	navMacs     = NavItem{ID: "macs", Label: "Macs", Path: "/macs"}
+	navJobs     = NavItem{ID: "jobs", Label: "Jobs", Path: "/jobs"}
+	navBuilds   = NavItem{ID: "builds", Label: "Builds", Path: "/builds"}
+	navReleases = NavItem{ID: "releases", Label: "Releases", Path: "/releases"}
+	navPeople   = NavItem{ID: "people", Label: "People", Path: "/people"}
+)
+
+// OwnPage is the path of a person's own page, which their handle links to.
+const OwnPage = "/me"
+
+// LabNav is row 2 for a viewer of kind k: the lab pages that kind may open.
+func LabNav(k Kind) []NavItem {
+	switch k {
+	case NoRole:
+		return []NavItem{navLend}
+	case External:
+		return []NavItem{navMyMacs}
+	case MTeam:
+		return []NavItem{navMacs, navJobs, navReleases}
+	case Maintainer, Admin:
+		return []NavItem{navMacs, navJobs, navBuilds, navReleases, navPeople}
+	}
+	return nil
 }
 
-var reSlug = regexp.MustCompile(`[^a-z0-9]+`)
-
-func slug(s string) string {
-	return strings.Trim(reSlug.ReplaceAllString(strings.ToLower(s), "-"), "-")
+// Fleet is the fleet status at the end of row 2, for the M team and up.
+type Fleet struct {
+	Macs, Free, JobsRunning, NeedsHands int
 }
 
-func title(s string) string {
-	parts := strings.Split(s, "-")
-	for i, p := range parts {
-		if p != "" {
-			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+// Viewer is who a page is rendered for.
+type Viewer struct {
+	Kind   Kind
+	Handle string
+	// CSRF is the token the viewer's forms carry; "" signed out.
+	CSRF string
+}
+
+// Request is what the server knows of one request for a page.
+type Request struct {
+	Viewer Viewer
+	// Path is this page's own path and query under the Lab address, where
+	// a visitor who signs in from it returns.
+	Path string
+	// Fleet is shown to the M team and up; nil shows nothing.
+	Fleet *Fleet
+	// PendingRequests is the count People carries in the navigation.
+	PendingRequests int
+	// Preview is the lab before it opens.
+	Preview bool
+}
+
+// Page is one page's own part.
+type Page struct {
+	// Title names the page in the browser's tab; "" on the home page.
+	Title string
+	// Nav is the ID of the header's link this page belongs under, "" for none.
+	Nav string
+	// Status is the HTTP status; 0 is 200.
+	Status int
+	// Public marks a page anyone may open: in Preview it carries the banner
+	// naming the live site.
+	Public bool
+	// Data is whatever the page's template reads as .Data.
+	Data any
+}
+
+// LiveSite is the site that serves the public until the lab opens.
+const LiveSite = "omarchy-m-testing.org"
+
+// Site is the interface as one labd serves it, under its prefix.
+type Site struct {
+	base   string
+	pages  map[string]*template.Template
+	assets map[string]*asset // by plain name
+	served map[string]*asset // by fingerprinted name
+}
+
+// New builds the interface for a labd served under base, "" for none.
+func New(base string) (*Site, error) {
+	s := &Site{base: base, pages: map[string]*template.Template{}}
+	if err := s.loadAssets(); err != nil {
+		return nil, err
+	}
+	funcs := template.FuncMap{"href": s.Href, "asset": s.Asset}
+	shared := template.New("shared").Funcs(funcs)
+	var pages []string
+	err := fs.WalkDir(templateFiles, "templates", func(f string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || path.Ext(f) != ".html" {
+			return err
 		}
-	}
-	return strings.Join(parts, " ")
-}
-
-// parseColors reads the flat `key = "value"` TOML Omarchy uses for colors.
-func parseColors(path string) (map[string]string, string, error) {
-	f, err := os.Open(path)
+		if name := path.Base(f); f == "templates/layout.html" || strings.HasPrefix(name, "_") {
+			_, err = shared.ParseFS(templateFiles, f)
+		} else {
+			pages = append(pages, f)
+		}
+		return err
+	})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	defer f.Close()
-	colors := map[string]string{}
-	mode := "dark"
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "[") {
-			continue
+	for _, f := range pages {
+		t, err := shared.Clone()
+		if err == nil {
+			_, err = t.ParseFS(templateFiles, f)
 		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
+		if err != nil {
+			return nil, err
 		}
-		k = strings.TrimSpace(k)
-		v = strings.TrimSpace(v)
-		if i := strings.Index(v, "#"); i > 0 && strings.HasPrefix(v, `"`) && strings.Count(v[:i], `"`) >= 2 {
-			v = strings.TrimSpace(v[:i]) // trailing comment
+		if t.Lookup("main") == nil {
+			return nil, fmt.Errorf("%s defines no \"main\"", f)
 		}
-		v = strings.Trim(v, `"'`)
-		if k == "mode" {
-			mode = v
-			continue
-		}
-		if strings.HasPrefix(v, "#") && (len(v) == 7 || len(v) == 9) {
-			colors[k] = v
-		}
+		s.pages[strings.TrimSuffix(strings.TrimPrefix(f, "templates/"), ".html")] = t
 	}
-	return colors, mode, sc.Err()
+	return s, nil
 }
 
-func loadThemes() []*Theme {
-	byName := map[string]*Theme{}
-	for _, dir := range themeDirs() {
-		ents, _ := os.ReadDir(dir)
-		for _, e := range ents {
-			p := filepath.Join(dir, e.Name())
-			colors, mode, err := parseColors(filepath.Join(p, "colors.toml"))
-			if err != nil || colors["background"] == "" || colors["foreground"] == "" {
-				continue
-			}
-			name := slug(e.Name())
-			byName[name] = &Theme{Name: name, Title: title(name), Mode: mode, Colors: colors, dir: p, HasBG: firstBackground(p) != ""}
-		}
-	}
-	cur := currentTheme()
-	var out []*Theme
-	for _, t := range byName {
-		t.Current = t.Name == cur
-		out = append(out, t)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
+// Href is a path of the lab as a page links to it: under labd's prefix.
+func (s *Site) Href(p string) string { return s.base + p }
+
+// view is what a template sees.
+type view struct {
+	Page
+	Request
+	site *Site
 }
 
-func firstBackground(dir string) string {
-	ents, _ := os.ReadDir(filepath.Join(dir, "backgrounds"))
-	var imgs []string
-	for _, e := range ents {
-		switch strings.ToLower(filepath.Ext(e.Name())) {
-		case ".png", ".jpg", ".jpeg", ".webp":
-			imgs = append(imgs, filepath.Join(dir, "backgrounds", e.Name()))
+func (v view) Row1() []NavItem { return PublicNav() }
+
+func (v view) Row2() []NavItem {
+	items := LabNav(v.Viewer.Kind)
+	for i := range items {
+		if items[i].ID == navPeople.ID {
+			items[i].Count = v.PendingRequests
 		}
 	}
-	sort.Strings(imgs)
-	if len(imgs) == 0 {
-		return ""
+	return items
+}
+
+func (v view) SignedIn() bool { return v.Viewer.Kind != SignedOut }
+
+// ShowFleet is the fleet status, for the M team and up.
+func (v view) ShowFleet() *Fleet {
+	if MTeamUp.Allows(v.Viewer.Kind) {
+		return v.Fleet
 	}
-	return imgs[0]
+	return nil
 }
 
-// Register adds the UI and theme routes. Themes and wallpapers are public so
-// the lock screen can wear them before anyone has signed in. base is the
-// path prefix labd is served under, "" for none: the page says it in its
-// <base>, and every URL the UI uses is relative to that.
-func Register(m *http.ServeMux, base string) {
-	sub, _ := fs.Sub(static, "static")
-	files := http.FileServer(http.FS(sub))
-	m.Handle("GET /ui/", http.StripPrefix("/ui/", cache(files)))
-	index := IndexHTML(base)
-	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Write(index)
-	})
-	m.HandleFunc("GET /api/themes", func(w http.ResponseWriter, r *http.Request) {
-		themes := loadThemes()
-		if themes == nil {
-			themes = []*Theme{}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(themes)
-	})
-	m.HandleFunc("GET /api/themes/{name}/background", func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("name")
-		var path string
-		if name == "current" || name == currentTheme() {
-			home, _ := os.UserHomeDir()
-			if p, err := filepath.EvalSymlinks(filepath.Join(home, ".local/state/omarchy/current/background")); err == nil {
-				path = p
-			}
-		}
-		if path == "" {
-			for _, t := range loadThemes() {
-				if t.Name == name {
-					path = firstBackground(t.dir)
-				}
-			}
-		}
-		if path == "" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		http.ServeFile(w, r, path)
-	})
+// Banner reports whether the page carries Preview's banner.
+func (v view) Banner() bool { return v.Preview && v.Public }
+
+func (v view) LiveSite() string { return LiveSite }
+
+func (v view) OwnPage() string { return v.site.Href(OwnPage) }
+
+// SignInURL is the Sign in link: it comes back to this page.
+func (v view) SignInURL() string {
+	u := v.site.Href("/sign-in")
+	if v.Path != "" {
+		u += "?return=" + url.QueryEscape(v.Path)
+	}
+	return u
 }
 
-func cache(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
-		h.ServeHTTP(w, r)
-	})
+// Take is one action that takes something away, for the "take" template: a
+// button that asks twice in place. The first click turns Label into
+// Sentence, which states the effect; the second posts to Action.
+type Take struct {
+	Action, Label, Sentence, CSRF string
+	Fields                        []Field
 }
 
-// IndexHTML is the UI's page for a labd served under base: its <base> is
-// base/, against which the page's relative URLs resolve.
-func IndexHTML(base string) []byte {
-	b, _ := static.ReadFile("static/index.html")
-	tag := `<base href="` + html.EscapeString(base) + `/">`
-	return []byte(strings.Replace(string(b), "<head>\n", "<head>\n"+tag+"\n", 1))
+// Field is one more value a form carries.
+type Field struct{ Name, Value string }
+
+// Take is the button for {{template "take" (.Take "/path" "Remove" "Remove:
+// 1 Lease ends now")}}; fields are further name, value pairs of its form.
+func (v view) Take(action, label, sentence string, fields ...string) Take {
+	t := Take{Action: v.site.Href(action), Label: label, Sentence: sentence, CSRF: v.Viewer.CSRF}
+	for i := 0; i+1 < len(fields); i += 2 {
+		t.Fields = append(t.Fields, Field{fields[i], fields[i+1]})
+	}
+	return t
+}
+
+// Asking is what the page "ask_twice" reads: the server asking the second
+// time itself, for a browser that ran no script.
+type Asking struct {
+	Action, Sentence, Back string
+	Fields                 []Field
+}
+
+// CSP is the content security policy of every page: the lab's own files
+// only, so a page carries no inline script and no inline style.
+const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+
+// Render writes the page named name, inside the header and footer. A page
+// rendered for someone signed in is theirs alone and is never stored.
+func (s *Site) Render(w http.ResponseWriter, name string, req Request, p Page) error {
+	t := s.pages[name]
+	if t == nil {
+		return fmt.Errorf("web: no page %q in templates/", name)
+	}
+	var buf bytes.Buffer
+	if err := t.ExecuteTemplate(&buf, "layout", view{Page: p, Request: req, site: s}); err != nil {
+		return fmt.Errorf("web: page %q: %v", name, err)
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Security-Policy", CSP)
+	if req.Viewer.Kind != SignedOut {
+		h.Set("Cache-Control", "private, no-store")
+	}
+	if p.Status != 0 {
+		w.WriteHeader(p.Status)
+	}
+	_, err := w.Write(buf.Bytes())
+	return err
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/reports"
+	"github.com/omacom/omarchy-maclab/internal/web"
 )
 
 // The upload and the report's two old links, through labd's own front: the
@@ -322,11 +323,11 @@ func TestTheReportPageExplainsEachResultInPlainWords(t *testing.T) {
 	l := newReportsLab(t, nil)
 	page := func(change func(map[string]any)) string {
 		t.Helper()
-		var out bytes.Buffer
-		if err := l.s.writeReportPage(&out, reportOf(t, change)); err != nil {
+		out := httptest.NewRecorder()
+		if err := l.s.site.Render(out, "reports/show", web.Request{}, web.Page{Data: l.s.reportPage(reportOf(t, change))}); err != nil {
 			t.Fatal(err)
 		}
-		return out.String()
+		return out.Body.String()
 	}
 	firstCheck := func(body map[string]any) map[string]any {
 		return body["checks"].([]any)[0].(map[string]any)
@@ -371,7 +372,7 @@ func TestTheReportPageExplainsEachResultInPlainWords(t *testing.T) {
 		body["machine"].(map[string]any)["model"] = `<script>alert(1)</script>`
 		firstCheck(body)["evidence"] = []any{`</pre><img src=x onerror=alert(1)>`}
 	})
-	if strings.Contains(hostile, "<script>") || strings.Contains(hostile, "<img") {
+	if strings.Contains(hostile, "<script>") || strings.Contains(hostile, "<img src=x") || strings.Contains(hostile, "onerror=alert(1)>") {
 		t.Error("a report's words reached its page as markup")
 	}
 }
@@ -415,8 +416,8 @@ func TestTheDeletionLinkAsksBeforeDeleting(t *testing.T) {
 			t.Errorf("the confirmation lacks %q:\n%s", want, page)
 		}
 	}
-	if strings.Contains(page, "csrf_token") || strings.Contains(page, "<a ") || strings.Contains(page, "<script") || strings.Contains(page, "src=") {
-		t.Errorf("the confirmation of a signed-out visitor carries a token, a link or something to fetch:\n%s", page)
+	if strings.Contains(page, "csrf_token") || strings.Count(page, token) != 1 || strings.Contains(page, "token=") {
+		t.Errorf("the confirmation of a signed-out visitor carries a token of its own, or the link's secret outside its form:\n%s", page)
 	}
 	if l.stored() != 2 {
 		t.Fatalf("opening the link deleted something: %d reports", l.stored())

@@ -190,28 +190,28 @@ func TestCallerLogLinesOlderThan30DaysAreDeleted(t *testing.T) {
 	}
 	get("/healthz") // 14 November 22:00
 	at(90 * time.Minute)
-	get("/ui/app.js") // 14 November 23:30
+	get("/terms") // 14 November 23:30
 	at(3 * time.Hour)
-	get("/ui/") // 15 November 01:00
+	get("/privacy") // 15 November 01:00
 	at(20 * 24 * time.Hour)
 	get("/") // 4 December
-	if got := paths(); got != "/healthz /ui/app.js /ui/ /" {
+	if got := paths(); got != "/healthz /terms /privacy /" {
 		t.Fatalf("the caller log: %s", got)
 	}
 
 	at(30*24*time.Hour - time.Second)
 	s.callers.prune(s.now())
-	if got := paths(); got != "/healthz /ui/app.js /ui/ /" {
+	if got := paths(); got != "/healthz /terms /privacy /" {
 		t.Errorf("a line under 30 days old was deleted: %s", got)
 	}
 	at(30*24*time.Hour + time.Second)
 	s.callers.prune(s.now())
-	if got := paths(); got != "/ui/app.js /ui/ /" {
+	if got := paths(); got != "/terms /privacy /" {
 		t.Errorf("30 days and a second after the first line: %s", got)
 	}
 	at(30*24*time.Hour + 2*time.Hour)
 	s.callers.prune(s.now())
-	if got := paths(); got != "/ui/ /" {
+	if got := paths(); got != "/privacy /" {
 		t.Errorf("30 days and two hours after the first line: %s", got)
 	}
 	if files, _ := filepath.Glob(filepath.Join(s.callers.dir, "*")); len(files) != 2 {
@@ -219,7 +219,7 @@ func TestCallerLogLinesOlderThan30DaysAreDeleted(t *testing.T) {
 	}
 	// labd goes on writing after a prune.
 	get("/healthz")
-	if got := paths(); got != "/ui/ / /healthz" {
+	if got := paths(); got != "/privacy / /healthz" {
 		t.Errorf("after a prune: %s", got)
 	}
 	at(51 * 24 * time.Hour)

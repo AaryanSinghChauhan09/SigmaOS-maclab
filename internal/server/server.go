@@ -153,6 +153,7 @@ type Server struct {
 	serialMu    sync.Mutex
 	callers     *callerLog
 	signIns     signInStates
+	site        *web.Site
 }
 
 // clock is where labd reads time: Config.Clock, or the wall clock when unset.
@@ -270,6 +271,9 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	s.start = s.now()
 	if rules != nil {
 		s.uploads = reports.NewUploads(rep, rules, s.now)
+	}
+	if s.site, err = web.New(s.basePath()); err != nil {
+		return nil, err
 	}
 	if err := s.firstMaintainer(); err != nil {
 		return nil, err
@@ -572,9 +576,12 @@ func (s *Server) Handler() http.Handler {
 	for _, rt := range s.routes() {
 		s.register(m, rt)
 	}
-	// The UI's own files and themes: no Mac's data, so anyone.
-	web.Register(m, s.basePath())
-	return s.edge(s.capBodies(m))
+	// The interface's own files and pages: each page says who may open it.
+	s.site.Register(m)
+	for _, p := range pageRoutes {
+		m.HandleFunc(p.pattern, s.pageHandler(p))
+	}
+	return s.edge(s.capBodies(s.withPages(m)))
 }
 
 // routes is every API route and who may reach it (see reach).

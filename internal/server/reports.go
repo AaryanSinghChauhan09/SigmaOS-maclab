@@ -7,10 +7,8 @@ package server
 // report is deleted only when that is sent.
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"math/big"
 	"net/http"
 	"strings"
@@ -47,25 +45,15 @@ func (s *Server) hUploadReport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) hReportPage(w http.ResponseWriter, r *http.Request) {
 	report, err := s.reports.Report(r.PathValue("id"))
 	if errors.Is(err, reports.ErrNoReport) || (err == nil && report.Hidden) {
-		http.NotFound(w, r)
+		s.notFound(w, r)
 		return
 	}
 	if err != nil {
 		s.pageFailed(w, err)
 		return
 	}
-	s.page(w, func(out io.Writer) error { return s.writeReportPage(out, report) })
-}
-
-// page answers with what write makes, whole or not at all.
-func (s *Server) page(w http.ResponseWriter, write func(io.Writer) error) {
-	var out bytes.Buffer
-	if err := write(&out); err != nil {
-		s.pageFailed(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(out.Bytes())
+	p := s.reportPage(report)
+	s.render(w, r, "reports/show", web.Page{Title: p.Title, Nav: "reports", Public: true, Data: p})
 }
 
 func (s *Server) pageFailed(w http.ResponseWriter, err error) {
@@ -99,10 +87,9 @@ func (s *Server) hReportDeletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	model, _ := member(report.Document(), "machine", "model").(string)
-	s.page(w, func(out io.Writer) error {
-		return web.WritePage(out, "reports/deletion", struct{ Title, Model, Uploaded, Action, Token, CSRF string }{
-			"Delete report", model, uploadedAt(report), s.basePath() + "/reports/" + report.PublicID, token, CSRFToken(r)})
-	})
+	s.render(w, r, "reports/deletion", web.Page{Title: "Delete report", Nav: "reports", Public: true,
+		Data: struct{ Model, Uploaded, Action, Token, CSRF string }{
+			model, uploadedAt(report), s.basePath() + "/reports/" + report.PublicID, token, CSRFToken(r)}})
 }
 
 // hReportDelete is the confirmation, sent: the form of the deletion page,
@@ -124,9 +111,7 @@ func (s *Server) hReportDelete(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.pageFailed(w, err)
 	default:
-		s.page(w, func(out io.Writer) error {
-			return web.WritePage(out, "reports/deleted", struct{ Title string }{"Report deleted"})
-		})
+		s.render(w, r, "reports/deleted", web.Page{Title: "Report deleted", Nav: "reports", Public: true})
 	}
 }
 
@@ -209,9 +194,9 @@ func expectedGap(status, outcome string) bool {
 	return false
 }
 
-// writeReportPage writes a report's page: the machine, and each check with
+// reportPage is what a report's page shows: the machine, and each check with
 // its result in the catalogue's words.
-func (s *Server) writeReportPage(out io.Writer, report *reports.Report) error {
+func (s *Server) reportPage(report *reports.Report) reportPage {
 	doc := report.Document()
 	text := func(path ...string) string { return words(member(doc, path...)) }
 	p := reportPage{
@@ -273,7 +258,7 @@ func (s *Server) writeReportPage(out io.Writer, report *reports.Report) error {
 		}
 		section.Checks = append(section.Checks, c)
 	}
-	return web.WritePage(out, "reports/show", p)
+	return p
 }
 
 // loadCatalogue is the feature catalogue the pages word results with.

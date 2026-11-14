@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -73,6 +74,18 @@ func edgeAt(h http.Handler, method, host, path, remote string, hdr map[string]st
 	return w
 }
 
+// pageFile is the address the page at home loads its file ending in ext
+// from, as cloudflared would ask for it.
+func pageFile(t *testing.T, h http.Handler, host, home, ext string) string {
+	t.Helper()
+	body := edgeAt(h, "GET", host, home, viaProxy, fromIngress).Body.String()
+	m := regexp.MustCompile(`(?:href|src)="([^"]*/assets/[^"]+` + regexp.QuoteMeta(ext) + `)"`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("the page at %s loads no %s file:\n%s", home, ext, body)
+	}
+	return m[1]
+}
+
 func with(m map[string]string, kv ...string) map[string]string {
 	out := map[string]string{}
 	for k, v := range m {
@@ -89,6 +102,7 @@ func with(m map[string]string, kv ...string) map[string]string {
 func TestPrefixIsServedExactlyOnce(t *testing.T) {
 	h := edgeServer(t)
 	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	script := pageFile(t, h, "chonkbase.net", "/maclab/", ".js")
 	for _, c := range []struct {
 		name, path string
 		hdr        map[string]string
@@ -96,7 +110,9 @@ func TestPrefixIsServedExactlyOnce(t *testing.T) {
 	}{
 		{"the UI", "/maclab/", fromIngress, 200},
 		{"the UI without its slash", "/maclab", fromIngress, 200},
-		{"its script", "/maclab/ui/app.js", fromIngress, 200},
+		{"its script", script, fromIngress, 200},
+		{"its script outside the prefix", strings.TrimPrefix(script, "/maclab"), fromIngress, 404},
+		{"a page", "/maclab/terms", fromIngress, 200},
 		{"the API", "/maclab/api/devices", tok, 200},
 		{"the API outside the prefix", "/api/devices", tok, 404},
 		{"the UI outside the prefix", "/", fromIngress, 404},
@@ -112,21 +128,27 @@ func TestPrefixIsServedExactlyOnce(t *testing.T) {
 			t.Errorf("%s: GET %s = %d, want %d: %s", c.name, c.path, w.Code, c.want, w.Body)
 		}
 	}
-	w := edgeDo(h, "GET", "/maclab/", viaProxy, fromIngress)
-	if !strings.Contains(w.Body.String(), `<base href="/maclab/">`) {
-		t.Errorf("the UI's page doesn't name its base:\n%s", w.Body)
-	}
-	page := strings.Replace(w.Body.String(), `<base href="/maclab/">`, "", 1)
-	for _, p := range []string{`src="/`, `href="/`} {
-		if strings.Contains(page, p) {
-			t.Errorf("the UI's page has a URL from the root (%s), which would leave the prefix", p)
+	for _, home := range []string{"/maclab/", "/maclab", "/maclab/terms", "/maclab/no-such-page"} {
+		page := edgeDo(h, "GET", home, viaProxy, fromIngress).Body.String()
+		urls := regexp.MustCompile(`(?:href|src|action)="([^"]*)"`).FindAllStringSubmatch(page, -1)
+		if len(urls) < 20 {
+			t.Fatalf("GET %s: a page with %d URLs:\n%s", home, len(urls), page)
+		}
+		for _, m := range urls {
+			if !strings.HasPrefix(m[1], "/maclab/") && !strings.HasPrefix(m[1], "https://") {
+				t.Errorf("GET %s: the page has the URL %s, which would leave the prefix", home, m[1])
+			}
 		}
 	}
-	js := edgeDo(h, "GET", "/maclab/ui/app.js", viaProxy, fromIngress).Body.String()
-	for _, p := range []string{"'/api/", "`/api/", `"/api/`, "'/ui/", "`/ui/", `"/ui/`, "location.origin"} {
-		if strings.Contains(js, p) {
+	js := edgeDo(h, "GET", script, viaProxy, fromIngress).Body.String()
+	for _, p := range []string{"'/api/", "`/api/", `"/api/`, "'/assets/", "`/assets/", `"/assets/`, "location.origin"} {
+		if js == "" || strings.Contains(js, p) {
 			t.Errorf("app.js still has %q, which would leave the prefix", p)
 		}
+	}
+	css := edgeDo(h, "GET", pageFile(t, h, "chonkbase.net", "/maclab/", ".css"), viaProxy, fromIngress).Body.String()
+	if css == "" || strings.Contains(css, `url("/`) || strings.Contains(css, "url(/") {
+		t.Errorf("the stylesheet loads a file from the root, which would leave the prefix")
 	}
 }
 
@@ -213,7 +235,9 @@ func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
 		sandbox bool
 	}{
 		{"/maclab/", false},
-		{"/maclab/ui/app.js", false},
+		{pageFile(t, h, "chonkbase.net", "/maclab/", ".js"), false},
+		{"/maclab/terms", false},
+		{"/maclab/no-such-page", false},
 		{"/maclab/api/devices", true},
 		{"/maclab/api/jobs/nope/files/evil.html", true},
 		{"/maclab/api/devices/nope/screens/x.jpg", true},
@@ -274,26 +298,21 @@ func TestPublicURLAndAliasRefuseWhatTheyCantMean(t *testing.T) {
 func TestRedirectsStayUnderThePrefix(t *testing.T) {
 	h := edgeServer(t)
 	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
-	for _, p := range []string{"/maclab//api/devices", "/maclab/api/../api/devices", "/maclab/./api/devices", "/maclab/ui/../api/devices", "/maclab/api/%2e%2e/api/devices"} {
+	for _, p := range []string{"/maclab//api/devices", "/maclab/api/../api/devices", "/maclab/./api/devices", "/maclab/assets/../api/devices", "/maclab/api/%2e%2e/api/devices"} {
 		if w := edgeDo(h, "GET", p, viaProxy, tok); w.Code != 404 {
 			t.Errorf("GET %s: %d %s, want 404", p, w.Code, w.Header().Get("Location"))
 		}
 	}
-	for _, p := range []string{"/maclab/ui", "/maclab/ui/index.html", "/maclab/ui/fonts"} {
-		w := edgeDo(h, "GET", p, viaProxy, tok)
-		loc := w.Header().Get("Location")
-		if w.Code < 300 || w.Code >= 400 {
-			continue
-		}
-		if strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "/maclab/") {
-			t.Errorf("GET %s: %d to %s, outside the prefix", p, w.Code, loc)
-		}
-		if strings.Contains(loc, "://") || strings.HasPrefix(loc, "//") {
-			t.Errorf("GET %s: %d to another origin %s", p, w.Code, loc)
-		}
+	// The way to sign-in, the one redirect labd makes itself.
+	signIn := labServer(t, "https://chonkbase.net/maclab", func(c *Config) { c.GitHub = &GitHubApp{ClientID: "the-client-id"} }).Handler()
+	w := edgeDo(signIn, "GET", "/maclab/test-only/maintainers?tab=2", viaProxy, fromIngress)
+	if want := "/maclab/sign-in?return=%2Fmaclab%2Ftest-only%2Fmaintainers%3Ftab%3D2"; w.Code != http.StatusSeeOther || w.Header().Get("Location") != want {
+		t.Errorf("GET a Maintainers' page, signed out: %d to %q, want 303 to %q", w.Code, w.Header().Get("Location"), want)
 	}
-	if w := edgeDo(h, "GET", "/maclab/ui", viaProxy, tok); w.Header().Get("Location") != "/maclab/ui/" {
-		t.Errorf("GET /maclab/ui: %d %q, want a redirect to /maclab/ui/", w.Code, w.Header().Get("Location"))
+	for _, p := range []string{"/maclab/assets", "/maclab/assets/", "/maclab/terms/"} {
+		if w := edgeDo(h, "GET", p, viaProxy, tok); w.Code != 404 {
+			t.Errorf("GET %s: %d %s, want 404", p, w.Code, w.Header().Get("Location"))
+		}
 	}
 }
 
@@ -458,7 +477,7 @@ func TestTheDefaultCachePolicyIsNoStore(t *testing.T) {
 	if w := edgeAt(h, "GET", "evil.example", "/", viaProxy, nil); w.Header().Get("Cache-Control") != "no-store" {
 		t.Errorf("a third name's refusal: Cache-Control %q", w.Header().Get("Cache-Control"))
 	}
-	w := edgeAt(h, "GET", labHost, "/ui/app.js", viaProxy, fromIngress)
+	w := edgeAt(h, "GET", labHost, pageFile(t, h, labHost, "/", ".js"), viaProxy, fromIngress)
 	if cc := w.Header().Values("Cache-Control"); w.Code != 200 || len(cc) != 1 || cc[0] == "no-store" {
 		t.Errorf("a file whose handler states its own policy: %d, Cache-Control %q", w.Code, cc)
 	}
@@ -473,7 +492,7 @@ func TestPreviewPagesCarryNoindex(t *testing.T) {
 			t.Errorf("Preview() is %v with the switch at %v", s.Preview(), preview)
 		}
 		h := s.Handler()
-		for _, target := range []string{"/", "/ui/app.js", "/healthz", "/nothing"} {
+		for _, target := range []string{"/", "/terms", pageFile(t, h, labHost, "/", ".css"), "/healthz", "/nothing"} {
 			w := edgeAt(h, "GET", labHost, target, viaProxy, fromIngress)
 			if got := w.Header().Get("X-Robots-Tag") == "noindex"; got != preview {
 				t.Errorf("Preview %v: GET %s (%d): X-Robots-Tag %q", preview, target, w.Code, w.Header().Get("X-Robots-Tag"))

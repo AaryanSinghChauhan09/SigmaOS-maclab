@@ -2,6 +2,7 @@
     <meta name="referrer" content="no-referrer">
 {{- end}}
 {{define "main" -}}
+{{with .Data -}}
 <section class="card narrow">
   <h2 class="card-title">delete report</h2>
   <h1>Delete this report?</h1>
@@ -15,4 +16,5 @@
     <button type="submit" class="button button-danger">Delete report</button>
   </form>
 </section>
+{{- end}}
 {{- end}}

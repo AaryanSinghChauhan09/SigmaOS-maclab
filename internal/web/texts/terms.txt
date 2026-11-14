@@ -1,0 +1,41 @@
+OMARCHY MAC LAB: LENDING A MAC
+Terms of 2026-11-14
+
+Omarchy Mac Lab is a volunteer project. Nobody is paid and nothing is promised.
+
+1. Lend only a test machine: a Mac with nothing on it, in Omarchy or in
+   macOS, that you cannot afford to lose or to have read. It is yours to
+   lend and you are 18 or over.
+2. What the lab does. Inside the window you set, and only on AC power, it
+   restarts this Mac into test kernels and back, runs its tests, and
+   collects hardware facts, logs, test output and screenshots, without
+   asking each time. A test kernel has full control of the machine and can
+   crash it or lose what is on it. There is no warranty.
+3. Who does it. The lab's Maintainers, and members of the Omarchy M team
+   holding a Lease on this Mac. At Qualification, where every Mac starts:
+   test kernels, their own included, and the lab's tests. At Full, which
+   only you can choose, at the Mac: also commands and scripts as root. The
+   lab does not install an Omarchy release on this Mac; if that changes you
+   are asked again.
+4. What is kept and seen. Every root command run here at Full is kept by
+   the lab for 12 months, with its text and who ran it; you can read it on
+   My Macs. The Mac's name, never yours, is posted to the M team's Signal
+   group when it joins, is leased, is paused, changes its window or Access
+   level, or leaves, and in a daily summary. Its reports are published only
+   if you turn that on.
+5. What the lab never does. Force this Mac to restart from outside: a hung
+   Mac waits for its own watchdog, then for you. Act outside your window.
+   Update its own software here: you run the update at this Mac, and it
+   installs only if signed by the lab. Ask for a password or a command in a
+   Notice.
+6. If someone's access to the lab is stolen and this Mac may have been
+   touched, you are told. The lab cannot clean your Mac: reinstall it.
+7. You are in charge. Set the window, pause, choose the Access level, read
+   every record, and leave at any time: Leave on My Macs, or
+   `sudo lab-agent leave`.
+8. If these terms change, this Mac takes nothing from the lab until you
+   accept the new ones on My Macs.
+
+What the lab keeps: https://lab.omarchy-mac.org/privacy
+Your yes is recorded with your GitHub account, this Mac, the time and the
+sha256 of this text.
