@@ -95,15 +95,29 @@ func TestListenConfigTakesLoopbackOnly(t *testing.T) {
 }
 
 // shortDir is a temporary directory with a short path: a Unix socket's path
-// holds about a hundred bytes.
+// holds about a hundred bytes, and TMPDIR can be longer than that.
 func shortDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "labd")
+	dir, err := os.MkdirTemp("/tmp", "labd")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	return dir
+}
+
+// The socket tests pass whatever TMPDIR is: a test runner's own temporary
+// folder can be too long for a socket's path.
+func TestTheSocketTestsTakeALongTMPDIR(t *testing.T) {
+	long := filepath.Join(t.TempDir(), strings.Repeat("t", 100))
+	if err := os.Mkdir(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", long)
+	l := listenLab(t)
+	if code := l.get(t, l.tunnel, "http://"+labHost+"/healthz"); code != 200 {
+		t.Fatalf("GET /healthz through the socket: %d", code)
+	}
 }
 
 // listening is a labd at its Lab address, serving on both listeners.
