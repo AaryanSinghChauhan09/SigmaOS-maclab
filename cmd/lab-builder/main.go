@@ -30,6 +30,7 @@ import (
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
+	"github.com/omacom/omarchy-maclab/internal/upload"
 	"io/fs"
 )
 
@@ -366,24 +367,16 @@ func (b *builder) download(ctx context.Context, sha, dst string) error {
 	return err
 }
 
+// upload sends one output for build: in one request up to 32 MiB, in
+// numbered parts beyond, since labd reads no body over 90 MB.
 func (b *builder) upload(ctx context.Context, build string, f *os.File) (string, error) {
 	defer f.Close()
-	req, _ := http.NewRequestWithContext(ctx, "POST", b.server+"/api/builder/artifacts?build="+url.QueryEscape(build), f)
-	req.Header.Set("Authorization", "Bearer "+b.token)
-	resp, err := labhttp.Client(b.rt, 30*time.Minute).Do(req)
+	st, err := f.Stat()
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	var out struct{ SHA256 string }
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("upload: %s", strings.TrimSpace(string(data)))
-	}
-	if err := json.Unmarshal(data, &out); err != nil {
-		return "", err
-	}
-	return out.SHA256, nil
+	return upload.Sender{Client: labhttp.Client(b.rt, 30*time.Minute), URL: b.server + "/api/builder/artifacts",
+		Query: url.Values{"build": {build}}, Token: b.token}.Send(ctx, f, st.Size())
 }
 
 // run executes one build and always reports back, success or not.

@@ -238,6 +238,37 @@ type wdLabd struct {
 	art      []byte
 	onFetch  func() // runs while the artifact downloads
 	onUpload func() // runs while a file uploads
+	uploads  chan wdUpload
+}
+
+// wdUpload is one file labd was sent, and how its length was given.
+type wdUpload struct {
+	length  int64
+	chunked bool
+	body    string
+}
+
+func TestAFileGoesToLabdWithItsContentLength(t *testing.T) {
+	lab := &wdLabd{uploads: make(chan wdUpload, 4)}
+	a, _ := wdAgent(t, labBoot, lab)
+	dir := t.TempDir()
+	for _, content := range []string{"a journal", ""} {
+		path := filepath.Join(dir, "file")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.uploadOnce(context.Background(), "j1", "boot0/journal", path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.uploadScreen(context.Background(), path); err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			if up := <-lab.uploads; up.chunked || up.length != int64(len(content)) || up.body != content {
+				t.Errorf("a file of %d bytes arrived as %+v", len(content), up)
+			}
+		}
+	}
 }
 
 func (l *wdLabd) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -262,9 +293,13 @@ func (l *wdLabd) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			l.onFetch()
 		}
 		w.Write(l.art)
-	case r.URL.Path == "/api/agent/upload":
+	case r.URL.Path == "/api/agent/upload", r.URL.Path == "/api/agent/screen":
 		if l.onUpload != nil {
 			l.onUpload()
+		}
+		body, _ := io.ReadAll(r.Body)
+		if l.uploads != nil {
+			l.uploads <- wdUpload{length: r.ContentLength, chunked: len(r.TransferEncoding) > 0, body: string(body)}
 		}
 		io.WriteString(w, "ok")
 	default:

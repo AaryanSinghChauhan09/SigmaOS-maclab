@@ -1112,7 +1112,10 @@ func (a *Agent) uploadScreen(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	req, _ := http.NewRequestWithContext(ctx, "POST", a.url("/api/agent/screen"), f)
+	req, _ := http.NewRequestWithContext(ctx, "POST", a.url("/api/agent/screen"), nil)
+	if err := fileBody(req, f); err != nil {
+		return "", err
+	}
 	req.Header.Set("Authorization", "Bearer "+a.cfg.Secret)
 	req.Header.Set("Content-Type", "image/jpeg")
 	resp, err := labhttp.Client(a.rt, a.cfg.transferTimeout()).Do(req)
@@ -1405,7 +1408,10 @@ func (a *Agent) uploadOnce(ctx context.Context, job, name, path string) error {
 	}
 	defer f.Close()
 	q := url.Values{"job": {job}, "name": {name}}
-	req, _ := http.NewRequestWithContext(ctx, "POST", a.url("/api/agent/upload?"+q.Encode()), f)
+	req, _ := http.NewRequestWithContext(ctx, "POST", a.url("/api/agent/upload?"+q.Encode()), nil)
+	if err := fileBody(req, f); err != nil {
+		return err
+	}
 	req.Header.Set("Authorization", "Bearer "+a.cfg.Secret)
 	resp, err := labhttp.Client(a.rt, a.cfg.transferTimeout()).Do(req)
 	if err != nil {
@@ -1417,6 +1423,21 @@ func (a *Agent) uploadOnce(ctx context.Context, job, name, path string) error {
 	}
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("%s", resp.Status)
+	}
+	return nil
+}
+
+// fileBody makes f, as long as it is now, the body of req, with its
+// Content-Length: a body without one crosses the Front door whole before
+// labd can refuse it for its size.
+func fileBody(req *http.Request, f *os.File) error {
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	req.ContentLength, req.Body = st.Size(), io.NopCloser(io.NewSectionReader(f, 0, st.Size()))
+	if st.Size() == 0 {
+		req.Body = http.NoBody
 	}
 	return nil
 }

@@ -398,6 +398,9 @@ func TestUploadKernelAndModuleInputs(t *testing.T) {
 					http.Error(w, "wrong upload request", 400)
 					return
 				}
+				if r.ContentLength < 0 || len(r.TransferEncoding) > 0 {
+					t.Errorf("an upload came without Content-Length")
+				}
 				body, _ := io.ReadAll(r.Body)
 				if failInputs && string(body) == "module inputs" {
 					http.Error(w, "storage refused", 500)
