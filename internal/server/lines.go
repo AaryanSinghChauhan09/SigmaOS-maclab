@@ -175,8 +175,10 @@ func (l *groupLines) sendNext(ctx context.Context) (wait time.Duration, more boo
 			attempts++
 		}
 	}
+	// A line an earlier labd left waiting is not posted by one that has no
+	// sender, or no id for its group any more.
 	group := groupID(l.dir, lineGroup(channel))
-	if group == "" {
+	if group == "" || l.sender == nil {
 		l.settle(id, "not-posted", "")
 		return 0, true
 	}

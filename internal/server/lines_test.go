@@ -310,6 +310,26 @@ func TestWithNoSenderLinesAreRecordedAndNotPosted(t *testing.T) {
 	}
 }
 
+// A labd started with the groups' files and no sender (--signal without
+// --signal-socket), over a line an earlier run left waiting, posts nothing
+// and settles the line.
+func TestWithNoSenderALineLeftWaitingIsSettledAndNotPosted(t *testing.T) {
+	data := t.TempDir()
+	st, err := openStore(filepath.Join(data, "labd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO lines (at, channel, text, state) VALUES (?, 'lab', 'ada released m1-pro.', 'waiting'), (?, 'agents', 'ada made the Lab token "x".', 'waiting')`, time.Now().UnixMicro(), time.Now().UnixMicro()); err != nil {
+		t.Fatal(err)
+	}
+	st.db.Close()
+	h := newLinesAt(t, data, nil, signalDir(t))
+	rec := h.settle()
+	if len(rec) != 2 || rec[0].state != "not-posted" || rec[1].state != "not-posted" {
+		t.Fatalf("recorded %+v", rec)
+	}
+}
+
 // A line labd was handing to signal-cli when it stopped may have gone:
 // it is not sent a second time.
 func TestALineLabdStoppedWhileSendingIsNotSentAgain(t *testing.T) {
