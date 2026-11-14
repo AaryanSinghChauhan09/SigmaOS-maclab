@@ -1,26 +1,39 @@
 #!/bin/bash
-# Set the mini up for the lab:
+# Set the mini up for the lab, the whole machine in one run:
 #
 #   sudo scripts/mini/setup [--dry-run] [--release-key FILE] [--tunnel-credential FILE]
 #                           [--backup-guest ADDRESS] [--backup-keys FOLDER]
 #                           [--checks FOLDER]
 #                           [--container-user NAME] [--builder-token FILE] [--builder-cpus N]
+#                           [--tailscale-key FILE]
 #
-# Makes the lab account and its folders, pins the release key, installs the
-# Homebrew formulae deploy/homebrew-formulae names and what deploy/pins
-# names, and copies the Homebrew tools into a folder only root can write,
-# which is where every daemon runs them from. Makes the Out-of-band
-# controller's token, installs the controller's LaunchDaemon file and, once
-# a build is Deployed, starts it. Starts the tunnel once it has a credential
-# and a Deployed build to read its routes from. Installs the Signal sender's
-# LaunchDaemon file and starts signal-cli from the copy; its number is
-# registered with scripts/mini/signal. Starts Litestream and schedules the
-# nightly backup and the monthly Restore drill once the guest's and R2's keys
-# are in place. Starts the Dead-man switch's ping once it has its check.
-# Starts container's server and keeps it up, makes the Builder's volumes and
-# images, and starts the Builder once it has its token. Safe to run again:
-# it changes only what is not yet as it should be. It never starts labd:
-# Deploy does. Needs only what macOS has, and Homebrew for its own formulae.
+# In the order of the spec's "Changes to make on the mini", with the
+# Homebrew tools first because the daemons run from their copy:
+#
+#   1. The lab account and its folders, and the release key pinned.
+#   7. The Homebrew formulae deploy/homebrew-formulae names, installed as the
+#      account Homebrew belongs to and copied into a folder only root can
+#      write, which is where every daemon runs them from; and what
+#      deploy/pins names, by its checksum.
+#   1. The LaunchDaemons, each under its account: the Out-of-band controller
+#      and its token, the tunnel, the Signal sender, Litestream, the nightly
+#      backup and the Restore drill, the Dead-man switch's ping, container's
+#      server and the Builder. Each starts once it has what it needs, a
+#      Deployed build among it, and the run says what is still missing.
+#   2. tailscaled, from the copy and under the lab's own LaunchDaemon file,
+#      joined to the tailnet tagged tag:lab. The Standalone app goes first,
+#      by hand at the mini's screen.
+#   3. Wi-Fi off, while a wired port has an address.
+#   4. SSH with keys only after Unlock, once the account running this has a
+#      key in place.
+#   5. No macOS update or Security Response installs by itself; XProtect
+#      and configuration data stay automatic.
+#   6. autorestart 1 and sleep 0.
+#
+# Safe to run again: it changes only what is not yet as it should be, so a
+# run that stopped is taken up by the next one. It never starts labd: Deploy
+# does. Needs only what macOS has, and Homebrew for its own formulae.
+# scripts/mini/check reads the result and changes nothing.
 #
 #   --dry-run           say what would change, and change nothing
 #   --release-key FILE  the allowed_signers file Deploy checks a bundle
@@ -59,6 +72,11 @@
 #                       removed.
 #   --builder-cpus N    the cores a build gets: 10, or 8 or 6 after a failed
 #                       gate test. Every build gets 16 GB.
+#   --tailscale-key FILE
+#                       an auth key made for tag:lab in Tailscale's admin
+#                       console, one line. tailscale reads it from FILE,
+#                       which is removed once the mini has joined. Needed
+#                       once.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,7 +84,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,61p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,79p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
@@ -77,8 +95,10 @@ checks=""
 container_user=""
 builder_token=""
 builder_cpus=""
+tailscale_key=""
 while (( $# )); do
   case "$1" in
+    --tailscale-key) [[ $# -ge 2 ]] || usage; tailscale_key="$2"; shift ;;
     --container-user) [[ $# -ge 2 ]] || usage; container_user="$2"; shift ;;
     --builder-token) [[ $# -ge 2 ]] || usage; builder_token="$2"; shift ;;
     --builder-cpus) [[ $# -ge 2 ]] || usage; builder_cpus="$2"; shift ;;
@@ -180,6 +200,16 @@ case "$builder_cpus" in
   "" | 10 | 8 | 6) ;;
   *) fail "--builder-cpus $builder_cpus: a build gets 10 cores, or 8 or 6" ;;
 esac
+if [[ -n $tailscale_key ]]; then
+  [[ -f $tailscale_key && ! -L $tailscale_key ]] || fail "$tailscale_key is no plain file"
+  case "$(looks "$tailscale_key")" in
+    -r--------\ * | -rw-------\ *) ;;
+    *) fail "$tailscale_key can be read by others: whoever has the key can join the tailnet as the lab's mini. Revoke it in Tailscale's admin console, make another and keep the file to its owner (chmod 600)" ;;
+  esac
+  if [[ "$(wc -l < "$tailscale_key" | tr -d ' ')" -gt 1 ]] || ! grep -Eq '^tskey-auth-[A-Za-z0-9-]+$' "$tailscale_key"; then
+    fail "$tailscale_key is not an auth key: one line, as Tailscale's admin console shows it once (Settings, Keys, Generate auth key, with the tag $TAILNET_TAG)"
+  fi
+fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/lab-setup.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
@@ -305,8 +335,6 @@ brew_as_owner() {
     (cd / && sudo -u "$BREW_OWNER" -H env "${BREW_ENV[@]}" "$BREW_PREFIX/bin/brew" "$@")
   fi
 }
-
-formulae() { sed -e 's/#.*//' "$deploy/homebrew-formulae" | awk 'NF { print $1 }'; }
 
 KEG_NAMES=()
 KEG_PATHS=()
@@ -933,6 +961,152 @@ builder() {
   fi
 }
 
+# tailscaled, the open-source daemon, in place of the Standalone app: it is
+# the one that is back after a restart with nobody logged in. It runs as
+# root from the copy of the Homebrew tools, under the lab's own LaunchDaemon
+# file: Homebrew's service and tailscaled's own install-system-daemon would
+# both run it from where the admin account can write. The mini joins as a
+# new node tagged tag:lab, whose key does not expire. The auth key is read by
+# tailscale from its file and is never an argument.
+
+tailscale_cli() { "$TAILSCALE" --socket="$TAILSCALED_SOCKET" "$@"; }
+
+# on_tailnet: "Running yes" for a node that is on the tailnet under the tag;
+# empty while tailscaled does not answer.
+on_tailnet() {
+  tailscale_cli status --json 2>/dev/null |
+    jq -r --arg tag "$TAILNET_TAG" '[.BackendState // "", (if ((.Self.Tags // []) | index($tag)) != null then "yes" else "no" end)] | join(" ")' 2>/dev/null || true
+}
+
+start_tailscaled() {
+  local n
+  start_daemon "$TAILSCALED_LABEL"
+  for n in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -z "$(on_tailnet)" ]] || return 0
+    sleep 1
+  done
+  fail "tailscaled does not answer $n s after its start: see /var/log/lab-tailscaled.log"
+}
+
+join_tailnet() {
+  local self
+  tailscale_cli up --auth-key="file:$tailscale_key" --advertise-tags="$TAILNET_TAG" "$@" --timeout=60s ||
+    fail "the mini did not join the tailnet: the key in $tailscale_key has to be one made for $TAILNET_TAG, not used up and not expired. The file was left in place"
+  [[ "$(on_tailnet)" == "Running yes" ]] || fail "tailscale took the key, and the mini is still not on the tailnet under $TAILNET_TAG: $TAILSCALE status. $tailscale_key was left in place"
+  rm -f "$tailscale_key"
+  self="$(tailscale_cli status --json | jq -r '[(.Self.DNSName // "" | rtrimstr(".")), ((.Self.TailscaleIPs // []) | join(", "))] | join(", ")')"
+  say "the mini is on the tailnet as $self. Write the new address down wherever the old one was, and remove the old node (the Standalone app's) in Tailscale's admin console, under Machines"
+}
+
+tailnet() {
+  local plist="$LAUNCHD_DIR/$TAILSCALED_LABEL.plist" state
+  formulae | grep -qx tailscale || return 0
+  [[ -f $deploy/$TAILSCALED_LABEL.plist ]] || fail "no deploy/$TAILSCALED_LABEL.plist beside scripts/"
+  if [[ -e $TAILSCALE_APP ]]; then
+    say "tailscaled is not started: the Tailscale Standalone app is still at $TAILSCALE_APP, and the two must not be on one machine. At the mini's own screen: quit Tailscale, move the app to the Trash, empty it, restart, Unlock. Then run the set-up again, from the house's network: the tailnet is gone until the mini has joined anew"
+    return 0
+  fi
+  if [[ ! -x $TAILSCALED || ! -x $TAILSCALE ]]; then
+    (( DRY )) || fail "no tailscaled in the copy of the Homebrew tools ($TAILSCALED)"
+    change "start tailscaled ($TAILSCALED_LABEL) under $plist and join the tailnet as a node tagged $TAILNET_TAG" true
+    return 0
+  fi
+  if (( TOOLS_COPIED )) || ! cmp -s "$deploy/$TAILSCALED_LABEL.plist" "$plist" || ! loaded "$TAILSCALED_LABEL"; then
+    change "start tailscaled ($TAILSCALED_LABEL) under $plist, from $TAILSCALED" start_tailscaled
+  fi
+  state="$(on_tailnet)"
+  if [[ $state == "Running yes" ]]; then
+    [[ -z $tailscale_key ]] || change "remove $tailscale_key: the mini is already on the tailnet under $TAILNET_TAG" rm -f "$tailscale_key"
+  elif [[ -z $tailscale_key ]]; then
+    case "$state" in
+      Running\ *) say "the mini is on the tailnet without $TAILNET_TAG, so its key expires: join it again with a key made for the tag (--tailscale-key FILE)" ;;
+      *) say "the mini is not on the tailnet: tailscaled waits for a key made for $TAILNET_TAG (--tailscale-key FILE)" ;;
+    esac
+  elif [[ $state == Running\ * ]]; then
+    change "join the tailnet again as a node tagged $TAILNET_TAG, with the key in $tailscale_key, and remove that file" join_tailnet --force-reauth
+  else
+    change "join the tailnet as a node tagged $TAILNET_TAG, with the key in $tailscale_key, and remove that file" join_tailnet
+  fi
+}
+
+# Wi-Fi off: one path and one address, the wired one, which is also the only
+# dependable way to an Unlock over SSH. It is left on while no wired port has
+# an address, since turning it off then would take the mini off the network.
+
+wifi() {
+  local dev wired
+  dev="$(wifi_device)"
+  [[ -n $dev ]] || return 0
+  [[ "$(sys networksetup -getairportpower "$dev" 2>/dev/null | awk '{ print $NF }')" == On ]] || return 0
+  wired="$(wired_address)"
+  if [[ -z $wired ]]; then
+    say "Wi-Fi ($dev) is left on: no wired port has an address, and without it the mini would be off the network. Plug Ethernet in and run the set-up again"
+    return 0
+  fi
+  change "turn Wi-Fi ($dev) off: the mini is wired at $wired" sys networksetup -setairportpower "$dev" off
+}
+
+# SSH after Unlock takes keys only. (Before Unlock macOS takes the account
+# password and nothing else, whatever is written here.) The lab's file is the
+# first sshd reads, and the first value of a key stands. It is written only
+# once the account running this has a key in place, and taken back when sshd
+# refuses it: either way nobody is locked out by this step.
+
+keys_only() {
+  mkdir -p "$(dirname "$SSHD_KEYS_ONLY")"
+  write_as "$ROOT_OWNER" "$ROOT_GROUP" 0644 "$SSHD_KEYS_ONLY" < "$work/keys-only.conf"
+  if ! sys sshd -t; then
+    rm -f "$SSHD_KEYS_ONLY"
+    fail "sshd does not take $SSHD_KEYS_ONLY: it was removed, and SSH is as it was"
+  fi
+}
+
+remote_login() {
+  local admin home keys says
+  admin="${SUDO_USER:-$(id -un)}"
+  home="$(dscl_value "/Users/$admin" NFSHomeDirectory)"
+  keys="$SYSROOT${home:-/Users/$admin}/.ssh/authorized_keys"
+  printf '%s\n' "# Omarchy Mac Lab: after Unlock, SSH takes keys only. Written by scripts/mini/setup." "PasswordAuthentication no" "KbdInteractiveAuthentication no" > "$work/keys-only.conf"
+  if ! cmp -s "$work/keys-only.conf" "$SSHD_KEYS_ONLY" || [[ "$(looks "$SSHD_KEYS_ONLY")" != "$(shape - 644) $ROOT_OWNER:$ROOT_GROUP" ]]; then
+    if ! grep -Eqs '^(ssh-|ecdsa-|sk-)' "$keys"; then
+      say "SSH still takes a password: $admin has no key in $keys, and keys-only would lock $admin out. Put a key there (ssh-copy-id from the machine you come in from) and run the set-up again"
+      return 0
+    fi
+    change "write $SSHD_KEYS_ONLY: after Unlock, SSH takes keys only ($admin has a key in $keys)" keys_only
+  fi
+  # Without root sshd says nothing about itself.
+  says="$(sshd_says)"
+  if (( ! DRY )) && [[ $says != "$SSHD_WANT" ]]; then
+    fail "SSH still takes a password after Unlock (sshd -T: ${says:-no answer}), though $SSHD_KEYS_ONLY says otherwise: a file sshd reads before it, in $(dirname "$SSHD_KEYS_ONLY") or sshd_config itself, sets it. Put that right and run the set-up again"
+  fi
+}
+
+# Nothing that restarts the mini installs by itself: macOS updates and
+# Security Responses wait for a Maintenance run. XProtect and configuration
+# data stay automatic.
+
+# update_pref KEY 0|1: one value of Software Update.
+update_pref() {
+  local word=off bool=false
+  [[ $2 == 0 ]] || word=on bool=true
+  [[ "$(sys defaults read "$UPDATE_PREFS" "$1" 2>/dev/null || true)" != "$2" ]] || return 0
+  change "turn $1 $word in Software Update" sys defaults write "$UPDATE_PREFS" "$1" -bool "$bool"
+}
+
+updates() {
+  update_pref AutomaticallyInstallMacOSUpdates 0
+  update_pref CriticalUpdateInstall 0
+  update_pref ConfigDataInstall 1
+}
+
+# Power: after a hard power loss the mini starts by itself and waits for
+# Unlock, and it never sleeps.
+
+power() {
+  [[ "$(power_value autorestart)" == 1 ]] || change "set autorestart 1: the mini starts by itself when power returns" sys pmset -a autorestart 1
+  [[ "$(power_value sleep)" == 0 ]] || change "set sleep 0: the mini never sleeps" sys pmset -a sleep 0
+}
+
 no_planted_link
 account
 folders
@@ -946,6 +1120,11 @@ sender
 backups
 dead_man
 builder
+tailnet
+wifi
+remote_login
+updates
+power
 
 if (( CHANGES == 0 )); then
   say "nothing to change"

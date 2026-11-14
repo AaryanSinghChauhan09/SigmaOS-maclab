@@ -22,6 +22,10 @@ LITESTREAM_LABEL="org.omarchy-mac.lab.litestream"
 BACKUP_LABEL="org.omarchy-mac.lab.backup"
 DRILL_LABEL="org.omarchy-mac.lab.restore-drill"
 DEAD_MAN_LABEL="org.omarchy-mac.lab.dead-man"
+# tailscaled, the open-source daemon, in place of the Standalone app; the
+# tag the mini joins the tailnet under, so that its key does not expire.
+TAILSCALED_LABEL="org.omarchy-mac.lab.tailscaled"
+TAILNET_TAG="tag:lab"
 # Where the checks kept outside the house are pinged: healthchecks.io.
 CHECKS_AT="https://hc-ping.com"
 # cloudflared's own answer to whether it holds a connection to Cloudflare,
@@ -128,6 +132,17 @@ SIGNAL_CLI="$LAB_TOOLS/current/signal-cli/bin/signal-cli"
 SIGNAL_DATA="$LAB_HOME/secrets/signal-cli"
 SIGNAL_SOCKET="$LAB_HOME/run/signal-cli.sock"
 BREW_PREFIX="$SYSROOT/opt/homebrew"
+# tailscaled and its command, from the copy of the Homebrew tools. The
+# Standalone app it replaces, which must be gone before it starts.
+TAILSCALE="$LAB_TOOLS/current/tailscale/bin/tailscale"
+TAILSCALED="$LAB_TOOLS/current/tailscale/bin/tailscaled"
+TAILSCALED_SOCKET="$SYSROOT/var/run/tailscaled.socket"
+TAILSCALE_APP="$SYSROOT/Applications/Tailscale.app"
+# After Unlock, SSH takes keys only: the first file sshd reads.
+SSHD_KEYS_ONLY="$SYSROOT/etc/ssh/sshd_config.d/000-lab.conf"
+UPDATE_PREFS="$SYSROOT/Library/Preferences/com.apple.SoftwareUpdate"
+# Every daemon of the lab and the account it runs as (the spec's table).
+LAB_DAEMONS="$LABD_LABEL:lab $LITESTREAM_LABEL:lab $BACKUP_LABEL:lab $DRILL_LABEL:lab $DEAD_MAN_LABEL:lab $CLOUDFLARED_LABEL:lab $SIGNAL_LABEL:lab $OOBD_LABEL:root $CONTAINER_LABEL:root $BUILDER_LABEL:root $TAILSCALED_LABEL:root"
 
 umask 022
 ME="$(basename "$0")"
@@ -153,6 +168,52 @@ change() {
 need_root() {
   [[ -n $SYSROOT || "$(id -u)" == 0 ]] || fail "run it with sudo"
 }
+
+# sys TOOL ARGS...: a tool of macOS that reads or changes the machine itself
+# (its network, its power, its updates, its sshd), which no folder can stand
+# in for. A test names the folder its own stand-ins are in, and nothing else
+# is run: a test never reaches the machine it runs on.
+sys() {
+  local tool="$1"
+  shift
+  if [[ -n $SYSROOT ]]; then
+    [[ -n ${LAB_SYSTEM_TOOLS:-} && -x $LAB_SYSTEM_TOOLS/$tool ]] || fail "a test ran $tool with no stand-in for it"
+    "$LAB_SYSTEM_TOOLS/$tool" "$@"
+  else
+    "$tool" "$@"
+  fi
+}
+
+# formulae: the Homebrew formulae of deploy/homebrew-formulae, one a line.
+# The script that sources this names the folder in $deploy.
+# shellcheck disable=SC2154
+formulae() { sed -e 's/#.*//' "$deploy/homebrew-formulae" | awk 'NF { print $1 }'; }
+
+# wifi_device: the Wi-Fi port's device, or nothing on a Mac with none.
+wifi_device() { sys networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: Wi-Fi/ { getline; print $2; exit }'; }
+
+# wired_address: the address of the first wired port that has one.
+wired_address() {
+  local port dev addr
+  while IFS='|' read -r port dev; do
+    case "$port" in Wi-Fi | *Bridge* | "") continue ;; esac
+    addr="$(sys ipconfig getifaddr "$dev" 2>/dev/null || true)"
+    if [[ -n $addr ]]; then
+      echo "$addr"
+      return 0
+    fi
+  done < <(sys networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: / { sub(/^Hardware Port: /, ""); port = $0 } /^Device: / { print port "|" $2 }')
+}
+
+# sshd_says: whether sshd takes a password after Unlock, as sshd itself
+# reads its configuration; SSHD_WANT is keys only. Empty without root.
+SSHD_WANT="kbdinteractiveauthentication no passwordauthentication no"
+sshd_says() {
+  sys sshd -T 2>/dev/null | awk '$1 == "passwordauthentication" || $1 == "kbdinteractiveauthentication" { print $1, $2 }' | sort | tr '\n' ' ' | sed 's/ $//'
+}
+
+# power_value KEY: one of pmset's settings in use.
+power_value() { sys pmset -g 2>/dev/null | awk -v key="$1" '$1 == key { print $2; exit }'; }
 
 # loaded LABEL: whether launchd has that daemon.
 loaded() { launchctl print "system/$1" >/dev/null 2>&1; }

@@ -95,8 +95,10 @@ type mini struct {
 	// tree is an unpacked bundle: the scripts under test and their deploy/ files.
 	tree string
 	bin  string
-	log  string
-	env  []string
+	// tools holds the stand-ins for what reads or changes the machine itself.
+	tools string
+	log   string
+	env   []string
 }
 
 // launchctl keeps one file for each loaded daemon: "loaded" for labd,
@@ -111,7 +113,8 @@ case "$1" in
   print)
     [[ -f $state ]] || exit 113
     echo "state = $(cat "$state.state" 2>/dev/null || echo running)"
-    echo "runs = $(cat "$state.runs" 2>/dev/null || echo 1)" ;;
+    echo "runs = $(cat "$state.runs" 2>/dev/null || echo 1)"
+    [[ ! -f $STUB_STATE/pid.$label ]] || echo "	pid = $(<"$STUB_STATE/pid.$label")" ;;
   bootout) rm -f "$state" ;;
   bootstrap) [[ -f $3 ]] || exit 5; cp "$3" "$state" ;;
   kickstart) [[ -f $state && ! -f $STUB_STATE/kickstart.fails ]] || exit 113 ;;
@@ -162,6 +165,8 @@ case "$1" in
       printf '#!/bin/sh\necho %s 1.0\n' "$f" > "$prefix/Cellar/$f/1.0/bin/$f"
       chmod 0775 "$prefix/Cellar/$f/1.0/bin/$f" "$prefix/Cellar/$f/1.0/bin"
       ln -sfn "../Cellar/$f/1.0" "$prefix/opt/$f"
+      # tailscale's keg holds the command and the daemon; the set-up asks the command.
+      [[ $f != tailscale ]] || { cp "$STUB_TAILSCALE" "$prefix/Cellar/$f/1.0/bin/tailscale"; printf '#!/bin/sh\n# tailscaled 1.0\n' > "$prefix/Cellar/$f/1.0/bin/tailscaled"; chmod 0775 "$prefix/Cellar/$f/1.0/bin/tailscaled"; }
     done ;;
   *) echo "brew $1: not expected of the set-up" >&2; exit 1 ;;
 esac
@@ -175,7 +180,7 @@ func newMini(t *testing.T) *mini {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
-	m := &mini{t: t, root: filepath.Join(root, "r"), tree: filepath.Join(root, "lab-server"), bin: filepath.Join(root, "stubs"), log: filepath.Join(root, "stubs.log")}
+	m := &mini{t: t, root: filepath.Join(root, "r"), tree: filepath.Join(root, "lab-server"), bin: filepath.Join(root, "stubs"), tools: filepath.Join(root, "machine"), log: filepath.Join(root, "stubs.log")}
 	for _, d := range []string{m.root + "/Library/LaunchDaemons", filepath.Join(root, "state")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
@@ -206,7 +211,7 @@ func newMini(t *testing.T) *mini {
 	write(t, m.tree+"/deploy/homebrew-formulae", "# none\n", 0o644)
 	write(t, m.tree+"/deploy/"+cloudflaredLabel+".plist", read(t, filepath.Join(repo(t), "deploy", cloudflaredLabel+".plist")), 0o644)
 	write(t, m.tree+"/deploy/"+signalLabel+".plist", read(t, filepath.Join(repo(t), "deploy", signalLabel+".plist")), 0o644)
-	for _, f := range []string{litestreamLabel + ".plist", backupLabel + ".plist", "litestream.yml", deadManLabel + ".plist", drillLabel + ".plist"} {
+	for _, f := range []string{litestreamLabel + ".plist", backupLabel + ".plist", "litestream.yml", deadManLabel + ".plist", drillLabel + ".plist", tailscaledLabel + ".plist"} {
 		write(t, m.tree+"/deploy/"+f, read(t, filepath.Join(repo(t), "deploy", f)), 0o644)
 	}
 	write(t, m.tree+"/deploy/pins", "# none\n", 0o644)
@@ -218,6 +223,7 @@ func newMini(t *testing.T) *mini {
 		"LAB_VERIFY_TRIES=2",
 		"LAB_AS_LAB="+m.bin+"/as-lab",
 	)
+	m.machine()
 	return m
 }
 

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- tailscaled on the mini, as root: the open-source daemon, in place of the
+     Tailscale Standalone app, so that the tailnet is back after a restart
+     with nobody logged in. It runs from the copy of the Homebrew tools only
+     root can write, never from Homebrew's own folder, and under this file,
+     not Homebrew's service nor tailscaled's own install-system-daemon. The
+     mini joins tagged tag:lab; SSH stays OpenSSH. scripts/mini/setup
+     installs this file and starts it. Nothing here is a secret: the node's
+     key is in the state file named, which only root reads. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.tailscaled</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/tools/current/tailscale/bin/tailscaled</string>
+    <string>--state=/Library/Tailscale/tailscaled.state</string>
+    <string>--socket=/var/run/tailscaled.socket</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/empty</string>
+  <key>Umask</key><integer>63</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/var/log/lab-tailscaled.log</string>
+  <key>StandardErrorPath</key><string>/var/log/lab-tailscaled.log</string>
+</dict>
+</plist>

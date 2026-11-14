@@ -1,0 +1,447 @@
+#!/bin/bash
+# Read the mini's state against what the set-up leaves, and change nothing:
+#
+#   sudo scripts/mini/check
+#
+# One line for each thing looked at: ok, FAIL, or a note. It shows:
+#
+#   - each of the lab's daemons installed under the account the spec's table
+#     gives, its file naming no path under Homebrew and no environment, its
+#     program inside /usr/local/lab where only root can write, loaded, and
+#     when it runs: under that account, with nothing of Homebrew's loaded;
+#   - nothing started by Homebrew's own services or by tailscaled's own
+#     system daemon, no LaunchDaemon file of any kind naming a path under
+#     Homebrew, and the Tailscale Standalone app gone;
+#   - the copy of the Homebrew tools in use and the previous one, each
+#     root's alone, with the versions in them;
+#   - every formula of deploy/homebrew-formulae installed, by version;
+#   - container at its pin and the reset tool's checksum;
+#   - the mini on the tailnet, tagged tag:lab, the old node gone;
+#   - SSH with keys only after Unlock, Remote Login and Screen Sharing on and
+#     answering on the wired address and the tailnet's;
+#   - Wi-Fi off, the three Software Update values, autorestart 1, sleep 0;
+#   - no secret in any process's arguments.
+#
+# Exits 1 when anything failed. Run it from the Deployed build or an unpacked
+# bundle, after the set-up. Needs only what macOS has.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+deploy="$(cd "$here/../.." && pwd)/deploy"
+
+usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+(( $# == 0 )) || usage
+need_root
+[[ -f $deploy/homebrew-formulae && -f $deploy/pins ]] || fail "no deploy/ folder beside scripts/: run the check from the Deployed build or an unpacked bundle"
+
+FAILED=0
+good() { echo "ok    $*"; }
+bad() { echo "FAIL  $*"; FAILED=$((FAILED + 1)); }
+note() { echo "note  $*"; }
+# PHYS is the tests' stand-in for / once every link above it is followed,
+# as a resolved path has it. Outside the tests it is empty, as SYSROOT is.
+PHYS=""
+[[ -z $SYSROOT ]] || PHYS="$(cd -P "$SYSROOT" 2>/dev/null && pwd -P)" || PHYS="$SYSROOT"
+# shown PATH: a path of the mini as the owner knows it.
+shown() {
+  local p="${1#"$PHYS"}"
+  echo "${p#"$SYSROOT"}"
+}
+
+# plist_value FILE KEY: a string at the top of a LaunchDaemon file.
+plist_value() {
+  awk -v key="$2" 'index($0, "<key>" key "</key><string>") { s = $0; sub(".*<key>" key "</key><string>", "", s); sub("</string>.*", "", s); print s; exit }' "$1"
+}
+
+# program FILE: what the file runs, the first of its ProgramArguments.
+program() {
+  awk '/<key>ProgramArguments<\/key>/ { args = 1; next } args && /<string>/ { s = $0; sub(/^[^<]*<string>/, "", s); sub(/<\/string>.*/, "", s); print s; exit }' "$1"
+}
+
+# resolve PATH: where PATH leads once every link on the way is followed.
+resolve() {
+  local p="$1" dir to _
+  for _ in 1 2 3 4 5 6 7 8; do
+    dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd -P)" || return 1
+    p="$dir/$(basename "$p")"
+    if [[ ! -L $p ]]; then
+      echo "$p"
+      return 0
+    fi
+    to="$(readlink "$p")"
+    case "$to" in
+      /*) p="$to" ;;
+      *) p="$dir/$to" ;;
+    esac
+  done
+  return 1
+}
+
+# open_to_others PATH: the first of PATH and the folders above it that is
+# not root's, or that another account can write. Nothing when only root can
+# change what PATH names.
+open_to_others() {
+  local p="$1"
+  while [[ -n $p && $p != / && $p != "$PHYS" && $p != "$SYSROOT" ]]; do
+    case "$(looks "$p")" in
+      [-d]????-??-?" $ROOT_OWNER:"*) ;;
+      *)
+        echo "$p"
+        return 0 ;;
+    esac
+    p="$(dirname "$p")"
+  done
+}
+
+# unsealed FOLDER: the first thing in FOLDER that is not root's, that another
+# account can write, or that is a link into Homebrew.
+unsealed() {
+  find "$1" \( ! -user "$ROOT_OWNER" -o \( ! -type l \( -perm -020 -o -perm -002 \) \) -o \( -type l \( -lname "$BREW_PREFIX/*" -o -lname '/opt/homebrew/*' \) \) \) -print 2>/dev/null | head -n 1
+}
+
+daemons() {
+  local pair label account plist user prog real open out pid who
+  echo "The lab's daemons, each under its account and run from where only $ROOT_OWNER can write:"
+  for pair in $LAB_DAEMONS; do
+    label="${pair%%:*}" account="${pair##*:}"
+    plist="$LAUNCHD_DIR/$label.plist"
+    if [[ ! -f $plist ]]; then
+      bad "$label: no $(shown "$plist"). The set-up installs it once the daemon has what it needs (labd's comes with a Deploy)"
+      continue
+    fi
+    if grep -q /opt/homebrew "$plist"; then
+      bad "$label: $(shown "$plist") names a path under /opt/homebrew, which the admin account can write"
+      continue
+    fi
+    if grep -q '<key>EnvironmentVariables</key>' "$plist"; then
+      bad "$label: $(shown "$plist") holds an environment. A secret is in a file the daemon is told the name of"
+      continue
+    fi
+    user="$(plist_value "$plist" UserName)"
+    if [[ ${user:-root} != "$account" ]]; then
+      bad "$label: its file runs it as ${user:-root}; the spec's table says $account"
+      continue
+    fi
+    prog="$(program "$plist")"
+    if [[ $prog != /usr/local/lab/* ]]; then
+      bad "$label runs ${prog:-nothing}, outside /usr/local/lab"
+      continue
+    fi
+    if ! real="$(resolve "$SYSROOT$prog")" || [[ ! -x $real ]]; then
+      bad "$label: nothing to run at $prog"
+      continue
+    fi
+    if [[ $real != "$PHYS/usr/local/lab"/* ]]; then
+      bad "$label: $prog leads to $(shown "$real"), outside /usr/local/lab"
+      continue
+    fi
+    open="$(open_to_others "$real")"
+    if [[ -n $open ]]; then
+      bad "$label runs $(shown "$real"), and $(shown "$open") can be changed by another account than $ROOT_OWNER"
+      continue
+    fi
+    if ! out="$(launchctl print "system/$label" 2>/dev/null)"; then
+      bad "$label is installed and not loaded"
+      continue
+    fi
+    pid="$(awk '$1 == "pid" && $2 == "=" { print $3; exit }' <<<"$out")"
+    if [[ -z $pid ]]; then
+      if grep -q '<key>KeepAlive</key>' "$plist"; then
+        bad "$label is loaded and not running: see its log"
+      else
+        good "$label: as $account, $(shown "$real"); it runs at its times, not now"
+      fi
+      continue
+    fi
+    who="$(sys ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')"
+    if [[ $who != "$account" ]]; then
+      bad "$label (pid $pid) runs as ${who:-an account ps does not name}; the spec's table says $account"
+      continue
+    fi
+    if sys lsof -nP -p "$pid" 2>/dev/null | grep -q /opt/homebrew; then
+      bad "$label (pid $pid) has a file under /opt/homebrew loaded"
+      continue
+    fi
+    good "$label: pid $pid as $account, $(shown "$real"), nothing of Homebrew's loaded"
+  done
+}
+
+foreign() {
+  local f found=0 home admin names
+  echo
+  echo "Nothing runs from Homebrew, by its services or otherwise:"
+  admin="${SUDO_USER:-$(id -un)}"
+  home="$SYSROOT/Users/$admin"
+  for f in "$LAUNCHD_DIR"/homebrew.mxcl.* "$SYSROOT"/Library/LaunchAgents/homebrew.mxcl.* "$home"/Library/LaunchAgents/homebrew.mxcl.* "$LAUNCHD_DIR"/com.tailscale.tailscaled.plist; do
+    [[ -e $f ]] || continue
+    found=1
+    bad "$(shown "$f") is a service file of Homebrew's or of tailscaled's own: the lab's daemons have the lab's files only"
+  done
+  names="$(launchctl print system 2>/dev/null | grep -Eo '(homebrew\.mxcl\.[A-Za-z0-9@._-]+|com\.tailscale\.tailscaled)' | sort -u | tr '\n' ' ')"
+  if [[ -n $names ]]; then
+    found=1
+    bad "launchd has loaded: $names"
+  fi
+  (( found )) || good "no service of Homebrew's own, and no system daemon of tailscaled's own, is installed or loaded"
+  found=0
+  for f in "$LAUNCHD_DIR"/*.plist; do
+    [[ -f $f ]] || continue
+    if grep -q /opt/homebrew "$f"; then
+      found=1
+      bad "$(shown "$f") names a path under /opt/homebrew"
+    fi
+  done
+  (( found )) || good "no LaunchDaemon file names a path under /opt/homebrew"
+  if [[ -e $TAILSCALE_APP ]]; then
+    bad "the Tailscale Standalone app is still at $(shown "$TAILSCALE_APP")"
+  else
+    good "the Tailscale Standalone app is gone"
+  fi
+}
+
+# copy WHICH LINK: one copy of the Homebrew tools, by the link that names it.
+copy() {
+  local dir open stray
+  if ! dir="$(resolve "$2")" || [[ ! -d $dir || "$(dirname "$dir")" != "$(resolve "$LAB_TOOLS")" ]]; then
+    bad "$1: $(shown "$2") does not lead to a folder in $(shown "$LAB_TOOLS")"
+    return
+  fi
+  open="$(open_to_others "$dir")"
+  stray="$(unsealed "$dir")"
+  if [[ -n $open ]]; then
+    bad "$1, $(basename "$dir"): $(shown "$open") can be changed by another account than $ROOT_OWNER"
+  elif [[ -n $stray ]]; then
+    bad "$1, $(basename "$dir"): $(shown "$stray") is not $ROOT_OWNER's alone, or is a link into Homebrew"
+  else
+    good "$1, $(basename "$dir"), which only $ROOT_OWNER can write: $(tr '\n' ' ' < "$dir/VERSIONS" 2>/dev/null | sed 's/ $//')"
+  fi
+}
+
+copies() {
+  echo
+  echo "The copies of the Homebrew tools:"
+  if [[ ! -L $LAB_TOOLS/current ]]; then
+    bad "no copy in use: $(shown "$LAB_TOOLS")/current is missing. The set-up makes it"
+    return
+  fi
+  copy "the copy the daemons run from" "$LAB_TOOLS/current"
+  if [[ -L $LAB_TOOLS/previous ]]; then
+    copy "the previous copy, the way back after a bad upgrade" "$LAB_TOOLS/previous"
+  else
+    note "no previous copy yet: the tools were copied once. The first upgrade, in a Maintenance run, keeps this copy as the way back"
+  fi
+}
+
+formulas() {
+  local f name installed copied owner
+  echo
+  echo "Homebrew's formulae on the lab's list, by version:"
+  owner="$(owner_of "$BREW_PREFIX" 2>/dev/null)"
+  if [[ -z $owner || $owner == root ]]; then
+    bad "$(shown "$BREW_PREFIX") belongs to ${owner:-nobody}: Homebrew is the admin account's and never runs as root"
+  else
+    good "Homebrew at $(shown "$BREW_PREFIX") belongs to $owner"
+  fi
+  for f in $(formulae); do
+    name="${f##*/}"
+    # The keg Homebrew has in use, as the set-up's copy reads it.
+    installed="$(basename "$(resolve "$BREW_PREFIX/opt/$name" 2>/dev/null)" 2>/dev/null)"
+    [[ -d $BREW_PREFIX/opt/$name/ ]] || installed=""
+    copied="$(awk -v n="$name" '$1 == n { print $2 }' "$LAB_TOOLS/current/VERSIONS" 2>/dev/null)"
+    if [[ -z $installed ]]; then
+      bad "$name is not installed in $(shown "$BREW_PREFIX")"
+    elif [[ -z $copied ]]; then
+      bad "$name $installed is installed and is not in the copy the daemons run from"
+    elif [[ $installed != "$copied" ]]; then
+      note "$name: the daemons run $copied and Homebrew now has $installed. Only a Maintenance run brings the copy up"
+    else
+      good "$name $copied"
+    fi
+  done
+}
+
+pinned() {
+  local name version sum url have
+  echo
+  echo "What is pinned by version and checksum:"
+  if [[ -L $LAB_CURRENT ]]; then
+    good "the Deployed build is $(basename "$(readlink "$LAB_CURRENT")")"
+  else
+    bad "no build is Deployed"
+  fi
+  while read -r name version sum url <&3; do
+    [[ -n $name ]] || continue
+    if [[ $name == "$RESET_TOOL_NAME" ]]; then
+      if [[ -x $RESET_TOOL ]]; then
+        good "$name, built from $version (its source's sha256 $sum), in the Deployed build: sha256 $(shasum -a 256 "$RESET_TOOL" | awk '{ print $1 }')"
+      else
+        bad "no reset tool at $(shown "$RESET_TOOL"): a Deploy of a release brings it"
+      fi
+      continue
+    fi
+    have="$(awk -v n="$name" '$1 == n { print $2, $3 }' "$LAB_ROOT/installed-pins" 2>/dev/null)"
+    if [[ $have == "$version $sum" ]]; then
+      good "$name $version, installed from the package with sha256 $sum"
+    else
+      bad "$name: deploy/pins names $version (sha256 $sum); the set-up installed ${have:-nothing}"
+    fi
+  done 3< <(sed -e 's/#.*//' "$deploy/pins")
+  if [[ -x $CONTAINER ]] && [[ -z "$(open_to_others "$CONTAINER")" ]]; then
+    good "container is at $(shown "$CONTAINER"), which only $ROOT_OWNER can write"
+  else
+    bad "container is not at $(shown "$CONTAINER"), or another account than $ROOT_OWNER can change it"
+  fi
+}
+
+TAILNET_ADDRESS=""
+
+tailnet() {
+  local status state tagged name addresses twins
+  echo
+  echo "The tailnet:"
+  if [[ ! -x $TAILSCALE ]]; then
+    bad "no tailscale in the copy of the Homebrew tools ($(shown "$TAILSCALE"))"
+    return
+  fi
+  if ! status="$("$TAILSCALE" --socket="$TAILSCALED_SOCKET" status --json 2>/dev/null)"; then
+    bad "tailscaled does not answer: see /var/log/lab-tailscaled.log"
+    return
+  fi
+  read -r state tagged name addresses twins <<<"$(jq -r --arg tag "$TAILNET_TAG" '
+    def word: if . == "" then "none" else . end;
+    . as $all | [
+      (.BackendState // "" | word),
+      (if ((.Self.Tags // []) | index($tag)) != null then "yes" else "no" end),
+      (.Self.DNSName // "" | rtrimstr(".") | word),
+      ((.Self.TailscaleIPs // []) | join(",") | word),
+      ([(.Peer // {})[] | select((.HostName // "") == ($all.Self.HostName // "-")) | (.DNSName // .HostName | rtrimstr("."))] | join(",") | word)
+    ] | join(" ")' <<<"$status" 2>/dev/null)"
+  if [[ $state != Running ]]; then
+    bad "the mini is not on the tailnet (${state:-no answer}): the set-up joins it, given --tailscale-key FILE"
+    return
+  fi
+  good "the mini is on the tailnet as $name, $addresses"
+  TAILNET_ADDRESS="${addresses%%,*}"
+  if [[ $tagged == yes ]]; then
+    good "the node is tagged $TAILNET_TAG, so its key does not expire"
+  else
+    bad "the node is not tagged $TAILNET_TAG: its key expires. Join it again with a key made for the tag"
+  fi
+  if [[ $twins == none ]]; then
+    good "no other node has this machine's name: the old node is gone"
+  else
+    bad "another node has this machine's name ($twins): remove the old node in Tailscale's admin console, under Machines"
+  fi
+}
+
+remote() {
+  local says key admin home keys wired where address pair port what
+  echo
+  echo "Reaching the mini:"
+  says=" $(sshd_says) "
+  if [[ $says == "  " ]]; then
+    bad "sshd does not say what it takes (sshd -T gave nothing)"
+  else
+    for key in passwordauthentication kbdinteractiveauthentication; do
+      if [[ $says == *" $key no "* ]]; then
+        good "sshd -T: $key no"
+      else
+        bad "sshd -T does not say $key no: after Unlock, SSH would take a password"
+      fi
+    done
+  fi
+  admin="${SUDO_USER:-$(id -un)}"
+  home="$SYSROOT/Users/$admin"
+  keys="$(grep -Ecs '^(ssh-|ecdsa-|sk-)' "$home/.ssh/authorized_keys")"
+  if (( ${keys:-0} > 0 )); then
+    good "$admin comes in with a key: $keys in $(shown "$home")/.ssh/authorized_keys"
+  else
+    bad "$admin has no key in $(shown "$home")/.ssh/authorized_keys"
+  fi
+  if loaded com.openssh.sshd; then good "Remote Login is on"; else bad "Remote Login is off (com.openssh.sshd is not loaded)"; fi
+  if loaded com.apple.screensharing; then good "Screen Sharing is on"; else bad "Screen Sharing is off (com.apple.screensharing is not loaded)"; fi
+  wired="$(wired_address)"
+  [[ -n $wired ]] || bad "no wired port has an address"
+  for where in "the LAN|$wired" "the tailnet|$TAILNET_ADDRESS"; do
+    address="${where##*|}"
+    [[ -n $address ]] || continue
+    for pair in "22|SSH" "5900|Screen Sharing"; do
+      port="${pair%%|*}" what="${pair##*|}"
+      if sys nc -z -G 3 "$address" "$port" >/dev/null 2>&1; then
+        good "$what answers on $address (${where%%|*})"
+      else
+        bad "$what does not answer on $address:$port (${where%%|*})"
+      fi
+    done
+  done
+}
+
+machine() {
+  local dev power pair key want have
+  echo
+  echo "The machine:"
+  dev="$(wifi_device)"
+  if [[ -z $dev ]]; then
+    good "this Mac has no Wi-Fi port"
+  else
+    power="$(sys networksetup -getairportpower "$dev" 2>/dev/null | awk '{ print $NF }')"
+    if [[ $power == Off ]]; then good "Wi-Fi ($dev) is off"; else bad "Wi-Fi ($dev) is ${power:-in a state networksetup does not say}"; fi
+  fi
+  for pair in AutomaticallyInstallMacOSUpdates:0 CriticalUpdateInstall:0 ConfigDataInstall:1; do
+    key="${pair%%:*}" want="${pair##*:}"
+    have="$(sys defaults read "$UPDATE_PREFS" "$key" 2>/dev/null || true)"
+    if [[ $have == "$want" ]]; then good "Software Update: $key $have"; else bad "Software Update: $key is ${have:-not set}, want $want"; fi
+  done
+  for pair in autorestart:1 sleep:0; do
+    key="${pair%%:*}" want="${pair##*:}"
+    have="$(power_value "$key")"
+    if [[ $have == "$want" ]]; then good "pmset: $key $have"; else bad "pmset: $key is ${have:-not shown}, want $want"; fi
+  done
+}
+
+# held: the first line of every secret the lab keeps on the mini, for the
+# look through the processes' arguments. It goes to grep through a pipe: no
+# file holds it and nothing prints it.
+held() {
+  {
+    cat "$LAB_SECRETS"/*.token 2>/dev/null
+    # shellcheck disable=SC2016
+    as_lab /bin/sh -c 'for f in "$1"/* "$1"/checks/* "$1"/backup/*; do if [ -f "$f" ] && [ ! -L "$f" ]; then head -n 1 "$f"; fi; done' held "$LAB_HOME/secrets" 2>/dev/null
+  } | awk 'length($0) >= 20 && $0 !~ /^(-----|ssh-|ecdsa-|s3:)/'
+}
+
+secrets() {
+  local args shaped exact
+  echo
+  echo "No secret in a process's arguments:"
+  if ! args="$(sys ps -axww -o args= 2>/dev/null)" || [[ -z $args ]]; then
+    bad "ps did not list the processes"
+    return
+  fi
+  shaped="$(grep -E -e 'tskey-[a-z]+-' -e 'bldr_[0-9a-f]{40}' -e 'lab_[A-Za-z0-9]{24,}' -e 'hc-ping\.com/[0-9a-f-]{36}' -e '--(token|password|secret|credential)[= ]' <<<"$args" | awk '{ print $1 }' | sort -u | tr '\n' ' ')"
+  exact="$(grep -F -f <(held) <<<"$args" | awk '{ print $1 }' | sort -u | tr '\n' ' ')"
+  if [[ -n $shaped$exact ]]; then
+    bad "a secret is an argument of: $shaped$exact(the arguments are not shown here: ps -axww -o args)"
+  else
+    good "no process has a token, a key, a check's address or anything the lab keeps in its secrets as an argument"
+  fi
+}
+
+daemons
+foreign
+copies
+formulas
+pinned
+tailnet
+remote
+machine
+secrets
+
+echo
+if (( FAILED )); then
+  fail "$FAILED checks failed; nothing was changed"
+fi
+say "every check passed; nothing was changed"
