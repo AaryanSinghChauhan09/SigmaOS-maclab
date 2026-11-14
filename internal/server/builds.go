@@ -348,6 +348,11 @@ func (s *Server) hBuilderPoll(w http.ResponseWriter, r *http.Request) {
 	where := kindsWhere(c, r.URL.Query().Get("kinds"))
 	deadline := s.now().Add(25 * time.Second)
 	for {
+		// A builder that has gone away takes nothing off the queue.
+		if r.Context().Err() != nil {
+			w.WriteHeader(204)
+			return
+		}
 		b, err := s.claimBuild(c, host, where)
 		if errors.Is(err, errBuilderRemoved) {
 			s.refuse(w, r, 401, "%v", err)
@@ -362,7 +367,7 @@ func (s *Server) hBuilderPoll(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, a)
 			return
 		}
-		if s.now().After(deadline) || r.Context().Err() != nil {
+		if s.now().After(deadline) {
 			w.WriteHeader(204)
 			return
 		}

@@ -1020,3 +1020,42 @@ func TestAnMTeamMemberUploadsOnlyForAMacTheyLease(t *testing.T) {
 		t.Errorf("an upload by a person with no role: %d", code)
 	}
 }
+
+// A poll whose builder has gone away takes no build off the queue: the
+// build would read as running on a builder that never got it. The poll is
+// cut while labd is busy with its builds, and the build is queued after.
+func TestAnAbandonedPollTakesNoBuild(t *testing.T) {
+	b := newBuilderLab(t)
+	token := b.addBuilder("mini", api.BuilderKernel)
+	ctx, cut := context.WithCancel(b.ctx)
+	defer cut()
+	r := httptest.NewRequest("POST", "http://127.0.0.1/api/builder/poll", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("User-Agent", "lab-builder/test")
+	answered := make(chan int, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		b.s.Handler().ServeHTTP(w, r)
+		answered <- w.Code
+	}()
+	time.Sleep(200 * time.Millisecond)
+	b.s.builds.state.Lock()
+	cut()
+	time.Sleep(200 * time.Millisecond)
+	queued := b.queue("")
+	b.s.builds.state.Unlock()
+	select {
+	case code := <-answered:
+		if code == 200 {
+			t.Errorf("the abandoned poll was handed a build")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the abandoned poll never ended")
+	}
+	if got := b.build(queued.ID).State; got != api.BuildQueued {
+		t.Errorf("the build is %s after an abandoned poll, want it still queued", got)
+	}
+	if a, code := b.poll(token, "", 5*time.Second); code != 200 || a.Build.ID != queued.ID {
+		t.Errorf("the builder that asks next got no build: %d %+v", code, a)
+	}
+}
