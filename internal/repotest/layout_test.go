@@ -13,6 +13,10 @@ const present = `
 cmd
 internal
 internal/reports
+internal/web/templates
+internal/web/static
+internal/web/texts/terms.txt
+internal/web/texts/privacy.txt
 builder
 specs
 tools
@@ -38,8 +42,9 @@ AGENTS.md
 scripts/ci-local
 `
 
-// Docker and Kubernetes went with the fork; the rest are the paths the two
-// trees were joined under.
+// Docker and Kubernetes went with the fork, and maclab's single-page
+// interface when every page got the one header; the rest are the paths the
+// two trees were joined under.
 const gone = `
 Dockerfile
 .dockerignore
@@ -50,6 +55,10 @@ deploy/labd.service
 .github/scripts/image-smoke.sh
 CONTEXT.md
 docs/tickets
+internal/web/static/index.html
+internal/web/static/manifest.json
+internal/web/static/vendor
+scripts/fonts.py
 .held
 `
 
