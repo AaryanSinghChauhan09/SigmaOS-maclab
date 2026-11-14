@@ -138,6 +138,12 @@ BUILDER_TOKEN="$LAB_SECRETS/builder.token"
 # runs as root, makes each build's folder there, and hands the account
 # container runs under one folder inside it and nothing else.
 BUILDER_IO="$LAB_ROOT/io"
+# The package image is built from Arch Linux ARM's root file system. The
+# set-up downloads none: the owner brings the archive, and it is kept in the
+# image's build context, root's, beside a copy of the Deployed build's
+# builder/pkg.
+BUILDER_ROOTFS="ArchLinuxARM-aarch64-latest.tar.gz"
+BUILDER_PKG_CONTEXT="$LAB_ROOT/pkg-image"
 # The lab's Signal sender: signal-cli from the copy of the Homebrew tools,
 # its account's keys and the two groups' ids as files of the lab account.
 SIGNAL_PLIST="$LAUNCHD_DIR/$SIGNAL_LABEL.plist"

@@ -17,11 +17,14 @@ const (
 	builderToken   = "usr/local/lab/secrets/builder.token"
 	madeUpToken    = "bldr_0123456789abcdef0123456789abcdef01234567"
 	builderIO      = "usr/local/lab/io"
+	rootfsName     = "ArchLinuxARM-aarch64-latest.tar.gz"
+	pkgContext     = "usr/local/lab/pkg-image"
 )
 
 // container plays Apple's container: its server is up while the file "up"
-// exists, and cannot be started while "broken" does. It writes down what it
-// was asked.
+// exists, and cannot be started while "broken" does. It builds an image only
+// from a folder that holds every file its Containerfile adds. It writes down
+// what it was asked.
 const containerStub = `#!/bin/bash
 echo "container $*" >> "$STUB_LOG"
 s="$STUB_STATE/container"
@@ -32,7 +35,11 @@ case "$1 $2" in
   "volume inspect") [[ -f $s/up && -f $s/volume.$3 ]] || exit 1 ;;
   "volume create") [[ -f $s/up ]] || exit 1; echo "$4" > "$s/volume.$5" ;;
   "image inspect") [[ -f $s/up && -f $s/image.$3 ]] || exit 1 ;;
-  build\ *) [[ -f $s/up && -f $4/Containerfile ]] || exit 1; touch "$s/image.$3" ;;
+  build\ *) [[ -f $s/up && -f $4/Containerfile ]] || exit 1
+    while read -r verb file _; do
+      [[ $verb != ADD || -f $4/$file ]] || { echo "ADD $file: no such file in the build context" >&2; exit 1; }
+    done < "$4/Containerfile"
+    touch "$s/image.$3" ;;
   *) echo "container $*: not expected" >&2; exit 64 ;;
 esac
 `
@@ -128,7 +135,17 @@ func (m *mini) builderBuild(tag string) {
 	}
 	write(m.t, build+"/bin/lab-builder", "#!/bin/sh\n", 0o755)
 	write(m.t, build+"/builder/Containerfile", "FROM scratch\n", 0o644)
-	write(m.t, build+"/builder/pkg/Containerfile", "FROM scratch\n", 0o644)
+	write(m.t, build+"/builder/pkg/Containerfile", "FROM scratch\nADD "+rootfsName+" /\n", 0o644)
+	write(m.t, build+"/builder/pkg/pkgbuild", "#!/bin/bash\n", 0o755)
+}
+
+// rootfs is a made-up archive of Arch Linux ARM's root file system, as the
+// owner brings it.
+func rootfs(t *testing.T) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), rootfsName)
+	write(t, file, "\x1f\x8b\x08 a made-up root file system\n", 0o644)
+	return file
 }
 
 // The two LaunchDaemon files: root's, from the Deployed build, with no
@@ -390,7 +407,7 @@ func TestSetupBringsTheBuilderUp(t *testing.T) {
 		t.Fatalf("the dry run:\n%s", dry)
 	}
 
-	out = m.ok("setup")
+	out = m.ok("setup", "--builder-rootfs", rootfs(t))
 	if !loaded(containerLabel) || !m.serverUp() || loaded(builderLabel) || !strings.Contains(out, "lab builder add mini --kinds kernel,package") {
 		t.Fatalf("without a token the Builder waits, and the rest is up:\n%s", out)
 	}
@@ -399,7 +416,7 @@ func TestSetupBringsTheBuilderUp(t *testing.T) {
 		"container volume create -s 40G maclab-cache",
 		"container volume create -s 120G maclab-pkgcache",
 		"container build -t maclab-kbuild:1 " + m.path("usr/local/lab/current/builder"),
-		"container build -t maclab-pkgbuild:1 " + m.path("usr/local/lab/current/builder/pkg"),
+		"container build -t maclab-pkgbuild:1 " + m.path(pkgContext),
 		"sudo -n -u " + user + " " + m.path("usr/local/bin/container") + " system start --enable-kernel-install",
 	} {
 		if !strings.Contains(calls, want) {
@@ -460,6 +477,75 @@ func TestSetupBringsTheBuilderUp(t *testing.T) {
 	m.ok("setup")
 	if !m.serverUp() {
 		t.Fatal("the set-up left the server stopped")
+	}
+}
+
+// The package image is built from Arch Linux ARM's root file system, which
+// the set-up does not download. Without it the Builder's step stops before
+// container's server is started, and says what to bring; brought, it is
+// copied into a build context that is root's, beside the Deployed build's
+// files, and the image is built from there.
+func TestSetupBuildsThePackageImageFromTheRootFileSystemBrought(t *testing.T) {
+	need(t, "openssl")
+	m := builderMini(t)
+	k := newKey(t)
+	loaded := func(label string) bool { return exists(filepath.Join(filepath.Dir(m.root), "state", "loaded."+label)) }
+	m.ok("setup", "--release-key", k.signers, "--container-user", account(t))
+	m.builderBuild("v0.2.0")
+	os.Remove(m.log)
+
+	for _, args := range [][]string{{"--dry-run"}, {}} {
+		out := m.ok("setup", args...)
+		if !strings.Contains(out, "--builder-rootfs FILE") || !strings.Contains(out, rootfsName) {
+			t.Errorf("setup %v does not say what to bring:\n%s", args, out)
+		}
+		if m.serverUp() || loaded(containerLabel) || strings.Contains(m.callsOrNone(), "container ") {
+			t.Fatalf("setup %v reached container with no root file system:\n%s\n%s", args, out, m.callsOrNone())
+		}
+	}
+
+	link := filepath.Join(t.TempDir(), rootfsName)
+	if err := os.Symlink(rootfs(t), link); err != nil {
+		t.Fatal(err)
+	}
+	notGzip := filepath.Join(t.TempDir(), rootfsName)
+	write(t, notGzip, "<html>not found</html>\n", 0o644)
+	for what, file := range map[string]string{"a file that is not there": filepath.Join(t.TempDir(), "none"), "a link": link, "a page in place of the archive": notGzip} {
+		m.refused("setup", "--builder-rootfs", file)
+		if m.serverUp() || exists(m.path(pkgContext)+"/"+rootfsName) {
+			t.Fatalf("%s was taken", what)
+		}
+	}
+
+	brought := rootfs(t)
+	dry := m.ok("setup", "--dry-run", "--builder-rootfs", brought)
+	if !strings.Contains(dry, "would") || m.serverUp() || exists(m.path(pkgContext)+"/"+rootfsName) {
+		t.Fatalf("the dry run:\n%s", dry)
+	}
+	out := m.ok("setup", "--builder-rootfs", brought)
+	if !m.serverUp() || !strings.Contains(m.calls(), "container build -t maclab-pkgbuild:1 "+m.path(pkgContext)) {
+		t.Fatalf("the image was not built from its own context:\n%s\n%s", out, m.calls())
+	}
+	if !regexp.MustCompile(`sha256 [0-9a-f]{64}`).MatchString(out) {
+		t.Errorf("the run does not say which archive it took:\n%s", out)
+	}
+	if read(t, m.path(pkgContext)+"/"+rootfsName) != read(t, brought) || mode(t, m.path(pkgContext)+"/"+rootfsName) != 0o644 || mode(t, m.path(pkgContext)) != 0o755 {
+		t.Error("the archive is not in the build context as it was brought, for the account to read")
+	}
+	for _, name := range []string{"Containerfile", "pkgbuild"} {
+		if read(t, m.path(pkgContext)+"/"+name) != read(t, m.path("usr/local/lab/current/builder/pkg/"+name)) {
+			t.Errorf("the build context lacks the Deployed build's %s", name)
+		}
+	}
+	if !exists(m.path("usr/local/lab/current/builder/pkg/Containerfile")) || exists(m.path("usr/local/lab/current/builder/pkg/"+rootfsName)) {
+		t.Error("the Deployed build was changed")
+	}
+
+	os.Remove(m.log)
+	for _, args := range [][]string{{}, {"--builder-rootfs", brought}} {
+		if out := m.ok("setup", args...); strings.Contains(m.callsOrNone(), "container build") || strings.Contains(out, "root file system") {
+			t.Fatalf("setup %v, a second run, did something:\n%s\n%s", args, out, m.callsOrNone())
+		}
 	}
 }
 

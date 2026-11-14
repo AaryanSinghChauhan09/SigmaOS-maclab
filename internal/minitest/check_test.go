@@ -77,7 +77,7 @@ func wholeMini(t *testing.T) *whole {
 		"--tunnel-credential", cred,
 		"--backup-guest", "192.168.0.186", "--backup-keys", keys,
 		"--checks", checks,
-		"--container-user", account(t), "--builder-token", token,
+		"--container-user", account(t), "--builder-token", token, "--builder-rootfs", rootfs(t),
 		"--tailscale-key", tailnet,
 	}
 	w.brought = []string{cred, keys + "/restic-password", keys + "/r2-secret-access-key", checks + "/dead-man", token, tailnet}

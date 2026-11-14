@@ -1,7 +1,8 @@
 # maclab package builder: runs a PKGBUILD recipe with makepkg, on Arch Linux ARM,
 # so the packages match what the release build machine (m1) makes.
-# Build context: this directory plus ArchLinuxARM-aarch64-latest.tar.gz from
-# http://os.archlinuxarm.org/os/ (see README, "Release packages from a PKGBUILD").
+# Build context: this directory plus ArchLinuxARM-aarch64-latest.tar.gz, its
+# signature checked (see README, "Release packages from a PKGBUILD"). On the
+# mini the set-up makes that context: scripts/mini/setup --builder-rootfs FILE.
 FROM scratch AS rootfs
 ADD ArchLinuxARM-aarch64-latest.tar.gz /
 # The build VM can't apply pacman's Landlock download sandbox.

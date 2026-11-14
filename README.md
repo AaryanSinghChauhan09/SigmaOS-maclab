@@ -1246,9 +1246,23 @@ off, as on the release machine: its base-dir path rewriting changes `__FILE__` s
 modules. When the image is built, gcc, glibc, binutils, rustup, bindgen and pahole come out at the
 same versions as on an up-to-date Arch Linux ARM machine. Rebuild the image to follow the distribution:
 
+The image starts from Arch Linux ARM's root file system, `ArchLinuxARM-aarch64-latest.tar.gz`, which
+no script of the lab downloads: Arch Linux ARM publishes it over plain http (`os.archlinuxarm.org/os/`),
+so it counts only once its signature is checked. Fetch the archive and its `.sig` on any machine with
+gpg and check them against Arch Linux ARM's build key before the archive goes anywhere near a build:
+
 ```sh
-# on the controller Mac, in a directory holding builder/pkg/* and the rootfs tarball
-curl -LO http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+gpg --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6   # Arch Linux ARM Build System
+gpg --verify ArchLinuxARM-aarch64-latest.tar.gz.sig ArchLinuxARM-aarch64-latest.tar.gz   # want: Good signature
+```
+
+On the mini the set-up takes it (`scripts/mini/setup --builder-rootfs FILE`): it copies the archive into
+a build context only root writes (`/usr/local/lab/pkg-image`), beside the Deployed build's `builder/pkg`,
+says its SHA-256, and builds the image from there. With no archive the Builder's step stops before
+`container`'s server is started and says what to bring. Elsewhere:
+
+```sh
+# in a directory holding builder/pkg/* and the checked rootfs tarball
 container build -t maclab-pkgbuild:1 .
 container volume create -s 120G maclab-pkgcache   # once; a kernel tree needs ~35 GB while building
 ```

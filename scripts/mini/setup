@@ -5,7 +5,7 @@
 #                           [--backup-guest ADDRESS] [--backup-keys FOLDER]
 #                           [--checks FOLDER]
 #                           [--container-user NAME] [--builder-token FILE] [--builder-cpus N]
-#                           [--tailscale-key FILE]
+#                           [--builder-rootfs FILE] [--tailscale-key FILE]
 #
 # In the order of the spec's "Changes to make on the mini", with the
 # Homebrew tools first because the daemons run from their copy:
@@ -74,6 +74,13 @@
 #                       removed.
 #   --builder-cpus N    the cores a build gets: 10, or 8 or 6 after a failed
 #                       gate test. Every build gets 16 GB.
+#   --builder-rootfs FILE
+#                       ArchLinuxARM-aarch64-latest.tar.gz, Arch Linux ARM's
+#                       root file system, which the package image is built
+#                       from. The set-up downloads none: bring it with its
+#                       signature checked (README, "Release packages from a
+#                       PKGBUILD"). It is copied where only root writes, and
+#                       FILE stays. Needed before the Builder's first start.
 #   --tailscale-key FILE
 #                       an auth key made for tag:lab in Tailscale's admin
 #                       console, one line. tailscale reads it from FILE,
@@ -86,7 +93,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,81p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,88p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
@@ -97,6 +104,7 @@ checks=""
 container_user=""
 builder_token=""
 builder_cpus=""
+builder_rootfs=""
 tailscale_key=""
 while (( $# )); do
   case "$1" in
@@ -104,6 +112,7 @@ while (( $# )); do
     --container-user) [[ $# -ge 2 ]] || usage; container_user="$2"; shift ;;
     --builder-token) [[ $# -ge 2 ]] || usage; builder_token="$2"; shift ;;
     --builder-cpus) [[ $# -ge 2 ]] || usage; builder_cpus="$2"; shift ;;
+    --builder-rootfs) [[ $# -ge 2 ]] || usage; builder_rootfs="$2"; shift ;;
     --dry-run) DRY=1 ;;
     --release-key) [[ $# -ge 2 ]] || usage; key="$2"; shift ;;
     --tunnel-credential) [[ $# -ge 2 ]] || usage; credential="$2"; shift ;;
@@ -239,6 +248,10 @@ case "$builder_cpus" in
   "" | 10 | 8 | 6) ;;
   *) fail "--builder-cpus $builder_cpus: a build gets 10 cores, or 8 or 6" ;;
 esac
+if [[ -n $builder_rootfs ]]; then
+  [[ -f $builder_rootfs && ! -L $builder_rootfs && -s $builder_rootfs ]] || fail "$builder_rootfs is empty or no plain file"
+  [[ "$(od -An -tx1 -N2 "$builder_rootfs" | tr -d ' \n')" == 1f8b ]] || fail "$builder_rootfs is no gzip archive: it is not $BUILDER_ROOTFS as Arch Linux ARM publishes it"
+fi
 if [[ -n $tailscale_key && ! -e $tailscale_key && ! -L $tailscale_key && -x $TAILSCALE ]] &&
   [[ "$("$TAILSCALE" --socket="$TAILSCALED_SOCKET" status --json 2>/dev/null | jq -r '.BackendState // ""' 2>/dev/null)" == Running ]]; then
   taken "$tailscale_key" "the mini's place on the tailnet"
@@ -937,6 +950,20 @@ take_builder_token() {
   rm -f "$builder_token"
 }
 
+take_rootfs() {
+  make_folder "$BUILDER_PKG_CONTEXT" "$ROOT_OWNER" "$ROOT_GROUP" 755
+  write_as "$ROOT_OWNER" "$ROOT_GROUP" 0644 "$BUILDER_PKG_CONTEXT/$BUILDER_ROOTFS" < "$builder_rootfs"
+}
+
+# build_pkg_image TAG DIR: the package image, from a build context of its
+# own: the Deployed build's DIR as it is now, beside the root file system.
+# watch and user are the Builder step's.
+build_pkg_image() {
+  find "$BUILDER_PKG_CONTEXT" -mindepth 1 -maxdepth 1 ! -name "$BUILDER_ROOTFS" -exec rm -rf {} +
+  cp -R "$2/." "$BUILDER_PKG_CONTEXT/"
+  "$watch" as "$user" build -t "$1" "$BUILDER_PKG_CONTEXT"
+}
+
 # installed_cpus: the cores the Builder's installed file gives a build.
 installed_cpus() {
   awk '/<string>--cpus<\/string>/ { sub(/.*<string>--cpus<\/string><string>/, ""); sub(/<.*/, ""); print; exit }' "$LAUNCHD_DIR/$BUILDER_LABEL.plist" 2>/dev/null || true
@@ -944,6 +971,7 @@ installed_cpus() {
 
 builder() {
   local user cpus pair name size tag dir watch="$LAB_CURRENT/scripts/mini/container" again=0 token_new=0
+  local rootfs="$BUILDER_PKG_CONTEXT/$BUILDER_ROOTFS" rootfs_new=0
 
   user="$(cat "$CONTAINER_USER_FILE" 2>/dev/null || true)"
   if [[ -n $container_user && $container_user != "$user" ]]; then
@@ -981,6 +1009,15 @@ builder() {
     change "start container's server ($CONTAINER_LABEL), make the Builder's volumes and images and start the Builder" true
     return 0
   fi
+  [[ ! -L $BUILDER_PKG_CONTEXT && ! -L $rootfs ]] || fail "$BUILDER_PKG_CONTEXT, or the archive in it, is a symbolic link, and the package image's build context is a folder of $ROOT_OWNER's own: nothing was written through it. Look at who put it there, remove the link and run this again"
+  if [[ -n $builder_rootfs ]] && ! cmp -s "$builder_rootfs" "$rootfs"; then
+    change "copy $builder_rootfs (sha256 $(shasum -a 256 "$builder_rootfs" | awk '{ print $1 }')) to $rootfs, which the package image is built from" take_rootfs
+    rootfs_new=1
+  fi
+  if [[ ! -s $rootfs ]] && (( ! rootfs_new )); then
+    say "the Builder is not set up: its package image is built from Arch Linux ARM's root file system, which the set-up does not download. Bring $BUILDER_ROOTFS with its signature checked (README, \"Release packages from a PKGBUILD\") and run the set-up with --builder-rootfs FILE"
+    return 0
+  fi
   if (( again )) && loaded "$CONTAINER_LABEL"; then
     change "start $CONTAINER_LABEL again, for its new file" start_rendered "$CONTAINER_LABEL"
   elif ! loaded "$CONTAINER_LABEL"; then
@@ -1000,8 +1037,12 @@ builder() {
   for pair in $BUILDER_IMAGES; do
     tag="${pair%:*}" dir="$LAB_CURRENT/${pair##*:}"
     [[ -f $dir/Containerfile ]] || fail "the Deployed build has no $dir/Containerfile"
-    "$watch" as "$user" image inspect "$tag" >/dev/null 2>&1 ||
+    "$watch" as "$user" image inspect "$tag" >/dev/null 2>&1 && continue
+    if [[ ${pair##*:} == builder/pkg ]]; then
+      change "build the Builder's image $tag from $BUILDER_PKG_CONTEXT: $dir and the root file system" build_pkg_image "$tag" "$dir"
+    else
       change "build the Builder's image $tag from $dir" "$watch" as "$user" build -t "$tag" "$dir"
+    fi
   done
 
   if [[ ! -s $BUILDER_TOKEN ]] && (( ! token_new )); then
