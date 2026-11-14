@@ -77,3 +77,14 @@ func TestForceReleaseCarriesItsReason(t *testing.T) {
 		t.Fatalf("--why without --force: %v, asked %v", err, asked)
 	}
 }
+
+// lab builds says who asked for each build.
+func TestBuildsSayWhoAsked(t *testing.T) {
+	c := labAt(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]*api.Build{{ID: "b1115-080000-abcd", State: api.BuildDone, AskedBy: "ada"}})
+	})
+	out, err := printed(t, c, "builds")
+	if err != nil || !strings.Contains(out, "ASKED BY") || !strings.Contains(out, "ada") {
+		t.Errorf("lab builds: %v\n%s", err, out)
+	}
+}

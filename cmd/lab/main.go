@@ -561,7 +561,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 			return err
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-		fmt.Fprintln(w, "BUILD\tSTATE\tSOURCE\tCOMMIT\tRELEASE\tTIME")
+		fmt.Fprintln(w, "BUILD\tSTATE\tSOURCE\tCOMMIT\tRELEASE\tTIME\tASKED BY")
 		for _, b := range l {
 			src, commit := shortSrc(b.Source), ""
 			if b.Source.SHA != "" {
@@ -573,7 +573,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 					src += " -" + b.Pkgrel
 				}
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", b.ID, buildState(b), trunc(src, 44), commit, b.Release, fmtSecs(b.Seconds))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", b.ID, buildState(b), trunc(src, 44), commit, b.Release, fmtSecs(b.Seconds), b.AskedBy)
 		}
 		return w.Flush()
 
