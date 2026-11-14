@@ -11,8 +11,8 @@ import (
 
 // The scripts that run, and lib.sh, which they share.
 var runnable = []string{
-	"cloudflare-zone.sh", "nameservers.sh", "owner-setup.sh", "register-domain.sh",
-	"tunnel.sh", "verify-delegation.sh", "zone-settings.sh",
+	"alias.sh", "cloudflare-zone.sh", "nameservers.sh", "owner-setup.sh", "register-domain.sh",
+	"rehearsal-record.sh", "tunnel.sh", "verify-delegation.sh", "zone-settings.sh",
 }
 
 func source(t *testing.T, name string) string {
@@ -33,7 +33,7 @@ func TestTheCloudFolderHoldsTheseScripts(t *testing.T) {
 	for _, e := range entries {
 		got = append(got, e.Name())
 	}
-	want := "cloudflare-zone.sh edge.json lab.env.example lib.sh nameservers.sh owner-setup.sh register-domain.sh tunnel.sh verify-delegation.sh zone-settings.sh"
+	want := "alias.sh cloudflare-zone.sh edge.json lab.env.example lib.sh nameservers.sh owner-setup.sh register-domain.sh rehearsal-record.sh tunnel.sh verify-delegation.sh zone-settings.sh"
 	if strings.Join(got, " ") != want {
 		t.Errorf("scripts/cloud holds %s\nwant %s", strings.Join(got, " "), want)
 	}

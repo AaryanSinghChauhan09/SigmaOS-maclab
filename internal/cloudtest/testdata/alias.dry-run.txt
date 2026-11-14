@@ -1,0 +1,13 @@
+alias.sh: a dry run. These are the calls --apply makes; nothing is sent.
+A write is sent only for what is missing.
+
+the zone
+  GET /zones?name=omarchy-mac.org
+the fallback origin: lab.omarchy-mac.org, the Lab address, which the tunnel serves
+  GET /zones/{zone}/custom_hostnames/fallback_origin
+  PUT /zones/{zone}/custom_hostnames/fallback_origin {"origin":"lab.omarchy-mac.org"}
+the custom hostname maclab.omarchy.org: made when missing, its certificate validated over HTTP
+  GET /zones/{zone}/custom_hostnames?hostname=maclab.omarchy.org
+  POST /zones/{zone}/custom_hostnames {"hostname":"maclab.omarchy.org","ssl":{"method":"http","type":"dv"}}
+then the name's side adds one record, and nothing else:
+  maclab.omarchy.org CNAME lab.omarchy-mac.org (DNS only, not proxied)

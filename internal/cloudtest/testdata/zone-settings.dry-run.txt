@@ -73,6 +73,13 @@ the mail forwarding rule: privacy@omarchy-mac.org to the mailbox of --forward-to
   POST /zones/{zone}/email/routing/dns {"name":"omarchy-mac.org"}
   GET /zones/{zone}/email/routing/rules?per_page=50
   POST /zones/{zone}/email/routing/rules {"name":"privacy","enabled":true,"matchers":[{"type":"literal","field":"to","value":"privacy@omarchy-mac.org"}],"actions":[{"type":"forward","value":["<MAILBOX>"]}]}
+the Alias, once edge.json says alias.wanted (now: false)
+the fallback origin: lab.omarchy-mac.org, the Lab address, which the tunnel serves
+  GET /zones/{zone}/custom_hostnames/fallback_origin
+  PUT /zones/{zone}/custom_hostnames/fallback_origin {"origin":"lab.omarchy-mac.org"}
+the custom hostname maclab.omarchy.org: made when missing, its certificate validated over HTTP
+  GET /zones/{zone}/custom_hostnames?hostname=maclab.omarchy.org
+  POST /zones/{zone}/custom_hostnames {"hostname":"maclab.omarchy.org","ssl":{"method":"http","type":"dv"}}
 checked, the owner's to set: DNSSEC
   GET /zones/{zone}/dnssec
 checked, the owner's to set: the tunnel-health alert

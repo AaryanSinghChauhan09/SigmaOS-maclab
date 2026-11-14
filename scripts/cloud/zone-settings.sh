@@ -14,7 +14,10 @@
 # Set and checked: each setting that is off or on, the one skip rule, the one
 # rate rule, the cache rules, that there is no redirect rule, the mail
 # forwarding rule. Checked and never set, because they are the owner's:
-# DNSSEC and the two tunnel alerts.
+# DNSSEC and the two tunnel alerts. The Alias (its fallback origin and its
+# custom hostname) is made and checked once edge.json says alias.wanted,
+# which it does from the day the other side says yes; alias.sh is the same
+# calls for that one thing.
 
 # shellcheck source=scripts/cloud/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -25,11 +28,11 @@ FORWARD_TO=""
 while (( $# )); do
   case "$1" in
     --forward-to)
-      [[ $# -ge 2 ]] || usage 2 17
+      [[ $# -ge 2 ]] || usage 2 20
       FORWARD_TO="$2"
       shift
       ;;
-    *) usage 2 17 ;;
+    *) usage 2 20 ;;
   esac
   shift
 done
@@ -217,6 +220,18 @@ mail() {
   fi
 }
 
+# the_alias fix|judge: nothing of the Alias is read before it is wanted,
+# since Cloudflare takes none of its calls until the owner has entered
+# payment details.
+the_alias() {
+  if [[ $ALIAS_WANTED != true ]]; then
+    [[ $1 != judge ]] || say "ok       the Alias: not made yet (edge.json says alias.wanted is false), so nothing of it is read. alias.sh makes it the day the other side says yes"
+    return 0
+  fi
+  alias_origin "$1"
+  alias_hostname "$1" "$ALIAS_HOST" present
+}
+
 plan() {
   local name state path read accept method body n i phase want
   say "$ME: a dry run. These are the calls --apply makes; nothing is sent."
@@ -245,6 +260,8 @@ plan() {
   would "POST /zones/{zone}/email/routing/dns {\"name\":\"$LAB_DOMAIN\"}"
   would "GET /zones/{zone}/email/routing/rules?per_page=50"
   would "POST /zones/{zone}/email/routing/rules $(jq -nc --arg n "$MAIL_NAME" --arg to "$MAIL" '{name: $n, enabled: true, matchers: [{type: "literal", field: "to", value: $to}], actions: [{type: "forward", value: ["<MAILBOX>"]}]}')"
+  say "the Alias, once edge.json says alias.wanted (now: $ALIAS_WANTED)"
+  alias_plan "$ALIAS_HOST" present
   while IFS=$'\t' read -r name state path read accept method body <&3; do
     say "checked, the owner's to set: $name"
     would "GET $path"
@@ -256,6 +273,7 @@ pass() {
   settings settings "$1"
   rules "$1"
   mail "$1"
+  the_alias "$1"
   settings owner "$1"
 }
 

@@ -40,6 +40,12 @@ if [[ -n ${LAB_CLOUD_API:-} ]]; then
   CLOUDFLARE_API="$LAB_CLOUD_API"
 fi
 
+# And for Porkbun's, with made-up keys in the environment.
+if [[ -n ${LAB_PORKBUN_API:-} ]]; then
+  [[ $LAB_PORKBUN_API =~ ^http://127\.0\.0\.1:[0-9]+(/.*)?$ ]] || die "LAB_PORKBUN_API is the tests' and takes a loopback address only"
+  PORKBUN_API="$LAB_PORKBUN_API"
+fi
+
 # Names with no value that is a secret (CLOUDFLARE_ACCOUNT_ID) may sit beside
 # the scripts in lab.env, which is not committed: see lab.env.example.
 if [[ -f "$SCRIPTS_DIR/lab.env" ]]; then
@@ -145,6 +151,121 @@ find_zone() {
   ZONE_ID="$(printf '%s' "$out" | jq -r '.result[0].id // empty')"
   ACCOUNT_ID="$(printf '%s' "$out" | jq -r '.result[0].account.id // empty')"
   ZONE="$(printf '%s' "$out" | jq -c '.result[0] // empty')"
+}
+
+# The Alias (spec section 6): a custom hostname of the zone, which Cloudflare
+# calls Cloudflare for SaaS, whose fallback origin is the Lab address. A
+# request for the name then comes down the lab's tunnel with its own Host,
+# and labd forwards it. The other side adds one record, a CNAME of the Lab
+# address that is DNS only; the certificate is validated over HTTP, so
+# nothing else is asked of them. The owner enters payment details on
+# Cloudflare before any of these calls is taken. The script that sources
+# this says what drifted with its own drifted NAME WHY.
+ALIAS_HOST="$(jq -r '.alias.hostname' "$SCRIPTS_DIR/edge.json")"
+ALIAS_ORIGIN="$(jq -r '.alias.fallback_origin' "$SCRIPTS_DIR/edge.json")"
+ALIAS_WANTED="$(jq -r '.alias.wanted' "$SCRIPTS_DIR/edge.json")"
+
+not_enabled() {
+  say "$ME: Cloudflare did not take a call about custom hostnames. They need Cloudflare for SaaS on $LAB_DOMAIN, which the owner enables by entering payment details (SSL/TLS > Custom Hostnames > Enable), and a token with \"SSL and Certificates: Edit\" on the zone."
+  exit 1
+}
+
+alias_hostname_body() { jq -nc --arg h "$1" '{hostname: $h, ssl: {method: "http", type: "dv"}}'; }
+
+# alias_plan NAME present|absent: a dry run's lines.
+alias_plan() {
+  if [[ $2 == absent ]]; then
+    say "the custom hostname $1: deleted when it is there. The fallback origin stays"
+    would "GET /zones/{zone}/custom_hostnames?hostname=$1"
+    would "DELETE /zones/{zone}/custom_hostnames/{id}"
+    return 0
+  fi
+  say "the fallback origin: $ALIAS_ORIGIN, the Lab address, which the tunnel serves"
+  would "GET /zones/{zone}/custom_hostnames/fallback_origin"
+  would "PUT /zones/{zone}/custom_hostnames/fallback_origin {\"origin\":\"$ALIAS_ORIGIN\"}"
+  say "the custom hostname $1: made when missing, its certificate validated over HTTP"
+  would "GET /zones/{zone}/custom_hostnames?hostname=$1"
+  would "POST /zones/{zone}/custom_hostnames $(alias_hostname_body "$1")"
+}
+
+# alias_origin fix|judge: the zone's fallback origin is the Lab address, and
+# Cloudflare has it active.
+alias_origin() {
+  local rc=0 out origin status
+  out="$(cf GET "/zones/{zone}/custom_hostnames/fallback_origin")" || rc=$?
+  case "$rc" in
+    0) ;;
+    4) out='{"result":{}}' ;;
+    *) not_enabled ;;
+  esac
+  origin="$(printf '%s' "$out" | jq -r '.result.origin // empty')"
+  status="$(printf '%s' "$out" | jq -r '.result.status // empty')"
+  if [[ $1 == fix ]]; then
+    if [[ $origin != "$ALIAS_ORIGIN" ]]; then
+      cf PUT "/zones/{zone}/custom_hostnames/fallback_origin" "$(jq -nc --arg o "$ALIAS_ORIGIN" '{origin: $o}')" >/dev/null || not_enabled
+      say "set      the fallback origin: $ALIAS_ORIGIN"
+    fi
+    return 0
+  fi
+  if [[ -z $origin ]]; then
+    drifted "the fallback origin" "there is none"
+  elif [[ $origin != "$ALIAS_ORIGIN" ]]; then
+    drifted "the fallback origin" "is $origin, want $ALIAS_ORIGIN"
+  elif [[ $status == active ]]; then
+    say "ok       the fallback origin: $origin, active"
+  elif [[ $MODE == apply ]]; then
+    say "ok       the fallback origin: $origin, not active yet (${status:-no state}): Cloudflare is still putting it in place"
+  else
+    drifted "the fallback origin" "is ${status:-in no state}, want active"
+  fi
+}
+
+# alias_hostname fix|judge NAME present|absent: the zone's custom hostname
+# NAME. Cloudflare's own filter gives every name that holds NAME, so the
+# list is narrowed here. One that is there and not active is never made
+# again: only the other side's record brings it back. judge prints one line
+# of state that scripts/cutover/alias-rehearsal reads.
+alias_hostname() {
+  local name="$2" want="$3" out found count id status ssl method
+  out="$(cf GET "/zones/{zone}/custom_hostnames?hostname=$name")" || not_enabled
+  found="$(printf '%s' "$out" | jq -c --arg n "$name" '[.result[]? | select(.hostname == $n)]')"
+  count="$(printf '%s' "$found" | jq 'length')"
+  status="$(printf '%s' "$found" | jq -r '.[0].status // "none"')"
+  ssl="$(printf '%s' "$found" | jq -r '.[0].ssl.status // "none"')"
+  method="$(printf '%s' "$found" | jq -r '.[0].ssl.method // "none"')"
+  if [[ $1 == fix ]]; then
+    if [[ $want == present && $count == 0 ]]; then
+      cf POST "/zones/{zone}/custom_hostnames" "$(alias_hostname_body "$name")" >/dev/null || not_enabled
+      say "set      the custom hostname $name: made. It becomes active once $name is a CNAME of $ALIAS_ORIGIN, DNS only (not proxied), and nothing else is asked of the name's side"
+    elif [[ $want == absent ]]; then
+      while IFS= read -r id; do
+        [[ $id =~ ^[0-9a-f-]{36}$ ]] || continue
+        cf DELETE "/zones/{zone}/custom_hostnames/$id" >/dev/null || not_enabled
+        say "set      the custom hostname $name: deleted"
+      done < <(printf '%s' "$found" | jq -r '.[].id')
+    fi
+    return 0
+  fi
+  say "state    $name: hostname=$status certificate=$ssl method=$method"
+  if [[ $want == absent ]]; then
+    if [[ $count == 0 ]]; then
+      say "ok       the custom hostname $name: there is none"
+    else
+      drifted "the custom hostname $name" "is still there ($status)"
+    fi
+  elif [[ $count == 0 ]]; then
+    drifted "the custom hostname $name" "there is none"
+  elif [[ $count -gt 1 ]]; then
+    drifted "the custom hostname $name" "$count carry the name, want one: remove the others in the dashboard"
+  elif [[ $method != http ]]; then
+    drifted "the custom hostname $name" "its certificate is validated by $method, want http: nothing but the CNAME is asked of the name's side"
+  elif [[ $status == active && $ssl == active ]]; then
+    say "ok       the custom hostname $name: active, and so is its certificate, validated over HTTP"
+  elif [[ $MODE == apply ]]; then
+    say "ok       the custom hostname $name: not active yet (hostname $status, certificate $ssl). It waits for $name to be a CNAME of $ALIAS_ORIGIN, DNS only"
+  else
+    drifted "the custom hostname $name" "the hostname is $status and its certificate $ssl, want both active"
+  fi
 }
 
 # Porkbun, the registrar. Its two keys come from the environment or the login

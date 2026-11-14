@@ -68,6 +68,11 @@ type edge struct {
 		Name    string `json:"name"`
 	} `json:"mail"`
 	Owner []setting `json:"owner"`
+	Alias struct {
+		Hostname       string `json:"hostname"`
+		FallbackOrigin string `json:"fallback_origin"`
+		Wanted         bool   `json:"wanted"`
+	} `json:"alias"`
 }
 
 type setting struct {
@@ -117,6 +122,9 @@ type fake struct {
 	tunnels   []map[string]any
 	records   []map[string]any
 	noZone    bool
+	fallback  map[string]any   // the zone's fallback origin; nil when none is set
+	hostnames []map[string]any // the zone's custom hostnames
+	noSaaS    bool             // Cloudflare for SaaS is not enabled on the zone
 	broken    string // a path that answers with a web error page
 	seq       int
 }
@@ -216,6 +224,7 @@ var (
 	phasePath = regexp.MustCompile(`^rulesets/phases/([a-z_0-9]+)/entrypoint$`)
 	rulePath  = regexp.MustCompile(`^email/routing/rules/([a-z0-9]+)$`)
 	recPath   = regexp.MustCompile(`^dns_records/([a-z0-9]+)$`)
+	hostPath  = regexp.MustCompile(`^custom_hostnames/([0-9a-f-]{36})$`)
 )
 
 func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +334,10 @@ func (f *fake) zone(w http.ResponseWriter, r *http.Request, path string, in map[
 		f.refuse(w, http.StatusNotFound, 81044, "Record does not exist.")
 		return
 	}
+	if strings.HasPrefix(path, "custom_hostnames") {
+		f.custom(w, r, path, in)
+		return
+	}
 	switch path + " " + r.Method {
 	case "bot_management GET":
 		f.ok(w, f.bot)
@@ -377,6 +390,106 @@ func (f *fake) zone(w http.ResponseWriter, r *http.Request, path string, in map[
 		f.ok(w, in)
 	default:
 		f.refuse(w, http.StatusNotFound, 7003, "No route for the URI")
+	}
+}
+
+// custom answers for the zone's custom hostnames and their fallback origin
+// (Cloudflare for SaaS). A new hostname waits, as Cloudflare's does, until
+// the name is a CNAME of the zone's: a test makes it active with activate.
+func (f *fake) custom(w http.ResponseWriter, r *http.Request, path string, in map[string]any) {
+	if f.noSaaS {
+		f.refuse(w, http.StatusForbidden, 1404, "Custom hostnames are not enabled for this zone")
+		return
+	}
+	if m := hostPath.FindStringSubmatch(path); m != nil && r.Method == "DELETE" {
+		for i, h := range f.hostnames {
+			if h["id"] == m[1] {
+				f.hostnames = append(f.hostnames[:i], f.hostnames[i+1:]...)
+				f.ok(w, map[string]any{"id": m[1]})
+				return
+			}
+		}
+		f.refuse(w, http.StatusNotFound, 1436, "The custom hostname was not found")
+		return
+	}
+	switch path + " " + r.Method {
+	case "custom_hostnames/fallback_origin GET":
+		if f.fallback == nil {
+			f.refuse(w, http.StatusNotFound, 1551, "The fallback origin was not found")
+			return
+		}
+		f.ok(w, f.fallback)
+	case "custom_hostnames/fallback_origin PUT":
+		f.fallback = map[string]any{"origin": in["origin"], "status": "initializing", "errors": []any{}}
+		f.ok(w, f.fallback)
+	case "custom_hostnames GET":
+		// Cloudflare's filter is not an exact one: it gives every name that holds the text.
+		out := []any{}
+		for _, h := range f.hostnames {
+			if strings.Contains(h["hostname"].(string), r.URL.Query().Get("hostname")) {
+				out = append(out, h)
+			}
+		}
+		f.ok(w, out)
+	case "custom_hostnames POST":
+		name, _ := in["hostname"].(string)
+		for _, h := range f.hostnames {
+			if h["hostname"] == name {
+				f.refuse(w, http.StatusConflict, 1406, "Duplicate custom hostname found")
+				return
+			}
+		}
+		ssl, _ := in["ssl"].(map[string]any)
+		f.seq++
+		h := map[string]any{
+			"id": fmt.Sprintf("00000000-0000-4000-9000-%012d", f.seq), "hostname": name, "status": "pending", "created_at": "2026-11-15T00:00:00Z",
+			"ssl":                    map[string]any{"status": "initializing", "method": ssl["method"], "type": ssl["type"], "wildcard": false},
+			"ownership_verification": map[string]any{"type": "txt", "name": "_cf-custom-hostname." + name, "value": "a-made-up-value"},
+		}
+		f.hostnames = append(f.hostnames, h)
+		f.ok(w, h)
+	default:
+		f.refuse(w, http.StatusNotFound, 7003, "No route for the URI")
+	}
+}
+
+// hostname is the zone's custom hostname of that name, or nil.
+func (f *fake) hostname(name string) map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, h := range f.hostnames {
+		if h["hostname"] == name {
+			return h
+		}
+	}
+	return nil
+}
+
+// activate is what Cloudflare does once the name is a CNAME of the zone's:
+// the hostname and its certificate become active, and so does the fallback
+// origin.
+func (f *fake) activate(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fallback != nil {
+		f.fallback["status"] = "active"
+	}
+	for _, h := range f.hostnames {
+		if h["hostname"] == name {
+			h["status"] = "active"
+			h["ssl"].(map[string]any)["status"] = "active"
+		}
+	}
+}
+
+// lapse is what Cloudflare does once the name's CNAME is gone.
+func (f *fake) lapse(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, h := range f.hostnames {
+		if h["hostname"] == name {
+			h["status"] = "moved"
+		}
 	}
 }
 
@@ -469,7 +582,14 @@ func (f *fake) tokenFile() string {
 func script(t *testing.T, f *fake, env []string, name string, args ...string) (string, int) {
 	t.Helper()
 	need(t, "bash", "curl", "jq")
-	cmd := exec.Command(filepath.Join(repo(t), "scripts", "cloud", name), args...)
+	dir := filepath.Join(repo(t), "scripts", "cloud")
+	for _, e := range env {
+		// A test's own copy of the scripts, with another edge.json.
+		if strings.HasPrefix(e, "CLOUDTEST_SCRIPTS=") {
+			dir = strings.TrimPrefix(e, "CLOUDTEST_SCRIPTS=")
+		}
+	}
+	cmd := exec.Command(filepath.Join(dir, name), args...)
 	cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "KEYCHAIN_SERVICE=cloudtest-no-such-service")
 	if f != nil {
 		cmd.Env = append(cmd.Env, "LAB_CLOUD_API="+f.url())

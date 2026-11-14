@@ -1,0 +1,5 @@
+rehearsal-record.sh: a dry run. These are the calls --apply makes; nothing is sent.
+
+the record of alias-rehearsal.omarchy-m-testing.org, at Porkbun
+  POST https://api.porkbun.com/api/json/v3/dns/retrieveByNameType/omarchy-m-testing.org/CNAME/alias-rehearsal {}
+  POST https://api.porkbun.com/api/json/v3/dns/create/omarchy-m-testing.org {"name":"alias-rehearsal","type":"CNAME","content":"lab.omarchy-mac.org","ttl":"600"}

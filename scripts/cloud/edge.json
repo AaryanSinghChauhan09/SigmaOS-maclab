@@ -73,6 +73,7 @@
       "want": []
     }
   ],
+  "alias": {"hostname": "maclab.omarchy.org", "fallback_origin": "lab.omarchy-mac.org", "wanted": false},
   "mail": {"address": "privacy@omarchy-mac.org", "name": "privacy"},
   "owner": [
     {"name": "DNSSEC", "path": "/zones/{zone}/dnssec", "read": ".result.status", "accept": ["active"], "how": "Cloudflare: DNS > Settings > DNSSEC > Enable, then the DS record it shows goes in at Porkbun"},
