@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# Runs what .github/workflows/tests.yml runs, on this machine.
+#
+#   scripts/ci-local [--race] [--serial] [step ...]
+#
+# Steps: go tools cli installer catalogue schema spec gpu site (default: all).
+# A step this machine cannot run is skipped with its reason; the workflow
+# still runs it. Exit status 1 when anything failed.
+#
+#   --race    go test -race, as the workflow does (slower)
+#   --serial  one step after another, for a busy machine
+set -uo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
+ALL=(go tools cli installer catalogue schema spec gpu site)
+RACE=""
+SERIAL=0
+STEPS=()
+for arg in "$@"; do
+  case "$arg" in
+    --race) RACE="-race" ;;
+    --serial) SERIAL=1 ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) echo "unknown option: $arg" >&2; exit 2 ;;
+    *) [[ " ${ALL[*]} " == *" $arg "* ]] || { echo "unknown step: $arg (steps: ${ALL[*]})" >&2; exit 2; }
+       STEPS+=("$arg") ;;
+  esac
+done
+(( ${#STEPS[@]} )) || STEPS=("${ALL[@]}")
+
+LOGS="$(mktemp -d "${TMPDIR:-/tmp}/ci-local.XXXXXX")"
+OS="$(uname -s)"
+STEP=""
+N=0
+
+# run LABEL COMMAND...: one line per command; a failure shows the end of its output.
+run() {
+  local label="$1" log start=$SECONDS
+  shift
+  N=$((N + 1))
+  log="$LOGS/$STEP-$N.log"
+  if "$@" >"$log" 2>&1; then
+    printf 'ok    %-9s %-56s %4ss\n' "$STEP" "$label" $((SECONDS - start))
+  else
+    printf 'FAIL  %-9s %-56s %4ss  %s\n' "$STEP" "$label" $((SECONDS - start)) "$log"
+    tail -n 40 "$log" | sed 's/^/        /'
+  fi
+}
+skip() { printf 'skip  %-9s %-56s %s\n' "$STEP" "$1" "$2"; }
+in_dir() { ( cd "$1" && shift && "$@" ); }
+have() { command -v "$1" >/dev/null 2>&1; }
+linux() { [[ "$OS" == Linux ]]; }
+
+step_go() {
+  run "go vet" go vet ./...
+  run "go vet for linux/arm64" env GOOS=linux GOARCH=arm64 go vet ./...
+  # shellcheck disable=SC2086
+  run "go test${RACE:+ -race}" go test $RACE -timeout 40m ./...
+  run "make all" make all
+  run "labd smoke on its own host" bash .github/scripts/labd-smoke.sh bin
+  run "labd smoke under a prefix" bash .github/scripts/labd-smoke.sh bin https://example.org/lab
+}
+
+step_tools() {
+  local py=python3
+  have python3.14 && py=python3.14
+  run "lab-only-autounlock parses" bash -n scripts/lab-only-autounlock
+  run "builder" "$py" -B -m unittest discover -s builder -p 'test_*.py'
+  if linux; then
+    run "lab-only-autounlock" "$py" scripts/test-lab-only-autounlock.py
+    if "$py" -c 'import sys; sys.exit(sys.version_info < (3, 14))'; then
+      run "tools/bt2" in_dir tools/bt2 "$py" -B -E -s -m unittest discover -s tests
+    else
+      skip "tools/bt2" "needs Python 3.14"
+    fi
+    run "boot-test https runtime" "$py" -I -B -m unittest discover -s scripts/boot-test -p 'test_https_runtime.py'
+    run "workflow https controller" "$py" -I -B -m unittest discover -s scripts/workflow/m1 -p 'test_https_controller.py'
+  else
+    skip "lab-only-autounlock" "needs Linux (util-linux script)"
+    skip "tools/bt2" "needs Linux (/dev/shm) and Python 3.14"
+    skip "boot-test https runtime" "needs Linux (O_PATH)"
+    skip "workflow https controller" "needs Linux (O_PATH)"
+  fi
+}
+
+step_cli() {
+  local found=0 v
+  for v in 3.11 3.13; do
+    if have "python$v"; then
+      found=1
+      run "host boundary, Python $v" "python$v" cli/scripts/check_boundary.py
+      run "tests, Python $v" in_dir cli "python$v" -m unittest discover -s tests -t .
+    else
+      skip "Python $v" "python$v is not installed"
+    fi
+  done
+  if (( ! found )); then
+    run "host boundary, $(python3 --version)" python3 cli/scripts/check_boundary.py
+    run "tests, $(python3 --version)" in_dir cli python3 -m unittest discover -s tests -t .
+  fi
+}
+
+step_installer() {
+  # Both scripts want GNU install, tar and sed; Homebrew keeps them out of PATH.
+  local gnu="" d
+  if ! linux; then
+    for d in coreutils gnu-tar gnu-sed; do
+      [[ -d "/opt/homebrew/opt/$d/libexec/gnubin" ]] || { skip "installer and release tarball" "needs GNU $d (brew install $d)"; return; }
+      gnu="/opt/homebrew/opt/$d/libexec/gnubin:$gnu"
+    done
+  fi
+  run "installer" env PATH="$gnu$PATH" installer/test.sh
+  run "release tarball" env PATH="$gnu$PATH" release/check.sh
+}
+
+step_catalogue() {
+  local py=python3
+  have python3.13 && py=python3.13
+  run "Asahi layer matches the snapshot" "$py" catalogue/asahi_tables.py check
+}
+
+step_schema() {
+  if have check-jsonschema; then
+    run "schema is valid draft 2020-12" check-jsonschema --check-metaschema schema/*.schema.json
+    run "golden reports validate" check-jsonschema --schemafile schema/report-v1.schema.json \
+      schema/golden/*.json schema/golden/signed/*.json schema/golden/benchmarks/*.json
+  else
+    skip "report schema" "needs check-jsonschema (pip install check-jsonschema==0.33.0)"
+  fi
+}
+
+step_spec() {
+  if ! have java; then
+    skip "TLA+ specs" "needs java"
+  elif [[ ! -f specs/.tools/tla2tools.jar ]]; then
+    skip "TLA+ specs" "tla2tools.jar is not fetched yet: run make spec once"
+  else
+    run "TLA+ specs" make spec
+  fi
+}
+
+step_gpu() {
+  if linux && have glslangValidator && have spirv-val; then
+    local out="$LOGS/gpu-helper"
+    run "GPU helper compiles" cli/scripts/build_gpu_benchmark.sh "$out"
+    run "GPU helper self-test" "$out/gpu-benchmark-vulkan" --host-self-test
+  else
+    skip "GPU helper" "needs Linux with libvulkan-dev, glslang-tools and spirv-tools"
+  fi
+}
+
+step_site() {
+  if have pg_isready && pg_isready -q 2>/dev/null && have ruby && [[ "$(ruby -e 'print RUBY_VERSION')" == "$(tr -d 'ruby-\n' < site/.ruby-version)" ]]; then
+    run "Rails: prepare the test database" in_dir site env RAILS_ENV=test bin/rails db:test:prepare
+    run "Rails: tests" in_dir site env RAILS_ENV=test bin/rails test
+  else
+    skip "Rails reference" "needs Postgres running and Ruby $(tr -d 'ruby-\n' < site/.ruby-version)"
+  fi
+}
+
+start=$SECONDS
+for STEP in "${STEPS[@]}"; do
+  if (( SERIAL )); then
+    "step_$STEP" 2>&1 | tee "$LOGS/$STEP.status"
+  else
+    "step_$STEP" >"$LOGS/$STEP.status" 2>&1 &
+  fi
+done
+wait
+if (( ! SERIAL )); then
+  for STEP in "${STEPS[@]}"; do cat "$LOGS/$STEP.status"; done
+fi
+
+failed="$(cat "$LOGS"/*.status | grep -c '^FAIL' || true)"
+skipped="$(cat "$LOGS"/*.status | grep -c '^skip' || true)"
+passed="$(cat "$LOGS"/*.status | grep -c '^ok' || true)"
+echo
+if (( failed )); then
+  echo "ci-local: $failed failed, $passed passed, $skipped skipped in $((SECONDS - start))s; logs in $LOGS"
+  exit 1
+fi
+rm -rf "$LOGS"
+echo "ci-local: $passed passed, $skipped skipped in $((SECONDS - start))s"

@@ -1,0 +1,172 @@
+name: tests
+
+# Everything that is tested, on every push and pull request. scripts/ci-local
+# runs the same commands on a developer's machine.
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go
+    strategy:
+      fail-fast: false
+      matrix:
+        # labd, oobd and lab-builder run on macOS; lab-agent runs on Linux.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: GOOS=linux GOARCH=arm64 go vet ./...
+      - run: go test -race -timeout 40m ./...
+      - run: make all
+      - name: labd on its own host and under a prefix
+        run: |
+          bash .github/scripts/labd-smoke.sh bin
+          bash .github/scripts/labd-smoke.sh bin https://example.org/lab
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: labd-smoke-log-${{ matrix.os }}
+          path: ${{ runner.temp }}/labd-smoke.log
+          if-no-files-found: ignore
+
+  tools:
+    name: Builder, boot-test and workflow tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"   # the bt2 fixtures need 3.14 (tarfile w:zst), as the Macs run
+      - run: bash -n scripts/lab-only-autounlock
+      - run: python3 scripts/test-lab-only-autounlock.py
+      - run: python3 -B -m unittest discover -s builder -p 'test_*.py'
+      - run: python3 -B -E -s -m unittest discover -s tests -v
+        working-directory: tools/bt2
+      - run: python3 -I -B -m unittest discover -s scripts/boot-test -p 'test_https_runtime.py' -v
+      - run: python3 -I -B -m unittest discover -s scripts/workflow/m1 -p 'test_https_controller.py' -v
+
+  spec:
+    name: TLA+ specs
+    # Today's design must pass, and each replayed bug must fail.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: make spec
+
+  cli:
+    name: omarchy-m-test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Host boundary and stdlib-only imports
+        run: python cli/scripts/check_boundary.py
+      - name: Tests
+        working-directory: cli
+        run: python -m unittest discover -s tests -t . -v
+
+  gpu-native:
+    name: GPU helper compile and CPU-only guards
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build dependencies (CI only)
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libvulkan-dev glslang-tools spirv-tools
+      - name: Compile C and validate SPIR-V; no GPU invocation
+        run: |
+          cli/scripts/build_gpu_benchmark.sh "$RUNNER_TEMP/gpu-helper"
+          "$RUNNER_TEMP/gpu-helper/gpu-benchmark-vulkan" --host-self-test
+      - name: Preserve compile-only helper receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-helper-${{ matrix.os }}
+          path: ${{ runner.temp }}/gpu-helper/
+
+  installer:
+    name: Installer and release tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install, upgrade in place, refuse tampered and foreign-signed releases
+        run: installer/test.sh
+      - name: The release tarball ships the catalogue and the vendored check scripts
+        run: release/check.sh
+
+  catalogue:
+    name: Feature catalogue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Asahi layer matches the pinned snapshot of Asahi's tables
+        run: python catalogue/asahi_tables.py check
+
+  schema:
+    name: Report schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install check-jsonschema==0.33.0
+      - name: Schema is valid draft 2020-12
+        run: check-jsonschema --check-metaschema schema/*.schema.json
+      - name: Golden reports validate
+        run: check-jsonschema --schemafile schema/report-v1.schema.json schema/golden/*.json schema/golden/signed/*.json schema/golden/benchmarks/*.json
+
+  site:
+    name: Rails reference
+    # Runs until the Go port passes its acceptance corpus and site/ is deleted.
+    # Newer images only get the latest Ruby patch from setup-ruby, not site/.ruby-version's.
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      RAILS_ENV: test
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          working-directory: site
+          bundler-cache: true
+      - run: bin/rails db:test:prepare
+      - run: bin/rails test
