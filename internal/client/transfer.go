@@ -17,12 +17,56 @@ import (
 // errStartOver is a partial file that is not the start of what labd serves.
 var errStartOver = errors.New("the partial file is not this download's")
 
-// fetch downloads path into dst through dst.part and returns the file's
-// sha256. A cut download asks again for the bytes it lacks, up to eight
-// times in a row without a byte arriving; the partial file stays for the
-// next call when it gives up.
-func (c *Client) fetch(ctx context.Context, path, name, dst string) (string, error) {
+// fetch downloads path, the artifact whose SHA-256 is want, into dst through
+// dst.part. Beside the partial file, dst.part.sha256 says which artifact it
+// is a part of: an earlier call's is gone on from only when that is want,
+// and dst is replaced only by bytes that are want. A cut download asks again
+// for the bytes it lacks, up to eight times in a row without a byte
+// arriving; the partial file stays for the next call when it gives up.
+func (c *Client) fetch(ctx context.Context, path, name, want, dst string) error {
 	part := dst + ".part"
+	of := part + ".sha256"
+	if b, _ := os.ReadFile(of); strings.TrimSpace(string(b)) != want {
+		if err := os.Remove(part); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.WriteFile(of, []byte(want+"\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	// An earlier call's partial file is taken on its word: if the whole is
+	// not want after all, the file is fetched once more, from its start.
+	for earlier := size(part) > 0; ; earlier = false {
+		if err := c.fetchWhole(ctx, path, name, part); err != nil {
+			if size(part) == 0 {
+				os.Remove(part)
+				os.Remove(of)
+			}
+			return err
+		}
+		got, err := fileSHA256(part)
+		if err != nil {
+			return err
+		}
+		if got == want {
+			break
+		}
+		if err := os.Remove(part); err != nil {
+			return err
+		}
+		if !earlier {
+			os.Remove(of)
+			return fmt.Errorf("%s: downloaded sha256 %s, but the build recorded %s", name, got, want)
+		}
+	}
+	if err := os.Rename(part, dst); err != nil {
+		return err
+	}
+	os.Remove(of)
+	return nil
+}
+
+func (c *Client) fetchWhole(ctx context.Context, path, name, part string) error {
 	for try := 0; ; try++ {
 		if try > 0 {
 			pause := c.pause
@@ -30,35 +74,37 @@ func (c *Client) fetch(ctx context.Context, path, name, dst string) (string, err
 				pause = upload.Backoff
 			}
 			if err := pause(ctx, try); err != nil {
-				return "", err
+				return err
 			}
 		}
 		before := size(part)
 		err := c.fetchOnce(ctx, path, part)
 		if err == nil {
-			break
+			return nil
 		}
 		var no *StatusError
 		switch {
 		case errors.As(err, &no):
-			return "", fmt.Errorf("%s: %w", name, err)
+			return fmt.Errorf("%s: %w", name, err)
 		case errors.Is(err, errStartOver) || size(part) > before:
 			try = 0
 		case try >= upload.Retries || ctx.Err() != nil:
-			return "", fmt.Errorf("%s: %w", name, err)
+			return fmt.Errorf("%s: %w", name, err)
 		}
 	}
-	f, err := os.Open(part)
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
+	defer f.Close()
 	h := sha256.New()
-	_, err = io.Copy(h, f)
-	f.Close()
-	if err != nil {
+	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), os.Rename(part, dst)
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func size(path string) int64 {

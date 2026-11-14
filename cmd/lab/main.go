@@ -1396,7 +1396,8 @@ func followBuild(ctx context.Context, c *client.Client, b *api.Build, noWait boo
 	return nil
 }
 
-// getBuildFiles downloads named build outputs and checks each sha256.
+// getBuildFiles downloads named build outputs, each checked against the
+// sha256 the build recorded.
 func getBuildFiles(ctx context.Context, c *client.Client, b *api.Build, dir string) error {
 	if len(b.Files) == 0 {
 		return fmt.Errorf("build %s has no named files to download", b.ID)
@@ -1406,15 +1407,10 @@ func getBuildFiles(ctx context.Context, c *client.Client, b *api.Build, dir stri
 	}
 	for _, f := range b.Files {
 		dst := filepath.Join(dir, f.Name)
-		sha, err := c.BuildFile(ctx, b.ID, f.Name, dst)
-		if err != nil {
+		if err := c.BuildFile(ctx, b.ID, f.Name, f.SHA256, dst); err != nil {
 			return err
 		}
-		if sha != f.SHA256 {
-			os.Remove(dst)
-			return fmt.Errorf("%s: downloaded sha256 %s, but the build recorded %s", f.Name, sha, f.SHA256)
-		}
-		fmt.Printf("%s  %s\n", sha, dst)
+		fmt.Printf("%s  %s\n", f.SHA256, dst)
 	}
 	if b.Recipe != "" {
 		if err := getRecipe(ctx, c, b, dir); err != nil {
@@ -1428,14 +1424,10 @@ func getBuildFiles(ctx context.Context, c *client.Client, b *api.Build, dir stri
 // uploaded (PKGBUILD, patches, data files), into dir/recipe/.
 func getRecipe(ctx context.Context, c *client.Client, b *api.Build, dir string) error {
 	tarball := filepath.Join(dir, api.RecipeFile)
-	sha, err := c.BuildFile(ctx, b.ID, api.RecipeFile, tarball)
-	if err != nil {
+	if err := c.BuildFile(ctx, b.ID, api.RecipeFile, b.Recipe, tarball); err != nil {
 		return err
 	}
 	defer os.Remove(tarball)
-	if sha != b.Recipe {
-		return fmt.Errorf("downloaded sha256 %s, but the build recorded %s", sha, b.Recipe)
-	}
 	rdir := filepath.Join(dir, "recipe")
 	if err := os.MkdirAll(rdir, 0o755); err != nil {
 		return err
@@ -1443,7 +1435,7 @@ func getRecipe(ctx context.Context, c *client.Client, b *api.Build, dir string) 
 	if o, err := exec.Command("tar", "-C", rdir, "--no-same-owner", "-xf", tarball).CombinedOutput(); err != nil {
 		return fmt.Errorf("unpacking: %v: %s", err, o)
 	}
-	fmt.Printf("%s  %s/ (the recipe as uploaded)\n", sha, rdir)
+	fmt.Printf("%s  %s/ (the recipe as uploaded)\n", b.Recipe, rdir)
 	return nil
 }
 

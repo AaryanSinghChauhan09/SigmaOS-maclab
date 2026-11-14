@@ -484,11 +484,11 @@ func (c *Client) BuildLog(ctx context.Context, id string, follow bool, w io.Writ
 	return err
 }
 
-// BuildFile downloads one output of a package build into dst and returns
-// its sha256. A download that is cut goes on from where it stopped, in this
-// call or the next one for the same dst.
-func (c *Client) BuildFile(ctx context.Context, id, name, dst string) (string, error) {
-	return c.fetch(ctx, "/api/builds/"+url.PathEscape(id)+"/files/"+url.PathEscape(name), name, dst)
+// BuildFile downloads one output of a package build, the one the build
+// recorded under sha256, into dst. A download that is cut goes on from where
+// it stopped, in this call or the next one for the same dst and sha256.
+func (c *Client) BuildFile(ctx context.Context, id, name, sha256, dst string) error {
+	return c.fetch(ctx, "/api/builds/"+url.PathEscape(id)+"/files/"+url.PathEscape(name), name, sha256, dst)
 }
 
 // Installed sends one of the installed-release Maintainer requests
