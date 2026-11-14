@@ -514,6 +514,12 @@ func TestTheMaintenanceRunRefusesBeforeItTellsAnyone(t *testing.T) {
 		t.Errorf("with no authrestart:\n%s", out)
 	}
 	r.unset("authrestart")
+	// With a Homebrew that belongs to root: brew would run as root.
+	write(t, r.bin+"/ls", "#!/bin/bash\nif [[ \"$*\" == \"-ld $LAB_SYSROOT/opt/homebrew\" ]]; then echo \"drwxr-xr-x  10 root  wheel  320 Nov 14 10:00 $2\"; exit 0; fi\nexec /bin/ls \"$@\"\n", 0o755)
+	if out := r.stopped(); !strings.Contains(out, "brew never runs as root") {
+		t.Errorf("with root's Homebrew:\n%s", out)
+	}
+	os.Remove(r.bin + "/ls")
 	for _, args := range [][]string{{"--deploy", "latest"}, {"--deploy", "v0.2"}, {"--from", "https://example.org/x"}, {"--deploy", "v0.2.0", "--from", "http://example.org/x"}, {"--wait"}, {"--restart"}} {
 		r.stopped(args...)
 	}

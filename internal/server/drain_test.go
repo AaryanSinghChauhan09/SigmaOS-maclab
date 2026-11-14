@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,19 @@ func opsOf(s *Server, method, path string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	s.OpsHandler().ServeHTTP(w, httptest.NewRequest(method, "http://labd"+path, strings.NewReader("")))
 	return w
+}
+
+// pollHere polls once as a builder and returns when labd has answered: no
+// poll is left waiting in labd to take a build later.
+func pollHere(b *builderLab, token string, wait time.Duration) int {
+	ctx, cancel := context.WithTimeout(b.ctx, wait)
+	defer cancel()
+	r := httptest.NewRequest("POST", "http://127.0.0.1/api/builder/poll", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("User-Agent", "lab-builder/test")
+	w := httptest.NewRecorder()
+	b.s.Handler().ServeHTTP(w, r)
+	return w.Code
 }
 
 // A Deploy and a Maintenance run restart labd, and a job that runs then is
@@ -78,8 +92,8 @@ func TestADrainHandsTheBuilderNoBuild(t *testing.T) {
 	if w := opsOf(b.s, "POST", "/drain"); w.Body.String() != "0 0\n" {
 		t.Fatalf("with that build done: %q", w.Body)
 	}
-	if a, code := b.poll(token, "", 1500*time.Millisecond); code == 200 {
-		t.Fatalf("a build was handed out while jobs are drained: %+v", a)
+	if code := pollHere(b, token, time.Second); code == 200 {
+		t.Fatal("a build was handed out while jobs are drained")
 	}
 	if got := b.build(waiting.ID).State; got != api.BuildQueued {
 		t.Errorf("the waiting build is %s", got)
@@ -102,7 +116,7 @@ func TestPartsSaysHowTheBuilderAndTheControllerAre(t *testing.T) {
 	if w := opsOf(b.s, "GET", "/parts"); w.Body.String() != "builder silent\ncontroller none\n" {
 		t.Fatalf("with a builder that never asked: %q", w.Body)
 	}
-	b.poll(token, "", 300*time.Millisecond)
+	pollHere(b, token, 300*time.Millisecond)
 	if w := opsOf(b.s, "GET", "/parts"); w.Body.String() != "builder ok\ncontroller none\n" {
 		t.Fatalf("with a builder that asks: %q", w.Body)
 	}
