@@ -51,6 +51,106 @@ func TestNoLaunchDaemonNamesAPathUnderHomebrew(t *testing.T) {
 	}
 }
 
+// No LaunchDaemon file holds a secret, only the name of the file one is in;
+// none sets an environment; none is a service file of Homebrew's own or the
+// one tailscaled writes for itself; and there is one for each daemon the
+// scripts know, under the account the spec's table gives.
+func TestNoLaunchDaemonFileHoldsASecretOrIsHomebrewsOwn(t *testing.T) {
+	secret := regexp.MustCompile(`tskey-|bldr_[0-9a-f]{8}|lab_[A-Za-z0-9]{24}|hc-ping\.com/|\b[0-9a-f]{32,}\b|^[A-Za-z0-9+][A-Za-z0-9+/]{39,}={0,2}$`)
+	names := regexp.MustCompile(`(?i)token|secret|password|credential|auth-?key`)
+	labels := map[string]string{}
+	for _, f := range launchDaemons(t) {
+		base := filepath.Base(f)
+		text := read(t, f)
+		values, arrays := plist(t, f)
+		label := values["Label"]
+		if label+".plist" != base {
+			t.Errorf("%s holds the label %q", base, label)
+		}
+		if strings.HasPrefix(label, "homebrew.mxcl.") || label == "com.tailscale.tailscaled" || strings.Contains(text, "brew services") {
+			t.Errorf("%s is a service file of Homebrew's or of tailscaled's own", base)
+		}
+		if strings.Contains(text, "EnvironmentVariables") {
+			t.Errorf("%s sets an environment: a secret is in a file the daemon is told the name of", base)
+		}
+		args := arrays["ProgramArguments"]
+		if len(args) == 0 || !strings.HasPrefix(args[0], "/usr/local/lab/") {
+			t.Errorf("%s runs %v, outside the folder only root can write", base, args)
+		}
+		for i, arg := range args {
+			if secret.MatchString(arg) {
+				t.Errorf("%s: argument %q has the shape of a secret", base, arg)
+			}
+			// Whatever names a secret names a file: --token-file PATH, or a path.
+			if names.MatchString(arg) && !strings.HasPrefix(arg, "/") {
+				if !strings.HasSuffix(arg, "-file") || i+1 >= len(args) || !strings.HasPrefix(args[i+1], "/") {
+					t.Errorf("%s: %q names a secret and no file", base, arg)
+				}
+			}
+		}
+		account := values["UserName"]
+		if account == "" {
+			account = "root"
+		}
+		labels[label] = account
+	}
+	want := map[string]string{}
+	for _, pair := range strings.Fields(shell(t, "LAB_DAEMONS")) {
+		name, account, _ := strings.Cut(pair, ":")
+		label := name
+		if strings.HasPrefix(name, "$") {
+			label = shell(t, strings.TrimPrefix(name, "$"))
+		}
+		want[label] = account
+	}
+	if len(want) != 11 {
+		t.Errorf("scripts/mini/lib.sh knows %d daemons, want eleven: %v", len(want), want)
+	}
+	for label, account := range want {
+		if labels[label] != account {
+			t.Errorf("%s runs as %q by its file in deploy/; scripts/mini/lib.sh says %s", label, labels[label], account)
+		}
+	}
+	for label := range labels {
+		if _, ok := want[label]; !ok {
+			t.Errorf("deploy/%s.plist is of no daemon scripts/mini/lib.sh knows: the check would not look at it", label)
+		}
+	}
+	// The spec's table, by name.
+	for label, account := range map[string]string{
+		labdLabel: "lab", litestreamLabel: "lab", backupLabel: "lab", deadManLabel: "lab", cloudflaredLabel: "lab",
+		oobdLabel: "root", builderLabel: "root", tailscaledLabel: "root", containerLabel: "root",
+	} {
+		if want[label] != account {
+			t.Errorf("scripts/mini/lib.sh has %s as %q; the spec's table says %s", label, want[label], account)
+		}
+	}
+}
+
+// deploy/pins holds container and the reset tool only: every other tool is
+// Homebrew's and carries no pin (decision S10).
+func TestThePinsAreContainerAndTheResetToolOnly(t *testing.T) {
+	var names []string
+	for _, line := range strings.Split(read(t, filepath.Join(repo(t), "deploy", "pins")), "\n") {
+		if i := strings.Index(line, "#"); i >= 0 {
+			line = line[:i]
+		}
+		if f := strings.Fields(line); len(f) > 0 {
+			names = append(names, f[0])
+		}
+	}
+	if got := strings.Join(names, " "); got != "macvdmtool container" {
+		t.Errorf("deploy/pins names %q", got)
+	}
+	for _, f := range formulaeList(t) {
+		for _, n := range names {
+			if f == n {
+				t.Errorf("%s is both pinned and on the Homebrew list", f)
+			}
+		}
+	}
+}
+
 // plist reads the top dictionary of a property list: strings, booleans and
 // integers by key, and arrays of strings.
 func plist(t *testing.T, file string) (values map[string]string, arrays map[string][]string) {
@@ -223,7 +323,8 @@ func TestTheMinisScriptsPassShellcheck(t *testing.T) {
 }
 
 // The mini compiles nothing and has no Python of the lab's; only the set-up
-// calls brew, and only through the function that refuses to be root.
+// and the Maintenance run call brew, and only through the function that
+// refuses to be root.
 func TestTheMinisScriptsNeedOnlyWhatMacOSHas(t *testing.T) {
 	banned := regexp.MustCompile(`(^|[^\w./-])(python3?|git|cc|gcc|clang)([^\w./-]|$)`)
 	brew := regexp.MustCompile(`(^|[^\w/_-])brew([^\w_-]|$)`)
@@ -242,7 +343,7 @@ func TestTheMinisScriptsNeedOnlyWhatMacOSHas(t *testing.T) {
 				t.Errorf("%s:%d needs %s: %s", name, n+1, m[2], strings.TrimSpace(line))
 			}
 			// The address of the list Homebrew publishes is no call of brew.
-			if brew.MatchString(strings.ReplaceAll(code, "//formulae.brew.sh/", "")) && name != "setup" {
+			if brew.MatchString(strings.ReplaceAll(code, "//formulae.brew.sh/", "")) && name != "setup" && name != "maintenance" {
 				t.Errorf("%s:%d calls brew: %s", name, n+1, strings.TrimSpace(line))
 			}
 			if strings.Contains(code, "/bin/brew") && !strings.Contains(text, "brew_as_owner() {") {
