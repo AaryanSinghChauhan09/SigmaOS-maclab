@@ -144,7 +144,9 @@ func (c *Client) Port(ctx context.Context, rid int) (Port, error) {
 }
 
 // Probe is Port with the reset tool's own answer on that port. It waits its
-// turn behind a reset and resets nothing.
+// turn behind a reset and resets no Mac. The tool does take the mini's own
+// port controller into its debug mode for any command, this one included,
+// which is why Port asks for none.
 func (c *Client) Probe(ctx context.Context, rid int) (Port, error) {
 	return c.status(ctx, rid, "?probe=1", 2*time.Minute)
 }
