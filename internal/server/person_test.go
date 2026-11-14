@@ -197,13 +197,18 @@ func TestRoles(t *testing.T) {
 	}
 }
 
-// Device views leave the controller's token out: it resets the Mac.
-func TestDeviceViewHidesOOBToken(t *testing.T) {
-	v := &dev{d: api.Device{Name: "m", OOB: &api.OOBConfig{URL: "http://oobd:7780", Token: "secret"}}}
-	if o := v.viewLocked().OOB; o == nil || o.Token != "" || o.URL == "" {
-		t.Fatalf("view oob %+v", o)
+// A device view carries nothing of a controller an old record names: its
+// token was a secret, and the lab resets through a port it learns itself.
+func TestDeviceViewCarriesNoControllerOfTheMacsOwn(t *testing.T) {
+	v := &dev{s: &Server{cables: newCables(nil)}, d: api.Device{Name: "m", OOB: &api.OOBConfig{URL: "http://oobd:7780", Token: "secret"}}}
+	view := v.viewLocked()
+	if b, _ := json.Marshal(view); view.OOB != nil || strings.Contains(string(b), "secret") || strings.Contains(string(b), "oobd:7780") {
+		t.Fatalf("view: %s", b)
+	}
+	if view.Tier == 2 || view.Cable == nil || view.Cable.State != api.CableNone {
+		t.Fatalf("a record that names a controller of its own got a Hard reset: tier %d, cable %+v", view.Tier, view.Cable)
 	}
 	if v.d.OOB.Token != "secret" {
-		t.Fatal("the view changed labd's own copy of the token")
+		t.Fatal("the view changed labd's own record")
 	}
 }

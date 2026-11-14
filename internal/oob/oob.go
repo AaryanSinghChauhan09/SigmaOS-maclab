@@ -14,31 +14,34 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
-// Controller is what labd's recovery code holds for one Mac. Nothing makes
-// one any more: a Mac gets its port from a Sighting, not from its record.
-type Controller interface {
-	Name() string
-	// Reset hard-reboots the Mac regardless of what its OS is doing.
-	Reset(ctx context.Context) error
-	// Serial streams console lines to fn until ctx ends or the stream breaks.
-	Serial(ctx context.Context, fn func(line string)) error
-	Status(ctx context.Context) (string, error)
-	// Arm puts the Mac back into serial mode, retrying for window while it reboots.
-	Arm(ctx context.Context, window time.Duration) error
-	// Raw copies console bytes to w until ctx ends; Write types into the console.
-	Raw(ctx context.Context, w io.Writer) error
-	Write(ctx context.Context, b []byte) error
+// RIDs are the mini's three rear USB-C ports as the reset tool numbers them,
+// left to right facing the back.
+var RIDs = []int{1, 0, 2}
+
+// PortName is how people name the port with this RID: left, middle or
+// right, facing the back of the mini.
+func PortName(rid int) string {
+	switch rid {
+	case 1:
+		return "left"
+	case 0:
+		return "middle"
+	case 2:
+		return "right"
+	}
+	return fmt.Sprintf("RID %d", rid)
 }
 
-// New refuses the controller a Mac's record names. The old lab gave each Mac
-// a controller of its own, by address; the mini's controller serves three
-// ports and no request to it goes without one.
-func New(c *api.OOBConfig) (Controller, error) {
-	return nil, errors.New("its record names a controller of its own, which this lab does not use: a Hard reset goes through the mini's Out-of-band controller, to the port the Mac is sighted on")
+// RIDOf is the RID of the port people call name.
+func RIDOf(name string) (int, bool) {
+	for _, rid := range RIDs {
+		if PortName(rid) == name {
+			return rid, true
+		}
+	}
+	return 0, false
 }
 
 // Port is what the Out-of-band controller sees on one of its ports.

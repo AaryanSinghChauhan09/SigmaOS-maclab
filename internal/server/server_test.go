@@ -28,46 +28,14 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
-	"github.com/omacom/omarchy-maclab/internal/oob"
 	"github.com/omacom/omarchy-maclab/internal/testpki"
 )
-
-// fakeOOB is a Central-Scrutinizer-shaped controller wired to a simulated Mac.
-type fakeOOB struct {
-	sim    *agent.Sim
-	lines  chan string
-	resets int
-	mu     sync.Mutex
-}
-
-func (f *fakeOOB) Name() string { return "fake-oob" }
-func (f *fakeOOB) Reset(ctx context.Context) error {
-	f.mu.Lock()
-	f.resets++
-	f.mu.Unlock()
-	f.sim.PowerCycle()
-	return nil
-}
-func (f *fakeOOB) Raw(ctx context.Context, w io.Writer) error     { <-ctx.Done(); return nil }
-func (f *fakeOOB) Write(ctx context.Context, b []byte) error      { return nil }
-func (f *fakeOOB) Arm(ctx context.Context, d time.Duration) error { return nil }
-func (f *fakeOOB) Status(ctx context.Context) (string, error)     { return "Connection: Sink", nil }
-func (f *fakeOOB) Serial(ctx context.Context, fn func(string)) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case l := <-f.lines:
-			fn(l)
-		}
-	}
-}
 
 type lab struct {
 	t      *testing.T
 	s      *Server
 	sim    *agent.Sim
-	oob    *fakeOOB
+	oob    *fakeMini // the mini's ports; the Mac is on its right one in a lab made with oob
 	notes  []Notification
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -124,9 +92,12 @@ func newLabNamed(t *testing.T, withOOB bool, name string) *lab {
 	return newLabWith(t, labConfig{oob: withOOB, name: name})
 }
 
-// labConfig shapes a lab; the zero value is one lab-owned, OOB-less Mac
-// named sim-mac on the wall clock.
+// labConfig shapes a lab; the zero value is one Lab-owned Mac named sim-mac
+// on the wall clock, in a lab with no Out-of-band controller.
 type labConfig struct {
+	// oob gives the lab the mini's Out-of-band controller, and cables the
+	// Mac to its right port, where it shows its name: it is sighted from
+	// the start.
 	oob       bool
 	name      string
 	clock     *agent.FakeClock // nil runs labd and lab-agent on the wall clock
@@ -156,7 +127,6 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	testKnobs.Do(func() {
 		aliveWindow = 1500 * time.Millisecond
 		panicGrace = 2 * time.Second
-		serialStall = 3 * time.Second
 		quietGrace = 3 * time.Second
 		quickReboot = 3 * time.Second
 		stageBackoff = []time.Duration{50 * time.Millisecond, 50 * time.Millisecond}
@@ -166,13 +136,7 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	sim := agent.NewSim(t.TempDir())
 	sim.RebootDelay = 300 * time.Millisecond
 	l.sim = sim
-	l.oob = &fakeOOB{sim: sim, lines: make(chan string, 1000)}
-	sim.Serial = func(line string) {
-		select {
-		case l.oob.lines <- line:
-		default:
-		}
-	}
+	l.oob = newFakeMini(t)
 	var logw io.Writer = l.logs
 	if os.Getenv("MACLAB_TEST_LOG") != "" {
 		logw = io.MultiWriter(l.logs, os.Stderr)
@@ -180,8 +144,10 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	logger := log.New(logw, "labd: ", log.Ltime|log.Lmicroseconds)
 	cfg := Config{DataDir: t.TempDir(), Interval: 200 * time.Millisecond,
 		BootTimeout: 4 * time.Second, OfflineAfter: time.Hour, Clock: clock,
-		RebootGrace: 2 * time.Second, LabClockSkew: time.Second, WatchdogIdleReset: 2 * time.Second,
-		OOBFactory: func(*api.Device) (oob.Controller, error) { return l.oob, nil }}
+		RebootGrace: 2 * time.Second, LabClockSkew: time.Second, WatchdogIdleReset: 2 * time.Second}
+	if withOOB {
+		cfg.OOB, cfg.SightEvery = l.oob.client, 200*time.Millisecond
+	}
 	// labd's address is known before it starts, for its public URL.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -242,11 +208,11 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	a := agent.New(l.agent, sim, logger)
 	go a.Run(ctx)
 	if withOOB {
-		v := s.dev(name)
-		v.mu.Lock()
-		v.d.OOB = &api.OOBConfig{Driver: "fake"}
-		v.mu.Unlock()
-		s.attachOOB(v)
+		l.oob.plug(portRight, sim, name, productM1Pro)
+		l.sight()
+		if _, ok := s.cables.of(name); !ok && !c.volunteer {
+			t.Fatalf("%s was not sighted on the right port", name)
+		}
 	}
 	return l
 }
@@ -394,16 +360,19 @@ func TestPreflightWarningsDontBlockJobs(t *testing.T) {
 	}
 }
 
+// A test kernel that panics at boot falls back to the Known-good kernel by
+// itself, with no Hard reset. The lab reads no console, so the panic's own
+// line is known only if the lost boot left it behind.
 func TestPanicAtBootFallsBack(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
 	j := l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-bad behavior=panic")})
-	l.expect(j, api.OutcomePanicked)
-	if !j.Result.FellBack || l.oob.resets != 0 {
-		t.Fatalf("fellback=%v resets=%d", j.Result.FellBack, l.oob.resets)
+	l.expect(j, api.OutcomeBootFailed)
+	if resets, _ := l.oob.resetsSent(); !j.Result.FellBack || resets != 0 {
+		t.Fatalf("fellback=%v resets=%d", j.Result.FellBack, resets)
 	}
-	if !strings.Contains(j.Summary, "VFS: Unable to mount root fs") {
-		t.Fatalf("summary lacks the panic line: %s", j.Summary)
+	if !strings.Contains(j.Summary, "no kernel error was captured") || strings.Contains(j.Summary, "serial") {
+		t.Fatalf("summary: %s", j.Summary)
 	}
 	l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
 }
@@ -413,26 +382,30 @@ func TestHangRecoveredByHardReset(t *testing.T) {
 	l.baseline()
 	j := l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-hang behavior=hang")})
 	l.expect(j, api.OutcomeHung)
-	if l.oob.resets == 0 {
-		t.Fatal("expected a hard reset")
+	if resets, rids := l.oob.resetsSent(); resets != 1 || rids[0] != portRight {
+		t.Fatalf("resets sent to RIDs %v, want one to the right port; recovery %v", rids, j.Result.Recovery)
 	}
-	if !strings.Contains(j.Summary, "rcu_sched") {
-		t.Fatalf("summary: %s", j.Summary)
+	if !strings.Contains(strings.Join(j.Result.Recovery, "|"), "hard reset 1 via the right port") {
+		t.Fatalf("recovery: %v", j.Result.Recovery)
 	}
 	l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady && d.Kernel == agent.SimKnownGood })
 }
 
-func TestSilentHangDetectedFromSerial(t *testing.T) {
+// The serial boot-stall check is off: a boot that says nothing is waited
+// for until its boot timeout and the Mac's own deadline have passed, then
+// Hard reset.
+func TestASilentHangIsHardResetOnlyAfterItsBootTimeout(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
 	start := time.Now()
-	j := l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-silent behavior=silent"), BootTimeoutSec: 30})
+	j := l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-silent behavior=silent"), BootTimeoutSec: 5})
 	l.expect(j, api.OutcomeHung)
-	if time.Since(start) > 20*time.Second {
-		t.Fatalf("took %s: serial stall should beat the 30s boot timeout", time.Since(start))
+	steps := strings.Join(j.Result.Recovery, "|")
+	if time.Since(start) < 5*time.Second || strings.Contains(steps, "serial") || !strings.Contains(steps, "did not check in within 5s") {
+		t.Fatalf("after %s, recovery: %v", time.Since(start).Round(time.Second), j.Result.Recovery)
 	}
-	if !strings.Contains(strings.Join(j.Result.Recovery, "|"), "serial console silent") {
-		t.Fatalf("recovery: %v", j.Result.Recovery)
+	if resets, _ := l.oob.resetsSent(); resets != 1 {
+		t.Fatalf("%d Hard resets, want 1; recovery %v", resets, j.Result.Recovery)
 	}
 }
 
@@ -559,7 +532,7 @@ func TestLiveStreamScreenAndLogs(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
 
-	// The stream carries job, device and serial events while a job runs.
+	// The stream carries job, device and screen events while a job runs.
 	req, _ := http.NewRequest("GET", l.url+"/api/stream", nil)
 	req.Header.Set("Authorization", "Bearer "+harnessToken)
 	resp, err := http.DefaultClient.Do(req)
@@ -582,7 +555,7 @@ func TestLiveStreamScreenAndLogs(t *testing.T) {
 	for len(kinds) > 0 {
 		seen[<-kinds] = true
 	}
-	for _, k := range []string{"job", "device", "serial", "screen"} {
+	for _, k := range []string{"job", "device", "screen"} {
 		if !seen[k] {
 			t.Errorf("stream never sent a %q event (saw %v)", k, seen)
 		}
@@ -1066,22 +1039,21 @@ func TestSkippedTestVerdict(t *testing.T) {
 // suspend-devices (pm_test) and other Macs don't.
 func TestRealSleepNote(t *testing.T) {
 	air := api.Device{Name: "m1air", Facts: api.Facts{DTModel: "Apple MacBook Air (M1, 2020)"}}
-	withOOB := air
-	withOOB.OOB = &api.OOBConfig{Driver: "macvdmtool"}
 	for _, c := range []struct {
-		d    api.Device
-		t    api.TestSpec
-		want string
+		d         api.Device
+		hardReset bool // a Hard reset can reach the Mac
+		t         api.TestSpec
+		want      string
 	}{
-		{air, api.TestSpec{Name: "suspend-lid", Script: "abc"}, "test suspend-lid puts m1air to sleep, and it can't wake itself (Apple Silicon's RTC has no wakealarm): someone must press a key on it"},
-		{withOOB, api.TestSpec{Name: "suspend-lid", Script: "abc"}, "; an OOB reset would end the test"},
-		{air, api.TestSpec{Name: "suspend-devices", Builtin: "suspend-devices"}, ""},
-		{air, api.TestSpec{Name: "gui-smoke", Builtin: "gui-smoke"}, ""},
-		{api.Device{Name: "sim", Facts: api.Facts{DTModel: "Simulated Mac"}}, api.TestSpec{Name: "suspend-lid"}, ""},
+		{air, false, api.TestSpec{Name: "suspend-lid", Script: "abc"}, "test suspend-lid puts m1air to sleep, and it can't wake itself (Apple Silicon's RTC has no wakealarm): someone must press a key on it"},
+		{air, true, api.TestSpec{Name: "suspend-lid", Script: "abc"}, "; a Hard reset would end the test"},
+		{air, true, api.TestSpec{Name: "suspend-devices", Builtin: "suspend-devices"}, ""},
+		{air, false, api.TestSpec{Name: "gui-smoke", Builtin: "gui-smoke"}, ""},
+		{api.Device{Name: "sim", Facts: api.Facts{DTModel: "Simulated Mac"}}, true, api.TestSpec{Name: "suspend-lid"}, ""},
 	} {
-		n := realSleepNote(c.d, c.t)
-		if (c.want == "") != (n == "") || !strings.Contains(n, c.want) {
-			t.Errorf("%s on %s (oob %v): %q, want %q", c.t.Name, c.d.Name, c.d.OOB != nil, n, c.want)
+		n := realSleepNote(c.d, c.t, c.hardReset)
+		if (c.want == "") != (n == "") || !strings.Contains(n, c.want) || !c.hardReset && strings.Contains(n, "Hard reset") {
+			t.Errorf("%s on %s (Hard reset %v): %q, want %q", c.t.Name, c.d.Name, c.hardReset, n, c.want)
 		}
 	}
 }
@@ -1248,7 +1220,7 @@ func TestOmarchyMTestDriverNodes(t *testing.T) {
 func TestCmdlineBaseAndStrip(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
-	j := l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-ok behavior=ok"), CmdlineBase: "default", Cmdline: "extra=1"})
+	j := l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-ok behavior=ok"), CmdlineBase: "default", Cmdline: "extra=1", VerboseBoot: true})
 	l.expect(j, api.OutcomePass)
 	c := j.Result.BootCmdline
 	if !strings.HasPrefix(withoutLabBootAdditions(c), "root=UUID=sim rw loglevel=7 panic=10") || strings.Contains(c, "quiet") || !strings.Contains(c, "extra=1") || !strings.Contains(c, "maclab.job="+j.ID) {

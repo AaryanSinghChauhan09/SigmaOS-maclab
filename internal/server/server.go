@@ -71,8 +71,9 @@ type Config struct {
 	// port; nil when labd was given no token file for it, and then no Mac
 	// gets a Hard reset.
 	OOB *oob.Client
-	// OOBFactory builds a controller for a device; tests swap in fakes.
-	OOBFactory func(*api.Device) (oob.Controller, error)
+	// SightEvery is how often labd asks that controller what its ports
+	// show, for the Sightings; zero is every 15 s.
+	SightEvery time.Duration
 	// SourceHosts are the hosts a build's source may come from beside
 	// github.com, as SourceHosts returns them (see sources.go).
 	SourceHosts []string
@@ -195,6 +196,9 @@ type Server struct {
 	// releaseMu makes a verdict one step: whose turn it is depends on the
 	// history it is added to.
 	releaseMu sync.Mutex
+	// cables are the Sightings: which Lab-owned Mac is on which of the
+	// Out-of-band controller's ports (see sighting.go).
+	cables *cables
 }
 
 // clock is where labd reads time: Config.Clock, or the wall clock when unset.
@@ -277,9 +281,6 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	if cfg.WatchdogIdleReset == 0 {
 		cfg.WatchdogIdleReset = agent.LostLabdReset
 	}
-	if cfg.OOBFactory == nil {
-		cfg.OOBFactory = func(d *api.Device) (oob.Controller, error) { return oob.New(d.OOB) }
-	}
 	for _, d := range []string{"artifacts", "jobs", "serial", "baselines", "builds"} {
 		if err := os.MkdirAll(filepath.Join(cfg.DataDir, d), 0o755); err != nil {
 			return nil, err
@@ -314,6 +315,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, installScript: installLine, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, cancelWhy: map[string]string{}, callers: callers}
 	s.start = s.now()
+	s.cables = newCables(cfg.OOB)
 	s.lines = newGroupLines(st, s.clock(), logger, cfg.Signal, cfg.SignalDir)
 	s.labGroup = labGroupLines{l: s.lines, link: s.pageAddress}
 	s.agents = agentsLines{s.lines}
@@ -340,6 +342,9 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The Lab-owned Macs that were up when labd stopped: recovery runs on
+	// whichever of them does not return (see recoverAfterStart).
+	var wasUp []*dev
 	for _, row := range rows {
 		unused := neverUsed(st, row.d) // as stored, before the changes below
 		d := row.d
@@ -370,7 +375,9 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		if l := s.screens(d.Name); len(l) > 0 {
 			v.screenAt, v.screenName = l[0].Time, l[0].Name
 		}
-		s.attachOOB(v)
+		if !d.IsVolunteer() && !row.d.LastSeen.IsZero() && (row.d.State == api.StateReady || row.d.State == api.StateNew || row.d.State == api.StateBusy || row.d.State == api.StateRecovering) {
+			wasUp = append(wasUp, v)
+		}
 		go s.deviceLoop(v)
 	}
 	s.adoptReleases()
@@ -408,6 +415,8 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	go s.gcLoop()
 	go s.omtScheduler()
 	go s.callerLogLoop()
+	go s.sightLoop()
+	go s.recoverAfterStart(wasUp)
 	go s.execRecordLoop()
 	return s, nil
 }
@@ -475,87 +484,6 @@ func (s *Server) dev(name string) *dev {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.devs[name]
-}
-
-// attachOOB (re)connects a device's out-of-band controller and serial stream.
-func (s *Server) attachOOB(v *dev) {
-	v.mu.Lock()
-	if v.oobStop != nil {
-		v.oobStop()
-		v.oobStop, v.oob, v.serialUp = nil, nil, false
-	}
-	cfg := v.d.OOB
-	if v.networkOnlyLocked() {
-		cfg = nil
-	}
-	v.mu.Unlock()
-	if cfg == nil {
-		return
-	}
-	d := v.snapshot()
-	ctl, err := s.cfg.OOBFactory(&d)
-	if err != nil {
-		s.log.Printf("%s: oob: %v", d.Name, err)
-		return
-	}
-	ctx, cancel := context.WithCancel(s.ctx)
-	v.mu.Lock()
-	if v.forgotten { // lab forget ran meanwhile
-		v.mu.Unlock()
-		cancel()
-		return
-	}
-	if v.networkOnlyLocked() {
-		v.mu.Unlock()
-		cancel()
-		return
-	}
-	done := make(chan struct{})
-	v.oobSerialDone = done
-	v.oob, v.oobStop = ctl, cancel
-	v.mu.Unlock()
-	go func() {
-		defer close(done)
-		backoff := time.Second
-		for ctx.Err() == nil {
-			v.mu.Lock()
-			if v.networkOnlyLocked() {
-				v.mu.Unlock()
-				return
-			}
-			v.serialUp = true
-			v.mu.Unlock()
-			err := ctl.Serial(ctx, func(line string) {
-				backoff = time.Second
-				if strings.TrimSpace(line) == "" {
-					return // oobd keepalive
-				}
-				v.mu.Lock()
-				blocked := v.networkOnlyLocked()
-				v.mu.Unlock()
-				if blocked {
-					return
-				}
-				s.appendSerial(d.Name, line)
-				v.onSerial(line)
-			})
-			v.mu.Lock()
-			v.serialUp = false
-			v.mu.Unlock()
-			if ctx.Err() != nil {
-				return
-			}
-			s.log.Printf("%s: serial stream: %v (retrying in %s)", d.Name, err, backoff)
-			select {
-			case <-ctx.Done():
-				return
-			case <-s.clock().After(backoff):
-			}
-			if backoff < time.Minute {
-				backoff *= 2
-			}
-		}
-	}()
 }
 
 func (s *Server) serialPath(name string) string {
@@ -1241,6 +1169,9 @@ type DeviceView struct {
 	Alive    bool      `json:"alive"`
 	Queued   int       `json:"queued"`
 	ScreenAt time.Time `json:"screen_at,omitempty"`
+	// Cable is what the lab knows of the cable that joins a Lab-owned Mac
+	// to the lab server; nil for a Volunteer's Mac.
+	Cable *api.Cable `json:"cable,omitempty"`
 	// VolunteerHandle is the handle, as it is now, of the person who lends
 	// the Mac; "" for a Lab-owned Mac and on the stream.
 	VolunteerHandle string `json:"volunteer_handle,omitempty"`
@@ -1291,6 +1222,10 @@ func (s *Server) hPatchDevice(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "%v", err)
 		return
 	}
+	if p.OOB != nil {
+		httpErr(w, 400, "a Mac's record names no controller and no port: the lab learns which cable a Lab-owned Mac is on by a Sighting, or by a Proving reset (`lab reset <mac> --prove left|middle|right`)")
+		return
+	}
 	link := ""
 	if p.VolunteerLogin != nil && *p.VolunteerLogin != "" {
 		var err error
@@ -1323,18 +1258,11 @@ func (s *Server) hPatchDevice(w http.ResponseWriter, r *http.Request) {
 	if p.Model != nil {
 		v.d.Model = *p.Model
 	}
-	oobChanged := p.OOB != nil || p.NoOOB
-	if p.OOB != nil {
-		v.d.OOB = p.OOB
-	}
 	if p.NoOOB {
 		v.d.OOB = nil
 	}
 	v.saveLocked()
 	v.mu.Unlock()
-	if oobChanged {
-		s.attachOOB(v)
-	}
 	writeJSON(w, s.view(v))
 }
 
@@ -1423,18 +1351,22 @@ func (s *Server) forget(v *dev, holder string, force bool) (int, error) {
 		delete(s.devs, name)
 	}
 	s.mu.Unlock()
-	if v.oobStop != nil {
-		v.oobStop()
-	}
-	v.oobStop, v.oob, v.serialUp = nil, nil, false
 	close(v.gone)
 	s.dropNamedState(name, v.d.ID)
 	return 200, nil
 }
 
-// hReset runs the recovery ladder by hand, e.g. for an idle Mac that is wedged.
+// resetWait is how long a person's Hard reset may wait its turn at the
+// Out-of-band controller, behind another port's.
+const resetWait = 40 * time.Second
+
+// hReset is a person's Hard reset of a Lab-owned Mac, or, with ?prove=, a
+// Maintainer's Proving reset of the port named. The Hard reset goes out
+// before the answer does, so a refusal says why none was sent; the rest of
+// the recovery ladder (a second one, then a person) follows by itself.
+//
 // A Mac that left the lab (lab-agent uninstall) is put back in it first: a
-// reset is how an admin recovers one that wedged mid-uninstall, or whose
+// reset is how a Maintainer recovers one that wedged mid-uninstall, or whose
 // agent still runs after an uninstall that failed. Only automatic recovery
 // leaves a Mac that left alone.
 func (s *Server) hReset(w http.ResponseWriter, r *http.Request) {
@@ -1444,51 +1376,89 @@ func (s *Server) hReset(w http.ResponseWriter, r *http.Request) {
 	}
 	p := leaser(r)
 	by := orStr(r.URL.Query().Get("by"), p.Handle)
-	// A reset reboots the Mac, so a Lease fences it like a job.
+	if port := r.URL.Query().Get("prove"); port != "" {
+		s.hProve(w, r, v, p, port)
+		return
+	}
+	said, err := s.hardResetBy(r.Context(), v, p, by)
+	if err != nil {
+		httpErr(w, statusOf(err), "%v", err)
+		return
+	}
+	io.WriteString(w, said+"\n")
+}
+
+// hardResetBy is p's Hard reset of v's Mac: allowed to a Maintainer and to
+// the holder of a Lease on it, never on a Volunteer's Mac, and only where
+// the lab can place the Mac. It returns what to tell p once it is sent.
+func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person, by string) (said string, err error) {
+	// A reset restarts the Mac, so a Lease fences it like a job.
+	if err := s.fence(v, p, fenceReset); err != nil {
+		return "", err
+	}
+	v.mu.Lock()
+	name, volunteers, noReset := v.d.Name, v.d.IsVolunteer(), v.noHardResetLocked()
+	v.mu.Unlock()
+	switch {
+	case volunteers:
+		return "", refuse(http.StatusForbidden, "no Hard reset was sent: %s", noReset)
+	case noReset != "":
+		return "", refuse(s.cables.status(), "no Hard reset was sent: %s", noReset)
+	}
+	back, err := s.rejoin(v, "Hard reset by "+orStr(by, "a Maintainer"))
+	if err != nil {
+		return "", refuse(http.StatusNotFound, "%v", err)
+	}
+	// From here the Mac is being recovered: a second press sends no second
+	// reset while the lab waits for the first to bring it back.
+	why := "Hard reset by " + orStr(by, "a Maintainer")
+	v.mu.Lock()
+	prev, reason := v.d.State, v.d.StateReason
+	switch prev {
+	case api.StateBusy:
+		v.mu.Unlock()
+		return "", refuse(http.StatusConflict, "%s is busy; cancel its job instead", name)
+	case api.StateRecovering:
+		v.mu.Unlock()
+		return "", refuse(http.StatusConflict, "%s is being recovered already (%s)", name, reason)
+	}
+	v.setStateLocked(api.StateRecovering, why)
+	v.mu.Unlock()
+	rctx, cancel := context.WithTimeout(ctx, resetWait)
+	sent := sentReset{at: s.now(), prev: prev}
+	sent.port, err = v.resetOOB(rctx)
+	cancel()
+	if err != nil {
+		v.setState(prev, reason)
+		return "", err
+	}
+	go func() {
+		steps, ok := v.climb(s.ctx, why, s.cfg.BootTimeout, false, &sent)
+		s.log.Printf("%s: %s: ok=%v steps=%v", name, why, ok, steps)
+	}()
+	if back {
+		said = name + " had left the lab (lab-agent uninstall); the reset puts it back in. "
+	}
+	return said + "Hard reset sent to " + name + " through the " + sent.port + " port; watch `lab status " + name + "`", nil
+}
+
+// hProve is a Proving reset, which is aimed at a port and not at a Mac:
+// Maintainers only.
+func (s *Server) hProve(w http.ResponseWriter, r *http.Request, v *dev, p Person, port string) {
+	rid, ok := oob.RIDOf(port)
+	switch {
+	case !p.isMaintainer():
+		httpErr(w, http.StatusForbidden, "a Proving reset is a Maintainer's: it is aimed at a port, not at a Mac")
+		return
+	case !ok:
+		httpErr(w, http.StatusBadRequest, "no port %q: the lab server's ports are left, middle and right, facing its back", port)
+		return
+	}
 	if err := s.fence(v, p, fenceReset); err != nil {
 		httpErr(w, statusOf(err), "%v", err)
 		return
 	}
-	v.mu.Lock()
-	busy := v.d.State == api.StateBusy || v.d.State == api.StateRecovering
-	v.mu.Unlock()
-	if busy {
-		httpErr(w, 409, "%s is busy; cancel its job instead", v.d.Name)
-		return
-	}
-	back, err := s.rejoin(v, "reset requested by "+orStr(by, "an admin"))
-	if err != nil {
-		httpErr(w, 404, "%v", err)
-		return
-	}
-	go func() {
-		steps, ok := v.ladder(s.ctx, "reset requested by "+by, s.cfg.BootTimeout, true)
-		s.log.Printf("%s: manual reset: ok=%v steps=%v", v.d.Name, ok, steps)
-	}()
-	if back {
-		w.Write([]byte(v.d.Name + " had left the lab (lab-agent uninstall); the reset puts it back in. "))
-	}
-	w.Write([]byte("recovery started; watch `lab status " + v.d.Name + "`\n"))
-}
-
-func (s *Server) hOOBStatus(w http.ResponseWriter, r *http.Request) {
-	v := s.devOr404(w, r)
-	if v == nil {
-		return
-	}
-	v.mu.Lock()
-	ctl, up, last := v.effectiveOOBLocked(), v.serialUp, v.serialLast
-	v.mu.Unlock()
-	if ctl == nil {
-		httpErr(w, 404, "%s has no out-of-band controller", v.d.Name)
-		return
-	}
-	st, err := v.statusOOB(r.Context())
-	out := map[string]any{"controller": ctl.Name(), "serial_connected": up, "serial_last": last, "status": st}
-	if err != nil {
-		out["error"] = err.Error()
-	}
-	writeJSON(w, out)
+	s.held(w, r, func() (any, error) { return s.prove(v, rid, p.Handle) })
 }
 
 func (s *Server) hSubmit(w http.ResponseWriter, r *http.Request) {

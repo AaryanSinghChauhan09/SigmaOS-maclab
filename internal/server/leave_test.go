@@ -177,9 +177,9 @@ func TestLeaveUndo(t *testing.T) {
 	}
 }
 
-// An admin's lab reset recovers a Mac that left the lab and then wedged (mid
-// uninstall, say): it puts it back in the lab and runs the recovery ladder,
-// out-of-band reset included. Only automatic recovery leaves it alone.
+// A Maintainer's lab reset recovers a Mac that left the lab and then wedged
+// (mid uninstall, say): it puts it back in the lab and sends it a Hard
+// reset. Only automatic recovery leaves it alone.
 func TestResetLeftMac(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
@@ -190,7 +190,7 @@ func TestResetLeftMac(t *testing.T) {
 	boot := l.s.dev(l.name).snapshot().BootID
 
 	resp, body := l.get("POST", "/api/devices/"+l.name+"/reset?by=alice")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "had left the lab") || !strings.Contains(body, "recovery started") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "had left the lab") || !strings.Contains(body, "Hard reset sent to "+l.name+" through the right port") {
 		t.Fatalf("reset: %d %s", resp.StatusCode, body)
 	}
 	d := l.waitDevice(func(d api.Device) bool { return d.BootID != boot && d.State == api.StateReady })

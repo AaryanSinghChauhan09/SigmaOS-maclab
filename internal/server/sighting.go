@@ -1,0 +1,687 @@
+package server
+
+// Which Lab-owned Mac is on which of the lab server's cables. The Out-of-band
+// controller resets a port, not a Mac, and no port is written in a Mac's
+// record: labd learns the port by a Sighting, the Mac's name read there, or
+// by a Maintainer's Proving reset, and sends a Hard reset only where it is
+// sure. Sightings live in memory alone: after a restart labd holds none and
+// Macs that are up are sighted again by themselves.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/oob"
+)
+
+// sightEvery is how often labd asks the controller what its ports show.
+const sightEvery = 15 * time.Second
+
+// troubleController is the trouble "Agents" is told of while the
+// Out-of-band controller is not healthy.
+const troubleController = "oob"
+
+// sighting is the lab knowing a Mac's port, and the port as it was then.
+type sighting struct {
+	rid  int
+	seen oob.Seen
+	at   time.Time
+	// proved: placed by a Proving reset, the port showing no name.
+	proved bool
+}
+
+type cables struct {
+	mu sync.Mutex
+	// none: labd was given no controller.
+	none bool
+	// ports are the controller's ports as it last showed them.
+	ports map[int]oob.Port
+	held  map[string]sighting
+	// lost is why a Mac has no Sighting, where there is something to say.
+	lost map[string]string
+	// down is why the controller is not healthy; "" while it answers.
+	// answered: it has answered a look since labd started.
+	down     string
+	answered bool
+	// proving is held for the length of a Proving reset: one at a time.
+	proving sync.Mutex
+}
+
+func newCables(c *oob.Client) *cables {
+	return &cables{none: c == nil, ports: map[int]oob.Port{}, held: map[string]sighting{}, lost: map[string]string{}}
+}
+
+// of is the Sighting of the Mac named name.
+func (c *cables) of(name string) (sighting, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sg, ok := c.held[name]
+	return sg, ok
+}
+
+// saw records what a port showed at a look outside the regular ones.
+func (c *cables) saw(p oob.Port) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ports[p.RID] = p
+}
+
+// drop ends a Mac's Sighting, saying why.
+func (c *cables) drop(name, why string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dropLocked(name, why, now)
+}
+
+func (c *cables) dropLocked(name, why string, now time.Time) {
+	if _, ok := c.held[name]; ok {
+		delete(c.held, name)
+		why = "its Sighting was dropped at " + when(now) + ": " + why
+	}
+	c.lost[name] = why
+}
+
+// onPortLocked is the Mac sighted on a port, "" for none.
+func (c *cables) onPortLocked(rid int) string {
+	for name, sg := range c.held {
+		if sg.rid == rid {
+			return name
+		}
+	}
+	return ""
+}
+
+// freeLocked are the connected ports nothing is sighted on, as people name
+// them.
+func (c *cables) freeLocked() []string {
+	var out []string
+	for _, rid := range oob.RIDs {
+		if p, ok := c.ports[rid]; ok && p.Connected && c.onPortLocked(rid) == "" {
+			out = append(out, oob.PortName(rid))
+		}
+	}
+	return out
+}
+
+const noController = "labd was given no Out-of-band controller"
+
+// cable is what the lab knows of a Lab-owned Mac's cable.
+func (c *cables) cable(name string) api.Cable {
+	if c == nil {
+		return api.Cable{State: api.CableNone, NoHardReset: noController}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if sg, ok := c.held[name]; ok {
+		return api.Cable{State: api.CableSighted, Port: oob.PortName(sg.rid), Proved: sg.proved, Since: sg.at, NoHardReset: c.down}
+	}
+	if c.none {
+		return api.Cable{State: api.CableNone, NoHardReset: noController}
+	}
+	free := c.freeLocked()
+	lost := c.lost[name]
+	if lost != "" {
+		lost = " (" + lost + ")"
+	}
+	switch {
+	case c.down != "":
+		return api.Cable{State: api.CableNotSighted, NoHardReset: c.down}
+	case len(free) > 0:
+		return api.Cable{State: api.CableNotSighted, NoHardReset: fmt.Sprintf("the lab has no Sighting of %s%s. A Maintainer can prove its port: `lab reset %s --prove %s`",
+			name, lost, name, strings.Join(free, "|"))}
+	}
+	return api.Cable{State: api.CableNone, NoHardReset: fmt.Sprintf("no cable can be the one of %s%s: every connected port of the lab server is another Mac's, or none is connected", name, lost)}
+}
+
+// status is the status a refused Hard reset is answered with: the
+// controller's trouble is the lab's, anything else is the Mac's state.
+func (c *cables) status() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.down != "" || c.none {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusConflict
+}
+
+// reach is why no Hard reset can reach the Mac named name now, "" when one
+// can.
+func (c *cables) reach(name string) string { return c.cable(name).NoHardReset }
+
+// cableLocked is the Cable of v's Mac, nil for a Volunteer's. The caller
+// holds v.mu.
+func (v *dev) cableLocked() *api.Cable {
+	if v.d.IsVolunteer() {
+		return nil
+	}
+	c := v.s.cables.cable(v.d.Name)
+	if c.NoHardReset == "" && v.networkOnlyLocked() {
+		c.NoHardReset = "network-only recovery is selected for it"
+	}
+	return &c
+}
+
+// noHardResetLocked is why the lab sends v's Mac no Hard reset now, "" when
+// it can send one. The caller holds v.mu.
+func (v *dev) noHardResetLocked() string {
+	c := v.cableLocked()
+	if c == nil {
+		return neverAVolunteers(v.d.Name)
+	}
+	return c.NoHardReset
+}
+
+func (v *dev) noHardReset() string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.noHardResetLocked()
+}
+
+// neverAVolunteers is the lab's refusal to Hard reset a Volunteer's Mac.
+func neverAVolunteers(name string) string {
+	return name + " is a Volunteer's Mac, and the lab never sends a Volunteer's Mac a Hard reset: it recovers by network means and its own watchdog, then its Volunteer is asked"
+}
+
+// labOwned is a Lab-owned Mac's record as a look at the ports needs it.
+type labOwned struct {
+	name, hostname string
+}
+
+// labOwnedMacs are the Lab-owned Macs the lab has a record of.
+func (s *Server) labOwnedMacs() []labOwned {
+	var out []labOwned
+	for _, v := range s.allDevs() {
+		if d := v.snapshot(); !d.IsVolunteer() {
+			out = append(out, labOwned{d.Name, d.Facts.Hostname})
+		}
+	}
+	return out
+}
+
+// sightLoop keeps the Sightings: it asks the controller what its ports show
+// now and then, for as long as labd runs.
+func (s *Server) sightLoop() {
+	if s.cfg.OOB == nil {
+		return
+	}
+	every := s.cfg.SightEvery
+	if every <= 0 {
+		every = sightEvery
+	}
+	s.sight(s.ctx)
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-t.C:
+			s.sight(s.ctx)
+		}
+	}
+}
+
+// sight is one look at the controller's ports: Sightings whose port changed
+// are dropped, and a name that belongs to exactly one Lab-owned Mac's record
+// makes one.
+func (s *Server) sight(ctx context.Context) {
+	c := s.cfg.OOB
+	if c == nil {
+		return
+	}
+	ports := map[int]oob.Port{}
+	for _, rid := range oob.RIDs {
+		actx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		p, err := c.Port(actx, rid)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				s.controllerDown(err)
+			}
+			return
+		}
+		ports[rid] = p
+	}
+	s.controllerUp()
+	macs := s.labOwnedMacs()
+	now := s.now()
+	s.cables.mu.Lock()
+	defer s.cables.mu.Unlock()
+	said := s.cables.apply(ports, macs, now)
+	for _, line := range said {
+		s.log.Printf("sighting: %s", line)
+	}
+}
+
+// changed is how a port differs from what a Sighting saw on it, "" when it
+// does not.
+func changed(p oob.Port, seen oob.Seen) string {
+	port := "the " + oob.PortName(p.RID) + " port"
+	switch {
+	case !p.Connected:
+		return port + " is no longer connected"
+	case p.ProductID != seen.ProductID:
+		return fmt.Sprintf("%s shows product id %d, not the %d it was seen with", port, p.ProductID, seen.ProductID)
+	case p.PlugCount != seen.PlugCount:
+		return fmt.Sprintf("%s has plug count %d, not the %d it was seen with: its cable was pulled and something plugged in", port, p.PlugCount, seen.PlugCount)
+	}
+	return ""
+}
+
+// recordsNamed are the Macs a name read on a port belongs to.
+func recordsNamed(name string, macs []labOwned) []string {
+	var out []string
+	for _, m := range macs {
+		if strings.EqualFold(name, m.name) || m.hostname != "" && strings.EqualFold(name, m.hostname) {
+			out = append(out, m.name)
+		}
+	}
+	return out
+}
+
+// apply brings the Sightings in line with what the ports show, and returns
+// what changed, for the log. The caller holds c.mu.
+func (c *cables) apply(ports map[int]oob.Port, macs []labOwned, now time.Time) (said []string) {
+	c.ports = ports
+	drop := func(name, why string) {
+		if _, ok := c.held[name]; ok {
+			said = append(said, name+" is no longer sighted: "+why)
+		}
+		c.dropLocked(name, why, now)
+	}
+	known := map[string]bool{}
+	for _, m := range macs {
+		known[m.name] = true
+	}
+	for name, sg := range c.held {
+		if !known[name] {
+			delete(c.held, name)
+			delete(c.lost, name)
+			said = append(said, name+" is no longer sighted: it is no Lab-owned Mac of the lab any more")
+			continue
+		}
+		if why := changed(ports[sg.rid], sg.seen); why != "" {
+			drop(name, why)
+		}
+	}
+	for name := range c.lost {
+		if !known[name] {
+			delete(c.lost, name)
+		}
+	}
+	// Each name a port shows, and the one record it belongs to.
+	want := map[int]string{}
+	on := map[string][]int{}
+	conflict := map[string]string{}
+	for _, rid := range oob.RIDs {
+		p := ports[rid]
+		if !p.Connected || p.Name == "" {
+			continue
+		}
+		port := "the " + oob.PortName(rid) + " port"
+		owners := recordsNamed(p.Name, macs)
+		switch {
+		case len(owners) > 1:
+			for _, name := range owners {
+				conflict[name] = fmt.Sprintf("the name %q on %s belongs to %d Lab-owned Macs' records (%s)", p.Name, port, len(owners), strings.Join(owners, ", "))
+			}
+			continue
+		case len(owners) == 0:
+			// A name of nothing the lab owns. Whatever was placed there is
+			// not what is there now.
+			if held := c.onPortLocked(rid); held != "" {
+				conflict[held] = fmt.Sprintf("%s shows the name %q, which is not its own", port, p.Name)
+			}
+			continue
+		}
+		name := owners[0]
+		want[rid] = name
+		on[name] = append(on[name], rid)
+		if held := c.onPortLocked(rid); held != "" && held != name {
+			conflict[held] = fmt.Sprintf("%s shows the name of %s", port, name)
+			conflict[name] = fmt.Sprintf("its name is on %s, where %s was sighted", port, held)
+		}
+	}
+	for name, rids := range on {
+		if len(rids) > 1 {
+			var ps []string
+			for _, rid := range rids {
+				ps = append(ps, oob.PortName(rid))
+			}
+			conflict[name] = "its name is on " + strings.Join(ps, " and ") + " ports at once"
+			continue
+		}
+		if sg, ok := c.held[name]; ok && sg.rid != rids[0] {
+			conflict[name] = fmt.Sprintf("its name is on the %s port, and it was sighted on the %s port", oob.PortName(rids[0]), oob.PortName(sg.rid))
+		}
+	}
+	names := make([]string, 0, len(conflict))
+	for name := range conflict {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := c.held[name]; !ok {
+			said = append(said, name+" is not sighted: "+conflict[name])
+		}
+		drop(name, conflict[name])
+	}
+	for _, rid := range oob.RIDs {
+		name, ok := want[rid]
+		if !ok || conflict[name] != "" {
+			continue
+		}
+		p := ports[rid]
+		if p.ProductID <= 0 || p.PlugCount <= 0 {
+			c.lost[name] = fmt.Sprintf("the %s port shows its name and no product id or plug count to remember it by", oob.PortName(rid))
+			continue
+		}
+		seen := oob.Seen{ProductID: p.ProductID, PlugCount: p.PlugCount}
+		if sg, ok := c.held[name]; ok && sg.rid == rid && sg.seen == seen {
+			if sg.proved {
+				sg.proved = false
+				c.held[name] = sg
+			}
+			continue
+		}
+		c.held[name] = sighting{rid: rid, seen: seen, at: now}
+		delete(c.lost, name)
+		said = append(said, fmt.Sprintf("%s is sighted on the %s port (product id %d, plug count %d)", name, oob.PortName(rid), p.ProductID, p.PlugCount))
+	}
+	return said
+}
+
+// controllerDown records that the controller is not healthy, and tells
+// "Agents" once. A controller that was never set up is no trouble.
+func (s *Server) controllerDown(err error) {
+	why := "the Out-of-band controller is not healthy: " + err.Error()
+	setUp := true
+	if _, lerr := os.Lstat(s.cfg.OOB.TokenFile); errors.Is(lerr, os.ErrNotExist) {
+		why, setUp = "the Out-of-band controller is not set up: its token is not at "+s.cfg.OOB.TokenFile+" yet", false
+	}
+	s.cables.mu.Lock()
+	was := s.cables.down
+	s.cables.down = why
+	s.cables.mu.Unlock()
+	if was != why {
+		s.log.Printf("no Hard reset: %s", why)
+	}
+	if setUp {
+		s.agents.Trouble(troubleController, "The Out-of-band controller on the mini is not healthy: it does not answer as it should. No Mac gets a Hard reset until it does; jobs still run.")
+	}
+}
+
+// controllerUp records that the controller answers, and tells "Agents" when
+// it had been told otherwise: by this labd, or by the one before it.
+func (s *Server) controllerUp() {
+	s.cables.mu.Lock()
+	was, first := s.cables.down, !s.cables.answered
+	s.cables.down, s.cables.answered = "", true
+	s.cables.mu.Unlock()
+	if was != "" {
+		s.log.Printf("the Out-of-band controller answers again")
+	}
+	if was != "" || first {
+		s.agents.Recovered(troubleController, "The Out-of-band controller on the mini answers again.")
+	}
+}
+
+// hardReset sends a Hard reset to v's Mac through the port it is sighted
+// on, or says why it sends none. It goes out only while the port is still
+// connected with the product id and plug count of the Sighting: labd looks,
+// and the controller compares once more under its lock. Anything else drops
+// the Sighting.
+func (s *Server) hardReset(ctx context.Context, v *dev) (port string, err error) {
+	name := v.snapshot().Name
+	if why := v.noHardReset(); why != "" {
+		return "", refuse(s.cables.status(), "no Hard reset was sent: %s", why)
+	}
+	sg, ok := s.cables.of(name)
+	if !ok {
+		return "", refuse(http.StatusConflict, "no Hard reset was sent: %s", s.cables.reach(name))
+	}
+	port = oob.PortName(sg.rid)
+	p, err := s.cfg.OOB.Port(ctx, sg.rid)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.controllerDown(err)
+		}
+		return port, refuse(http.StatusServiceUnavailable, "no Hard reset was sent: the Out-of-band controller is not healthy: %v", err)
+	}
+	s.cables.saw(p)
+	if why := changed(p, sg.seen); why != "" {
+		s.cables.drop(name, why, s.now())
+		s.log.Printf("sighting: %s is no longer sighted: %s", name, why)
+		return port, refuse(http.StatusConflict, "no Hard reset was sent: %s. The Sighting of %s is dropped", why, name)
+	}
+	err = s.cfg.OOB.Reset(ctx, sg.rid, &sg.seen)
+	var moved *oob.Changed
+	switch {
+	case errors.As(err, &moved):
+		s.cables.drop(name, moved.Reason, s.now())
+		s.log.Printf("sighting: %s is no longer sighted: %s", name, moved.Reason)
+		return port, refuse(http.StatusConflict, "no Hard reset was sent: %s. The Sighting of %s is dropped", moved.Reason, name)
+	case err != nil:
+		return port, refuse(http.StatusBadGateway, "no Hard reset reached %s: %v", name, err)
+	}
+	s.log.Printf("%s: Hard reset sent through the %s port", name, port)
+	return port, nil
+}
+
+// prove is a Proving reset: a Maintainer names the port of a Mac that
+// shows no name, the lab resets that port, and the Mac is placed there only
+// if it returns on a new boot and every other Lab-owned Mac keeps its boot
+// id.
+func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
+	d := v.snapshot()
+	name, port := d.Name, "the "+oob.PortName(rid)+" port"
+	switch {
+	case d.IsVolunteer():
+		return nil, refuse(http.StatusForbidden, "no Proving reset was sent: %s", neverAVolunteers(name))
+	case s.cfg.OOB == nil:
+		return nil, refuse(http.StatusServiceUnavailable, "no Proving reset was sent: %s", noController)
+	case d.State == api.StateBusy || d.State == api.StateRecovering:
+		return nil, refuse(http.StatusConflict, "%s is busy; cancel its job first", name)
+	}
+	if !s.cables.proving.TryLock() {
+		return nil, refuse(http.StatusConflict, "no Proving reset was sent: another one is under way, and two at once prove nothing")
+	}
+	defer s.cables.proving.Unlock()
+	ctx := s.ctx
+	s.sight(ctx)
+	s.cables.mu.Lock()
+	sg, sighted := s.cables.held[name]
+	owner, down := s.cables.onPortLocked(rid), s.cables.down
+	s.cables.mu.Unlock()
+	switch {
+	case down != "":
+		return nil, refuse(http.StatusServiceUnavailable, "no Proving reset was sent: %s", down)
+	case sighted:
+		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s is sighted on the %s port, and a Proving reset is for a Mac the lab has no Sighting of", name, oob.PortName(sg.rid))
+	case owner != "":
+		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s is the cable of %s", port, owner)
+	}
+	p, err := s.cfg.OOB.Port(ctx, rid)
+	switch {
+	case err != nil:
+		return nil, refuse(http.StatusServiceUnavailable, "no Proving reset was sent: the Out-of-band controller is not healthy: %v", err)
+	case !p.Connected:
+		return nil, refuse(http.StatusConflict, "no Proving reset was sent: nothing is connected to %s", port)
+	case p.Name != "":
+		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s shows the name %q, and a Proving reset is for a Mac that shows none", port, p.Name)
+	}
+	others := map[string]string{}
+	heard := map[string]bool{}
+	for _, o := range s.allDevs() {
+		o.mu.Lock()
+		if o != v && !o.d.IsVolunteer() {
+			others[o.d.Name] = o.d.BootID
+			heard[o.d.Name] = o.aliveLocked()
+		}
+		o.mu.Unlock()
+	}
+	if d.State == api.StateReady || d.State == api.StateNew {
+		v.setState(api.StateRecovering, "Proving reset of "+port+" by "+by)
+		defer v.setState(d.State, "")
+	}
+	fail := func(format string, args ...any) (*api.Proving, error) {
+		why := fmt.Sprintf(format, args...)
+		s.cables.mu.Lock()
+		s.cables.lost[name] = "the Proving reset of " + port + " at " + when(s.now()) + " did not count: " + why
+		s.cables.mu.Unlock()
+		s.log.Printf("%s: Proving reset of %s by %s did not count: %s", name, port, by, why)
+		return nil, refuse(http.StatusConflict, "the Proving reset of %s did not count: %s. %s is not placed", port, why, name)
+	}
+	sent := s.now()
+	s.log.Printf("%s: Proving reset of %s by %s", name, port, by)
+	if err := s.cfg.OOB.Reset(ctx, rid, nil); err != nil {
+		return nil, refuse(http.StatusBadGateway, "no Proving reset reached %s: %v", port, err)
+	}
+	restarted := func() []string {
+		var out []string
+		for _, o := range s.allDevs() {
+			o.mu.Lock()
+			if boot, ok := others[o.d.Name]; ok && o.d.BootID != boot {
+				out = append(out, o.d.Name)
+			}
+			o.mu.Unlock()
+		}
+		return out
+	}
+	if v.waitFor(ctx, s.cfg.BootTimeout, func() bool { return v.d.BootID != d.BootID && v.d.LastSeen.After(sent) }) != nil {
+		if also := restarted(); len(also) > 0 {
+			return fail("%s did not return on a new boot within %s, and %s restarted: %s is its cable, or it restarted by itself", name, s.cfg.BootTimeout, strings.Join(also, ", "), port)
+		}
+		return fail("%s did not return on a new boot within %s", name, s.cfg.BootTimeout)
+	}
+	// A Mac the reset hit instead is down for a while: every other Mac that
+	// was up is heard again, on the boot it had, before the result counts.
+	back := s.now()
+	for _, o := range s.allDevs() {
+		o.mu.Lock()
+		boot, other := others[o.d.Name]
+		o.mu.Unlock()
+		if !other || !heard[o.d.Name] {
+			continue
+		}
+		if o.waitFor(ctx, 2*s.aliveWindow(), func() bool { return o.d.BootID != boot || o.heard.After(back) }) != nil {
+			return fail("%s has not been heard since the reset: it may be the Mac on %s", o.d.Name, port)
+		}
+	}
+	if also := restarted(); len(also) > 0 {
+		return fail("%s restarted too, and a Proving reset counts only if every other Mac keeps its boot id", strings.Join(also, ", "))
+	}
+	p, err = s.cfg.OOB.Port(ctx, rid)
+	switch {
+	case err != nil:
+		return fail("the Out-of-band controller did not say what %s shows now: %v", port, err)
+	case !p.Connected || p.ProductID <= 0 || p.PlugCount <= 0:
+		return fail("%s shows no connection, product id or plug count to remember %s by", port, name)
+	}
+	s.cables.mu.Lock()
+	if owner := s.cables.onPortLocked(rid); owner != "" && owner != name {
+		s.cables.mu.Unlock()
+		return fail("%s was sighted on %s meanwhile", owner, port)
+	}
+	s.cables.held[name] = sighting{rid: rid, seen: oob.Seen{ProductID: p.ProductID, PlugCount: p.PlugCount}, at: s.now(), proved: true}
+	delete(s.cables.lost, name)
+	s.cables.mu.Unlock()
+	s.log.Printf("sighting: %s is placed on %s by the Proving reset of %s (product id %d, plug count %d)", name, port, by, p.ProductID, p.PlugCount)
+	return &api.Proving{Device: name, Port: oob.PortName(rid), Cable: s.cables.cable(name)}, nil
+}
+
+// hOOBStatus is what the lab knows of a Mac's cable, and what the
+// controller's ports show.
+func (s *Server) hOOBStatus(w http.ResponseWriter, r *http.Request) {
+	v := s.devOr404(w, r)
+	if v == nil {
+		return
+	}
+	v.mu.Lock()
+	out := api.OOBStatus{Device: v.d.Name, Cable: v.cableLocked()}
+	v.mu.Unlock()
+	if out.Cable == nil || !callerOf(r).reads() {
+		writeJSON(w, out)
+		return
+	}
+	s.cables.mu.Lock()
+	out.Controller = orStr(s.cables.down, api.ControllerHealthy)
+	if s.cables.none {
+		out.Controller = noController
+	}
+	for _, rid := range oob.RIDs {
+		if p, ok := s.cables.ports[rid]; ok {
+			out.Ports = append(out.Ports, api.OOBPort{Port: oob.PortName(rid), Connected: p.Connected, Name: p.Name, ProductID: p.ProductID, PlugCount: p.PlugCount, Mac: s.cables.onPortLocked(rid)})
+		}
+	}
+	s.cables.mu.Unlock()
+	writeJSON(w, out)
+}
+
+// recoverAfterStart runs recovery on every Lab-owned Mac that was up when
+// labd stopped and did not return after it started, and writes the result
+// for "Agents". A Mac gets its own watchdog and a boot first.
+func (s *Server) recoverAfterStart(up []*dev) {
+	if len(up) == 0 {
+		return
+	}
+	select {
+	case <-s.ctx.Done():
+		return
+	case <-s.clock().After(s.cfg.WatchdogIdleReset + s.cfg.BootTimeout):
+	}
+	var results []string
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, v := range up {
+		v.mu.Lock()
+		returned := v.heard.After(s.start)
+		skip := returned || v.forgotten || v.d.State == api.StateLeft || v.d.State == api.StateBusy || v.d.State == api.StateRecovering || v.d.State == api.StateNeedsHands
+		name := v.d.Name
+		v.mu.Unlock()
+		if skip {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			steps, ok := v.ladder(s.ctx, "did not return after the lab started again", s.cfg.BootTimeout, false)
+			s.log.Printf("%s: recovery after the start: ok=%v steps=%v", name, ok, steps)
+			line := name + " is back after a Hard reset."
+			if !ok {
+				why := v.snapshot().StateReason
+				if a := v.snapshot().Action; a != nil {
+					why = a.Why
+				}
+				line = name + " needs hands: " + strings.TrimSuffix(why, ".") + "."
+			}
+			mu.Lock()
+			results = append(results, line)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if len(results) == 0 || s.ctx.Err() != nil {
+		return
+	}
+	sort.Strings(results)
+	s.agents.RecoveryAfterStart(results)
+}
+
+// RecoveryAfterStart is the result of the recovery labd ran, after it
+// started, on the Lab-owned Macs that did not return.
+func (a agentsLines) RecoveryAfterStart(results []string) {
+	macs := "1 Lab-owned Mac"
+	if len(results) != 1 {
+		macs = fmt.Sprintf("%d Lab-owned Macs", len(results))
+	}
+	a.l.post(lineAgents, "After the lab started again "+macs+" did not return, and the lab ran recovery. "+strings.Join(results, " "))
+}

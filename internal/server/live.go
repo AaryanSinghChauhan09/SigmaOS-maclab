@@ -5,7 +5,6 @@ package server
 // from a running Mac. The web UI and a future TUI use the same endpoints.
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -141,14 +140,18 @@ func (v *dev) viewLocked() DeviceView {
 	} else {
 		d.Configuration = nil
 	}
-	if d.OOB != nil {
-		// The controller's token resets the Mac and opens its root console:
-		// labd alone talks to the controller, clients only show the URL.
-		oob := *d.OOB
-		oob.Token = ""
-		d.OOB = &oob
+	// What the old lab kept of a controller of the Mac's own is no part of
+	// a view: its token was a secret, and this lab resets through a port.
+	d.OOB = nil
+	cable := v.cableLocked()
+	tier := 0
+	if d.Facts.WatchdogArmed {
+		tier = 1
 	}
-	return DeviceView{Device: d, Tier: d.Tier(), Alive: v.aliveLocked(), Queued: len(v.queue) + len(v.parked), ScreenAt: v.screenAt}
+	if cable != nil && cable.NoHardReset == "" {
+		tier = 2
+	}
+	return DeviceView{Device: d, Tier: tier, Alive: v.aliveLocked(), Queued: len(v.queue) + len(v.parked), ScreenAt: v.screenAt, Cable: cable}
 }
 
 // publishLocked sends the device to the web UI, which adds a device it
@@ -157,18 +160,6 @@ func (v *dev) publishLocked() {
 	if !v.forgotten {
 		v.s.hub.publish("device", v.d.Name, v.viewLocked())
 	}
-}
-
-// rearmSerial asks the controller to put the Mac's debug UART back into
-// serial mode: the Mac drops out of it on every reboot.
-func (v *dev) rearmSerial(window time.Duration) {
-	go func() {
-		ctx, cancel := context.WithTimeout(v.s.ctx, window+30*time.Second)
-		defer cancel()
-		if err := v.armOOB(ctx, window); err != nil {
-			v.s.log.Printf("%s: serial re-arm: %v", v.d.Name, err)
-		}
-	}()
 }
 
 // ---- screens ----

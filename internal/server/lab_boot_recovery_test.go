@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"log"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -10,7 +12,6 @@ import (
 
 	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
-	"github.com/omacom/omarchy-maclab/internal/detect"
 )
 
 // submitJob submits a job for the lab's Mac through labd's API.
@@ -63,26 +64,6 @@ func (l *lab) journalOf(j *api.Job, boot string) string {
 		}
 	}
 	return ""
-}
-
-// consoleAtLogin waits for labd to have read a login prompt on the Mac's
-// serial console that came after since: the console lines of a boot reach
-// labd a little after the Sim is up on it, and a clock jump before then reads
-// as a console gone silent mid-boot.
-func (l *lab) consoleAtLogin(since time.Time) {
-	l.t.Helper()
-	v := l.s.dev(l.name)
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		v.mu.Lock()
-		at := v.marker == detect.MarkUserspace && v.markerTime.After(since)
-		v.mu.Unlock()
-		if at {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	l.t.Fatalf("labd never read a login prompt on the console after %s", since.Format(time.TimeOnly))
 }
 
 // bootIDs records every boot ID the Mac goes through until stop.
@@ -169,18 +150,13 @@ func TestLostContactIsAFailure(t *testing.T) {
 
 func TestLabOwnedMacComesBackThroughItsDeadlineBeforeAnOOBHardReset(t *testing.T) {
 	l, clock := lostContactLab(t, labConfig{oob: true})
-	submitted := clock.Now()
 	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-offline behavior=no-network")})
 	l.lostBoot("7.2-offline")
-	l.consoleAtLogin(submitted) // the boot reached userspace, as the console shows: no stall to reset it for
 	clock.Advance(2 * 4 * time.Second)
 	j := l.jobAPI(id, 60*time.Second)
 	l.expect(j, api.OutcomeLostContact)
-	l.oob.mu.Lock()
-	resets := l.oob.resets
-	l.oob.mu.Unlock()
-	if resets != 0 {
-		t.Fatalf("%d OOB hard resets before the deadline brought the Mac back; recovery %v", resets, j.Result.Recovery)
+	if resets, _ := l.oob.resetsSent(); resets != 0 {
+		t.Fatalf("%d Hard resets before the deadline brought the Mac back; recovery %v", resets, j.Result.Recovery)
 	}
 	l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady && d.Kernel == agent.SimKnownGood })
 }
@@ -262,4 +238,147 @@ func withoutLabBootAdditions(cmdline string) string {
 		keep = append(keep, f)
 	}
 	return strings.Join(keep, " ")
+}
+
+// With no Sighting the ladder skips the Hard-reset rung: the Mac's own
+// watchdog has its time, then the Mac Needs hands, with the reason shown.
+func TestWithNoSightingTheLadderSkipsTheHardResetRung(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// cable changes what the mini's right port holds before the job.
+		cable func(l *lab)
+		state string
+		why   []string
+	}{
+		{"no cable", func(l *lab) { l.oob.unplug(portRight) }, api.CableNone, []string{"no cable can be the one of sim-mac"}},
+		{"not sighted", func(l *lab) { l.oob.plug(portRight, l.sim, "", productM1Pro) }, api.CableNotSighted,
+			[]string{"the lab has no Sighting of sim-mac", "A Maintainer can prove its port: `lab reset sim-mac --prove right`"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l := sightLab(t, labConfig{})
+			l.baseline()
+			c.cable(l)
+			l.sight()
+			l.wantCable(l.name, c.state, c.why...)
+			if tier := l.deviceJSON(l.name)["tier"]; tier == float64(2) {
+				t.Fatal("a Mac the lab cannot place is shown with a Hard reset")
+			}
+			started := time.Now()
+			j := l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-hang behavior=hang")})
+			l.expect(j, api.OutcomeHung)
+			steps := strings.Join(j.Result.Recovery, "|")
+			if strings.Contains(steps, "hard reset") || !strings.Contains(steps, "no Hard reset: "+c.why[0]) {
+				t.Fatalf("recovery: %v", j.Result.Recovery)
+			}
+			// The Mac's own watchdog came first: labd waited for it and a
+			// boot (2 s and 4 s here) past the boot timeout before the ladder.
+			if waited := time.Since(started); waited < 10*time.Second || !strings.Contains(steps, "nor come back by itself") {
+				t.Fatalf("the ladder began %s after the job, before the Mac's own watchdog had its time: %v", waited.Round(time.Second), j.Result.Recovery)
+			}
+			l.wantResets("the lab had no Sighting")
+			d := l.waitDevice(func(d api.Device) bool { return d.State == api.StateNeedsHands })
+			if d.Action == nil {
+				t.Fatal("no instruction for the person at the Mac")
+			}
+			for _, piece := range append(c.why, "No Hard reset was sent: ") {
+				if !strings.Contains(d.Action.Why, piece) {
+					t.Fatalf("the reason shown %q lacks %q", d.Action.Why, piece)
+				}
+			}
+			l.sim.PowerCycle() // the person
+			l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
+		})
+	}
+}
+
+// swapped serves whichever labd the test has put behind the lab's address.
+type swapped struct {
+	mu sync.Mutex
+	h  http.Handler
+}
+
+func (s *swapped) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	h := s.h
+	s.mu.Unlock()
+	h.ServeHTTP(w, r)
+}
+
+func (s *swapped) set(h http.Handler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.h = h
+}
+
+// After labd starts again it runs recovery on whatever did not return and
+// writes the result for "Agents": a Hard reset where it has a Sighting,
+// Needs hands with the reason where it has none, and nothing for a Mac that
+// returned.
+func TestAfterLabdStartsAgainItRunsRecoveryOnWhateverDidNotReturn(t *testing.T) {
+	front := &swapped{}
+	l := newLabWith(t, labConfig{oob: true, wrap: func(h http.Handler) http.Handler { front.set(h); return front }})
+	l.baseline()
+	uncabled, well := l.addMac("m2-max"), l.addMac("m3")
+	_ = well
+	// Two Macs hang while the lab is Dark; the third stays up.
+	go l.sim.Quiet(time.Hour)
+	go uncabled.Quiet(time.Hour)
+	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+
+	logs := &logBuf{}
+	fresh, err := New(l.ctx, l.s.cfg, log.New(logs, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var notes []Notification
+	fresh.OnNotify(func(n Notification) { mu.Lock(); notes = append(notes, n); mu.Unlock() })
+	front.set(fresh.Handler())
+	boot := fresh.dev(l.name).snapshot().BootID
+
+	var line string
+	for deadline := time.Now().Add(40 * time.Second); line == ""; time.Sleep(100 * time.Millisecond) {
+		for _, text := range agentsLinesOf(t, fresh) {
+			if strings.HasPrefix(text, "After the lab started again") {
+				line = text
+			}
+		}
+		if line == "" && time.Now().After(deadline) {
+			t.Fatalf("no result for \"Agents\"; labd said:\n%s", logs)
+		}
+	}
+	for _, piece := range []string{"2 Lab-owned Macs did not return, and the lab ran recovery.", "sim-mac is back after a Hard reset.", "m2-max needs hands: did not return after the lab started again. No Hard reset was sent: no cable can be the one of m2-max"} {
+		if !strings.Contains(line, piece) {
+			t.Fatalf("the line %q lacks %q", line, piece)
+		}
+	}
+	if strings.Contains(line, "m3") {
+		t.Fatalf("a Mac that returned is in the line: %q", line)
+	}
+	l.wantResets("recovery after the start", portRight)
+	if d := fresh.dev(l.name).snapshot(); d.BootID == boot || d.State != api.StateReady {
+		t.Fatalf("%s after its Hard reset: boot %s (was %s), %s", l.name, d.BootID, boot, d.State)
+	}
+	if d := fresh.dev("m2-max").snapshot(); d.State != api.StateNeedsHands || d.Action == nil {
+		t.Fatalf("m2-max: %s %+v", d.State, d.Action)
+	}
+	if d := fresh.dev("m3").snapshot(); d.State == api.StateNeedsHands || d.State == api.StateRecovering {
+		t.Fatalf("m3, which returned: %s", d.State)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(notes) != 1 || notes[0].Device != "m2-max" || notes[0].Priority != "urgent" {
+		t.Fatalf("who was asked for hands: %+v", notes)
+	}
+	// It is written once.
+	time.Sleep(time.Second)
+	var n int
+	for _, text := range agentsLinesOf(t, fresh) {
+		if strings.HasPrefix(text, "After the lab started again") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("the result was written %d times", n)
+	}
 }

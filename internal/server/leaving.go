@@ -65,10 +65,6 @@ func (s *Server) endEnrollment(v *dev, by, reason string) bool {
 	v.goneWhy = reason
 	v.d.Lease = nil
 	active := v.d.ActiveJob
-	if v.oobStop != nil {
-		v.oobStop()
-		v.oobStop, v.oob, v.serialUp = nil, nil, false
-	}
 	close(v.stop)
 	v.bump()
 	v.mu.Unlock()

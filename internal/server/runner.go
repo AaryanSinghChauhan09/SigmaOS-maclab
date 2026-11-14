@@ -533,7 +533,6 @@ func (r *jobRun) execute(ctx context.Context) (string, string) {
 		r.armedAt = t0
 	}
 	r.ev("one-shot armed, rebooting into %s", sr.Entry)
-	v.rearmSerial(3 * time.Minute)
 	steps, ok, neverLeft, err := v.waitBack(ctx, oldBoot, t0, r.boot, r.selfRecovery())
 	r.addRecovery(steps)
 	if err != nil {
@@ -613,7 +612,7 @@ func (r *jobRun) execute(ctx context.Context) (string, string) {
 		if err := validateRequiredWatchdog([]api.TestSpec{t}, v.snapshot()); err != nil {
 			return api.OutcomeInfra, "test refused before execution: " + err.Error()
 		}
-		if n := realSleepNote(v.snapshot(), t); n != "" {
+		if n := realSleepNote(v.snapshot(), t, v.noHardReset() == ""); n != "" {
 			r.ev("warning: %s", n)
 		}
 		r.ev("test %s: running", t.Name)
@@ -965,15 +964,15 @@ func testVerdict(t api.TestResult) string {
 
 // realSleepNote warns that a suspend-* test needs a person on an Apple
 // Silicon Mac: its RTC has no wakealarm, so neither the Mac nor the lab can
-// wake it, and an OOB reset only ends the boot. The builtin suspend-devices
-// resumes by itself (pm_test).
-func realSleepNote(d api.Device, t api.TestSpec) string {
+// wake it, and a Hard reset, where one can reach the Mac, only ends the boot.
+// The builtin suspend-devices resumes by itself (pm_test).
+func realSleepNote(d api.Device, t api.TestSpec, hardReset bool) string {
 	if !strings.HasPrefix(t.Name, "suspend-") || t.Builtin == "suspend-devices" || !strings.HasPrefix(d.Facts.DTModel, "Apple ") {
 		return ""
 	}
 	n := fmt.Sprintf("test %s puts %s to sleep, and it can't wake itself (Apple Silicon's RTC has no wakealarm): someone must press a key on it", t.Name, d.Name)
-	if d.OOB != nil {
-		n += "; an OOB reset would end the test"
+	if hardReset {
+		n += "; a Hard reset would end the test"
 	}
 	return n
 }
@@ -1046,7 +1045,7 @@ func lostSelfRecovery(hasOOB, alive bool, lastSeen, testEnd, now time.Time, boot
 // watchdogRecovery is lostSelfRecovery for this job's Mac now, after timeout.
 func (r *jobRun) watchdogRecovery(timeout time.Duration) time.Duration {
 	r.v.mu.Lock()
-	hasOOB, alive, lastSeen := r.v.effectiveOOBLocked() != nil, r.v.aliveLocked(), r.v.d.LastSeen
+	hasOOB, alive, lastSeen := r.v.noHardResetLocked() == "", r.v.aliveLocked(), r.v.d.LastSeen
 	r.v.mu.Unlock()
 	return lostSelfRecovery(hasOOB, alive, lastSeen, r.testStarted.Add(r.testLimit), r.s.now(), r.boot, timeout, r.s.cfg.WatchdogIdleReset)
 }
@@ -1055,7 +1054,7 @@ func (r *jobRun) watchdogRecovery(timeout time.Duration) time.Duration {
 // job's Mac: none with a hard reset.
 func (r *jobRun) watchdogAllowance() time.Duration {
 	r.v.mu.Lock()
-	hasOOB := r.v.effectiveOOBLocked() != nil
+	hasOOB := r.v.noHardResetLocked() == ""
 	r.v.mu.Unlock()
 	if hasOOB {
 		return 0
@@ -1100,7 +1099,7 @@ func (r *jobRun) classify(events []api.KernelEvent, steps []string) (string, str
 			return api.OutcomeHung, "stopped responding with no kernel error captured (" + strings.TrimPrefix(s, "detected: ") + ")"
 		}
 	}
-	return api.OutcomeBootFailed, "no kernel error was captured; see serial.log and prevboot/journal.txt"
+	return api.OutcomeBootFailed, "no kernel error was captured; see prevboot/journal.txt"
 }
 
 // quickReboot splits a reboot during a test that left no kernel error by how
@@ -1184,7 +1183,6 @@ func (r *jobRun) crashTest(ctx context.Context) (string, string) {
 	t0 := r.s.now()
 	r.ev("triggering a deliberate kernel %s", r.j.Spec.Crash)
 	r.v.send(api.CmdCrash, r.j.ID, api.CrashArgs{Mode: r.j.Spec.Crash})
-	r.v.rearmSerial(3 * time.Minute)
 	steps, ok, _, err := r.v.waitBack(ctx, old, t0, r.boot, 0)
 	r.addRecovery(steps)
 	if err != nil {
@@ -1300,7 +1298,6 @@ func (r *jobRun) restore(ctx context.Context) error {
 		r.ev("rebooting back to the known-good kernel")
 		t0 := r.s.now()
 		v.send(api.CmdReboot, r.j.ID, nil)
-		v.rearmSerial(3 * time.Minute)
 		// A Lab boot that can't hear the reboot (no network) is reset by
 		// lab-agent's watchdog: give it that before asking for hands.
 		steps, ok, _, err := v.waitBack(ctx, d.BootID, t0, r.boot, r.watchdogRecovery(r.boot))

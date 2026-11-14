@@ -10,7 +10,6 @@ import (
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/detect"
-	"github.com/omacom/omarchy-maclab/internal/oob"
 )
 
 // aliveWindow is how stale the last heartbeat may be before a device counts as unresponsive.
@@ -53,9 +52,6 @@ type dev struct {
 	gone          chan struct{} // closed when the device is forgotten: ends deviceLoop
 	stop          chan struct{} // closed when the Mac's enrollment ends
 	goneWhy       string        // why it ended, once it has
-	oob           oob.Controller
-	oobStop       context.CancelFunc
-	oobSerialDone chan struct{}
 	recoveryMu    sync.Mutex
 	oobCallMu     sync.Mutex
 	oobCallCancel context.CancelFunc
@@ -71,7 +67,6 @@ type dev struct {
 	screenAt   time.Time
 	screenName string
 
-	serialUp   bool
 	serialLast time.Time
 	serialLine string
 	marker     string
@@ -238,9 +233,6 @@ func (v *dev) heartbeat(ci api.Checkin) {
 		v.inflight = map[string]time.Time{}
 		v.sent = map[string]api.Command{}
 		v.s.log.Printf("%s: new boot %s kernel %s", v.d.Name, short(ci.BootID), ci.Kernel)
-		if v.effectiveOOBLocked() != nil {
-			go v.rearmSerial(20 * time.Second) // unplanned reboots too: keep the console live
-		}
 	}
 	for _, r := range ci.Results {
 		if _, ok := v.inflight[r.ID]; ok {

@@ -241,19 +241,6 @@ type Enrollment struct {
 
 func (e Enrollment) IsVolunteer() bool { return e.Kind == KindVolunteer }
 
-// Tier is how much of the recovery ladder a device supports: 0 panic reboot only,
-// 1 plus an armed hardware watchdog, 2 plus out-of-band reset and serial.
-func (d *Device) Tier() int {
-	t := 0
-	if d.Facts.WatchdogArmed {
-		t = 1
-	}
-	if d.OOB != nil && d.EffectiveRecoveryMode != RecoveryNetworkOnly {
-		t = 2
-	}
-	return t
-}
-
 // Facts are reported by the agent at startup and refreshed by preflight.
 type Facts struct {
 	Hostname      string   `json:"hostname"`

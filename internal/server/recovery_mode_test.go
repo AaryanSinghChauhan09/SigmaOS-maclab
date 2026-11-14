@@ -2,58 +2,30 @@ package server
 
 import (
 	"context"
-	"github.com/omacom/omarchy-maclab/internal/api"
-	"github.com/omacom/omarchy-maclab/internal/oob"
-	"io"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
-type modeCountOOB struct {
-	base                                   *fakeOOB
-	arm, reset, status, raw, write, serial atomic.Int64
+// modeCount counts what labd had the Out-of-band controller do to the
+// lab's Mac: the resets the reset tool sent.
+type modeCount struct{ m *fakeMini }
+
+func (c modeCount) counts() int {
+	n, _ := c.m.resetsSent()
+	return n
 }
 
-func (c *modeCountOOB) Name() string { return c.base.Name() }
-func (c *modeCountOOB) Arm(x context.Context, d time.Duration) error {
-	c.arm.Add(1)
-	return c.base.Arm(x, d)
-}
-func (c *modeCountOOB) Reset(x context.Context) error { c.reset.Add(1); return c.base.Reset(x) }
-func (c *modeCountOOB) Status(x context.Context) (string, error) {
-	c.status.Add(1)
-	return c.base.Status(x)
-}
-func (c *modeCountOOB) Raw(x context.Context, w io.Writer) error {
-	c.raw.Add(1)
-	return c.base.Raw(x, w)
-}
-func (c *modeCountOOB) Write(x context.Context, b []byte) error {
-	c.write.Add(1)
-	return c.base.Write(x, b)
-}
-func (c *modeCountOOB) Serial(x context.Context, f func(string)) error {
-	c.serial.Add(1)
-	return c.base.Serial(x, f)
-}
-func (c *modeCountOOB) counts() [6]int64 {
-	return [6]int64{c.arm.Load(), c.reset.Load(), c.status.Load(), c.raw.Load(), c.write.Load(), c.serial.Load()}
-}
-func countedModeLab(t *testing.T, name string) (*lab, *modeCountOOB) {
+// countedModeLab is a lab whose Mac is sighted on the mini's right port.
+func countedModeLab(t *testing.T, name string) (*lab, modeCount) {
 	l := newLabNamed(t, true, name)
 	l.baseline()
-	c := &modeCountOOB{base: l.oob}
-	l.s.cfg.OOBFactory = func(*api.Device) (oob.Controller, error) { return c, nil }
-	l.s.attachOOB(l.s.dev(name))
-	until := time.Now().Add(time.Second)
-	for c.serial.Load() == 0 && time.Now().Before(until) {
-		time.Sleep(time.Millisecond)
-	}
-	return l, c
+	return l, modeCount{l.oob}
 }
 func TestRecoveryNetworkJobNeverUsesStaleConfiguredController(t *testing.T) {
 	l, c := countedModeLab(t, "m1-stale-oob")
@@ -61,7 +33,6 @@ func TestRecoveryNetworkJobNeverUsesStaleConfiguredController(t *testing.T) {
 	j := l.run(api.JobSpec{RecoveryMode: api.RecoveryNetworkOnly, Kernel: l.artifact("krel=mode-network behavior=ok")})
 	l.expect(j, api.OutcomePass)
 	v := l.s.dev(l.name)
-	v.rearmSerial(time.Millisecond)
 	v.onSerial("Kernel panic - not syncing: FOREIGN_M3_SERIAL")
 	time.Sleep(20 * time.Millisecond)
 	if got := c.counts(); got != before {
@@ -71,8 +42,8 @@ func TestRecoveryNetworkJobNeverUsesStaleConfiguredController(t *testing.T) {
 		t.Fatal("requested/effective mode lost", j)
 	}
 	d := v.snapshot()
-	if d.OOB == nil || d.EffectiveRecoveryMode != api.RecoveryNetworkOnly || d.RecoveryModeJob != j.ID || d.Tier() > 1 {
-		t.Fatal("config cleared or effective isolation lost", d)
+	if _, sighted := l.s.cables.of(l.name); !sighted || d.EffectiveRecoveryMode != api.RecoveryNetworkOnly || d.RecoveryModeJob != j.ID || l.s.view(v).Tier > 1 {
+		t.Fatal("Sighting dropped or effective isolation lost", d)
 	}
 	if strings.Contains(modeMessages(j), "ttySAC0") {
 		t.Fatal("network boot injected serial cmdline", modeMessages(j))
@@ -83,9 +54,13 @@ func TestRecoveryNetworkJobNeverUsesStaleConfiguredController(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/devices/x/oob", nil)
 	req.SetPathValue("name", l.name)
-	l.s.hOOBStatus(rec, req)
-	if rec.Code != 404 {
-		t.Fatal("masked OOB status admitted", rec.Code)
+	l.s.hOOBStatus(rec, byMaintainer(req))
+	var status api.OOBStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil || status.Cable == nil || !strings.Contains(status.Cable.NoHardReset, "network-only") {
+		t.Fatal("the Mac is not shown as having no Hard reset", rec.Code, rec.Body.String())
+	}
+	if r, body := l.get("POST", "/api/devices/"+l.name+"/reset"); r.StatusCode != http.StatusConflict || !strings.Contains(body, "network-only") {
+		t.Fatal("a Hard reset under the network-only policy", r.Status, body)
 	}
 	if got := c.counts(); got != before {
 		t.Fatal("masked status called controller", got)
@@ -160,27 +135,33 @@ func modeMessages(j *api.Job) string {
 	return strings.Join(out, "\n")
 }
 
-type modeBlockingOOB struct {
-	*modeCountOOB
-	entered, stopped chan struct{}
-}
-
-func (c *modeBlockingOOB) Arm(ctx context.Context, d time.Duration) error {
-	close(c.entered)
-	<-ctx.Done()
-	close(c.stopped)
-	return ctx.Err()
-}
+// A Hard reset that waits its turn at the controller when the network-only
+// policy is selected is canceled and never sent, and the policy waits until
+// it has stopped before any command goes to the Mac.
 func TestRecoveryNetworkTransitionCancelsAndDrainsPriorControllerCall(t *testing.T) {
 	l, c := countedModeLab(t, "mode-quiesce")
 	v := l.s.dev(l.name)
-	block := &modeBlockingOOB{modeCountOOB: c, entered: make(chan struct{}), stopped: make(chan struct{})}
-	v.mu.Lock()
-	v.oob = block
-	v.mu.Unlock()
-	armDone := make(chan error, 1)
-	go func() { armDone <- v.armOOB(context.Background(), time.Minute) }()
-	<-block.entered
+	// Another port's tool run holds the controller's one lock.
+	probing, release := l.oob.holdProbes(t)
+	probed := make(chan error, 1)
+	go func() { _, err := l.oob.client.Probe(context.Background(), portLeft); probed <- err }()
+	<-probing
+	resetDone := make(chan error, 1)
+	go func() { _, err := v.resetOOB(context.Background()); resetDone <- err }()
+	until := time.Now().Add(5 * time.Second)
+	for {
+		v.mu.Lock()
+		waiting := v.oobCallCancel != nil
+		v.mu.Unlock()
+		if waiting {
+			break
+		}
+		if time.Now().After(until) {
+			t.Fatal("the Hard reset never reached the controller")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // past labd's own look, at the controller's lock
 	j := &api.Job{ID: "mode-quiesce-job", Spec: api.JobSpec{Device: l.name, RecoveryMode: api.RecoveryNetworkOnly}, State: api.JobQueued}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -188,14 +169,22 @@ func TestRecoveryNetworkTransitionCancelsAndDrainsPriorControllerCall(t *testing
 		t.Fatal(e)
 	}
 	select {
-	case <-block.stopped:
+	case e := <-resetDone:
+		if e == nil {
+			t.Fatal("prior reset not canceled")
+		}
 	default:
-		t.Fatal("device commands could start before controller stopped")
+		t.Fatal("device commands could start before the controller call stopped")
 	}
-	if e := <-armDone; e == nil {
-		t.Fatal("prior arm not canceled")
+	release()
+	if e := <-probed; e != nil {
+		t.Fatal(e)
 	}
-	if e := v.resetOOB(ctx); e == nil {
+	time.Sleep(100 * time.Millisecond)
+	if c.counts() != 0 {
+		t.Fatal("a Hard reset canceled while it waited was sent")
+	}
+	if _, e := v.resetOOB(ctx); e == nil || c.counts() != 0 {
 		t.Fatal("masked reset admitted")
 	}
 }
@@ -209,16 +198,18 @@ func TestRecoveryNetworkMaskPersistsAcrossRestartAndNoSerialJobLiftsIt(t *testin
 	before := c.counts()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, e := New(ctx, l.s.cfg, nil)
+	s, e := New(ctx, l.s.cfg, quietLog())
 	if e != nil {
 		t.Fatal(e)
 	}
 	fresh := s.dev(l.name)
-	if fresh.snapshot().EffectiveRecoveryMode != api.RecoveryNetworkOnly || fresh.snapshot().OOB == nil {
-		t.Fatal("restart lost network hold or original route")
+	if fresh.snapshot().EffectiveRecoveryMode != api.RecoveryNetworkOnly {
+		t.Fatal("restart lost network hold")
 	}
-	fresh.rearmSerial(time.Millisecond)
-	time.Sleep(10 * time.Millisecond)
+	s.sight(ctx)
+	if _, e := fresh.resetOOB(ctx); e == nil {
+		t.Fatal("masked reset admitted after the restart")
+	}
 	if c.counts() != before {
 		t.Fatal("restart touched isolated controller", before, c.counts())
 	}

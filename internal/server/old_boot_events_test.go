@@ -40,12 +40,16 @@ func TestOldBootFatalLineIsNotTheTestKernels(t *testing.T) {
 }
 
 // The guard for the rule above: a test kernel that panics before it checks in
-// is still its own panic.
-func TestTestKernelPanicBeforeCheckinStillPanicked(t *testing.T) {
+// is still its own failure. With no console to read, the lab knows it as a
+// kernel that did not come up.
+func TestTestKernelPanicBeforeCheckinIsStillItsOwnFailure(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
 	j := l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-panics behavior=panic")})
-	l.expect(j, api.OutcomePanicked)
+	l.expect(j, api.OutcomeBootFailed)
+	if !j.Result.FellBack {
+		t.Fatalf("the Mac did not fall back: %s", j.Summary)
+	}
 }
 
 // Serial events carry the boot the Mac was last heard on, like kmsg ones.

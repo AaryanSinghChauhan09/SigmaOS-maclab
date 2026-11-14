@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
-	"github.com/omacom/omarchy-maclab/internal/oob"
 )
 
 func effectiveRecoveryMode(requested, inherited string) string {
@@ -24,45 +23,28 @@ func effectiveRecoveryMode(requested, inherited string) string {
 	return ""
 }
 func (v *dev) networkOnlyLocked() bool { return v.d.EffectiveRecoveryMode == api.RecoveryNetworkOnly }
-func (v *dev) effectiveOOBLocked() oob.Controller {
-	if v.networkOnlyLocked() {
-		return nil
-	}
-	return v.oob
-}
-func (v *dev) alive() bool { v.mu.Lock(); defer v.mu.Unlock(); return v.aliveLocked() }
+func (v *dev) alive() bool             { v.mu.Lock(); defer v.mu.Unlock(); return v.aliveLocked() }
 func (r *jobRun) networkOnly() bool {
 	return r.j.EffectiveRecoveryMode == api.RecoveryNetworkOnly || r.j.Spec.RecoveryMode == api.RecoveryNetworkOnly
 }
 func (r *jobRun) serialEnabled() bool { return !r.networkOnly() && r.v.snapshot().OOB != nil }
 
-// Controller operations serialize with a policy transition and use cancellable
-// contexts. A captured stale controller pointer is never enough to issue a call.
-func (v *dev) useOOB(ctx context.Context, fn func(oob.Controller, context.Context) error) error {
+// resetOOB sends v's Mac a Hard reset and says through which port. It
+// serializes with a policy transition, which cancels it: a call that waited
+// behind one is never sent under the network-only policy.
+func (v *dev) resetOOB(ctx context.Context) (port string, err error) {
 	v.oobCallMu.Lock()
 	defer v.oobCallMu.Unlock()
 	v.mu.Lock()
-	ctl := v.effectiveOOBLocked()
-	if ctl == nil {
+	if v.networkOnlyLocked() {
 		v.mu.Unlock()
-		return errors.New("out-of-band use is unavailable under the current recovery policy")
+		return "", errors.New("no Hard reset was sent: network-only recovery is selected for it")
 	}
 	op, cancel := context.WithCancel(ctx)
 	v.oobCallCancel = cancel
 	v.mu.Unlock()
 	defer func() { cancel(); v.mu.Lock(); v.oobCallCancel = nil; v.mu.Unlock() }()
-	return fn(ctl, op)
-}
-func (v *dev) armOOB(ctx context.Context, d time.Duration) error {
-	return v.useOOB(ctx, func(c oob.Controller, x context.Context) error { return c.Arm(x, d) })
-}
-func (v *dev) resetOOB(ctx context.Context) error {
-	return v.useOOB(ctx, func(c oob.Controller, x context.Context) error { return c.Reset(x) })
-}
-func (v *dev) statusOOB(ctx context.Context) (string, error) {
-	var out string
-	e := v.useOOB(ctx, func(c oob.Controller, x context.Context) error { var e error; out, e = c.Status(x); return e })
-	return out, e
+	return v.s.hardReset(op, v)
 }
 
 // This policy survives a failed return and controller restart. An empty legacy
@@ -108,7 +90,6 @@ func (s *Server) transitionRecoveryMode(ctx context.Context, v *dev, requested, 
 	v.mu.Lock()
 	previous := v.d.EffectiveRecoveryMode
 	previousTransaction, previousHolder, previousJob := v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob
-	done := v.oobSerialDone
 	v.d.EffectiveRecoveryMode = mode
 	if jobID != "" {
 		v.d.RecoveryModeJob = jobID
@@ -124,25 +105,10 @@ func (s *Server) transitionRecoveryMode(ctx context.Context, v *dev, requested, 
 		v.d.EffectiveRecoveryMode = previous
 		v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob = previousTransaction, previousHolder, previousJob
 		v.mu.Unlock()
-		if mode == api.RecoveryNetworkOnly {
-			s.attachOOB(v)
-		}
 		return fmt.Errorf("persist recovery policy before commands: %w", err)
 	}
 	v.mu.Unlock()
-	if mode == api.RecoveryNetworkOnly || previous == api.RecoveryNetworkOnly {
-		s.attachOOB(v)
-	}
 	if mode == api.RecoveryNetworkOnly {
-		if done != nil {
-			select {
-			case <-done:
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(5 * time.Second):
-				return errors.New("configured serial stream did not stop; no device command issued")
-			}
-		}
 		drained := make(chan struct{})
 		go func() { v.oobCallMu.Lock(); v.oobCallMu.Unlock(); close(drained) }()
 		select {

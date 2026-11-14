@@ -3,18 +3,16 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/detect"
 )
 
-// Serial-based early detection: don't sit out the whole boot timeout when the
-// console already shows the Mac is stuck.
-var (
-	panicGrace  = 60 * time.Second  // panic=10 should have rebooted it well within this
-	serialStall = 120 * time.Second // console silent mid-boot for this long = hung
-)
+// panicGrace is how long after a panic labd waits for the Mac to reboot by
+// itself: panic=10 should have rebooted it well within this.
+var panicGrace = 60 * time.Second
 
 // waitBack waits for the Mac to come up on a new boot after `since`. When it
 // doesn't, it gives the Mac selfRecovery more to come back by itself (a Lab
@@ -38,11 +36,6 @@ func (v *dev) waitBack(ctx context.Context, oldBoot string, since time.Time, tim
 				reason = "kernel panicked and did not reboot within " + panicGrace.String()
 				return true
 			}
-		}
-		if v.effectiveOOBLocked() != nil && v.serialUp && v.serialLast.After(since) && now.Sub(v.serialLast) > serialStall &&
-			v.marker != detect.MarkUserspace && !v.aliveLocked() {
-			reason = fmt.Sprintf("boot stalled: serial console silent for %s after %q", now.Sub(v.serialLast).Round(time.Second), v.serialLine)
-			return true
 		}
 		return false
 	})
@@ -73,21 +66,44 @@ func (v *dev) waitBack(ctx context.Context, oldBoot string, since time.Time, tim
 	return steps, ok, neverLeft, nil
 }
 
-// ladder is the recovery ladder: soft reboot, hard reset (twice), then a
-// human. It returns the steps taken and whether the Mac came back.
+// ladder is the recovery ladder: a soft reboot, a Hard reset (twice), then a
+// person. It returns the steps taken and whether the Mac came back.
+//
+// A Hard reset goes only to a Lab-owned Mac the lab has a Sighting of, while
+// the Out-of-band controller is healthy. Without one the rung is skipped:
+// the Mac's own watchdog had its time before the ladder (see
+// lostSelfRecovery), so a person is next, and is told why. A Volunteer's Mac
+// never gets a Hard reset.
 //
 // A Mac that left the lab (lab-agent uninstall) is never reset or handed to a
 // human: its agent stopped on purpose.
 func (v *dev) ladder(ctx context.Context, reason string, bootTimeout time.Duration, trySoft bool) ([]string, bool) {
+	return v.climb(ctx, reason, bootTimeout, trySoft, nil)
+}
+
+// sentReset is a Hard reset a person asked for, which went out before the
+// ladder began: through which port, when, and the state the Mac was in.
+type sentReset struct {
+	port string
+	at   time.Time
+	prev api.DeviceState
+}
+
+// climb is the ladder. With sent, its first Hard reset is that one.
+func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duration, trySoft bool, sent *sentReset) ([]string, bool) {
 	if why := v.leaving(); why != "" {
 		return []string{"not recovered: " + why}, false
 	}
 	v.mu.Lock()
 	stuck := v.d.BootID
 	alive := trySoft && v.aliveLocked()
-	ctl := v.effectiveOOBLocked()
+	volunteers := v.d.IsVolunteer()
+	noReset := v.noHardResetLocked()
 	prev := v.d.State
 	v.mu.Unlock()
+	if sent != nil {
+		noReset, prev = "", sent.prev
+	}
 	v.setState(api.StateRecovering, reason)
 	v.s.log.Printf("%s: recovering: %s", v.d.Name, reason)
 	steps := []string{"detected: " + reason}
@@ -104,13 +120,21 @@ func (v *dev) ladder(ctx context.Context, reason string, bootTimeout time.Durati
 		steps = append(steps, "soft reboot via agent")
 		t0 := v.s.now()
 		v.send(api.CmdReboot, "", nil)
-		v.rearmSerial(3 * time.Minute)
 		if v.waitFor(ctx, bootTimeout, backSince(t0)) == nil {
 			return done()
 		}
 		steps = append(steps, "soft reboot did not bring it back")
 	}
-	if ctl != nil {
+	// unreset is why no Hard reset brought it back, for the person asked.
+	var unreset string
+	switch {
+	case volunteers:
+	case noReset != "":
+		steps = append(steps, "no Hard reset: "+noReset)
+		unreset = "No Hard reset was sent: " + noReset
+	default:
+		count := 0
+	resets:
 		for i := 1; i <= 2; i++ {
 			if ctx.Err() != nil {
 				return steps, false
@@ -118,19 +142,39 @@ func (v *dev) ladder(ctx context.Context, reason string, bootTimeout time.Durati
 			if why := v.leaving(); why != "" {
 				return append(steps, "stopped: "+why), false
 			}
-			t0 := v.s.now()
-			steps = append(steps, fmt.Sprintf("hard reset %d via %s", i, ctl.Name()))
-			rctx, cancel := context.WithTimeout(ctx, time.Minute)
-			err := v.resetOOB(rctx)
-			cancel()
-			if err != nil {
-				steps = append(steps, "hard reset failed: "+err.Error())
-				continue
+			var t0 time.Time
+			var port string
+			if i == 1 && sent != nil {
+				t0, port = sent.at, sent.port
+			} else {
+				t0 = v.s.now()
+				rctx, cancel := context.WithTimeout(ctx, time.Minute)
+				var err error
+				port, err = v.resetOOB(rctx)
+				cancel()
+				if err != nil {
+					steps = append(steps, fmt.Sprintf("hard reset %d not sent: %v", i, err))
+					unreset = strings.TrimPrefix(err.Error(), "no Hard reset was sent: ")
+					if v.noHardReset() != "" {
+						break resets
+					}
+					continue
+				}
 			}
+			count++
+			steps = append(steps, fmt.Sprintf("hard reset %d via the %s port", i, port))
 			if v.waitFor(ctx, bootTimeout, backSince(t0)) == nil {
 				return done()
 			}
 			steps = append(steps, fmt.Sprintf("no check-in %s after hard reset %d", bootTimeout, i))
+		}
+		switch {
+		case count == 2:
+			unreset = "Two Hard resets did not bring it back"
+		case count == 1:
+			unreset = "One Hard reset did not bring it back, and another was not sent: " + unreset
+		default:
+			unreset = "No Hard reset was sent: " + unreset
 		}
 	}
 	if ctx.Err() != nil {
@@ -140,7 +184,7 @@ func (v *dev) ladder(ctx context.Context, reason string, bootTimeout time.Durati
 		return append(steps, "stopped: "+why), false
 	}
 	v.mu.Lock()
-	act := humanAction(v.d, reason, v.lastLogLocked(), v.s.now())
+	act := humanAction(v.d, reason, unreset, v.lastLogLocked(), v.s.now())
 	n := Notification{Device: v.d.Name, Title: act.Title, Body: act.Text(), Priority: "urgent"}
 	if v.d.IsVolunteer() {
 		n.Volunteer, n.MacTopic = true, v.s.macTopicURL(v.d.Enrollment)
@@ -161,15 +205,14 @@ func (v *dev) lastLogLocked() string {
 			return v.events[i].Line
 		}
 	}
-	if !v.networkOnlyLocked() && v.serialLine != "" {
-		return v.serialLine
-	}
 	return ""
 }
 
 // humanAction writes the instruction for the person at the desk: which
 // machine, exactly what to press, and that nothing else is needed.
-func humanAction(d api.Device, reason, lastLog string, now time.Time) *api.HumanAction {
+// unreset is why no Hard reset brought it back, as a sentence: none could be
+// sent, or two were and it stayed away.
+func humanAction(d api.Device, reason, unreset, lastLog string, now time.Time) *api.HumanAction {
 	where := d.Name
 	if d.Label != "" {
 		where = fmt.Sprintf("%s (%s)", d.Name, d.Label)
@@ -191,12 +234,13 @@ func humanAction(d api.Device, reason, lastLog string, now time.Time) *api.Human
 	}
 	a.Steps = append(a.Steps, "That's it. The lab notices when it checks in again and picks up from there.")
 	a.Why = reason
-	if d.EffectiveRecoveryMode == api.RecoveryNetworkOnly {
-		a.Why += ". Network-only recovery is selected; no configured remote reset was attempted"
-	} else if d.OOB == nil {
-		a.Why += ". No out-of-band controller is attached, so the lab can't reset it remotely"
-	} else {
-		a.Why += ". Two remote resets did not bring it back"
+	switch {
+	case d.EffectiveRecoveryMode == api.RecoveryNetworkOnly:
+		a.Why += ". Network-only recovery is selected; no Hard reset was attempted"
+	case d.IsVolunteer():
+		a.Why += ". The lab never sends a Volunteer's Mac a Hard reset"
+	case unreset != "":
+		a.Why += ". " + unreset
 	}
 	return a
 }

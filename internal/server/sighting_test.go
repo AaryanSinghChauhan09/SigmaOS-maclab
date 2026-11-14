@@ -1,0 +1,584 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/oob"
+)
+
+// A name read on a port that belongs to exactly one Lab-owned Mac's record
+// makes a Sighting: the Mac, the port, the product id, the plug count.
+func TestANameOnAPortOfExactlyOneLabOwnedMacMakesASighting(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	sg, ok := l.s.cables.of(l.name)
+	if want := (oob.Seen{ProductID: productM1Pro, PlugCount: 41}); !ok || sg.rid != portRight || sg.seen != want || sg.proved {
+		t.Fatalf("the Sighting of %s: %+v %v, want the right port with %+v", l.name, sg, ok, want)
+	}
+	l.wantCable(l.name, api.CableSighted)
+	if c := l.cableOf(l.name); c["port"] != "right" || c["proved"] != nil {
+		t.Fatalf("the cable as shown: %v", c)
+	}
+	if tier := l.deviceJSON(l.name)["tier"]; tier != float64(2) {
+		t.Fatalf("a sighted Mac's recovery tier: %v, want 2", tier)
+	}
+
+	// A name that is in no Lab-owned Mac's record places nothing.
+	l.oob.plug(portLeft, nil, "somebody-elses-mac", productM2Max)
+	l.sight()
+	l.s.cables.mu.Lock()
+	held := len(l.s.cables.held)
+	l.s.cables.mu.Unlock()
+	if held != 1 {
+		t.Fatalf("%d Sightings, want the one", held)
+	}
+	l.oob.unplug(portLeft)
+
+	// The name is the one the Mac itself reported as its hostname, too.
+	l.waitDevice(func(d api.Device) bool { return d.Facts.Hostname == "sim" })
+	l.oob.plug(portRight, l.sim, "SIM", productM1Pro)
+	l.sight()
+	if sg, ok := l.s.cables.of(l.name); !ok || sg.rid != portRight || sg.seen.PlugCount != 42 {
+		t.Fatalf("sighted by its hostname: %+v %v", sg, ok)
+	}
+
+	// The same name in two records belongs to neither.
+	l.addMac("m2-max")
+	l.waitDeviceJSON("m2-max", func(m map[string]any) bool {
+		facts, _ := m["facts"].(map[string]any)
+		return facts["hostname"] == "sim"
+	})
+	l.sight()
+	if _, ok := l.s.cables.of(l.name); ok {
+		t.Fatal("a name two Lab-owned Macs' records carry made a Sighting")
+	}
+	l.wantCable(l.name, api.CableNotSighted, "belongs to 2 Lab-owned Macs' records")
+	l.wantCable("m2-max", api.CableNotSighted, "belongs to 2 Lab-owned Macs' records")
+	if r, body := l.resetAs(harnessToken, l.name, ""); r.StatusCode != http.StatusConflict || !strings.Contains(body, "no Hard reset was sent") {
+		t.Fatalf("a Hard reset with no Sighting: %s %s", r.Status, body)
+	}
+	l.wantResets("nothing was sighted for sure")
+}
+
+// A Hard reset goes out only if the port is still connected with the same
+// product id and plug count; otherwise the Sighting is dropped and the reset
+// refused with the reason. The controller compares once more, under its
+// lock.
+func TestAHardResetGoesOutOnlyWhileThePortIsAsItWasSighted(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	refused := func(why, state string, saying ...string) {
+		t.Helper()
+		r, body := l.resetAs(harnessToken, l.name, "")
+		if r.StatusCode != http.StatusConflict {
+			t.Fatalf("%s: %s %s", why, r.Status, body)
+		}
+		for _, piece := range append(saying, "no Hard reset was sent", "The Sighting of "+l.name+" is dropped") {
+			if !strings.Contains(body, piece) {
+				t.Fatalf("%s: the refusal %q lacks %q", why, body, piece)
+			}
+		}
+		l.wantResets(why)
+		if _, ok := l.s.cables.of(l.name); ok {
+			t.Fatalf("%s: the Sighting was kept", why)
+		}
+		l.wantCable(l.name, state, "its Sighting was dropped")
+	}
+	sighted := func() {
+		t.Helper()
+		l.sight()
+		if _, ok := l.s.cables.of(l.name); !ok {
+			t.Fatal("not sighted again")
+		}
+	}
+
+	// Its cable pulled and plugged back in.
+	l.oob.plug(portRight, l.sim, l.name, productM1Pro)
+	refused("the plug count moved", api.CableNotSighted, "the right port has plug count 42, not the 41 it was seen with")
+	sighted()
+
+	// Another model at the end of the cable.
+	l.oob.swap(portRight, productM2Max)
+	refused("the product id changed", api.CableNotSighted, "the right port shows product id 29453, not the 29448 it was seen with")
+	l.oob.swap(portRight, productM1Pro)
+	sighted()
+
+	// Nothing on the port.
+	l.oob.unplug(portRight)
+	refused("the port is not connected", api.CableNone, "the right port is no longer connected")
+	l.oob.plug(portRight, l.sim, l.name, productM1Pro)
+	sighted()
+
+	// The cable moves after labd looked: the controller's own look, under
+	// its lock, is the last word.
+	var once sync.Once
+	l.oob.onRead(func(rid int) {
+		if rid == portRight {
+			once.Do(func() { l.oob.plug(portRight, l.sim, l.name, productM1Pro) })
+		}
+	})
+	refused("the controller saw the port change", api.CableNotSighted, "the port with RID 2 has plug count 44, not the 43 it was seen with: no reset was sent")
+	l.oob.onRead(nil)
+	if log := l.oob.log.String(); !strings.Contains(log, "RID 2 reset refused") {
+		t.Fatalf("the controller did not refuse it itself:\n%s", log)
+	}
+	sighted()
+
+	// As it was sighted: the reset goes out, to that port.
+	boot := l.bootOf(l.name)
+	r, body := l.resetAs(harnessToken, l.name, "")
+	if r.StatusCode != http.StatusOK || !strings.Contains(body, "Hard reset sent to "+l.name+" through the right port") {
+		t.Fatalf("a Hard reset of a sighted Mac: %s %s", r.Status, body)
+	}
+	l.wantResets("the port was as it was sighted", portRight)
+	l.waitDevice(func(d api.Device) bool { return d.BootID != boot && d.State == api.StateReady })
+}
+
+// Any conflict drops the Sightings involved.
+func TestAnyConflictDropsTheSightingsInvolved(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	other := l.addMac("m2-max")
+	l.oob.plug(portLeft, other, "m2-max", productM2Max)
+	l.sight()
+	l.wantCable(l.name, api.CableSighted)
+	l.wantCable("m2-max", api.CableSighted)
+
+	// One name on two ports.
+	l.oob.plug(portMiddle, nil, "m2-max", productM2Max)
+	l.sight()
+	l.wantCable("m2-max", api.CableNotSighted, "its name is on left and middle ports at once")
+	l.wantCable(l.name, api.CableSighted)
+	if r, body := l.resetAs(harnessToken, "m2-max", ""); r.StatusCode != http.StatusConflict || !strings.Contains(body, "left and middle ports at once") {
+		t.Fatalf("a Hard reset of a Mac whose name is on two ports: %s %s", r.Status, body)
+	}
+	l.wantResets("its name was on two ports")
+	l.oob.unplug(portMiddle)
+	l.sight()
+	l.wantCable("m2-max", api.CableSighted)
+
+	// A remembered Mac's name appearing on another port.
+	l.oob.shows(portLeft, "")
+	l.sight()
+	if sg, ok := l.s.cables.of("m2-max"); !ok || sg.rid != portLeft {
+		t.Fatalf("a Mac that stopped showing its name on an unchanged port: %+v %v", sg, ok)
+	}
+	l.oob.plug(portMiddle, nil, "m2-max", productM2Max)
+	l.sight()
+	if _, ok := l.s.cables.of("m2-max"); ok {
+		t.Fatal("its name appeared on another port and a Sighting was kept or made")
+	}
+	l.wantCable("m2-max", api.CableNotSighted, "its name is on the middle port, and it was sighted on the left port")
+	l.oob.unplug(portMiddle)
+	l.sight()
+
+	// Another Mac's name on the port a Mac was sighted on.
+	l.oob.shows(portRight, "m2-max")
+	l.sight()
+	if _, ok := l.s.cables.of(l.name); ok {
+		t.Fatalf("%s kept the port that shows another Mac's name", l.name)
+	}
+	if _, ok := l.s.cables.of("m2-max"); ok {
+		t.Fatal("a Sighting was made in the look that found the conflict")
+	}
+	l.wantCable(l.name, api.CableNotSighted, "the right port shows the name of m2-max")
+	l.wantResets("conflicts")
+}
+
+// After a restart labd holds no Sighting and rebuilds them unaided.
+func TestAfterARestartLabdHoldsNoSightingAndRebuildsThemUnaided(t *testing.T) {
+	l := newLabWith(t, labConfig{oob: true})
+	l.baseline()
+	if _, ok := l.s.cables.of(l.name); !ok {
+		t.Fatal("the Mac is not sighted before the restart")
+	}
+	// The controller starts after labd, as after an Unlock.
+	l.oob.stop(true)
+	cfg := l.s.cfg
+	cfg.SightEvery = 50 * time.Millisecond
+	fresh, err := New(l.ctx, cfg, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, ok := fresh.cables.of(l.name); ok {
+		t.Fatal("labd started with a Sighting")
+	}
+	l.oob.stop(false)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if sg, ok := fresh.cables.of(l.name); ok {
+			if sg.rid != portRight || sg.seen != (oob.Seen{ProductID: productM1Pro, PlugCount: 41}) {
+				t.Fatalf("the Sighting it rebuilt: %+v", sg)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("labd did not sight the Mac again by itself")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The lab never Hard resets a Volunteer's Mac: not for a Maintainer, not
+// for the holder of a Lease on it, not as a Proving reset, and not from the
+// recovery ladder, even with the Mac on one of the mini's cables under its
+// own name.
+func TestAVolunteersMacNeverGetsAHardReset(t *testing.T) {
+	l := sightLab(t, labConfig{volunteer: true})
+	l.openForTheLab(time.Now())
+	l.baseline()
+	const never = "the lab never sends a Volunteer's Mac a Hard reset"
+	if port := l.oob.look(portRight); !port.Connected || port.Name != l.name {
+		t.Fatalf("the Volunteer's Mac is not on the right port under its name: %+v", port)
+	}
+	l.sight()
+	if _, ok := l.s.cables.of(l.name); ok {
+		t.Fatal("a Volunteer's Mac was sighted")
+	}
+	d := l.deviceJSON(l.name)
+	if d["cable"] != nil || d["tier"] == float64(2) {
+		t.Fatalf("a Volunteer's Mac is shown with a cable or a Hard reset: cable %v, tier %v", d["cable"], d["tier"])
+	}
+	if r, body := l.resetAs(harnessToken, l.name, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(body, never) {
+		t.Fatalf("a Maintainer's Hard reset: %s %s", r.Status, body)
+	}
+	if r, body := l.resetAs(harnessToken, l.name, "right"); r.StatusCode != http.StatusForbidden || !strings.Contains(body, never) {
+		t.Fatalf("a Proving reset of its port, naming it: %s %s", r.Status, body)
+	}
+	grace := l.member("grace")
+	l.leaseAs(grace, 0)
+	if r, body := l.resetAs(grace.Token, l.name, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(body, never) {
+		t.Fatalf("its Lease holder's Hard reset: %s %s", r.Status, body)
+	}
+	if r, body := l.as(grace.Token, "DELETE", "/api/devices/"+l.name+"/lease", nil); r.StatusCode != http.StatusOK {
+		t.Fatalf("grace releasing: %s %s", r.Status, body)
+	}
+	v := l.s.dev(l.name)
+	if port, err := l.s.hardReset(context.Background(), v); err == nil || port != "" || !strings.Contains(err.Error(), never) {
+		t.Fatalf("labd's own Hard reset: port %q, %v", port, err)
+	}
+
+	// The recovery ladder, for a Volunteer's Mac that went silent: network
+	// means, then its Volunteer is asked.
+	go l.sim.Quiet(time.Minute)
+	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+	steps, ok := v.ladder(context.Background(), "lost during a test", time.Second, true)
+	if ok || strings.Contains(strings.ToLower(strings.Join(steps, "|")), "hard reset") {
+		t.Fatalf("the ladder on a Volunteer's Mac: %v %v", ok, steps)
+	}
+	got := l.s.dev(l.name).snapshot()
+	if got.State != api.StateNeedsHands || got.Action == nil || !strings.Contains(got.Action.Why, "The lab never sends a Volunteer's Mac a Hard reset") {
+		t.Fatalf("after the ladder: %s %+v", got.State, got.Action)
+	}
+	l.wantResets("a Volunteer's Mac")
+}
+
+// A Hard reset is allowed to a Maintainer and to a Lease holder on the
+// Lab-owned Mac they hold; a Proving reset is a Maintainer's only.
+func TestAHardResetIsAMaintainersOrTheLeaseHoldersAndAProvingResetAMaintainersOnly(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	grace, linus := l.member("grace"), l.member("linus")
+	back := func(boot string) {
+		t.Helper()
+		l.waitDevice(func(d api.Device) bool { return d.BootID != boot && d.State == api.StateReady })
+	}
+
+	if r, body := l.resetAs(grace.Token, l.name, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(body, "needs their own Lease") {
+		t.Fatalf("an M team member with no Lease: %s %s", r.Status, body)
+	}
+	if r, body := l.resetAs("lab_no_such_token", l.name, ""); r.StatusCode != http.StatusUnauthorized && r.StatusCode != http.StatusForbidden {
+		t.Fatalf("nobody: %s %s", r.Status, body)
+	}
+	l.wantResets("nobody who may")
+
+	l.leaseAs(grace, 0)
+	if r, body := l.resetAs(linus.Token, l.name, ""); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("an M team member under another's Lease: %s %s", r.Status, body)
+	}
+	if r, body := l.resetAs(harnessToken, l.name, ""); r.StatusCode != http.StatusConflict || !strings.Contains(body, "leased by") {
+		t.Fatalf("a Maintainer under another person's Lease: %s %s", r.Status, body)
+	}
+	for _, port := range []string{"right", "left"} {
+		if r, body := l.resetAs(grace.Token, l.name, port); r.StatusCode != http.StatusForbidden || !strings.Contains(body, "a Proving reset is a Maintainer's") {
+			t.Fatalf("a Lease holder's Proving reset of the %s port: %s %s", port, r.Status, body)
+		}
+	}
+	l.wantResets("before the Lease holder's own")
+	boot := l.bootOf(l.name)
+	if r, body := l.resetAs(grace.Token, l.name, ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("the Lease holder's Hard reset: %s %s", r.Status, body)
+	}
+	l.wantResets("the Lease holder's", portRight)
+	back(boot)
+
+	if r, body := l.as(grace.Token, "DELETE", "/api/devices/"+l.name+"/lease", nil); r.StatusCode != http.StatusOK {
+		t.Fatalf("grace releasing: %s %s", r.Status, body)
+	}
+	boot = l.bootOf(l.name)
+	if r, body := l.resetAs(harnessToken, l.name, ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("a Maintainer's Hard reset of a free Mac: %s %s", r.Status, body)
+	}
+	l.wantResets("a Maintainer's", portRight, portRight)
+	back(boot)
+}
+
+// A Proving reset names the port, and counts only if that Mac returns and
+// every other Mac keeps its boot id.
+func TestAProvingResetCountsOnlyIfThatMacReturnsAndEveryOtherKeepsItsBootID(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	max, third := l.addMac("m2-max"), l.addMac("m3")
+	// The M2 Max is on the middle port and shows the mini no name, as on a
+	// USB 2 cable; the third Mac, on the left, shows none either.
+	l.oob.plug(portMiddle, max, "", productM2Max)
+	l.oob.plug(portLeft, third, "", productM2Max)
+	l.sight()
+	l.wantCable("m2-max", api.CableNotSighted, "`lab reset m2-max --prove left|middle`")
+	if r, body := l.resetAs(harnessToken, "m2-max", ""); r.StatusCode != http.StatusConflict || !strings.Contains(body, "the lab has no Sighting of m2-max") {
+		t.Fatalf("a Hard reset of a Mac the lab cannot place: %s %s", r.Status, body)
+	}
+
+	for _, c := range []struct {
+		why, mac, port string
+		status         int
+		saying         string
+	}{
+		{"a port the lab server has not", "m2-max", "front", http.StatusBadRequest, "left, middle and right"},
+		{"the port of a sighted Mac", "m2-max", "right", http.StatusConflict, "the right port is the cable of " + l.name},
+		{"a Mac the lab has a Sighting of", l.name, "middle", http.StatusConflict, l.name + " is sighted on the right port"},
+	} {
+		if r, body := l.resetAs(harnessToken, c.mac, c.port); r.StatusCode != c.status || !strings.Contains(body, c.saying) {
+			t.Fatalf("%s: %s %s", c.why, r.Status, body)
+		}
+	}
+	l.oob.unplug(portLeft)
+	if r, body := l.resetAs(harnessToken, "m2-max", "left"); r.StatusCode != http.StatusConflict || !strings.Contains(body, "nothing is connected to the left port") {
+		t.Fatalf("a port with nothing on it: %s %s", r.Status, body)
+	}
+	l.oob.plug(portLeft, third, "", productM2Max)
+	l.wantResets("Proving resets the lab refused")
+
+	// The wrong port: another Mac restarts and this one does not return.
+	boots := map[string]string{l.name: l.bootOf(l.name), "m2-max": l.bootOf("m2-max"), "m3": l.bootOf("m3")}
+	r, body := l.resetAs(harnessToken, "m2-max", "left")
+	if r.StatusCode != http.StatusConflict || !strings.Contains(body, "did not count") || !strings.Contains(body, "m2-max did not return on a new boot") ||
+		!strings.Contains(body, "m3 restarted") || !strings.Contains(body, "m2-max is not placed") {
+		t.Fatalf("a Proving reset of another Mac's port: %s %s", r.Status, body)
+	}
+	l.wantResets("the wrong port", portLeft)
+	if _, ok := l.s.cables.of("m2-max"); ok {
+		t.Fatal("a Proving reset that did not count placed the Mac")
+	}
+	l.wantCable("m2-max", api.CableNotSighted, "the Proving reset of the left port", "did not count")
+	if l.bootOf("m2-max") != boots["m2-max"] || l.bootOf("m3") == boots["m3"] {
+		t.Fatal("the reset did not land on the Mac on the left port alone")
+	}
+	l.waitDeviceJSON("m3", func(m map[string]any) bool { return m["alive"] == true })
+
+	// The right port, while another Mac restarts too: it does not count.
+	boots["m3"] = l.bootOf("m3")
+	go func() {
+		for n, _ := l.oob.resetsSent(); n < 2; n, _ = l.oob.resetsSent() {
+			time.Sleep(5 * time.Millisecond)
+		}
+		third.PowerCycle()
+	}()
+	r, body = l.resetAs(harnessToken, "m2-max", "middle")
+	if r.StatusCode != http.StatusConflict || !strings.Contains(body, "did not count") || !strings.Contains(body, "m3 restarted too") {
+		t.Fatalf("a Proving reset while another Mac restarted: %s %s", r.Status, body)
+	}
+	l.wantResets("another Mac restarted too", portLeft, portMiddle)
+	if _, ok := l.s.cables.of("m2-max"); ok {
+		t.Fatal("a Proving reset during which another Mac restarted placed the Mac")
+	}
+	l.waitDeviceJSON("m3", func(m map[string]any) bool { return m["alive"] == true && m["state"] != string(api.StateRecovering) })
+	l.waitDeviceJSON("m2-max", func(m map[string]any) bool { return m["alive"] == true && m["state"] != string(api.StateRecovering) })
+
+	// The right port and a quiet fleet: that Mac returns, every other Mac
+	// keeps its boot id, and the Mac is placed.
+	boots = map[string]string{l.name: l.bootOf(l.name), "m2-max": l.bootOf("m2-max"), "m3": l.bootOf("m3")}
+	r, body = l.resetAs(harnessToken, "m2-max", "middle")
+	var proved api.Proving
+	if r.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &proved) != nil || proved.Device != "m2-max" || proved.Port != "middle" || !proved.Cable.Proved {
+		t.Fatalf("a Proving reset of its own port: %s %s", r.Status, body)
+	}
+	l.wantResets("its own port", portLeft, portMiddle, portMiddle)
+	if l.bootOf("m2-max") == boots["m2-max"] || l.bootOf(l.name) != boots[l.name] || l.bootOf("m3") != boots["m3"] {
+		t.Fatal("the Proving reset counted though the boot ids say otherwise")
+	}
+	sg, ok := l.s.cables.of("m2-max")
+	if !ok || sg.rid != portMiddle || !sg.proved || sg.seen != (oob.Seen{ProductID: productM2Max, PlugCount: 43}) {
+		t.Fatalf("the Sighting a Proving reset made: %+v %v", sg, ok)
+	}
+	l.wantCable("m2-max", api.CableSighted)
+	if c := l.cableOf("m2-max"); c["port"] != "middle" || c["proved"] != true {
+		t.Fatalf("the cable as shown: %v", c)
+	}
+	// A look at the ports keeps it: the port shows no name, and has not changed.
+	l.sight()
+	if _, ok := l.s.cables.of("m2-max"); !ok {
+		t.Fatal("the next look dropped the Sighting a Proving reset made")
+	}
+
+	// Now a Hard reset reaches it, and only it.
+	l.waitDeviceJSON("m2-max", func(m map[string]any) bool { return m["alive"] == true && m["state"] != string(api.StateRecovering) })
+	boot := l.bootOf("m2-max")
+	if r, body := l.resetAs(harnessToken, "m2-max", ""); r.StatusCode != http.StatusOK || !strings.Contains(body, "through the middle port") {
+		t.Fatalf("a Hard reset of the placed Mac: %s %s", r.Status, body)
+	}
+	l.wantResets("the placed Mac", portLeft, portMiddle, portMiddle, portMiddle)
+	l.waitDeviceJSON("m2-max", func(m map[string]any) bool { return m["boot_id"] != boot && m["alive"] == true })
+
+	// Its cable pulled: the placing is gone with it.
+	l.oob.plug(portMiddle, max, "", productM2Max)
+	l.sight()
+	l.wantCable("m2-max", api.CableNotSighted, "its Sighting was dropped", "plug count")
+}
+
+// With the controller unhealthy: a reset is refused with the reason, the
+// Mac is shown as having no Hard reset, jobs still run, and a line is
+// written for "Agents", once.
+func TestWithTheControllerUnhealthyNoMacGetsAHardResetAndJobsStillRun(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	const unhealthy = "The Out-of-band controller on the mini is not healthy"
+	if lines := l.agentsLines(); has(lines, "Out-of-band controller") {
+		t.Fatalf("a healthy controller was told of: %q", lines)
+	}
+
+	l.oob.stop(true)
+	l.sight()
+	l.wantCable(l.name, api.CableSighted, "the Out-of-band controller is not healthy")
+	if tier := l.deviceJSON(l.name)["tier"]; tier == float64(2) {
+		t.Fatal("the Mac is still shown as having a Hard reset")
+	}
+	if r, body := l.resetAs(harnessToken, l.name, ""); r.StatusCode != http.StatusServiceUnavailable ||
+		!strings.Contains(body, "no Hard reset was sent: the Out-of-band controller is not healthy") {
+		t.Fatalf("a Hard reset with the controller stopped: %s %s", r.Status, body)
+	}
+	if r, body := l.resetAs(harnessToken, l.name, "left"); r.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "not healthy") {
+		t.Fatalf("a Proving reset with the controller stopped: %s %s", r.Status, body)
+	}
+	l.sight()
+	l.sight()
+	var told int
+	for _, line := range l.agentsLines() {
+		if strings.Contains(line, unhealthy) {
+			told++
+			if !strings.Contains(line, "No Mac gets a Hard reset until it does; jobs still run.") {
+				t.Fatalf("the line: %q", line)
+			}
+		}
+	}
+	if told != 1 {
+		t.Fatalf("\"Agents\" was told %d times, want once: %q", told, l.agentsLines())
+	}
+
+	// Jobs still run.
+	l.expect(l.run(api.JobSpec{Kernel: l.artifact("krel=7.2-while-unhealthy behavior=ok")}), api.OutcomePass)
+	l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
+
+	// The ladder skips the rung and says why.
+	v := l.s.dev(l.name)
+	go l.sim.Quiet(time.Minute)
+	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+	steps, ok := v.ladder(context.Background(), "lost during a test", time.Second, false)
+	if ok || !has(steps, "no Hard reset: the Out-of-band controller is not healthy") {
+		t.Fatalf("the ladder with the controller stopped: %v %v", ok, steps)
+	}
+	if d := v.snapshot(); d.State != api.StateNeedsHands || d.Action == nil || !strings.Contains(d.Action.Why, "No Hard reset was sent: the Out-of-band controller is not healthy") {
+		t.Fatalf("after the ladder: %s %+v", d.State, d.Action)
+	}
+	l.wantResets("the controller was stopped")
+
+	l.oob.stop(false)
+	l.sight()
+	l.sight()
+	l.wantCable(l.name, api.CableSighted)
+	lines := l.agentsLines()
+	if last := lines[len(lines)-1]; last != "The Out-of-band controller on the mini answers again." || told != 1 {
+		t.Fatalf("after it answered again: %q", lines)
+	}
+}
+
+// A lab with no Out-of-band controller, and a controller that was never set
+// up, are no trouble to tell "Agents" of: no Mac has a Hard reset, and each
+// says why.
+func TestALabWithNoControllerSendsNoHardResetAndSaysWhy(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	l.wantCable(l.name, api.CableNone, "labd was given no Out-of-band controller")
+	if r, body := l.resetAs(harnessToken, l.name, ""); r.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "labd was given no Out-of-band controller") {
+		t.Fatalf("a Hard reset: %s %s", r.Status, body)
+	}
+	if r, body := l.resetAs(harnessToken, l.name, "left"); r.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "no Proving reset was sent") {
+		t.Fatalf("a Proving reset: %s %s", r.Status, body)
+	}
+
+	mini := newFakeMini(t)
+	missing := *mini.client
+	missing.TokenFile += ".not-yet"
+	set := newLabWith(t, labConfig{config: func(c *Config) { c.OOB, c.SightEvery = &missing, time.Hour }})
+	mini.plug(portRight, set.sim, set.name, productM1Pro)
+	set.sight()
+	set.wantCable(set.name, api.CableNotSighted, "the Out-of-band controller is not set up", "its token is not at")
+	if r, body := set.resetAs(harnessToken, set.name, ""); r.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "is not set up") {
+		t.Fatalf("a Hard reset before the controller is set up: %s %s", r.Status, body)
+	}
+	if lines := set.agentsLines(); has(lines, "Out-of-band controller") {
+		t.Fatalf("a controller that is not set up yet was told of: %q", lines)
+	}
+}
+
+// `lab oob` and `lab status` are told sighted, not sighted or no cable.
+func TestTheLabSaysSightedNotSightedOrNoCable(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	other := l.addMac("m2-max")
+	status := func(token, name string) api.OOBStatus {
+		t.Helper()
+		r, body := l.as(token, "GET", "/api/devices/"+name+"/oob", nil)
+		var st api.OOBStatus
+		if r.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &st) != nil {
+			t.Fatalf("the cable of %s: %s %s", name, r.Status, body)
+		}
+		return st
+	}
+
+	// Every connected port is another Mac's: no cable can be this one's.
+	l.wantCable("m2-max", api.CableNone, "no cable can be the one of m2-max")
+	st := status(harnessToken, "m2-max")
+	if st.Cable == nil || st.Cable.State != api.CableNone || st.Controller != api.ControllerHealthy || len(st.Ports) != 3 {
+		t.Fatalf("no cable: %+v", st)
+	}
+	if p := st.Ports[2]; p.Port != "right" || !p.Connected || p.Mac != l.name || p.Name != l.name || p.ProductID != productM1Pro || p.PlugCount != 41 {
+		t.Fatalf("the right port as shown: %+v", p)
+	}
+	if p := st.Ports[0]; p.Port != "left" || p.Connected || p.Mac != "" {
+		t.Fatalf("the left port as shown: %+v", p)
+	}
+
+	// A connected port with nothing sighted on it could be its cable.
+	l.oob.plug(portLeft, other, "", productM2Max)
+	l.sight()
+	if st = status(harnessToken, "m2-max"); st.Cable.State != api.CableNotSighted || !strings.Contains(st.Cable.NoHardReset, "--prove left") {
+		t.Fatalf("not sighted: %+v", st.Cable)
+	}
+
+	l.oob.shows(portLeft, "m2-max")
+	l.sight()
+	if st = status(harnessToken, "m2-max"); st.Cable.State != api.CableSighted || st.Cable.Port != "left" || st.Cable.NoHardReset != "" || st.Cable.Since.IsZero() {
+		t.Fatalf("sighted: %+v", st.Cable)
+	}
+	if st = status(harnessToken, l.name); st.Cable.State != api.CableSighted || st.Cable.Port != "right" {
+		t.Fatalf("the first Mac: %+v", st.Cable)
+	}
+}
