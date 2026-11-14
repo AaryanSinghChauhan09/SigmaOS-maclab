@@ -835,9 +835,12 @@ type identityRead struct {
 	files map[string][]byte
 }
 
+// An observation with the kernel's file hashes is about a megabyte, beside
+// the check's log.
 const (
 	identityReadPrefix = "freeze-"
-	identityReadMax    = 16 << 20
+	identityReadMax    = 8 << 20
+	identityReadFiles  = 4
 )
 
 // readIdentity has v's lab-agent run the lab's read-only identity check
@@ -899,7 +902,11 @@ func (s *Server) takeObservation(w http.ResponseWriter, r *http.Request, v *dev,
 	}
 	v.mu.Lock()
 	if ok = reading(); ok {
-		v.reading.files[name] = b
+		if _, again := v.reading.files[name]; !again && len(v.reading.files) >= identityReadFiles {
+			ok = false
+		} else {
+			v.reading.files[name] = b
+		}
 	}
 	v.mu.Unlock()
 	if !ok {
