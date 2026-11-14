@@ -9,6 +9,9 @@
 <a class="chip{{if eq .Show "mine"}} current{{end}}" href="{{href "/macs?show=mine"}}">Mine</a>
 <a class="chip{{if eq .Show "leased"}} current{{end}}" href="{{href "/macs?show=leased"}}">Leased by me</a>
 </nav>
+{{- if eq .Show "mine"}}
+<p class="dim">A Mac of your own joins from <a href="{{href "/lend"}}">Lend a Mac</a>.</p>
+{{- end}}
 {{- if .Empty}}
 <p class="dim">{{.Empty}}</p>
 {{- else}}
