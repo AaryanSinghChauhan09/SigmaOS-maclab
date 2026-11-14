@@ -108,6 +108,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ou
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Accept", heldType+", application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -116,7 +117,14 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ou
 		return err
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	var b []byte
+	if resp.StatusCode == 200 && held(resp) {
+		if b, err = heldResult(resp.Body); err != nil {
+			return err
+		}
+	} else {
+		b, _ = io.ReadAll(resp.Body)
+	}
 	if resp.StatusCode != 200 {
 		return &StatusError{Code: resp.StatusCode, Msg: strings.TrimSpace(string(b))}
 	}
@@ -498,6 +506,9 @@ func (c *Client) Installed(ctx context.Context, method, release, what string, bo
 	if what != "" {
 		p += "/" + what
 	}
+	if strings.HasPrefix(what, "entry/") {
+		return c.once(ctx, method, p, r, out, "the freeze")
+	}
 	return c.do(ctx, method, p, r, out)
 }
 
@@ -505,7 +516,10 @@ func (c *Client) CancelBuild(ctx context.Context, id string) error {
 	return c.do(ctx, "POST", "/api/builds/"+url.PathEscape(id)+"/cancel", nil, nil)
 }
 
+// Exec runs a command on a Mac and waits for its result. The request goes
+// out once: if the answer is cut the command may be running on the Mac, and
+// the error is ErrCut.
 func (c *Client) Exec(ctx context.Context, device string, a api.ExecArgs) (*api.ExecResult, error) {
 	var out api.ExecResult
-	return &out, c.do(ctx, "POST", "/api/devices/"+url.PathEscape(device)+"/exec", jsonBody(a), &out)
+	return &out, c.once(ctx, "POST", "/api/devices/"+url.PathEscape(device)+"/exec", jsonBody(a), &out, "the command")
 }

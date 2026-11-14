@@ -1176,6 +1176,16 @@ type ExecResult struct {
 	Via      string  `json:"via"` // agent or serial
 }
 
+// HeldLine is the last line of a held response's stream
+// (application/x-ndjson): the result, or the error and the status labd would
+// have answered with had the response not already begun. The lines before it
+// are Keepalives, each an empty line.
+type HeldLine struct {
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  string          `json:"error,omitempty"`
+	Status int             `json:"status,omitempty"`
+}
+
 // ---- release gate: a kernel's results across the supported chip families ----
 
 // Gate results: of a run, a chip family, and the whole gate.

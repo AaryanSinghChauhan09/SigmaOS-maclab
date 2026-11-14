@@ -94,10 +94,10 @@ func (s *Server) hStream(w http.ResponseWriter, r *http.Request) {
 	serial := c.maintainer != ""
 	sb := s.hub.subscribe(r.URL.Query().Get("device"))
 	defer s.hub.unsubscribe(sb)
-	fmt.Fprint(w, ": maclab stream\n\n")
-	fl.Flush()
 	keep := s.clock().NewTicker(15 * time.Second)
 	defer keep.Stop()
+	fmt.Fprint(w, ": maclab stream\n\n")
+	fl.Flush()
 	for {
 		select {
 		case <-r.Context().Done():

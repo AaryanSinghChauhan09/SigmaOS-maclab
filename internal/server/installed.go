@@ -803,27 +803,25 @@ func (s *Server) hFreezeEntry(w http.ResponseWriter, r *http.Request) {
 	}
 	script := installed.Script("freeze", device, m.Kernel.Release, "", nil, false)
 	cmd := "export MACLAB_OUT=$(mktemp -d); MACLAB_JOB= bash -s >&2 <<'MACLAB_FREEZE_EOF'\n" + script + "MACLAB_FREEZE_EOF\ncat \"$MACLAB_OUT/observed.json\"; rm -rf \"$MACLAB_OUT\""
-	var res api.ExecResult
-	if err := v.call(r.Context(), api.CmdExec, "", api.ExecArgs{Command: cmd, TimeoutSec: 300}, 6*time.Minute, &res); err != nil {
-		httpErr(w, 502, "%v", err)
-		return
-	}
-	var o installed.Observed
-	if err := json.Unmarshal([]byte(res.Stdout), &o); err != nil {
-		httpErr(w, 502, "collector output: %v (stderr: %s)", err, lastLine(res.Stderr))
-		return
-	}
-	e, err := installed.FreezeEntry(&o, &m)
-	if err != nil {
-		httpErr(w, 409, "%v", err)
-		return
-	}
-	esha, pins, err := s.freezeEntry(dir, device, msha, e)
-	if err != nil {
-		httpErr(w, 409, "%v", err)
-		return
-	}
-	writeJSON(w, map[string]any{"device": device, "release": release, "entry": e, "entry_sha256": esha, "pins": pins})
+	s.held(w, r, func() (any, error) {
+		var res api.ExecResult
+		if err := v.call(r.Context(), api.CmdExec, "", api.ExecArgs{Command: cmd, TimeoutSec: 300}, 6*time.Minute, &res); err != nil {
+			return nil, err
+		}
+		var o installed.Observed
+		if err := json.Unmarshal([]byte(res.Stdout), &o); err != nil {
+			return nil, refuse(502, "collector output: %v (stderr: %s)", err, lastLine(res.Stderr))
+		}
+		e, err := installed.FreezeEntry(&o, &m)
+		if err != nil {
+			return nil, refuse(409, "%v", err)
+		}
+		esha, pins, err := s.freezeEntry(dir, device, msha, e)
+		if err != nil {
+			return nil, refuse(409, "%v", err)
+		}
+		return map[string]any{"device": device, "release": release, "entry": e, "entry_sha256": esha, "pins": pins}, nil
+	})
 }
 
 // freezeEntry writes a device's installer entry into the frozen store, once,

@@ -17,7 +17,8 @@ import (
 
 // hExec runs a shell command on a Mac, as root: through the agent when the
 // Mac is on the network, otherwise through the serial shell. This is what
-// agents use instead of ssh.
+// agents use instead of ssh. The answer is held until the command ends (see
+// held): cutting it does not stop the command on the Mac.
 func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 	v := s.devOr404(w, r)
 	if v == nil {
@@ -38,24 +39,25 @@ func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 	v.mu.Lock()
 	alive, ctl := v.aliveLocked(), v.effectiveOOBLocked()
 	v.mu.Unlock()
-	var res api.ExecResult
-	var err error
-	switch {
-	case alive:
-		err = v.call(r.Context(), api.CmdExec, "", a, time.Duration(a.TimeoutSec+30)*time.Second, &res)
-		res.Via = "agent"
-	case ctl != nil:
-		res, err = v.execOOB(r.Context(), a)
-		res.Via = "serial"
-	default:
+	if !alive && ctl == nil {
 		httpErr(w, 409, "%s is offline and has no serial console", v.d.Name)
 		return
 	}
-	if err != nil {
-		httpErr(w, 502, "%v", err)
-		return
-	}
-	writeJSON(w, res)
+	s.held(w, r, func() (any, error) {
+		var res api.ExecResult
+		var err error
+		if alive {
+			err = v.call(r.Context(), api.CmdExec, "", a, time.Duration(a.TimeoutSec+30)*time.Second, &res)
+			res.Via = "agent"
+		} else {
+			res, err = v.execOOB(r.Context(), a)
+			res.Via = "serial"
+		}
+		if err != nil {
+			return nil, err
+		}
+		return res, nil
+	})
 }
 
 var (
