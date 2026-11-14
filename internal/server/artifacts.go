@@ -410,7 +410,7 @@ func (s *Server) openUpload(w http.ResponseWriter, r *http.Request) (u partUploa
 }
 
 func (s *Server) hPutPart(w http.ResponseWriter, r *http.Request) {
-	u, _, _, ok := s.openUpload(w, r)
+	u, c, _, ok := s.openUpload(w, r)
 	if !ok {
 		return
 	}
@@ -427,12 +427,16 @@ func (s *Server) hPutPart(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "part %d of upload %s is %d bytes, not %d", n, short(u.SHA256), u.partLen(n), r.ContentLength)
 		return
 	}
-	if err := u.put(n, r.Body); err != nil {
-		if errors.Is(err, io.ErrUnexpectedEOF) {
+	defer interruptReadsOnCancel(w, r.Context())()
+	if err := u.put(n, ctxReader{r.Context(), r.Body}); err != nil {
+		switch {
+		case !c.shared() && r.Context().Err() != nil:
+			httpErr(w, 403, "%v", errBuilderRemoved)
+		case errors.Is(err, io.ErrUnexpectedEOF):
 			httpErr(w, 400, "part %d was cut short: send it again", n)
-			return
+		default:
+			httpErr(w, 500, "%v", err)
 		}
-		httpErr(w, 500, "%v", err)
 		return
 	}
 	writeJSON(w, map[string]int{"part": n})

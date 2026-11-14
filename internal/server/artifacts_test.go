@@ -681,3 +681,50 @@ func TestAOneGBUploadCutInTheMiddleOfAPartResumesAndItsChecksumMatches(t *testin
 	}
 	cutAndResume(t, Transfers{PartBytes: 32 << 20}, path, hex.EncodeToString(h.Sum(nil)), 32, 17)
 }
+
+// Removing a builder ends a part it is sending, even one whose sender has
+// stalled mid-body, and the part is not held.
+func TestRemovingABuilderMidPart(t *testing.T) {
+	b := transferLab(t, Transfers{}, nil)
+	a := b.addBuilder("a")
+	k := b.queue("")
+	b.poll(a, "", 5*time.Second)
+	data := partsContent(2500)
+	sha := artifactSHA(data)
+	if _, code := b.startUpload(a, "/api/builder/artifacts/uploads?build="+k.ID, data); code != 200 {
+		t.Fatalf("start: %d", code)
+	}
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	answered := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequestWithContext(b.ctx, "PUT", b.url+"/api/builder/artifacts/uploads/"+sha+"/parts/1?build="+k.ID, pr)
+		req.ContentLength = 1000
+		req.Header.Set("Authorization", "Bearer "+a)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			answered <- 0
+			return
+		}
+		resp.Body.Close()
+		answered <- resp.StatusCode
+	}()
+	pw.Write(data[:500])
+	time.Sleep(300 * time.Millisecond) // labd has read that and waits for more
+	if code := b.call("DELETE", "/api/builders/a", "mtok", nil, nil); code != 200 {
+		t.Fatalf("remove: %d", code)
+	}
+	select {
+	case code := <-answered:
+		if code == 200 {
+			t.Fatal("a removed builder's part was accepted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stalled part outlived its builder")
+	}
+	go pw.Write(data[500:1000])
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(b.s.partUploadDir(k.ID, sha), "1")); err == nil {
+		t.Fatal("labd holds a part its builder was removed while sending")
+	}
+}
