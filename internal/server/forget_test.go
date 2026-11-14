@@ -19,7 +19,7 @@ import (
 func (l *lab) adminDo(method, path string) int {
 	l.t.Helper()
 	req, _ := http.NewRequest(method, l.url+path, nil)
-	req.Header.Set("Authorization", "Bearer admin")
+	req.Header.Set("Authorization", "Bearer "+harnessToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		l.t.Fatal(err)
@@ -90,7 +90,7 @@ func TestForgetDeviceTwiceAtOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			req, _ := http.NewRequest("DELETE", l.url+"/api/devices/"+l.name+"?force=1", nil)
-			req.Header.Set("Authorization", "Bearer admin")
+			req.Header.Set("Authorization", "Bearer "+harnessToken)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				codes <- 0
@@ -149,7 +149,7 @@ func TestForgetThenLateSave(t *testing.T) {
 	// What labd loads when it starts again.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s2, err := New(ctx, Config{DataDir: l.s.cfg.DataDir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: harnessToken}, log.New(io.Discard, "", 0))
+	s2, err := newWith(harnessMaintainer, harnessToken, ctx, Config{DataDir: l.s.cfg.DataDir}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestPublishForgottenMacsReport(t *testing.T) {
 	defer site.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: harnessMaintainer, FirstMaintainerToken: harnessToken, OMTSite: site.URL}, log.New(io.Discard, "", 0))
+	s, err := newWith(harnessMaintainer, harnessToken, ctx, Config{DataDir: t.TempDir(), OMTSite: site.URL}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestPublishForgottenMacsReport(t *testing.T) {
 	}
 	admin := func(method, path string) (int, string) {
 		req, _ := http.NewRequest(method, hs.URL+path, nil)
-		req.Header.Set("Authorization", "Bearer admin")
+		req.Header.Set("Authorization", "Bearer "+harnessToken)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("%s %s: %v", method, path, err) // the handler panicked

@@ -65,7 +65,7 @@ func TestScope(t *testing.T) {
 // person without a Maintainer's token in. A new route a person may reach
 // changes this list on purpose.
 func TestRoutesDeclareReach(t *testing.T) {
-	s, err := New(context.Background(), Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret"}, log.New(io.Discard, "", 0))
+	s, err := newWith("ada", "lab_adm_secret", context.Background(), Config{DataDir: t.TempDir()}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestPersonSeesOnlyTheirOwnMacs(t *testing.T) {
 		}
 		return nil, fmt.Errorf("no match for IP")
 	}
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", Person: personAt(whois)},
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(), Person: personAt(whois)},
 		log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestPersonSeesOnlyTheirOwnMacs(t *testing.T) {
 	if got := names(other, ""); !slices.Equal(got, []string{"theirs"}) {
 		t.Errorf("the other Volunteer lists %q, want only theirs", got)
 	}
-	if got := names(visitor, "adm_secret"); !slices.Equal(got, []string{"lab", "mine", "theirs"}) {
+	if got := names(visitor, "lab_adm_secret"); !slices.Equal(got, []string{"lab", "mine", "theirs"}) {
 		t.Errorf("a Maintainer lists %q, want the whole fleet", got)
 	}
 	if got := jobs(visitor, "", ""); !slices.Equal(got, []string{"j-mine"}) {
@@ -207,7 +207,7 @@ func TestPersonSeesOnlyTheirOwnMacs(t *testing.T) {
 	if got := jobs(visitor, "", "?device=lab"); len(got) != 0 {
 		t.Errorf("the visitor's jobs on the Lab-owned Mac: %q", got)
 	}
-	if got := jobs(visitor, "adm_secret", ""); len(got) != 3 {
+	if got := jobs(visitor, "lab_adm_secret", ""); len(got) != 3 {
 		t.Errorf("a Maintainer's jobs: %q", got)
 	}
 
@@ -236,8 +236,8 @@ func TestPersonSeesOnlyTheirOwnMacs(t *testing.T) {
 		{"a tagged device reads a job", "/api/jobs/j-lab", tagged, "", 401},
 		{"a Mac's device secret lists Macs", "/api/devices", "10.1.1.42:1", secret, 401},
 		{"a Mac's device secret reads a job", "/api/jobs/j-lab", "10.1.1.42:1", secret, 401},
-		{"a Maintainer reads any Mac", "/api/devices/lab", visitor, "adm_secret", 200},
-		{"a Maintainer reads any journal", "/api/jobs/j-theirs/files/journal", visitor, "adm_secret", 200},
+		{"a Maintainer reads any Mac", "/api/devices/lab", visitor, "lab_adm_secret", 200},
+		{"a Maintainer reads any journal", "/api/jobs/j-theirs/files/journal", visitor, "lab_adm_secret", 200},
 	} {
 		if w := do("GET", c.path, c.remote, c.token, ""); w.Code != c.want {
 			t.Errorf("%s: GET %s got %d %s, want %d", c.name, c.path, w.Code, w.Body, c.want)
@@ -321,7 +321,7 @@ func TestPersonSeesOnlyTheirOwnMacs(t *testing.T) {
 	if w := do("GET", "/api/devices/lab/screens/old.jpg", visitor, "", ""); w.Code == 200 {
 		t.Errorf("the new lab's Volunteer reads the old lab's screen: %d", w.Code)
 	}
-	if w := do("GET", "/api/jobs/j-lab", visitor, "adm_secret", ""); w.Code != 200 {
+	if w := do("GET", "/api/jobs/j-lab", visitor, "lab_adm_secret", ""); w.Code != 200 {
 		t.Errorf("a Maintainer reads the old lab's job: %d, want 200", w.Code)
 	}
 }

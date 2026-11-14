@@ -35,14 +35,10 @@ import (
 )
 
 type Config struct {
-	DataDir string
-	// FirstMaintainer and FirstMaintainerToken name the Maintainer a labd
-	// with none starts with: on upgrade, whoever held the old admin token.
-	FirstMaintainer      string
-	FirstMaintainerToken string
-	Interval             time.Duration // agent heartbeat interval
-	BootTimeout          time.Duration // default time for a Mac to come back after a reboot
-	OfflineAfter         time.Duration
+	DataDir      string
+	Interval     time.Duration // agent heartbeat interval
+	BootTimeout  time.Duration // default time for a Mac to come back after a reboot
+	OfflineAfter time.Duration
 	// AliveWindow and QuietGrace are timeouts that assume a LAN, as
 	// StageTimeout below does; a Mac far from labd needs them longer. Zero
 	// keeps the LAN default; labd's flags default to remote-sized values.
@@ -288,8 +284,8 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	if s.site, err = web.New(s.basePath()); err != nil {
 		return nil, err
 	}
-	if err := s.firstMaintainer(); err != nil {
-		return nil, err
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "admin.token")); err == nil {
+		logger.Printf("%s is ignored: the admin token is retired, and the file can be deleted", filepath.Join(cfg.DataDir, "admin.token"))
 	}
 	rows, err := st.devices()
 	if err != nil {
@@ -699,9 +695,9 @@ func (s *Server) routes() []route {
 		{"DELETE /api/builders/{name}", maintainers, s.hRemoveBuilder},
 		{"POST /api/devices/{name}/exec", maintainers, s.hExec},
 		{"GET /api/devices/{name}/audit", maintainers, s.hAudit},
-		{"GET /api/maintainers", maintainers, s.hMaintainers},
-		{"POST /api/maintainers", maintainers, s.adminOnly(s.hAddMaintainer)},
-		{"DELETE /api/maintainers/{name}", maintainers, s.adminOnly(s.hRemoveMaintainer)},
+		{"GET /api/maintainers", maintainers, s.hMaintainersGone},
+		{"POST /api/maintainers", maintainers, s.hMaintainersGone},
+		{"DELETE /api/maintainers/{name}", maintainers, s.hMaintainersGone},
 	}
 }
 
@@ -718,11 +714,21 @@ func bearer(r *http.Request) string {
 	return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 }
 
-// hAuth tells a browser who it is to labd. Signed in, it names the person,
-// their kind and whether they are a Maintainer. Sent with a Maintainer's
-// token, it names its Maintainer. With neither, and while labd knows nobody
-// any other way (Config.Person), there is nothing to say: labd answers 404.
+// hAuth tells a caller who it is to labd. Signed in with a browser, or sent
+// with a Lab token, it names the person, their kind and whether they are a
+// Maintainer. With neither, and while labd knows nobody any other way
+// (Config.Person), there is nothing to say: labd answers 404.
 func (s *Server) hAuth(w http.ResponseWriter, r *http.Request) {
+	if u := tokenUseOf(r); u != nil {
+		if u.expired {
+			s.noCredential(w, r)
+			return
+		}
+		role := map[bool]string{true: "admin"}[u.isMaintainer()]
+		writeJSON(w, map[string]any{"trusted": u.isMaintainer(), "token_required": false, "role": role,
+			"login": u.Handle, "kind": u.Kind(), "account_id": u.AccountID})
+		return
+	}
 	if si := signedInOf(r); si != nil {
 		role := map[bool]string{true: "admin"}[si.isMaintainer()]
 		writeJSON(w, map[string]any{"trusted": si.isMaintainer(), "token_required": !si.isMaintainer(), "role": role,

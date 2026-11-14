@@ -460,10 +460,8 @@ func TestOnlyAMaintainerCanEndAnEnrollmentNotAMacNorAnUnknownToken(t *testing.T)
 
 func TestRemovedMaintainersTokenCannotEndAnEnrollment(t *testing.T) {
 	n, grace := leavingLab(t, labConfig{})
-	if r, body := n.as(harnessToken, "DELETE", "/api/maintainers/"+leavingMaintainer, nil); r.StatusCode/100 != 2 {
-		t.Fatalf("removing %s: %s %s", leavingMaintainer, r.Status, body)
-	}
-	if r, _ := n.leavingEnd(grace, n.name); r.StatusCode != 401 {
+	n.removeMaintainer(leavingMaintainer)
+	if r, _ := n.leavingEnd(grace, n.name); r.StatusCode != 403 {
 		t.Fatalf("a removed Maintainer ended an enrollment: %s", r.Status)
 	}
 	n.leavingStillEnrolled()

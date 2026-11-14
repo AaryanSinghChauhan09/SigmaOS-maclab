@@ -230,7 +230,7 @@ func TestSignInMakesAPersonByAccountID(t *testing.T) {
 	if me := b.whoami(); me.Login != "ada-lovelace" {
 		t.Errorf("the first browser still reads %+v", me)
 	}
-	if n := l.count(`SELECT count(*) FROM people`); n != 1 {
+	if n := l.count(`SELECT count(*) FROM people WHERE account_id != ?`, testAccount("ada")); n != 1 {
 		t.Errorf("%d people after one account signed in twice under two handles", n)
 	}
 	if n := l.count(`SELECT count(*) FROM people WHERE account_id = 7 AND handle = 'ada-lovelace'`); n != 1 {
@@ -411,10 +411,10 @@ func TestARoleChangeTakesEffectOnTheNextRequest(t *testing.T) {
 	if me := owner.whoami(); me.Kind != "Admin" || me.Login != "owner" {
 		t.Errorf("the account the configuration names reads as %+v", me)
 	}
-	if w := owner.do("GET", "/api/maintainers", ""); w.Code != http.StatusOK {
+	if w := owner.do("GET", "/api/builders", ""); w.Code != http.StatusOK {
 		t.Errorf("an Admin on a Maintainer's route: %d %s", w.Code, w.Body)
 	}
-	if n := l.count(`SELECT count(*) FROM people WHERE maintainer != 0`); n != 0 {
+	if n := l.count(`SELECT count(*) FROM people WHERE maintainer != 0 AND account_id != ?`, testAccount("ada")); n != 0 {
 		t.Errorf("%d people stored as Maintainers: the Admin is named in the configuration, on no screen", n)
 	}
 }
@@ -608,11 +608,11 @@ func TestABrowsersWriteMustComeFromTheLabsOwnPages(t *testing.T) {
 		if w := out.do("POST", "/sign-out", "", hdr...); w.Code != http.StatusForbidden {
 			t.Errorf("a signed-out write with %v: %d %s", hdr, w.Code, w.Body)
 		}
-		if w := out.do("POST", "/api/enroll-tokens", `{"name":"m4"}`, append([]string{"Authorization", "Bearer adm_secret"}, hdr...)...); w.Code != http.StatusForbidden {
+		if w := out.do("POST", "/api/enroll-tokens", `{"name":"m4"}`, append([]string{"Authorization", "Bearer lab_adm_secret"}, hdr...)...); w.Code != http.StatusForbidden {
 			t.Errorf("a token's write with %v: %d %s", hdr, w.Code, w.Body)
 		}
 	}
-	if w := out.do("POST", "/api/enroll-tokens", `{"name":"m4"}`, "Authorization", "Bearer adm_secret"); w.Code != http.StatusOK {
+	if w := out.do("POST", "/api/enroll-tokens", `{"name":"m4"}`, "Authorization", "Bearer lab_adm_secret"); w.Code != http.StatusOK {
 		t.Errorf("the CLI's write, by its token: %d %s", w.Code, w.Body)
 	}
 }
@@ -649,7 +649,7 @@ func TestGitHubsRefusalSignsNobodyIn(t *testing.T) {
 	if w := b.do("GET", u.Path+"?"+q.Encode(), ""); w.Code != http.StatusBadGateway || b.session() != nil {
 		t.Errorf("a callback with a code GitHub never gave: %d %s", w.Code, w.Body)
 	}
-	if n := l.count(`SELECT count(*) FROM people`); n != 0 {
+	if n := l.count(`SELECT count(*) FROM people WHERE account_id != ?`, testAccount("ada")); n != 0 {
 		t.Errorf("%d people after nobody signed in", n)
 	}
 }
@@ -677,37 +677,35 @@ func TestAnAdminIsWhoeverTheConfigurationNamesNow(t *testing.T) {
 	}
 }
 
-// Only an Admin adds and removes Maintainers: a Maintainer signed in with a
-// browser sees who they are and changes none of them.
-func TestOnlyAnAdminsBrowserAddsAndRemovesMaintainers(t *testing.T) {
+// No route of labd's makes or removes a Maintainer any more: maclab's three
+// answer that they are gone, to a Maintainer and to an Admin alike, and
+// change nobody. Only an Admin adds and removes Maintainers, on People.
+func TestNoRouteAddsOrRemovesAMaintainer(t *testing.T) {
 	l := newSignInLab(t, nil)
 	l.gh.AddUser(8, "grace")
-	b := l.browser()
-	b.mustSignIn(8)
+	grace, owner := l.browser(), l.browser()
+	grace.mustSignIn(8)
+	owner.mustSignIn(ownerID)
 	if err := l.s.setMaintainer(8, true); err != nil {
 		t.Fatal(err)
 	}
-	first := l.s.cfg.FirstMaintainer
-	if w := b.do("GET", "/api/maintainers", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), first) {
-		t.Fatalf("a Maintainer reading the Maintainers: %d %s", w.Code, w.Body)
+	before := l.count(`SELECT count(*) FROM people WHERE maintainer != 0`)
+	for who, b := range map[string]*browser{"a Maintainer": grace, "an Admin": owner} {
+		if w := b.do("GET", "/api/maintainers", ""); w.Code != http.StatusGone {
+			t.Errorf("%s reading maclab's Maintainers: %d %s", who, w.Code, w.Body)
+		}
+		if w := b.write("POST", "/api/maintainers", `{"name":"new"}`); w.Code != http.StatusGone || strings.Contains(w.Body.String(), "token\"") {
+			t.Errorf("%s adding a Maintainer: %d %s", who, w.Code, w.Body)
+		}
+		if w := b.write("DELETE", "/api/maintainers/grace", ""); w.Code != http.StatusGone {
+			t.Errorf("%s removing a Maintainer: %d %s", who, w.Code, w.Body)
+		}
 	}
-	if w := b.write("POST", "/api/maintainers", `{"name":"new"}`); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Admin") {
-		t.Errorf("a Maintainer adding a Maintainer: %d %s, want 403 naming the Admin", w.Code, w.Body)
+	if after := l.count(`SELECT count(*) FROM people WHERE maintainer != 0`); after != before || l.count(`SELECT count(*) FROM maintainers`) != 0 {
+		t.Errorf("the tries changed who is a Maintainer: %d people before, %d after", before, after)
 	}
-	if w := b.write("DELETE", "/api/maintainers/"+first, ""); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Admin") {
-		t.Errorf("a Maintainer removing a Maintainer: %d %s, want 403 naming the Admin", w.Code, w.Body)
-	}
-	if n, err := l.s.store.countMaintainers(); err != nil || n != 1 || !l.s.store.hasMaintainer(first) {
-		t.Fatalf("after a Maintainer's two tries there are %d Maintainers (%v), %s among them: %v", n, err, first, l.s.store.hasMaintainer(first))
-	}
-
-	owner := l.browser()
-	owner.mustSignIn(ownerID)
-	if w := owner.write("POST", "/api/maintainers", `{"name":"new"}`); w.Code != http.StatusOK {
-		t.Fatalf("an Admin adding a Maintainer: %d %s", w.Code, w.Body)
-	}
-	if w := owner.write("DELETE", "/api/maintainers/new", ""); w.Code != http.StatusOK {
-		t.Errorf("an Admin removing a Maintainer: %d %s", w.Code, w.Body)
+	if me := grace.whoami(); me.Kind != "Maintainer" {
+		t.Errorf("grace reads as %+v", me)
 	}
 }
 
@@ -732,7 +730,7 @@ func TestALabUnderDevelopmentSignsInOverLoopback(t *testing.T) {
 	defer fake.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret",
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(),
 		GitHub: &GitHubApp{ClientID: "id", ClientSecret: "secret", WebURL: fake.URL, APIURL: fake.URL}, Admins: []int64{5}}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)

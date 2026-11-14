@@ -12,7 +12,6 @@ import (
 	"database/sql"
 	"net/http"
 	"slices"
-	"strconv"
 	"time"
 )
 
@@ -39,10 +38,6 @@ func (p *Person) Kind() string {
 
 func (p *Person) isMaintainer() bool { return p.Admin || p.Maintainer }
 
-// connKey names the person's open requests in Server.conns. A Maintainer's
-// token goes by its name there, which has no colon.
-func (p *Person) connKey() string { return "account:" + strconv.FormatInt(p.AccountID, 10) }
-
 // sessionIdle is how long a browser session lasts unused. A use is written
 // down at most once in sessionTouch, so a page costs no write.
 const (
@@ -55,6 +50,11 @@ type signedIn struct {
 	Person
 	hash string // of the session id, as stored
 	csrf string
+}
+
+// connKeys are the names a request of this session is open under.
+func (si *signedIn) connKeys() []string {
+	return []string{accountConnKey(si.AccountID), browsersConnKey(si.AccountID), sessionConnKey(si.hash)}
 }
 
 type signedInKey struct{}
@@ -104,12 +104,18 @@ func (s *Server) sessionOf(value string) *signedIn {
 }
 
 // setMaintainer gives the person the Maintainer role or takes it away. It
-// holds from their next request, and their open streams end now.
+// holds from their next request, and their open streams end now. Taking it
+// away ends the leases they hold, which nobody else would release.
 func (s *Server) setMaintainer(accountID int64, on bool) error {
 	if err := s.store.setMaintainer(accountID, on); err != nil {
 		return err
 	}
-	s.conns.end((&Person{AccountID: accountID}).connKey())
+	s.conns.end(accountConnKey(accountID))
+	if !on {
+		if p, err := s.personNow(accountID); err == nil && !p.Admin {
+			s.endLeasesOf(p.Handle, "ended: @"+p.Handle+" is no longer a Maintainer")
+		}
+	}
 	return nil
 }
 

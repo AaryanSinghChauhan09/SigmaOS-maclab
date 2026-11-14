@@ -832,7 +832,7 @@ func TestGateEndpoint(t *testing.T) {
 	// lab gate --exclude is that query.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("MACLAB_URL", l.url)
-	t.Setenv("MACLAB_TOKEN", "admin")
+	t.Setenv("MACLAB_TOKEN", harnessToken)
 	c, err := client.Load()
 	if err != nil {
 		t.Fatal(err)

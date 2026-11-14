@@ -20,7 +20,7 @@ import (
 )
 
 // builderLab is a labd with no Macs, for builder tests: the shared builder
-// token is "bld", the first Maintainer's token "mtok".
+// token is "bld", the first Maintainer's token "lab_mtok".
 type builderLab struct {
 	t   *testing.T
 	ctx context.Context
@@ -44,7 +44,7 @@ func newBuilderLab(t *testing.T) *builderLab {
 
 // start (re)starts labd on b.dir.
 func (b *builderLab) start() {
-	s, err := New(b.ctx, Config{DataDir: b.dir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: "mtok", BuilderToken: "bld", Transfers: b.transfers},
+	s, err := newWith(harnessMaintainer, "lab_mtok", b.ctx, Config{DataDir: b.dir, BuilderToken: "bld", Transfers: b.transfers},
 		log.New(io.Discard, "", 0))
 	if err != nil {
 		b.t.Fatal(err)
@@ -90,7 +90,7 @@ func (b *builderLab) call(method, path, token string, body any, out any) int {
 
 func (b *builderLab) addBuilder(name string, kinds ...string) string {
 	var nb api.NewBuilder
-	if code := b.call("POST", "/api/builders", "mtok", api.BuilderRequest{Name: name, Kinds: kinds}, &nb); code != 200 {
+	if code := b.call("POST", "/api/builders", "lab_mtok", api.BuilderRequest{Name: name, Kinds: kinds}, &nb); code != 200 {
 		b.t.Fatalf("add builder %s: %d", name, code)
 	}
 	return nb.Token
@@ -167,7 +167,7 @@ func TestAddingANamedBuilder(t *testing.T) {
 		t.Fatalf("shared self: %d %+v", code, me)
 	}
 	var l []api.BuilderStatus
-	if b.call("GET", "/api/builders", "mtok", nil, &l); len(l) != 1 || l[0].Host != "m5mbp" || !l[0].Registered ||
+	if b.call("GET", "/api/builders", "lab_mtok", nil, &l); len(l) != 1 || l[0].Host != "m5mbp" || !l[0].Registered ||
 		l[0].AddedBy != harnessMaintainer || l[0].Alive || !l[0].LastSeen.IsZero() {
 		t.Fatalf("list %+v", l)
 	}
@@ -180,7 +180,7 @@ func TestAddingANamedBuilder(t *testing.T) {
 		{api.BuilderRequest{Name: ""}, 400},
 		{api.BuilderRequest{Name: "ok", Kinds: []string{"kernel", "root"}}, 400},
 	} {
-		if code := b.call("POST", "/api/builders", "mtok", c.req, nil); code != c.code {
+		if code := b.call("POST", "/api/builders", "lab_mtok", c.req, nil); code != c.code {
 			t.Errorf("%+v: %d, want %d", c.req, code, c.code)
 		}
 	}
@@ -329,7 +329,7 @@ func TestRemovingABuilder(t *testing.T) {
 	go func() { _, code := b.poll(a, "", 30*time.Second); polled <- code }()
 	time.Sleep(300 * time.Millisecond)
 	var rm api.RemovedBuilder
-	if code := b.call("DELETE", "/api/builders/a", "mtok", nil, &rm); code != 200 || rm.Removed != "a" ||
+	if code := b.call("DELETE", "/api/builders/a", "lab_mtok", nil, &rm); code != 200 || rm.Removed != "a" ||
 		strings.Join(rm.FailedBuilds, ",") != k.ID {
 		t.Fatalf("remove: %d %+v", code, rm)
 	}
@@ -347,11 +347,11 @@ func TestRemovingABuilder(t *testing.T) {
 	if code := b.call("GET", "/api/builder/self", a, nil, nil); code != 401 {
 		t.Errorf("removed token: %d", code)
 	}
-	if code := b.call("DELETE", "/api/builders/a", "mtok", nil, nil); code != 404 {
+	if code := b.call("DELETE", "/api/builders/a", "lab_mtok", nil, nil); code != 404 {
 		t.Errorf("remove again: %d", code)
 	}
 	var l []api.BuilderStatus
-	if b.call("GET", "/api/builders", "mtok", nil, &l); len(l) != 0 {
+	if b.call("GET", "/api/builders", "lab_mtok", nil, &l); len(l) != 0 {
 		t.Errorf("a removed builder is still listed: %+v", l)
 	}
 	// The same name again is a new builder: the old token stays dead, and the
@@ -390,7 +390,7 @@ func TestRemovingABuilderMidUpload(t *testing.T) {
 	}()
 	pw.Write(bytes.Repeat([]byte("k"), 1<<16))
 	time.Sleep(300 * time.Millisecond) // labd has read that and waits for more
-	if code := b.call("DELETE", "/api/builders/a", "mtok", nil, nil); code != 200 {
+	if code := b.call("DELETE", "/api/builders/a", "lab_mtok", nil, nil); code != 200 {
 		t.Fatalf("remove: %d", code)
 	}
 	select {
@@ -417,24 +417,24 @@ func TestRemovingABuilderMidUpload(t *testing.T) {
 func TestRemovingABuilderByGeneration(t *testing.T) {
 	b := newBuilderLab(t)
 	var first api.NewBuilder
-	b.call("POST", "/api/builders", "mtok", api.BuilderRequest{Name: "a"}, &first)
+	b.call("POST", "/api/builders", "lab_mtok", api.BuilderRequest{Name: "a"}, &first)
 	if len(first.Generation) != 32 {
 		t.Fatalf("generation %q", first.Generation)
 	}
-	b.call("DELETE", "/api/builders/a", "mtok", nil, nil)
+	b.call("DELETE", "/api/builders/a", "lab_mtok", nil, nil)
 	second := b.addBuilder("a")
-	if code := b.call("DELETE", "/api/builders/a?generation="+first.Generation, "mtok", nil, nil); code != 409 {
+	if code := b.call("DELETE", "/api/builders/a?generation="+first.Generation, "lab_mtok", nil, nil); code != 409 {
 		t.Fatalf("stale generation: %d", code)
 	}
 	if code := b.call("GET", "/api/builder/self", second, nil, nil); code != 200 {
 		t.Fatalf("the newer builder after a stale removal: %d", code)
 	}
-	if code := b.call("DELETE", "/api/builders/zz?generation="+first.Generation, "mtok", nil, nil); code != 404 {
+	if code := b.call("DELETE", "/api/builders/zz?generation="+first.Generation, "lab_mtok", nil, nil); code != 404 {
 		t.Fatalf("no such builder: %d", code)
 	}
 	var nb api.NewBuilder
-	b.call("POST", "/api/builders", "mtok", api.BuilderRequest{Name: "c"}, &nb)
-	if code := b.call("DELETE", "/api/builders/c?generation="+nb.Generation, "mtok", nil, nil); code != 200 {
+	b.call("POST", "/api/builders", "lab_mtok", api.BuilderRequest{Name: "c"}, &nb)
+	if code := b.call("DELETE", "/api/builders/c?generation="+nb.Generation, "lab_mtok", nil, nil); code != 200 {
 		t.Fatalf("own generation: %d", code)
 	}
 	if code := b.call("GET", "/api/builder/self", nb.Token, nil, nil); code != 401 {
@@ -452,7 +452,7 @@ func TestRemoveRacesClaim(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() { defer wg.Done(); b.poll(tok, "", 3*time.Second) }()
-		go func() { defer wg.Done(); b.call("DELETE", "/api/builders/"+name, "mtok", nil, nil) }()
+		go func() { defer wg.Done(); b.call("DELETE", "/api/builders/"+name, "lab_mtok", nil, nil) }()
 		wg.Wait()
 		if bd := b.build(k.ID); bd.State == api.BuildRunning {
 			t.Fatalf("round %d: build %s runs on removed builder %s", i, bd.ID, bd.Builder)
@@ -592,7 +592,7 @@ func TestSharedTokenUnchanged(t *testing.T) {
 		t.Fatalf("shared done: %d %s", code, b.build(k.ID).State)
 	}
 	var l []api.BuilderStatus
-	b.call("GET", "/api/builders", "mtok", nil, &l)
+	b.call("GET", "/api/builders", "lab_mtok", nil, &l)
 	if len(l) != 2 || l[0].Host != "controller" || !l[0].Shared || !l[0].Alive || l[1].Host != "m5mbp" || !l[1].Registered {
 		t.Fatalf("list %+v", l)
 	}
@@ -665,7 +665,7 @@ func TestStartupCleanupSkipsOnlyNeverUsedMacs(t *testing.T) {
 	st.db.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := New(ctx, Config{DataDir: dir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: "mtok"}, log.New(io.Discard, "", 0))
+	s, err := newWith(harnessMaintainer, "lab_mtok", ctx, Config{DataDir: dir}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}

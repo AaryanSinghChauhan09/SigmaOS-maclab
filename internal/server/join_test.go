@@ -39,7 +39,7 @@ func newJoinLab(t *testing.T) *joinLab {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	j := &joinLab{t: t, logs: &strings.Builder{}}
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret",
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(),
 		PublicURL: pub, AgentBinary: agentBin}, log.New(lockedWriter{j}, "", 0))
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func (j *joinLab) do(method, path, bearer, body string) (int, string) {
 // invite has a Maintainer make an enrollment token for name, as lab enroll does.
 func (j *joinLab) invite(name string) api.EnrollTokenResponse {
 	j.t.Helper()
-	code, body := j.do("POST", "/api/enroll-tokens", "adm_secret", `{"name":"`+name+`"}`)
+	code, body := j.do("POST", "/api/enroll-tokens", "lab_adm_secret", `{"name":"`+name+`"}`)
 	var t api.EnrollTokenResponse
 	if json.Unmarshal([]byte(body), &t); code != 200 || t.Token == "" {
 		j.t.Fatalf("invite %s: %d %s", name, code, body)
@@ -126,7 +126,7 @@ func TestEnrollmentTokenActivatesOneMacOnce(t *testing.T) {
 	if code, _ := j.enroll(j.invite("pending2").Token, keyA, termsSum()); code != 200 {
 		t.Fatal("pending2")
 	}
-	if code, body := j.do("POST", "/api/enroll-tokens", "adm_secret", `{"name":"pending2"}`); code != 409 || !strings.Contains(body, "lab forget pending2") {
+	if code, body := j.do("POST", "/api/enroll-tokens", "lab_adm_secret", `{"name":"pending2"}`); code != 409 || !strings.Contains(body, "lab forget pending2") {
 		t.Errorf("a new token for a Mac that never checked in: %d %s", code, body)
 	}
 }
@@ -172,7 +172,7 @@ func TestEnrollmentNeedsTheCurrentTerms(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("with the terms: %d", code)
 	}
-	_, body := j.do("GET", "/api/devices/terms", "adm_secret", "")
+	_, body := j.do("GET", "/api/devices/terms", "lab_adm_secret", "")
 	var d api.Device
 	json.Unmarshal([]byte(body), &d)
 	if d.ID != e.DeviceID || d.TermsSHA256 != termsSum() || d.TermsAccepted.IsZero() {
@@ -185,7 +185,7 @@ func TestEnrollmentNeedsTheCurrentTerms(t *testing.T) {
 }
 
 // The join routes answer to an unexpired enrollment token in the
-// Authorization header, and to nothing else: not a Maintainer's token, not a
+// Authorization header, and to nothing else: not a Lab token, not a
 // device secret, not a token in the URL.
 func TestJoinRoutesTakeOnlyAnEnrollmentTokenInTheHeader(t *testing.T) {
 	j := newJoinLab(t)
@@ -199,7 +199,7 @@ func TestJoinRoutesTakeOnlyAnEnrollmentTokenInTheHeader(t *testing.T) {
 		t.Fatalf("lab-agent: %d", code)
 	}
 	_, e := j.enroll(j.invite("enrolled").Token, keyA, termsSum())
-	for name, bearer := range map[string]string{"no token": "", "a Maintainer's token": "adm_secret", "a device secret": e.Secret, "a made-up token": "enr_00000000000000000000000000000000"} {
+	for name, bearer := range map[string]string{"no token": "", "a Maintainer's token": "lab_adm_secret", "a device secret": e.Secret, "a made-up token": "enr_00000000000000000000000000000000"} {
 		for _, p := range []string{"/api/join/terms", "/api/join/lab-agent"} {
 			if code, _ := j.do("GET", p, bearer, ""); code != 401 {
 				t.Errorf("%s on %s: %d, want 401", name, p, code)
@@ -222,7 +222,7 @@ func TestJoinRoutesTakeOnlyAnEnrollmentTokenInTheHeader(t *testing.T) {
 func TestRevokedInviteIsRefused(t *testing.T) {
 	j := newJoinLab(t)
 	tok := j.invite("revoked").Token
-	if code, body := j.do("DELETE", "/api/enroll-tokens/revoked", "adm_secret", ""); code != 200 || !strings.Contains(body, `"revoked":1`) {
+	if code, body := j.do("DELETE", "/api/enroll-tokens/revoked", "lab_adm_secret", ""); code != 200 || !strings.Contains(body, `"revoked":1`) {
 		t.Fatalf("revoke: %d %s", code, body)
 	}
 	if code, _ := j.enroll(tok, keyA, termsSum()); code != 403 {
@@ -265,7 +265,7 @@ func TestJoinCommandKeepsTheTokenOutOfURLsAndLogs(t *testing.T) {
 	j.do("GET", "/api/join/lab-agent", tok, "")
 	j.enroll(tok, keyA, termsSum())
 	j.enroll(tok, keyB, termsSum())
-	j.do("DELETE", "/api/enroll-tokens/one-liner", "adm_secret", "")
+	j.do("DELETE", "/api/enroll-tokens/one-liner", "lab_adm_secret", "")
 	j.mu.Lock()
 	logs := j.logs.String()
 	j.mu.Unlock()

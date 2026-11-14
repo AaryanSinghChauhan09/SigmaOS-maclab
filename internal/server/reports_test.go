@@ -79,12 +79,12 @@ func newReportsLab(t *testing.T, config func(*Config)) *reportsLab {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", PublicURL: u, Alias: aliasHost, MachineIDKey: testMachineIDKey()}
+	cfg := Config{DataDir: t.TempDir(), PublicURL: u, Alias: aliasHost, MachineIDKey: testMachineIDKey()}
 	if config != nil {
 		config(&cfg)
 	}
 	l := &reportsLab{t: t, log: &bytes.Buffer{}, remote: viaProxy}
-	l.s, err = New(t.Context(), cfg, log.New(l.log, "", 0))
+	l.s, err = newWith("ada", "lab_adm_secret", t.Context(), cfg, log.New(l.log, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,7 +663,7 @@ func TestALabWithoutItsMachineIDKeyTakesNoReports(t *testing.T) {
 	if w := l.do("GET", pathOf(t, got.ReportURL), ""); w.Code != http.StatusOK {
 		t.Errorf("a report's page: %d", w.Code)
 	}
-	if _, err := New(t.Context(), Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", MachineIDKey: []byte("short")}, log.New(io.Discard, "", 0)); err == nil {
+	if _, err := newWith("ada", "lab_adm_secret", t.Context(), Config{DataDir: t.TempDir(), MachineIDKey: []byte("short")}, log.New(io.Discard, "", 0)); err == nil {
 		t.Error("labd started with a machine-id key of the wrong size")
 	}
 }

@@ -93,7 +93,7 @@ func (l *lab) client() *http.Client {
 // harnessToken its token: the one l.get and l.post send.
 const (
 	harnessMaintainer = "ada"
-	harnessToken      = "admin"
+	harnessToken      = "lab_admin"
 )
 
 // logBuf collects labd's log so tests can read what it recorded.
@@ -178,7 +178,7 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 		logw = io.MultiWriter(l.logs, os.Stderr)
 	}
 	logger := log.New(logw, "labd: ", log.Ltime|log.Lmicroseconds)
-	cfg := Config{DataDir: t.TempDir(), FirstMaintainer: harnessMaintainer, FirstMaintainerToken: harnessToken, Interval: 200 * time.Millisecond,
+	cfg := Config{DataDir: t.TempDir(), Interval: 200 * time.Millisecond,
 		BootTimeout: 4 * time.Second, OfflineAfter: time.Hour, BuilderToken: "bld", Clock: clock,
 		RebootGrace: 2 * time.Second, LabClockSkew: time.Second, WatchdogIdleReset: 2 * time.Second,
 		OOBFactory: func(*api.Device) (oob.Controller, error) { return l.oob, nil }}
@@ -196,7 +196,7 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	if c.config != nil {
 		c.config(&cfg)
 	}
-	s, err := New(ctx, cfg, logger)
+	s, err := newWith(harnessMaintainer, harnessToken, ctx, cfg, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +560,7 @@ func TestLiveStreamScreenAndLogs(t *testing.T) {
 
 	// The stream carries job, device and serial events while a job runs.
 	req, _ := http.NewRequest("GET", l.url+"/api/stream", nil)
-	req.Header.Set("Authorization", "Bearer admin")
+	req.Header.Set("Authorization", "Bearer "+harnessToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -615,7 +615,7 @@ func TestScreenAtRestoredOnStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	quiet := log.New(io.Discard, "", 0)
-	s, err := New(ctx, Config{DataDir: dir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: "a"}, quiet)
+	s, err := newWith(harnessMaintainer, "a", ctx, Config{DataDir: dir}, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,7 +623,7 @@ func TestScreenAtRestoredOnStart(t *testing.T) {
 	s.store.saveDevice(&d, "h")
 	os.MkdirAll(s.screenDir("mac"), 0o755)
 	os.WriteFile(filepath.Join(s.screenDir("mac"), "1790753481823.jpg"), []byte("x"), 0o644)
-	s2, err := New(ctx, Config{DataDir: dir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: "a"}, quiet)
+	s2, err := newWith(harnessMaintainer, "a", ctx, Config{DataDir: dir}, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1593,7 +1593,7 @@ func TestRunningBuildSurvivesLabdRestart(t *testing.T) {
 	defer cancel()
 	dir := t.TempDir()
 	quiet := log.New(io.Discard, "", 0)
-	s1, err := New(ctx, Config{DataDir: dir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: "a", BuilderToken: "bld"}, quiet)
+	s1, err := newWith(harnessMaintainer, "a", ctx, Config{DataDir: dir, BuilderToken: "bld"}, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1602,7 +1602,7 @@ func TestRunningBuildSurvivesLabdRestart(t *testing.T) {
 		ConfigSHA: "c", State: api.BuildRunning, Stage: "build", Created: now, Updated: now}
 	s1.saveBuild(b)
 	// labd restarts while the builder keeps compiling.
-	s2, err := New(ctx, Config{DataDir: dir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: "a", BuilderToken: "bld"}, quiet)
+	s2, err := newWith(harnessMaintainer, "a", ctx, Config{DataDir: dir, BuilderToken: "bld"}, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}

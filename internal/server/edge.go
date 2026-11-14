@@ -243,6 +243,7 @@ func (s *Server) edge(h http.Handler) http.Handler {
 			if !ok {
 				return
 			}
+			r = s.labTokenRequest(r)
 			h.ServeHTTP(w, r)
 		})
 	})

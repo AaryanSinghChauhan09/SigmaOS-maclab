@@ -57,7 +57,7 @@ func TestRoles(t *testing.T) {
 		}
 		return nil, fmt.Errorf("no match for IP")
 	}
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret",
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(),
 		Person: personAt(whois)}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
@@ -84,8 +84,8 @@ func TestRoles(t *testing.T) {
 		name, method, path, remote, token string
 		want                              int
 	}{
-		{"admin lists Macs", "GET", "/api/devices", admin, "adm_secret", 200},
-		{"admin submits a job", "POST", "/api/jobs", admin, "adm_secret", past},
+		{"admin lists Macs", "GET", "/api/devices", admin, "lab_adm_secret", 200},
+		{"admin submits a job", "POST", "/api/jobs", admin, "lab_adm_secret", past},
 		{"viewer lists Macs", "GET", "/api/devices", viewer, "", 200},
 		{"viewer over IPv6", "GET", "/api/jobs", "[fd7a:115c:a1e0::10]:1", "", 200},
 		{"a person may not read builds", "GET", "/api/builds", viewer, "", 403},
@@ -97,17 +97,17 @@ func TestRoles(t *testing.T) {
 		{"viewer opens the console", "GET", "/api/devices/m/console", viewer, "", 403},
 		{"viewer reads the serial log", "GET", "/api/devices/m/serial", viewer, "", 403},
 		{"viewer releases a lease", "DELETE", "/api/devices/m/lease", viewer, "", 403},
-		{"viewer with the token", "POST", "/api/jobs", viewer, "adm_secret", past},
+		{"viewer with the token", "POST", "/api/jobs", viewer, "lab_adm_secret", past},
 		{"tagged device gets nothing", "GET", "/api/devices", tagged, "", 401},
 		{"tagged device can't change", "POST", "/api/jobs", tagged, "", 401},
 		{"an address labd knows nobody at", "GET", "/api/devices", unknown, "", 401},
 		{"another address nobody is at", "GET", "/api/devices", "192.168.7.3:5000", "", 401},
-		{"trusted network still admin", "POST", "/api/jobs", "10.1.1.42:1", "adm_secret", past},
-		{"token from anywhere", "POST", "/api/jobs", "192.168.7.3:5000", "adm_secret", past},
+		{"trusted network still admin", "POST", "/api/jobs", "10.1.1.42:1", "lab_adm_secret", past},
+		{"token from anywhere", "POST", "/api/jobs", "192.168.7.3:5000", "lab_adm_secret", past},
 		{"agents keep device secrets", "POST", "/api/agent/checkin", admin, "", 401},
 		{"a person may not read a release", "GET", "/api/installed/aurora-1", viewer, "", 403},
 		{"nor reach the frozen stores", "GET", "/api/installed/..%2F..%2F..%2Fetc", viewer, "", 403},
-		{"nor can an admin", "GET", "/api/installed/..%2F..%2F..%2Fetc", admin, "adm_secret", 404},
+		{"nor can an admin", "GET", "/api/installed/..%2F..%2F..%2Fetc", admin, "lab_adm_secret", 404},
 	}
 	for _, c := range cases {
 		if got := try(c.method, c.path, c.remote, c.token); got != c.want {
@@ -131,13 +131,13 @@ func TestRoles(t *testing.T) {
 	if a := auth(viewer); a.TokenRequired || a.Role != "viewer" || a.Login != "visitor@github" {
 		t.Errorf("viewer's /api/auth: %+v", a)
 	}
-	if a := auth(viewer, "adm_secret"); a.Role != "admin" {
+	if a := auth(viewer, "lab_adm_secret"); a.Role != "admin" {
 		t.Errorf("viewer's /api/auth with the token: %+v", a)
 	}
 	if a := auth(viewer, "nope"); a.Role != "viewer" {
 		t.Errorf("viewer's /api/auth with a wrong token: %+v", a)
 	}
-	if a := auth(admin, "adm_secret"); a.TokenRequired || a.Role != "admin" {
+	if a := auth(admin, "lab_adm_secret"); a.TokenRequired || a.Role != "admin" {
 		t.Errorf("admin's /api/auth: %+v", a)
 	}
 	if a := auth("192.168.7.3:5000"); !a.TokenRequired || a.Role != "" {
@@ -196,7 +196,7 @@ func TestRoles(t *testing.T) {
 	if got := stream(viewer); strings.Contains(got, "event: serial") || strings.Contains(got, "secret") {
 		t.Errorf("a viewer's stream carried a serial line:\n%s", got)
 	}
-	if got := stream(admin, "adm_secret"); !strings.Contains(got, "event: serial") {
+	if got := stream(admin, "lab_adm_secret"); !strings.Contains(got, "event: serial") {
 		t.Errorf("an admin's stream lost the serial line:\n%s", got)
 	}
 }
@@ -213,7 +213,7 @@ func TestVolunteer(t *testing.T) {
 		return nil, fmt.Errorf("no match for IP")
 	}
 	bin := filepath.Join(t.TempDir(), "lab-agent-linux-arm64")
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", Person: personAt(whois), AgentBinary: bin},
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(), Person: personAt(whois), AgentBinary: bin},
 		log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)

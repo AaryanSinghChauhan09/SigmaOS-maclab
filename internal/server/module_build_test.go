@@ -28,7 +28,7 @@ func TestKernelModuleBuildOutputs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "admin"}, log.New(io.Discard, "", 0))
+			s, err := newWith("ada", "lab_admin", ctx, Config{DataDir: t.TempDir()}, log.New(io.Discard, "", 0))
 			if err != nil {
 				t.Fatal(err)
 			}

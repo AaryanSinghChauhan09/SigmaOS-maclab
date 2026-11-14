@@ -19,7 +19,7 @@ const labdAt = "http://10.1.1.5:7770"
 func TestSameOrigin(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", BuilderToken: "bld"}, log.New(io.Discard, "", 0))
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(), BuilderToken: "bld"}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,22 +51,22 @@ func TestSameOrigin(t *testing.T) {
 	}{
 		{"another site's page", "POST", exec, "http://evil.example", "cross-site", "", 403},
 		{"another site, Origin only", "POST", exec, "http://evil.example", "", "", 403},
-		{"another site, with the token", "POST", exec, "http://evil.example", "", "adm_secret", 403},
+		{"another site, with the token", "POST", exec, "http://evil.example", "", "lab_adm_secret", 403},
 		{"another port on labd's host", "POST", exec, "http://labd:8080", "same-site", "", 403},
 		{"labd's host, default port", "POST", exec, "http://labd", "", "", 403},
 		{"a sandboxed frame", "POST", exec, "null", "cross-site", "", 403},
 		{"a sibling subdomain, no Origin", "DELETE", "http://labd:7770/api/devices/m1air/lease", "", "same-site", "", 403},
 		{"another site, no Origin", "PATCH", "http://labd:7770/api/devices/m1air", "", "cross-site", "", 403},
-		{"labd's own UI", "POST", exec, "http://labd:7770", "same-origin", "adm_secret", past},
-		{"labd's own UI, Origin only", "POST", exec, "http://labd:7770", "", "adm_secret", past},
-		{"the UI under another case", "POST", exec, "http://LabD:7770", "", "adm_secret", past},
-		{"the UI by IPv6 address", "POST", "http://[fd7a:115c:a1e0::5]:7770/api/devices/m1air/exec", "http://[fd7a:115c:a1e0::5]:7770", "same-origin", "adm_secret", past},
-		{"the UI behind https", "POST", "https://labd.tail1234.ts.net/api/devices/m1air/exec", "https://labd.tail1234.ts.net", "same-origin", "adm_secret", past},
-		{"the UI, Host with the default port", "POST", "https://labd.tail1234.ts.net:443/api/devices/m1air/exec", "https://labd.tail1234.ts.net", "", "adm_secret", past},
-		{"typed into the address bar", "POST", exec, "", "none", "adm_secret", past},
-		{"the CLI, curl, scripts", "POST", exec, "", "", "adm_secret", past},
-		{"the CLI with the token", "POST", exec, "", "", "adm_secret", past},
-		{"another site may still look", "GET", "http://labd:7770/api/devices", "http://evil.example", "cross-site", "adm_secret", 200},
+		{"labd's own UI", "POST", exec, "http://labd:7770", "same-origin", "lab_adm_secret", past},
+		{"labd's own UI, Origin only", "POST", exec, "http://labd:7770", "", "lab_adm_secret", past},
+		{"the UI under another case", "POST", exec, "http://LabD:7770", "", "lab_adm_secret", past},
+		{"the UI by IPv6 address", "POST", "http://[fd7a:115c:a1e0::5]:7770/api/devices/m1air/exec", "http://[fd7a:115c:a1e0::5]:7770", "same-origin", "lab_adm_secret", past},
+		{"the UI behind https", "POST", "https://labd.tail1234.ts.net/api/devices/m1air/exec", "https://labd.tail1234.ts.net", "same-origin", "lab_adm_secret", past},
+		{"the UI, Host with the default port", "POST", "https://labd.tail1234.ts.net:443/api/devices/m1air/exec", "https://labd.tail1234.ts.net", "", "lab_adm_secret", past},
+		{"typed into the address bar", "POST", exec, "", "none", "lab_adm_secret", past},
+		{"the CLI, curl, scripts", "POST", exec, "", "", "lab_adm_secret", past},
+		{"the CLI with the token", "POST", exec, "", "", "lab_adm_secret", past},
+		{"another site may still look", "GET", "http://labd:7770/api/devices", "http://evil.example", "cross-site", "lab_adm_secret", 200},
 		{"and ask about CORS", "OPTIONS", exec, "http://evil.example", "cross-site", "", 405},
 
 		// Agents and builders send neither header, and get the same check:

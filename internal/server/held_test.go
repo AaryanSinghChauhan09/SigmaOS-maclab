@@ -27,7 +27,7 @@ func heldServer(t *testing.T) (*Server, *agent.FakeClock) {
 	clock := agent.NewFakeClock(time.Now())
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", Clock: clock}, log.New(io.Discard, "", 0))
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(), Clock: clock}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestTheEventStreamKeepsIts15s(t *testing.T) {
 	hs := httptest.NewServer(s.Handler())
 	t.Cleanup(hs.Close)
 	req, _ := http.NewRequest("GET", hs.URL+"/api/stream", nil)
-	req.Header.Set("Authorization", "Bearer adm_secret")
+	req.Header.Set("Authorization", "Bearer lab_adm_secret")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

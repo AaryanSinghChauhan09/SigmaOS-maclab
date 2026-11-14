@@ -240,7 +240,7 @@ func TestLabdOpensBothStores(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := New(ctx, Config{DataDir: dir, FirstMaintainer: harnessMaintainer, FirstMaintainerToken: "mtok"}, log.New(io.Discard, "", 0)); err != nil {
+	if _, err := newWith(harnessMaintainer, "lab_mtok", ctx, Config{DataDir: dir}, log.New(io.Discard, "", 0)); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"labd.db", "reports.db"} {

@@ -20,7 +20,7 @@ func waiting(s *Server, target string) <-chan *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", target, nil)
 		req.RemoteAddr = direct
 		req.Host = loopback
-		req.Header.Set("Authorization", "Bearer adm_secret")
+		req.Header.Set("Authorization", "Bearer lab_adm_secret")
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, req)
 		got <- rec

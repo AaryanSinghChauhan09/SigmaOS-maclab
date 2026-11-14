@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"slices"
 	"sort"
 	"sync"
@@ -101,7 +102,7 @@ func (s *Server) builderAuth(h http.HandlerFunc) http.HandlerFunc {
 			defer cancel()
 		} else {
 			noteCaller(r, "builder:"+c.name)
-			defer s.bconns.add(c.gen, cancel)()
+			defer s.bconns.add(cancel, c.gen)()
 			// Removed between the lookup and registering this request.
 			if !s.store.builderGenCurrent(c.gen) {
 				httpErr(w, 401, "bad builder token")
@@ -323,12 +324,14 @@ func builderKinds(kinds []string) ([]string, error) {
 	return out, nil
 }
 
+var reBuilderName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
 func (s *Server) hAddBuilder(w http.ResponseWriter, r *http.Request) {
 	var req api.BuilderRequest
 	if !decodeBody(w, r, 4<<10, &req) {
 		return
 	}
-	if !reMaintainer.MatchString(req.Name) {
+	if !reBuilderName.MatchString(req.Name) {
 		httpErr(w, 400, "a builder's name is letters, digits, dots, dashes and underscores")
 		return
 	}

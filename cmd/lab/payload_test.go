@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/client"
@@ -53,7 +54,11 @@ func TestAPayloadFileOverOnePartGoesInPartsAndTheNextRunResumes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	data := t.TempDir()
-	labd, err := server.New(ctx, server.Config{DataDir: data, FirstMaintainer: "ada", FirstMaintainerToken: "tok"}, log.New(io.Discard, "", 0))
+	labd, err := server.New(ctx, server.Config{DataDir: data, Admins: []int64{1}}, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ada, err := server.BreakGlass(data, "ada", 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +85,7 @@ func TestAPayloadFileOverOnePartGoesInPartsAndTheNextRunResumes(t *testing.T) {
 	defer hs.Close()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("MACLAB_URL", hs.URL)
-	t.Setenv("MACLAB_TOKEN", "tok")
+	t.Setenv("MACLAB_TOKEN", ada.Token)
 	c, err := client.Load()
 	if err != nil {
 		t.Fatal(err)

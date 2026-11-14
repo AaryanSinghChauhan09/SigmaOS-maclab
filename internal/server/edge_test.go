@@ -30,11 +30,11 @@ func labServer(t *testing.T, pub string, config func(*Config)) *Server {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	cfg := Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", PublicURL: u}
+	cfg := Config{DataDir: t.TempDir(), PublicURL: u}
 	if config != nil {
 		config(&cfg)
 	}
-	s, err := New(ctx, cfg, log.New(io.Discard, "", 0))
+	s, err := newWith("ada", "lab_adm_secret", ctx, cfg, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func with(m map[string]string, kv ...string) map[string]string {
 // it, not /maclabx, and no X-Forwarded-Prefix changes that.
 func TestPrefixIsServedExactlyOnce(t *testing.T) {
 	h := edgeServer(t)
-	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	tok := with(fromIngress, "Authorization", "Bearer lab_adm_secret")
 	script := pageFile(t, h, "chonkbase.net", "/maclab/", ".js")
 	for _, c := range []struct {
 		name, path string
@@ -157,7 +157,7 @@ func TestPrefixIsServedExactlyOnce(t *testing.T) {
 // what a caller on the mini forwards is not believed.
 func TestAThirdHostNameIsRefused(t *testing.T) {
 	h := edgeServer(t)
-	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	tok := with(fromIngress, "Authorization", "Bearer lab_adm_secret")
 	for _, c := range []struct {
 		name, host, remote string
 		hdr                map[string]string
@@ -166,7 +166,7 @@ func TestAThirdHostNameIsRefused(t *testing.T) {
 		{"the Lab address", "chonkbase.net", viaProxy, tok, 200},
 		{"its default port named", "chonkbase.net:443", viaProxy, tok, 200},
 		{"the host in another case", "ChonkBase.NET", viaProxy, tok, 200},
-		{"no scheme forwarded", "chonkbase.net", viaProxy, map[string]string{"Authorization": "Bearer adm_secret"}, 200},
+		{"no scheme forwarded", "chonkbase.net", viaProxy, map[string]string{"Authorization": "Bearer lab_adm_secret"}, 200},
 		{"plain http forwarded", "chonkbase.net", viaProxy, with(tok, "X-Forwarded-Proto", "http"), 421},
 		{"a third name", "evil.example", viaProxy, tok, 421},
 		{"a third name, the Lab address forwarded", "evil.example", viaProxy, with(tok, "X-Forwarded-Host", "chonkbase.net"), 421},
@@ -198,7 +198,7 @@ func TestAThirdHostNameIsRefused(t *testing.T) {
 // host and port.
 func TestBrowserOriginMustMatchSchemeHostAndPort(t *testing.T) {
 	h := edgeServer(t)
-	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	tok := with(fromIngress, "Authorization", "Bearer lab_adm_secret")
 	for _, c := range []struct {
 		name, remote string
 		hdr          map[string]string
@@ -229,7 +229,7 @@ func TestBrowserOriginMustMatchSchemeHostAndPort(t *testing.T) {
 // labd's origin; the UI can't be framed; https answers carry HSTS.
 func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
 	h := edgeServer(t)
-	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	tok := with(fromIngress, "Authorization", "Bearer lab_adm_secret")
 	for _, c := range []struct {
 		path    string
 		sandbox bool
@@ -285,7 +285,7 @@ func TestPublicURLAndAliasRefuseWhatTheyCantMean(t *testing.T) {
 		"an Alias without a Lab address":   {Alias: "maclab.omarchy.org"},
 		"an Alias that is the Lab address": {Alias: "lab.omarchy-mac.org", PublicURL: pub},
 	} {
-		cfg.DataDir, cfg.FirstMaintainer, cfg.FirstMaintainerToken = t.TempDir(), "ada", "adm_secret"
+		cfg.DataDir = t.TempDir()
 		if _, err := New(context.Background(), cfg, log.New(io.Discard, "", 0)); err == nil {
 			t.Errorf("%s: labd started", name)
 		}
@@ -297,7 +297,7 @@ func TestPublicURLAndAliasRefuseWhatTheyCantMean(t *testing.T) {
 // the prefix.
 func TestRedirectsStayUnderThePrefix(t *testing.T) {
 	h := edgeServer(t)
-	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	tok := with(fromIngress, "Authorization", "Bearer lab_adm_secret")
 	for _, p := range []string{"/maclab//api/devices", "/maclab/api/../api/devices", "/maclab/./api/devices", "/maclab/assets/../api/devices", "/maclab/api/%2e%2e/api/devices"} {
 		if w := edgeDo(h, "GET", p, viaProxy, tok); w.Code != 404 {
 			t.Errorf("GET %s: %d %s, want 404", p, w.Code, w.Header().Get("Location"))
@@ -340,7 +340,7 @@ func aliasServer(t *testing.T, config func(*Config)) *Server {
 func TestTheAliasForwardsPagesAndRefusesTheAPI(t *testing.T) {
 	s := aliasServer(t, func(c *Config) { c.Preview = true })
 	h := s.Handler()
-	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	tok := with(fromIngress, "Authorization", "Bearer lab_adm_secret")
 	for _, c := range []struct{ method, target, want string }{
 		{"GET", "/", labAddress + "/"},
 		{"GET", "/install", labAddress + "/install"},
@@ -411,7 +411,7 @@ func TestEveryLinkNamesTheLabAddress(t *testing.T) {
 		{"at the loopback port", loopback, direct},
 	} {
 		r := httptest.NewRequest("POST", "http://"+c.host+"/api/enroll-tokens", strings.NewReader(`{"name":"m1-pro"}`))
-		r.Header.Set("Authorization", "Bearer adm_secret")
+		r.Header.Set("Authorization", "Bearer lab_adm_secret")
 		if r.RemoteAddr = c.remote; c.remote == viaProxy {
 			r = r.WithContext(onTunnel(r.Context()))
 		}
@@ -440,7 +440,7 @@ func TestEveryLinkNamesTheLabAddress(t *testing.T) {
 // labd answers 425 to any such request under /api/.
 func TestEarlyDataUnderTheAPIGets425(t *testing.T) {
 	h := aliasServer(t, nil).Handler()
-	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	tok := with(fromIngress, "Authorization", "Bearer lab_adm_secret")
 	early := with(tok, "Early-Data", "1")
 	for _, c := range []struct {
 		name, method, target string
@@ -464,7 +464,7 @@ func TestEarlyDataUnderTheAPIGets425(t *testing.T) {
 // states its own keeps it.
 func TestTheDefaultCachePolicyIsNoStore(t *testing.T) {
 	h := aliasServer(t, nil).Handler()
-	tok := with(fromIngress, "Authorization", "Bearer adm_secret")
+	tok := with(fromIngress, "Authorization", "Bearer lab_adm_secret")
 	for _, target := range []string{"/healthz", "/api/devices", "/api/devices/nope", "/api/nothing", "/nothing", "/api/maintainers"} {
 		w := edgeAt(h, "GET", labHost, target, viaProxy, tok)
 		if cc := w.Header().Values("Cache-Control"); len(cc) != 1 || cc[0] != "no-store" {

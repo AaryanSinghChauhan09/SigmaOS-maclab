@@ -1,0 +1,45 @@
+{{define "main"}}{{with .Data}}<h1>@{{.Handle}}</h1>
+<section class="card">
+<h2 class="card-title">you</h2>
+<dl class="facts">
+<dt>GitHub</dt><dd>@{{.Handle}}</dd>
+<dt>Kind</dt><dd>{{.Kind}}</dd>
+<dt>Allows</dt><dd>{{.Allows}}</dd>
+</dl>
+</section>
+{{with .Shown}}<section class="card attention">
+<h2 class="card-title">your new lab token</h2>
+<p>“{{.Name}}” {{.Expires}}. This is the only time the lab shows it: copy it now.</p>
+<p><code>{{.Secret}}</code></p>
+<p class="dim">Give it to <code>lab login</code> at its prompt. It acts as you, with what you may do at that moment.</p>
+</section>
+{{end}}<section class="card">
+<h2 class="card-title">lab tokens · {{.Count}} of {{.Cap}}</h2>
+<p class="dim">A Lab token is how <code>lab</code>, <code>lab mcp</code> and your agents act as you. Each use moves its date out; one left unused past its period stops working until you renew it.</p>
+{{if .Refused}}<p class="flash flash-alert" role="alert">{{.Refused}}</p>
+{{end}}{{if .Tokens}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Name</th><th>Made</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
+<tbody>
+{{range .Tokens}}<tr>
+<td>{{.Name}}</td>
+<td data-label="Made">{{.Made}}</td>
+<td data-label="Expires">{{if .Never}}never{{else if .Expired}}<span class="bad">expired {{.Expires}}</span>{{else}}{{.Expires}}{{end}} <span class="dim">({{.Period}})</span></td>
+<td data-label="Last used">{{if .LastUsed}}{{.LastUsed}}{{if .Address}} from {{.Address}}{{end}}{{else}}never used{{end}}</td>
+<td class="actions">{{if .Expired}}<form class="inline" method="post" action="{{href (printf "/me/tokens/%d/renew" .ID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Renew</button></form> {{end}}{{template "take" ($.Take (printf "/me/tokens/%d/revoke" .ID) "Revoke" (printf "Revoke “%s”: whatever uses it stops now" .Name))}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+{{end}}{{if lt .Count .Cap}}<form class="form form-inline" method="post" action="{{href "/me/tokens"}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">
+<label class="filter-field"><span>Name</span><input type="text" name="name" maxlength="64" required placeholder="laptop"></label>
+<label class="filter-field"><span>Lasts</span><select name="period">{{range .Periods}}<option value="{{.Value}}"{{if .Default}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<button class="button" type="submit">Make a Lab token</button>
+</form>
+{{else}}<p class="dim">You have {{.Cap}} Lab tokens, which is the most a person has. Revoke one to make another.</p>
+{{end}}</section>
+<section class="card">
+<h2 class="card-title">browsers</h2>
+<p>You are signed in on {{.Browsers}}.</p>
+<p>{{template "take" ($.Take "/me/sign-out-everywhere" "Sign out everywhere" (printf "Sign out everywhere: %s, this one too, are signed out now" .Browsers))}} <span class="dim">Browsers only: your Lab tokens go on working.</span></p>
+<p>{{template "take" ($.Take "/me/end-all-access" "End all access" .EndAll)}} <span class="dim">Every browser and every Lab token of yours stops. You can sign in again.</span></p>
+</section>
+{{end}}{{end}}

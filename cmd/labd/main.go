@@ -1,4 +1,6 @@
-// Command labd is the Mac test lab controller.
+// Command labd is the Mac test lab controller. `labd break-glass` is the
+// command run on the server itself that mints a Lab token for a named
+// person (breakglass.go).
 package main
 
 import (
@@ -21,6 +23,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "break-glass" {
+		os.Exit(breakGlass(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	home, _ := os.UserHomeDir()
 	listen := flag.String("listen", envOr("MACLAB_LISTEN", "127.0.0.1:7770"), "the loopback port, for callers on this machine (the Builder, the Out-of-band controller's client side, break-glass): it believes nothing a caller forwards, and labd listens on no other network address")
 	socket := flag.String("socket", "", "the tunnel's Unix socket, which cloudflared dials: made for the account labd runs as alone, and the only place the edge's CF-Connecting-IP and forwarded headers are believed (needs --public-url)")
@@ -42,7 +47,6 @@ func main() {
 	watchdogOpenTimeout := flag.Duration("watchdog-open-timeout", 0, "watchdog.open_timeout on every Lab boot: how long the kernel feeds the hardware watchdog before systemd must open it; an early hang resets about 30s after it (0 is half the job's boot timeout, at least 120s)")
 	artifactGB := flag.Int64("artifact-budget-gb", 20, "cap on the kernel artifact store; unreferenced artifacts go first")
 	partsAtOnce := flag.Int("parts-at-once", 1, "how many parts of an upload labd tells a client to send at the same time: 1 or 4")
-	maintainer := flag.String("maintainer", os.Getenv("USER"), "the first Maintainer's name, used once: on a fresh labd, or on the first start after upgrading from the single admin token")
 	omt := flag.Bool("omt", true, "run omarchy-m-test (github.com/maralcbr/omarchy-m-testing) in every job on Macs with a desktop user, and compare it with the known-good kernel")
 	omtSite := flag.String("omt-site", "https://omarchy-m-testing.org", "where omarchy-m-test reports are published (lab publish, --publish); empty never publishes")
 	omtPublish := flag.Bool("omt-publish", false, "publish known-good omarchy-m-test runs (baselines and --omt-every runs) by themselves")
@@ -119,12 +123,6 @@ func main() {
 	if err := os.MkdirAll(*data, 0o700); err != nil {
 		log.Fatal(err)
 	}
-	// labd announces the first Maintainer when it makes one.
-	tok, _, err := server.FirstMaintainerToken(*data)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	btokPath := filepath.Join(*data, "builder.token")
 	btok, err := os.ReadFile(btokPath)
 	if os.IsNotExist(err) {
@@ -139,7 +137,7 @@ func main() {
 	defer stop()
 	// ./volunteer downloads the lab-agent built alongside labd.
 	exe, _ := os.Executable()
-	s, err := server.New(ctx, server.Config{DataDir: *data, FirstMaintainer: *maintainer, FirstMaintainerToken: tok,
+	s, err := server.New(ctx, server.Config{DataDir: *data,
 		PublicURL: pub, Alias: *alias, Preview: *preview, Terms: terms, GitHub: app, Admins: admins, OOB: controller, MachineIDKey: idKey, Signal: sender, SignalDir: *signalDir,
 		OMT: *omt, OMTSite: *omtSite, OMTPublish: *omtPublish, OMTEvery: *omtEvery,
 		BootTimeout: *bootTimeout, OfflineAfter: *offlineAfter, AliveWindow: *aliveWindow, QuietGrace: *quietGrace, StageTimeout: *stageTimeout, WatchdogOpenTimeout: *watchdogOpenTimeout, RebootWarning: *rebootWarning, NtfyURL: *ntfy, NotifyCmd: *notifyCmd,

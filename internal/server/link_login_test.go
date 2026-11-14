@@ -36,7 +36,7 @@ func TestVolunteerLogin(t *testing.T) {
 	for _, raw := range []string{
 		"", "ada", "ada@", "@github", "ada@@github", "ada@git@hub", "ada lovelace@github", "ada@github.", "ada@.github",
 		"ada@-github", "ada@github/x", "<ada>@github", "ada@github\nbob@github", "tagged-devices",
-		"enr_0123456789abcdef0123456789abcdef", "adm_secret", "dev_0123456789abcdef0123456789abcdef0123456789abcdef",
+		"enr_0123456789abcdef0123456789abcdef", "lab_adm_secret", "dev_0123456789abcdef0123456789abcdef0123456789abcdef",
 		"bld_x@github", "mnt_x@github", "ENR_x@github", "tskey-auth-kAbCdEf@github",
 		"0123456789abcdef0123456789abcdef@github", strings.Repeat("a", 65) + "@github",
 	} {
@@ -81,7 +81,7 @@ func TestMaintainerLinksVolunteerLogin(t *testing.T) {
 	for _, body := range []string{
 		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"visitor"}`,
 		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"enr_0123456789abcdef0123456789abcdef"}`,
-		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"adm_secret"}`,
+		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"lab_adm_secret"}`,
 		`{"name":"bad","volunteer_name":"V","contact":"c","volunteer_login":"visitor@github visitor@github"}`,
 		`{"name":"bad","volunteer_login":"visitor@github"}`, // a Lab-owned Mac's token
 	} {
@@ -216,7 +216,7 @@ type linkLab struct {
 const (
 	visitorAt = "100.64.0.2:40000"
 	otherAt   = "100.64.0.4:40000"
-	adminTok  = "adm_secret"
+	adminTok  = "lab_adm_secret"
 )
 
 func newLinkLab(t *testing.T, dir string) *linkLab {
@@ -233,7 +233,7 @@ func newLinkLab(t *testing.T, dir string) *linkLab {
 		}
 		return nil, fmt.Errorf("no match for IP")
 	}
-	s, err := New(ctx, Config{DataDir: dir, FirstMaintainer: "ada", FirstMaintainerToken: adminTok, Person: personAt(whois)},
+	s, err := newWith("ada", adminTok, ctx, Config{DataDir: dir, Person: personAt(whois)},
 		log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)

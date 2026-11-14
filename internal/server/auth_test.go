@@ -28,7 +28,7 @@ var maintainerRoutes = []struct{ method, path string }{
 func TestNoNetworkGetsInWithoutAToken(t *testing.T) {
 	l := newLab(t, false) // the harness labd is on loopback
 	for _, r := range maintainerRoutes {
-		if resp, body := l.as("", r.method, r.path, nil); resp.StatusCode != 401 || !strings.Contains(body, "not a Maintainer's token") {
+		if resp, body := l.as("", r.method, r.path, nil); resp.StatusCode != 401 || !strings.Contains(body, "not a Lab token") {
 			t.Errorf("%s %s without a token: %s %s", r.method, r.path, resp.Status, body)
 		}
 	}
@@ -40,28 +40,24 @@ func TestNoNetworkGetsInWithoutAToken(t *testing.T) {
 	}
 }
 
-func TestMaintainerRoutesRefuseEverythingButAMaintainersToken(t *testing.T) {
+func TestMaintainerRoutesRefuseEverythingButAMaintainersLabToken(t *testing.T) {
 	l := newLab(t, false)
 	l.waitDevice(func(d api.Device) bool { return d.BootID != "" })
 	gone := l.addMaintainer(harnessToken, "gone")
-	if resp, body := l.as(harnessToken, "DELETE", "/api/maintainers/gone", nil); resp.StatusCode != 200 {
-		t.Fatalf("remove gone: %s %s", resp.Status, body)
-	}
+	l.revokeTokenOf(gone)
 	tokens := []struct{ what, token string }{
-		{"an unknown token", "mnt_0000000000000000000000000000000000000000"},
-		{"a removed Maintainer's token", gone.Token},
+		{"a Maintainer token of maclab's", "mnt_0000000000000000000000000000000000000000"},
+		{"an unknown Lab token", "lab_0000000000000000000000000000000000000000"},
+		{"a revoked Lab token", gone.Token},
 		{"the Mac's device secret", l.secret},
 		{"the builder token", "bld"},
 	}
 	for _, tok := range tokens {
 		for _, r := range maintainerRoutes {
-			if resp, body := l.as(tok.token, r.method, r.path, nil); resp.StatusCode != 401 || !strings.Contains(body, "not a Maintainer's token") {
+			if resp, body := l.as(tok.token, r.method, r.path, nil); resp.StatusCode != 401 || !strings.Contains(body, "not a Lab token") {
 				t.Errorf("%s on %s %s: %s %s", tok.what, r.method, r.path, resp.Status, body)
 			}
 		}
-	}
-	if ms, body := l.maintainers(harnessToken); strings.Join(maintainerNames(ms), ",") != harnessMaintainer {
-		t.Fatalf("a refused token changed the Maintainers: %s", body)
 	}
 }
 
@@ -111,7 +107,7 @@ func TestJobRecordsTheSubmittingMaintainer(t *testing.T) {
 	l := newLab(t, false)
 	l.waitDevice(func(d api.Device) bool { return d.BootID != "" })
 	grace := l.addMaintainer(harnessToken, "grace")
-	// a client-sent maintainer is ignored: the name comes from the token
+	// a client-sent maintainer is ignored: the handle comes from the token
 	resp, body := l.as(grace.Token, "POST", "/api/jobs", map[string]any{"device": l.name, "baseline": true, "maintainer": "mallory"})
 	var j map[string]any
 	if resp.StatusCode != 200 || json.Unmarshal([]byte(body), &j) != nil || j["maintainer"] != "grace" {

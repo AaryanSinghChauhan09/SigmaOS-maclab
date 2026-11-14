@@ -212,7 +212,7 @@ func (s *Server) hSignOut(w http.ResponseWriter, r *http.Request) {
 			httpErr(w, 500, "%v", err)
 			return
 		}
-		s.conns.end(si.connKey())
+		s.conns.end(sessionConnKey(si.hash))
 		secure := strings.HasPrefix(origin, "https://")
 		setCookie(w, sessionCookie(secure), "", secure, -1)
 	}

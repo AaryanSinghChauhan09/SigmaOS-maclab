@@ -237,7 +237,7 @@ func TestGrantsDontSurviveEnrollingAgainOrAReusedName(t *testing.T) {
 	tok := j.invite("regrant").Token
 	_, first := j.enroll(tok, keyA, termsSum())
 	art, _ := putArtifactForTest(j.s, "a package")
-	if code, body := j.do("POST", "/api/devices/regrant/artifact-grants", "adm_secret", `{"artifacts":["`+art+`"]}`); code != 200 {
+	if code, body := j.do("POST", "/api/devices/regrant/artifact-grants", "lab_adm_secret", `{"artifacts":["`+art+`"]}`); code != 200 {
 		t.Fatalf("grant: %d %s", code, body)
 	}
 	if code, _ := j.do("GET", "/api/agent/artifacts/"+art, first.Secret, ""); code != 200 {
@@ -248,8 +248,8 @@ func TestGrantsDontSurviveEnrollingAgainOrAReusedName(t *testing.T) {
 		t.Errorf("after enrolling again: %d, want 404", code)
 	}
 	// The Mac is forgotten and another enrolls under its name.
-	j.do("POST", "/api/devices/regrant/artifact-grants", "adm_secret", `{"artifacts":["`+art+`"]}`)
-	if code, body := j.do("DELETE", "/api/devices/regrant?force=true", "adm_secret", ""); code != 200 {
+	j.do("POST", "/api/devices/regrant/artifact-grants", "lab_adm_secret", `{"artifacts":["`+art+`"]}`)
+	if code, body := j.do("DELETE", "/api/devices/regrant?force=true", "lab_adm_secret", ""); code != 200 {
 		t.Fatalf("forget: %d %s", code, body)
 	}
 	_, next := j.enroll(j.invite("regrant").Token, keyB, termsSum())
@@ -300,7 +300,7 @@ func TestUploadsAreBoundToTheEnrollmentAndTheActiveJob(t *testing.T) {
 	setActive("reused", "")
 	save(&api.Job{ID: "j-old", Spec: api.JobSpec{Device: "reused"}, DeviceID: old.DeviceID, State: api.JobDone})
 	save(&api.Job{ID: "j-legacy", Spec: api.JobSpec{Device: "reused"}, State: api.JobDone})
-	if code, body := j.do("DELETE", "/api/devices/reused?force=true", "adm_secret", ""); code != 200 {
+	if code, body := j.do("DELETE", "/api/devices/reused?force=true", "lab_adm_secret", ""); code != 200 {
 		t.Fatalf("forget: %d %s", code, body)
 	}
 	_, next := j.enroll(j.invite("reused").Token, keyB, termsSum())
@@ -386,7 +386,7 @@ func TestJobAuthorityEndsBeforeTheJobIsSeenDone(t *testing.T) {
 	_, e := j.enroll(j.invite("ending").Token, keyA, termsSum())
 	kernel, _ := putArtifactForTest(j.s, "the job's kernel")
 	pkg, _ := putArtifactForTest(j.s, "a granted package")
-	if code, _ := j.do("POST", "/api/devices/ending/artifact-grants", "adm_secret", `{"artifacts":["`+pkg+`"]}`); code != 200 {
+	if code, _ := j.do("POST", "/api/devices/ending/artifact-grants", "lab_adm_secret", `{"artifacts":["`+pkg+`"]}`); code != 200 {
 		t.Fatal("grant")
 	}
 	job := &api.Job{ID: "j-ending", Spec: api.JobSpec{Device: "ending", Kernel: kernel}, DeviceID: e.DeviceID, State: api.JobTesting}

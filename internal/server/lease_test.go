@@ -161,15 +161,40 @@ func TestRemovingAMaintainerEndsTheirLeases(t *testing.T) {
 	joshua := l.addMaintainer(harnessToken, "joshua")
 	mine := l.setAside(joshua.Token, "joshua@mini", harnessToken, "ada@laptop")
 
-	if r, body := l.as(harnessToken, "DELETE", "/api/maintainers/joshua", nil); r.StatusCode != 200 {
-		t.Fatalf("removing joshua: %s %s", r.Status, body)
-	}
+	l.removeMaintainer("joshua")
 	if q := l.s.dev(l.name).snapshot().Lease; q != nil {
 		t.Fatalf("a removed Maintainer's lease outlived them: %+v", q)
 	}
-	const ended = "Maintainer joshua was removed by " + harnessMaintainer
+	const ended = "@joshua is no longer a Maintainer"
 	if !strings.Contains(l.logs.String(), ended) {
 		t.Fatalf("labd's log doesn't say why the lease ended:\n%s", l.logs.String())
+	}
+	j := l.jobAPI(mine, 60*time.Second)
+	l.expect(j, api.OutcomePass)
+	if !hasEvent(j, ended) {
+		t.Fatalf("the set-aside job doesn't say why the lease ended: %v", j.Events)
+	}
+}
+
+// "End all access" ends the person's leases with everything else of theirs.
+func TestEndAllAccessEndsThePersonsLeases(t *testing.T) {
+	l := newLab(t, true)
+	l.baseline()
+	joshua := l.addMaintainer(harnessToken, "joshua")
+	mine := l.setAside(joshua.Token, "joshua@mini", harnessToken, "ada@laptop")
+	p, err := l.s.personNow(testAccount("joshua"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ended = `@joshua used "End all access"`
+	if err := l.s.endAllAccess(p, "ended: "+ended); err != nil {
+		t.Fatal(err)
+	}
+	if q := l.s.dev(l.name).snapshot().Lease; q != nil {
+		t.Fatalf("the lease outlived End all access: %+v", q)
+	}
+	if r, _ := l.as(joshua.Token, "GET", "/api/devices", nil); r.StatusCode != 401 {
+		t.Fatalf("the Lab token after End all access: %s", r.Status)
 	}
 	j := l.jobAPI(mine, 60*time.Second)
 	l.expect(j, api.OutcomePass)

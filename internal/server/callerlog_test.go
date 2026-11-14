@@ -104,7 +104,7 @@ func TestTheCallerLogNamesAddressCallerAndRay(t *testing.T) {
 		}
 		return edgeAt(h, method, labHost, target, viaProxy, hdr).Code
 	}
-	if code := ask("GET", "/api/devices?all=1", "adm_secret", "203.0.113.7", "8f1e2d3c4b5a6978-BNE"); code != 200 {
+	if code := ask("GET", "/api/devices?all=1", "lab_adm_secret", "203.0.113.7", "8f1e2d3c4b5a6978-BNE"); code != 200 {
 		t.Fatalf("a Maintainer's list: %d", code)
 	}
 	ask("POST", "/api/agent/checkin", mac, "198.51.100.20", "8f1e2d3c4b5a6979-SYD")
@@ -135,7 +135,7 @@ func TestTheCallerLogNamesAddressCallerAndRay(t *testing.T) {
 			t.Errorf("line %d:\n got %+v\nwant %+v", i, got, want)
 		}
 	}
-	if raw := s.callers.rawForTest(t); strings.Contains(raw, "adm_secret") || strings.Contains(raw, mac) || strings.Contains(raw, "mnt_wrong") || strings.Contains(raw, "bld_shared") {
+	if raw := s.callers.rawForTest(t); strings.Contains(raw, "lab_adm_secret") || strings.Contains(raw, mac) || strings.Contains(raw, "mnt_wrong") || strings.Contains(raw, "bld_shared") {
 		t.Errorf("the caller log holds a credential:\n%s", raw)
 	}
 }
@@ -276,7 +276,7 @@ func TestTheCallerLogKeepsStreamsFlushing(t *testing.T) {
 func TestAStoppingLabdMakesNoCallerLogFile(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
-	s, err := New(ctx, Config{DataDir: dir, FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret"}, log.New(io.Discard, "", 0))
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: dir}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -229,7 +229,7 @@ func transferLab(t *testing.T, tr Transfers, wrap func(http.Handler) http.Handle
 
 // sender uploads as the lab command does, as the harness Maintainer.
 func (b *builderLab) sender() upload.Sender {
-	return upload.Sender{Client: http.DefaultClient, URL: b.url + "/api/artifacts", Token: "mtok", PartBytes: b.transfers.PartBytes,
+	return upload.Sender{Client: http.DefaultClient, URL: b.url + "/api/artifacts", Token: "lab_mtok", PartBytes: b.transfers.PartBytes,
 		Pause: func(context.Context, int) error { return nil }}
 }
 
@@ -296,19 +296,19 @@ func TestStartingAnUploadAgainSaysWhichPartsLabdHolds(t *testing.T) {
 	b := transferLab(t, Transfers{AtOnce: 4}, nil)
 	data := partsContent(3500)
 	sha := artifactSHA(data)
-	st, code := b.startUpload("mtok", "/api/artifacts/uploads", data)
+	st, code := b.startUpload("lab_mtok", "/api/artifacts/uploads", data)
 	if code != 200 || st.PartBytes != 1000 || st.AtOnce != 4 || st.Held == nil || len(st.Held) != 0 || st.SHA256 != sha || st.Size != 3500 {
 		t.Fatalf("a new upload: %d %+v", code, st)
 	}
 	for n, part := range map[int][]byte{1: data[:1000], 4: data[3000:]} {
-		if code, body := b.do(b.ctx, "PUT", fmt.Sprintf("/api/artifacts/uploads/%s/parts/%d", sha, n), "mtok", bytes.NewReader(part)); code != 200 {
+		if code, body := b.do(b.ctx, "PUT", fmt.Sprintf("/api/artifacts/uploads/%s/parts/%d", sha, n), "lab_mtok", bytes.NewReader(part)); code != 200 {
 			t.Fatalf("part %d: %d %s", n, code, body)
 		}
 	}
-	if st, _ := b.startUpload("mtok", "/api/artifacts/uploads", data); !slices.Equal(st.Held, []int{1, 4}) {
+	if st, _ := b.startUpload("lab_mtok", "/api/artifacts/uploads", data); !slices.Equal(st.Held, []int{1, 4}) {
 		t.Fatalf("held %v, want 1 and 4", st.Held)
 	}
-	if code, body := b.do(b.ctx, "POST", "/api/artifacts/uploads/"+sha+"/close", "mtok", nil); code != 409 || !strings.Contains(string(body), "2, 3") {
+	if code, body := b.do(b.ctx, "POST", "/api/artifacts/uploads/"+sha+"/close", "lab_mtok", nil); code != 409 || !strings.Contains(string(body), "2, 3") {
 		t.Fatalf("closing with parts missing: %d %s", code, body)
 	}
 	var notes []string
@@ -321,7 +321,7 @@ func TestStartingAnUploadAgainSaysWhichPartsLabdHolds(t *testing.T) {
 		t.Fatalf("notes %q", notes)
 	}
 	if st := transferLab(t, Transfers{}, nil); true {
-		if got, _ := st.startUpload("mtok", "/api/artifacts/uploads", data); got.AtOnce != 1 {
+		if got, _ := st.startUpload("lab_mtok", "/api/artifacts/uploads", data); got.AtOnce != 1 {
 			t.Fatalf("parts at once by default: %d, want 1", got.AtOnce)
 		}
 	}
@@ -332,11 +332,11 @@ func TestPartsAndUploadsLabdRefuses(t *testing.T) {
 	data := partsContent(2500)
 	sha := artifactSHA(data)
 	other := strings.Repeat("ab", 32)
-	if _, code := b.startUpload("mtok", "/api/artifacts/uploads", data); code != 200 {
+	if _, code := b.startUpload("lab_mtok", "/api/artifacts/uploads", data); code != 200 {
 		t.Fatalf("start: %d", code)
 	}
 	part := func(sha string, n int, body io.Reader) (int, string) {
-		code, out := b.do(b.ctx, "PUT", fmt.Sprintf("/api/artifacts/uploads/%s/parts/%d", sha, n), "mtok", body)
+		code, out := b.do(b.ctx, "PUT", fmt.Sprintf("/api/artifacts/uploads/%s/parts/%d", sha, n), "lab_mtok", body)
 		return code, string(out)
 	}
 	pr, pw := io.Pipe()
@@ -359,17 +359,17 @@ func TestPartsAndUploadsLabdRefuses(t *testing.T) {
 			t.Errorf("%s: %d %s, want %d", c.what, code, body, c.code)
 		}
 	}
-	if st, _ := b.startUpload("mtok", "/api/artifacts/uploads", data); len(st.Held) != 0 {
+	if st, _ := b.startUpload("lab_mtok", "/api/artifacts/uploads", data); len(st.Held) != 0 {
 		t.Fatalf("refused parts are held: %v", st.Held)
 	}
 	for what, start := range map[string]api.UploadStart{
 		"no sha256": {Size: 2500}, "a short sha256": {SHA256: "abc", Size: 2500}, "no size": {SHA256: other}, "a path for a sha256": {SHA256: "../" + other[3:], Size: 2500},
 	} {
-		if code := b.call("POST", "/api/artifacts/uploads", "mtok", start, nil); code != 400 {
+		if code := b.call("POST", "/api/artifacts/uploads", "lab_mtok", start, nil); code != 400 {
 			t.Errorf("an upload started with %s: %d, want 400", what, code)
 		}
 	}
-	if code := b.call("POST", "/api/artifacts/uploads", "mtok", api.UploadStart{SHA256: other, Size: 20<<30 + 1}, nil); code != 413 {
+	if code := b.call("POST", "/api/artifacts/uploads", "lab_mtok", api.UploadStart{SHA256: other, Size: 20<<30 + 1}, nil); code != 413 {
 		t.Errorf("an upload larger than the artifact store: %d, want 413", code)
 	}
 	for _, token := range []string{"", "bld", "mnt_0000000000000000000000000000000000000000"} {
@@ -389,13 +389,13 @@ func TestAnUploadWhosePartsAreNotItsSHA256StoresNothing(t *testing.T) {
 	b := transferLab(t, Transfers{}, nil)
 	said, sent := partsContent(2500), bytes.Repeat([]byte("x"), 2500)
 	sha := artifactSHA(said)
-	b.startUpload("mtok", "/api/artifacts/uploads", said)
+	b.startUpload("lab_mtok", "/api/artifacts/uploads", said)
 	for n := 1; n <= 3; n++ {
-		if code, body := b.do(b.ctx, "PUT", fmt.Sprintf("/api/artifacts/uploads/%s/parts/%d", sha, n), "mtok", bytes.NewReader(sent[(n-1)*1000:min(n*1000, 2500)])); code != 200 {
+		if code, body := b.do(b.ctx, "PUT", fmt.Sprintf("/api/artifacts/uploads/%s/parts/%d", sha, n), "lab_mtok", bytes.NewReader(sent[(n-1)*1000:min(n*1000, 2500)])); code != 200 {
 			t.Fatalf("part %d: %d %s", n, code, body)
 		}
 	}
-	code, body := b.do(b.ctx, "POST", "/api/artifacts/uploads/"+sha+"/close", "mtok", nil)
+	code, body := b.do(b.ctx, "POST", "/api/artifacts/uploads/"+sha+"/close", "lab_mtok", nil)
 	if code != 422 || strings.Contains(string(body), `"sha256"`) {
 		t.Fatalf("close: %d %s", code, body)
 	}
@@ -433,7 +433,7 @@ func TestLabdRefusesAnyBodyOver90MB(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer mtok\r\nContent-Length: 90000001\r\n\r\n", path, u.Host)
+		fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer lab_mtok\r\nContent-Length: 90000001\r\n\r\n", path, u.Host)
 		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 		if err != nil || resp.StatusCode != 413 {
@@ -443,7 +443,7 @@ func TestLabdRefusesAnyBodyOver90MB(t *testing.T) {
 	}
 	// With no Content-Length the limit holds while the body streams.
 	b := transferLab(t, Transfers{BodyMax: 2000}, nil)
-	for path, token := range map[string]string{"/api/artifacts": "mtok", "/api/builder/artifacts": "bld"} {
+	for path, token := range map[string]string{"/api/artifacts": "lab_mtok", "/api/builder/artifacts": "bld"} {
 		pr, pw := io.Pipe()
 		go func() { pw.Write(bytes.Repeat([]byte("x"), 4096)); pw.Close() }()
 		if code, body := b.do(b.ctx, "POST", path, token, pr); code != 413 || strings.Contains(string(body), `"sha256"`) {
@@ -453,7 +453,7 @@ func TestLabdRefusesAnyBodyOver90MB(t *testing.T) {
 	if ents, _ := os.ReadDir(filepath.Join(b.dir, "artifacts")); len(ents) != 0 {
 		t.Fatalf("a refused body left %v", ents)
 	}
-	if code, _ := b.do(b.ctx, "POST", "/api/artifacts", "mtok", strings.NewReader("small")); code != 200 {
+	if code, _ := b.do(b.ctx, "POST", "/api/artifacts", "lab_mtok", strings.NewReader("small")); code != 200 {
 		t.Fatalf("a body under the limit: %d", code)
 	}
 }
@@ -462,8 +462,8 @@ func TestUnfinishedUploadsAreDeletedAfter24Hours(t *testing.T) {
 	b := transferLab(t, Transfers{}, nil)
 	old, fresh := partsContent(2500), partsContent(3500)
 	for _, data := range [][]byte{old, fresh} {
-		b.startUpload("mtok", "/api/artifacts/uploads", data)
-		if code, _ := b.do(b.ctx, "PUT", "/api/artifacts/uploads/"+artifactSHA(data)+"/parts/1", "mtok", bytes.NewReader(data[:1000])); code != 200 {
+		b.startUpload("lab_mtok", "/api/artifacts/uploads", data)
+		if code, _ := b.do(b.ctx, "PUT", "/api/artifacts/uploads/"+artifactSHA(data)+"/parts/1", "lab_mtok", bytes.NewReader(data[:1000])); code != 200 {
 			t.Fatalf("part: %d", code)
 		}
 	}
@@ -482,7 +482,7 @@ func TestUnfinishedUploadsAreDeletedAfter24Hours(t *testing.T) {
 	}
 	// A part that arrives, or a resume, counts as the upload's latest hour.
 	age(".upload-"+artifactSHA(fresh), 25*time.Hour)
-	if st, _ := b.startUpload("mtok", "/api/artifacts/uploads", fresh); !slices.Equal(st.Held, []int{1}) {
+	if st, _ := b.startUpload("lab_mtok", "/api/artifacts/uploads", fresh); !slices.Equal(st.Held, []int{1}) {
 		t.Fatalf("held %v", st.Held)
 	}
 	b.s.gcArtifacts()
@@ -711,7 +711,7 @@ func TestRemovingABuilderMidPart(t *testing.T) {
 	}()
 	pw.Write(data[:500])
 	time.Sleep(300 * time.Millisecond) // labd has read that and waits for more
-	if code := b.call("DELETE", "/api/builders/a", "mtok", nil, nil); code != 200 {
+	if code := b.call("DELETE", "/api/builders/a", "lab_mtok", nil, nil); code != 200 {
 		t.Fatalf("remove: %d", code)
 	}
 	select {
@@ -741,22 +741,22 @@ func TestStartsOfOneUploadAtOnceLoseNoPart(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if _, code := b.startUpload("mtok", "/api/artifacts/uploads", data); code != 200 {
+				if _, code := b.startUpload("lab_mtok", "/api/artifacts/uploads", data); code != 200 {
 					t.Errorf("round %d: start: %d", round, code)
 					return
 				}
-				if code, msg := b.do(b.ctx, "PUT", fmt.Sprintf("%s/parts/%d", path, n), "mtok", bytes.NewReader(data[(n-1)*1000:n*1000])); code != 200 {
+				if code, msg := b.do(b.ctx, "PUT", fmt.Sprintf("%s/parts/%d", path, n), "lab_mtok", bytes.NewReader(data[(n-1)*1000:n*1000])); code != 200 {
 					t.Errorf("round %d: part %d: %d %s", round, n, code, msg)
 					return
 				}
-				if st, code := b.startUpload("mtok", "/api/artifacts/uploads", data); code != 200 || !slices.Contains(st.Held, n) {
+				if st, code := b.startUpload("lab_mtok", "/api/artifacts/uploads", data); code != 200 || !slices.Contains(st.Held, n) {
 					t.Errorf("round %d: part %d was answered for, and a start then says labd holds %v (%d)", round, n, st.Held, code)
 				}
 			}()
 		}
 		wg.Wait()
 		var stored api.StoredArtifact
-		if code := b.call("POST", path+"/close", "mtok", nil, &stored); !t.Failed() && (code != 200 || !bytes.Equal(b.stored(stored.SHA256), data)) {
+		if code := b.call("POST", path+"/close", "lab_mtok", nil, &stored); !t.Failed() && (code != 200 || !bytes.Equal(b.stored(stored.SHA256), data)) {
 			t.Errorf("round %d: close: %d", round, code)
 		}
 	}
@@ -768,9 +768,9 @@ func TestAPartThatArrivesAfterItsUploadIsClosedIsToldToStartAgain(t *testing.T) 
 	b := transferLab(t, Transfers{}, nil)
 	data := partsContent(2500)
 	path := "/api/artifacts/uploads/" + artifactSHA(data)
-	b.startUpload("mtok", "/api/artifacts/uploads", data)
+	b.startUpload("lab_mtok", "/api/artifacts/uploads", data)
 	for n := 1; n <= 3; n++ {
-		if code, msg := b.do(b.ctx, "PUT", fmt.Sprintf("%s/parts/%d", path, n), "mtok", bytes.NewReader(data[(n-1)*1000:min(n*1000, 2500)])); code != 200 {
+		if code, msg := b.do(b.ctx, "PUT", fmt.Sprintf("%s/parts/%d", path, n), "lab_mtok", bytes.NewReader(data[(n-1)*1000:min(n*1000, 2500)])); code != 200 {
 			t.Fatalf("part %d: %d %s", n, code, msg)
 		}
 	}
@@ -784,7 +784,7 @@ func TestAPartThatArrivesAfterItsUploadIsClosedIsToldToStartAgain(t *testing.T) 
 	go func() {
 		req, _ := http.NewRequestWithContext(b.ctx, "PUT", b.url+path+"/parts/1", pr)
 		req.ContentLength = 1000
-		req.Header.Set("Authorization", "Bearer mtok")
+		req.Header.Set("Authorization", "Bearer lab_mtok")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			answered <- answer{0, err.Error()}
@@ -796,7 +796,7 @@ func TestAPartThatArrivesAfterItsUploadIsClosedIsToldToStartAgain(t *testing.T) 
 	}()
 	pw.Write(data[:500])
 	time.Sleep(300 * time.Millisecond) // labd has read that and waits for more
-	if code := b.call("POST", path+"/close", "mtok", nil, nil); code != 200 {
+	if code := b.call("POST", path+"/close", "lab_mtok", nil, nil); code != 200 {
 		t.Fatalf("close: %d", code)
 	}
 	pw.Write(data[500:1000])

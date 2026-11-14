@@ -361,49 +361,6 @@ func (s *store) setConfig(device, kernel, sha string) error {
 	return err
 }
 
-func (s *store) addMaintainer(m api.Maintainer, tokenHash string) error {
-	_, err := s.db.Exec(`INSERT INTO maintainers(name,token_hash,added,added_by) VALUES(?,?,?,?)`, m.Name, tokenHash, m.Added.Unix(), m.AddedBy)
-	return err
-}
-
-// maintainerByToken is the name of the Maintainer holding a token hash.
-func (s *store) maintainerByToken(hash string) (string, error) {
-	var name string
-	err := s.db.QueryRow(`SELECT name FROM maintainers WHERE token_hash=?`, hash).Scan(&name)
-	return name, err
-}
-
-func (s *store) hasMaintainer(name string) bool {
-	var n int
-	s.db.QueryRow(`SELECT count(*) FROM maintainers WHERE name=?`, name).Scan(&n)
-	return n > 0
-}
-
-func (s *store) countMaintainers() (int, error) {
-	var n int
-	err := s.db.QueryRow(`SELECT count(*) FROM maintainers`).Scan(&n)
-	return n, err
-}
-
-func (s *store) maintainers() ([]api.Maintainer, error) {
-	rows, err := s.db.Query(`SELECT name,added,added_by FROM maintainers ORDER BY added, rowid`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []api.Maintainer{}
-	for rows.Next() {
-		var m api.Maintainer
-		var added int64
-		if err := rows.Scan(&m.Name, &added, &m.AddedBy); err != nil {
-			return nil, err
-		}
-		m.Added = time.Unix(added, 0)
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
 // addBuilder records a named builder: gen names this one token of it, and
 // tokenHash is that token's hash.
 func (s *store) addBuilder(b api.Builder, gen, tokenHash string) error {
@@ -475,15 +432,4 @@ func (s *store) removeBuilder(name, only string) (gen string, ok bool, err error
 		return "", false, err
 	}
 	return gen, true, nil
-}
-
-// removeMaintainer deletes a Maintainer, and with them their token, unless
-// they are the last one: labd without a Maintainer can't be reached.
-func (s *store) removeMaintainer(name string) (removed bool, err error) {
-	res, err := s.db.Exec(`DELETE FROM maintainers WHERE name=? AND (SELECT count(*) FROM maintainers) > 1`, name)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n > 0, err
 }

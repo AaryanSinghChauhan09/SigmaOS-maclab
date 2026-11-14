@@ -35,7 +35,7 @@ func volunteerLab(t *testing.T) (*Server, func(method, path, remote, token, body
 		}
 		return &testPeer{Login: fmt.Sprintf("User-%d-%d@github", a, b), Node: "omarchy"}, nil
 	}
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret", Person: personAt(whois)},
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir(), Person: personAt(whois)},
 		log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
@@ -115,10 +115,10 @@ func TestVolunteerLimits(t *testing.T) {
 		t.Errorf("a volunteer who holds a token can't replace it when the lab is full: %d", code)
 	}
 	// Maintainers aren't held to it, with their token from anywhere.
-	if code, _ := ask("100.64.0.3:40000", "adm_secret", `{}`); code != 200 {
+	if code, _ := ask("100.64.0.3:40000", "lab_adm_secret", `{}`); code != 200 {
 		t.Errorf("admin token from a tagged device: %d", code)
 	}
-	if code, _ := ask("10.1.1.42:1", "adm_secret", `{}`); code != 200 {
+	if code, _ := ask("10.1.1.42:1", "lab_adm_secret", `{}`); code != 200 {
 		t.Errorf("admin on a trusted network: %d", code)
 	}
 
@@ -161,16 +161,16 @@ func TestVolunteerDevicesMarked(t *testing.T) {
 			t.Fatalf("enroll: %d %s", w.Code, w.Body)
 		}
 		var d api.Device
-		json.Unmarshal(do("GET", "/api/devices/"+e.Name, "10.1.1.42:1", "adm_secret", "").Body.Bytes(), &d)
+		json.Unmarshal(do("GET", "/api/devices/"+e.Name, "10.1.1.42:1", "lab_adm_secret", "").Body.Bytes(), &d)
 		return d
 	}
 	if d := device(mint("/api/volunteer", "100.64.1.1:1", "", `{"name":"viewer","volunteer":false}`)); !d.Volunteer || d.Label != "User-1-1@github" {
 		t.Errorf("a viewer's Mac: volunteer %v, label %q", d.Volunteer, d.Label)
 	}
-	if d := device(mint("/api/volunteer", "10.1.1.42:1", "adm_secret", `{"name":"admins"}`)); !d.Volunteer {
+	if d := device(mint("/api/volunteer", "10.1.1.42:1", "lab_adm_secret", `{"name":"admins"}`)); !d.Volunteer {
 		t.Error("a Mac an admin enrolled through ./volunteer isn't marked a volunteer's")
 	}
-	if d := device(mint("/api/enroll-tokens", "10.1.1.42:1", "adm_secret", `{"name":"labmac"}`)); d.Volunteer {
+	if d := device(mint("/api/enroll-tokens", "10.1.1.42:1", "lab_adm_secret", `{"name":"labmac"}`)); d.Volunteer {
 		t.Error("a lab Mac enrolled with lab enroll is marked a volunteer's")
 	}
 }
@@ -254,7 +254,7 @@ func TestVolunteerMacLimit(t *testing.T) {
 	if code, body, _ := ask("100.64.1.2:40000"); code != 200 {
 		t.Errorf("someone else: %d %s", code, body)
 	}
-	if code, body, _ := ask(lan, "adm_secret"); code != 200 {
+	if code, body, _ := ask(lan, "lab_adm_secret"); code != 200 {
 		t.Errorf("an admin: %d %s", code, body)
 	}
 	rows, err := s.store.devices()
@@ -272,7 +272,7 @@ func TestVolunteerMacLimit(t *testing.T) {
 	}
 
 	// lab forget frees a place.
-	if w := do("DELETE", "/api/devices/"+names[0], lan, "adm_secret", ""); w.Code != 200 {
+	if w := do("DELETE", "/api/devices/"+names[0], lan, "lab_adm_secret", ""); w.Code != 200 {
 		t.Fatalf("forget %s: %d %s", names[0], w.Code, w.Body)
 	}
 	code, body, tok := ask(person)
@@ -314,7 +314,7 @@ func (f *filler) Read(p []byte) (int, error) {
 func TestAgentBodyLimits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := New(ctx, Config{DataDir: t.TempDir(), FirstMaintainer: "ada", FirstMaintainerToken: "adm_secret"}, log.New(io.Discard, "", 0))
+	s, err := newWith("ada", "lab_adm_secret", ctx, Config{DataDir: t.TempDir()}, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
