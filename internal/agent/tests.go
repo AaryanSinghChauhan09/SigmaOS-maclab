@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"embed"
 	"errors"
@@ -92,7 +93,12 @@ func (l *Linux) RunTest(ctx context.Context, job string, t api.TestSpec, fetch F
 	tctx, cancel := context.WithTimeout(ctx, testTimeout(t))
 	defer cancel()
 
+	// Where the lab is and the release key this lab-agent pins: the
+	// omarchy-m-test builtin installs the test tool from the lab's install
+	// line.
+	lab := []string{"MACLAB_SERVER=" + l.Server, "MACLAB_RELEASE_KEY=" + cmp.Or(l.ReleaseKey, ReleaseKey)}
 	env := append(os.Environ(), "MACLAB_OUT="+outDir, "MACLAB_JOB="+job, "MACLAB_TEST="+t.Name)
+	env = append(env, lab...)
 	if len(t.Payload) > 0 {
 		env = append(env, "MACLAB_IN="+inDir)
 	}
@@ -116,7 +122,7 @@ func (l *Linux) RunTest(ctx context.Context, job string, t api.TestSpec, fetch F
 			return fail(fmt.Errorf("GUI workspace: %w", err))
 		}
 		defer gui.close()
-		args := append([]string{"-u", u.Username, "--", "env"}, append(genv, "MACLAB_OUT="+gui.outputPath(), "MACLAB_JOB="+job, "MACLAB_TEST="+t.Name, skip, "bash", gui.scriptPath())...)
+		args := append([]string{"-u", u.Username, "--", "env"}, append(genv, "MACLAB_OUT="+gui.outputPath(), "MACLAB_JOB="+job, "MACLAB_TEST="+t.Name, skip, lab[0], lab[1], "bash", gui.scriptPath())...)
 		cmd = exec.CommandContext(tctx, "runuser", args...)
 		cmd.Dir = gui.dir
 	} else {

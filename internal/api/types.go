@@ -197,6 +197,9 @@ type Device struct {
 	// recorded when the lab publishes a job's report. labd keeps it and
 	// shows it to nobody.
 	MachineID string `json:"machine_id,omitempty"`
+	// UpdateNoticed is the number of the lab's lab-agent the Mac's Volunteer
+	// was last sent a Notice about. labd keeps it and shows it to nobody.
+	UpdateNoticed string `json:"update_noticed,omitempty"`
 	// RefreshPublished is when the lab queued the last scheduled refresh it
 	// published by itself: it publishes one a week.
 	RefreshPublished time.Time `json:"refresh_published,omitzero"`
@@ -486,7 +489,22 @@ const (
 	// Qualification and records in its Audit log with the Maintainer and the
 	// Release.
 	CmdInstall = "install"
+	// CmdAgentUpdate has a Lab-owned Mac take the lab's lab-agent, as
+	// `sudo lab-agent update` does at the Mac: `lab agent-update`. A
+	// Volunteer's Mac refuses it: nothing pushes an agent to one.
+	CmdAgentUpdate = "agent_update"
 )
+
+// AgentUpdate is what an update of lab-agent did on a Mac.
+type AgentUpdate struct {
+	// From and To are lab-agent's number before and after; LabRelease is
+	// the Lab release the new one came from.
+	From       string `json:"from"`
+	To         string `json:"to"`
+	LabRelease string `json:"lab_release,omitempty"`
+	// Changed is false when the lab's lab-agent was the one installed.
+	Changed bool `json:"changed"`
+}
 
 // InstallTimeout is how long labd gives a Mac to install a Release: fetching
 // its packages and running the installer's hooks.

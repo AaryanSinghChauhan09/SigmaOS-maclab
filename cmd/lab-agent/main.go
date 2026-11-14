@@ -27,6 +27,8 @@ const usage = `lab-agent: the Mac side of the test lab
   sudo lab-agent move --server <the new Lab address> [--ca-file <pem>] [--allow-plain-http] [--no-check]
                                   for a change of the Lab address only: point this enrolled Mac at it, and change
                                   nothing else (a Mac joins another lab with that lab's Join command)
+  sudo lab-agent update           take the lab's lab-agent from the lab server: its signature is checked against
+                                  the release key this lab-agent pins, and one older than this one is refused
   sudo lab-agent status           what this Mac is enrolled as, its ntfy topic, its Availability window,
                                   Access level, Installed-run eligibility and latest Audit log entries
   sudo lab-agent window show|add|remove [<days> <HH:MM-HH:MM>]
@@ -142,7 +144,7 @@ func main() {
 			// This Mac left the lab; all that remains is to tell labd.
 			err = agent.Farewell(ctx, "/var/lib/maclab", &agent.Linux{WorkDir: "/var/lib/maclab"}, log.Printf)
 		} else if cfg, err = agent.LoadConfig(*cfgPath); err == nil {
-			sys := &agent.Linux{WorkDir: "/var/lib/maclab", GUIUser: cfg.GUIUser}
+			sys := &agent.Linux{WorkDir: "/var/lib/maclab", GUIUser: cfg.GUIUser, Server: cfg.Server}
 			err = agent.New(cfg, sys, nil).Run(ctx)
 		}
 	case "lab-boot-deadlines":

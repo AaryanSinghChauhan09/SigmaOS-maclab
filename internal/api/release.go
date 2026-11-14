@@ -38,3 +38,54 @@ func releaseNumbers(v string) (n [3]int, ok bool) {
 	}
 	return n, true
 }
+
+// VersionAtLeast compares lab-agent's dotted numbers: whether have is want
+// or later. A valid build suffix ("+gui-workspace") does not count.
+func VersionAtLeast(have, want string) bool {
+	h, w := strings.Split(versionWithoutBuild(have), "."), strings.Split(versionWithoutBuild(want), ".")
+	for i := range w {
+		var a, b int
+		if i < len(h) {
+			a, _ = strconv.Atoi(h[i])
+		}
+		b, _ = strconv.Atoi(w[i])
+		if a != b {
+			return a > b
+		}
+	}
+	return true
+}
+
+// Build identifiers do not affect version precedence. Strip only a valid
+// metadata suffix, so malformed versions do not newly satisfy an agent gate.
+func versionWithoutBuild(version string) string {
+	core, build, found := strings.Cut(version, "+")
+	if !found {
+		return version
+	}
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return version
+	}
+	for _, part := range parts {
+		if part == "" || (len(part) > 1 && part[0] == '0') {
+			return version
+		}
+		for _, c := range part {
+			if c < '0' || c > '9' {
+				return version
+			}
+		}
+	}
+	for _, identifier := range strings.Split(build, ".") {
+		if identifier == "" {
+			return version
+		}
+		for _, c := range identifier {
+			if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-') {
+				return version
+			}
+		}
+	}
+	return core
+}

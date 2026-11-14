@@ -128,6 +128,8 @@ func (a *Agent) describeWithScript(ctx context.Context, c api.Command) string {
 // describe is what a command does, as the Audit log says it.
 func describe(c api.Command) string {
 	switch c.Kind {
+	case api.CmdAgentUpdate:
+		return "update lab-agent"
 	case api.CmdExec:
 		var a api.ExecArgs
 		_ = json.Unmarshal(c.Args, &a)

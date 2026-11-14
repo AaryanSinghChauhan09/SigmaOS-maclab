@@ -1,7 +1,9 @@
 #!/bin/bash
-# Runs omarchy-m-test (github.com/maralcbr/omarchy-m-testing) inside the GUI
-# user's desktop session and keeps its signed report. Installs or upgrades the
-# tool first with its own installer, which checks the release signature.
+# Runs omarchy-m-test inside the GUI user's desktop session and keeps its
+# signed report. Before each run it installs the latest omarchy-m-test from
+# the lab's own install line (<Lab address>/install), whose script checks the
+# release's signature against the release key it pins; lab-agent runs that
+# script only when it pins the release key lab-agent itself trusts.
 #
 # It runs with --unattended (omarchy-m-test 0.1.15 and later): automatic checks
 # only, no tone, brightness steps or camera window, nothing disruptive. It still
@@ -11,22 +13,43 @@
 set -u
 out=${MACLAB_OUT:-.}
 export PATH="$HOME/.local/bin:$PATH"
-releases=https://github.com/maralcbr/omarchy-m-testing/releases/latest/download
+lab=${MACLAB_SERVER:-}
+lab=${lab%/}
+
+install_from_lab() {
+    local work rc
+    if [ -z "$lab" ]; then
+        echo "lab-agent did not say where the lab is"
+        return 1
+    fi
+    work=$(mktemp -d) || return 1
+    if ! curl -fsSL --max-time 120 -o "$work/install" "$lab/install"; then
+        echo "the lab's install line ($lab/install) did not answer"
+        rm -rf "$work"
+        return 1
+    fi
+    if [ -n "${MACLAB_RELEASE_KEY:-}" ] && ! grep -qF -- "$MACLAB_RELEASE_KEY" "$work/install"; then
+        echo "the lab's install line does not pin the release key this lab-agent trusts: not run"
+        rm -rf "$work"
+        return 1
+    fi
+    bash "$work/install"
+    rc=$?
+    rm -rf "$work"
+    return $rc
+}
 
 have=$(omarchy-m-test --version 2>/dev/null | awk '{print $2}')
-want=$(curl -fsSL --max-time 20 "$releases/VERSION" 2>/dev/null | tr -d '[:space:]')
-if [ -z "$have" ] || { [ -n "$want" ] && [ "$want" != "$have" ]; }; then
-    echo "installing omarchy-m-test ${want:-latest} (had ${have:-none})"
-    if ! curl -fsSL --max-time 120 https://omarchy-m-testing.org/install | bash; then
-        [ -n "$have" ] || { echo "FAIL: could not install omarchy-m-test"; exit 1; }
-        echo "upgrade failed; running $have"
-    fi
+echo "installing omarchy-m-test from $lab/install (had ${have:-none})"
+if ! install_from_lab; then
+    [ -n "$have" ] || { echo "FAIL: could not install omarchy-m-test"; exit 1; }
+    echo "install failed; running $have"
 fi
 running=$(omarchy-m-test --version | awk '{print $2}')
 echo "omarchy-m-test $running on $(uname -r)"
 
 args=(--dry-run)
-# A tool older than 0.1.15 (the upgrade failed) doesn't know the flag and would
+# A tool older than 0.1.15 (the install failed) doesn't know the flag and would
 # refuse to run. Without it, every question still goes unanswered, but the tone,
 # the brightness steps and the camera window happen as they did before.
 case "$(omarchy-m-test --help 2>/dev/null)" in
@@ -52,4 +75,4 @@ if [ ! -s "$out/omt-report.json" ]; then
     tail -20 "$out/omt-run.txt"
     exit 1
 fi
-echo "report: $(stat -c %s "$out/omt-report.json") bytes (exit $rc)"
+echo "report: $(wc -c < "$out/omt-report.json" | tr -d ' ') bytes (exit $rc)"

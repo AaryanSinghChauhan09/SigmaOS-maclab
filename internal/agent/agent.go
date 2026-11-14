@@ -29,7 +29,7 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
-const Version = "0.9.0"
+const Version = "0.10.0"
 
 type Config struct {
 	Server   string `json:"server"`
@@ -53,6 +53,9 @@ type Config struct {
 	AllowPlainHTTP *bool  `json:"allow_plain_http,omitempty"`
 	// Clock is where lab-agent reads time; nil is the wall clock.
 	Clock Clock `json:"-"`
+	// Self is the lab-agent installed on the Mac, as update finds it; nil
+	// is the real one (update.go).
+	Self *Self `json:"-"`
 }
 
 func (c *Config) workDir() string {
@@ -489,7 +492,7 @@ func (a *Agent) poll(ctx context.Context) error {
 	}
 	if refreshFacts {
 		f := a.sys.Facts()
-		f.AgentVersion = Version
+		f.AgentVersion = a.cfg.self().Version
 		f.LabRelease = LabRelease
 		_, f.MesaStaged = a.sys.(interface {
 			StageMesa(context.Context, string, api.MesaStageArgs, Fetcher) (api.MesaStageResult, error)
@@ -904,7 +907,14 @@ type afterAck struct {
 // exec runs one command. The returned afterAck runs only after the result
 // reaches labd, so a reboot never swallows its own acknowledgement.
 func (a *Agent) exec(ctx context.Context, c api.Command) (any, *afterAck, error) {
-	refused := a.refuseOutsideWindow(c)
+	var refused error
+	if c.Kind == api.CmdAgentUpdate && a.volunteer() {
+		// Whatever its window and Access level are.
+		refused = fmt.Errorf("%w: %s", errAccessLevel, neverPushed)
+	}
+	if refused == nil {
+		refused = a.refuseOutsideWindow(c)
+	}
 	if refused == nil {
 		refused = a.refuseByAccess(c)
 	}
@@ -1070,6 +1080,8 @@ func (a *Agent) exec(ctx context.Context, c api.Command) (any, *afterAck, error)
 		_ = json.Unmarshal(c.Args, &args)
 		out, err := a.sys.Logs(ctx, args)
 		return out, nil, err
+	case api.CmdAgentUpdate:
+		return a.updateSelf(ctx, c)
 	}
 	return nil, nil, fmt.Errorf("unknown command %q", c.Kind)
 }

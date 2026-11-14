@@ -42,6 +42,11 @@ type KnownGood struct {
 type Linux struct {
 	WorkDir string
 	GUIUser string
+	// Server is the Lab address the Mac is enrolled at: the omarchy-m-test
+	// builtin installs the test tool from its install line. ReleaseKey is
+	// the release key that line must pin; "" is the one this lab-agent pins.
+	Server     string
+	ReleaseKey string
 }
 
 func (l *Linux) knownGoodPath() string { return filepath.Join(l.WorkDir, "known-good.json") }
