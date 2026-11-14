@@ -100,6 +100,41 @@ func (s *CandidateSet) VerifiedRuns() []*Run {
 	return verified
 }
 
+// Carries reports whether a Release with these packages (name to version)
+// is this set's. It is when the lab knows the set by exactly the Release's
+// omarchy package, or when a Verified run on the set lists every package of
+// the Release at the Release's version. Community runs link nothing.
+func (s *CandidateSet) Carries(packages map[string]string) bool {
+	if len(packages) == 0 {
+		return false
+	}
+	if knownSetFor(packages["omarchy"]) == s.Name {
+		return true
+	}
+	for _, run := range s.VerifiedRuns() {
+		on := true
+		for name, version := range packages {
+			on = on && version != "" && run.PackageVersion(name) == version
+		}
+		if on {
+			return true
+		}
+	}
+	return false
+}
+
+// SetsCarrying are the names of the sets a Release with these packages is
+// linked to, in the order of CandidateSets.
+func (p *Published) SetsCarrying(packages map[string]string) []string {
+	var names []string
+	for _, set := range p.CandidateSets() {
+		if set.Carries(packages) {
+			names = append(names, set.Name)
+		}
+	}
+	return names
+}
+
 // Latest is the set's latest run.
 func (s *CandidateSet) Latest() *Run {
 	latest := s.Runs[0]
