@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Verify a signed Lab release: release/verify.sh DIR [ALLOWED_SIGNERS [TAG]]
+#
+# Checks each file against its .sig the way the install lines and Deploy do
+# (ssh-keygen -Y verify against the pinned release key), then opens the mini's
+# bundle: lab-agent's own signature, the key pinned inside lab-agent, and the
+# tag when one is named. DIR must hold the Lab release and nothing else.
+# ALLOWED_SIGNERS defaults to release/allowed_signers, the release key.
+set -euo pipefail
+
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=release/lib.sh
+. "$repo/release/lib.sh"
+fail() { echo "release/verify.sh: $*" >&2; exit 1; }
+
+[[ $# -ge 1 && $# -le 3 ]] || fail "usage: release/verify.sh DIR [ALLOWED_SIGNERS [TAG]]"
+dir="$(cd "$1" && pwd)"
+signers="${2:-$repo/release/allowed_signers}"
+tag="${3:-}"
+[[ -f $signers ]] || fail "no allowed_signers file $signers"
+
+want="$(printf '%s\n' "${RELEASE_FILES[@]}" "${RELEASE_FILES[@]/%/.sig}" | LC_ALL=C sort)"
+have="$(ls -A "$dir" | LC_ALL=C sort)"
+[[ $have == "$want" ]] || fail "$dir is not a Lab release's files: ${have//$'\n'/ }"
+for f in "${RELEASE_FILES[@]}"; do
+  verified "$signers" "$dir/$f" || fail "$f doesn't match its signature by the release key"
+done
+
+t="$(mktemp -d)"
+trap 'rm -rf "$t"' EXIT
+tar -xzf "$dir/$RELEASE_BUNDLE" -C "$t"
+[[ -f $t/$RELEASE_AGENT.sig ]] || fail "lab-agent has no signature of its own"
+verified "$signers" "$t/$RELEASE_AGENT" || fail "lab-agent doesn't match its own signature by the release key"
+grep -qaF -- "$(release_key "$signers")" "$t/$RELEASE_AGENT" || fail "lab-agent doesn't carry the release key"
+if [[ -n $tag ]]; then
+  [[ "$(<"$t/lab-server/VERSION")" == "$tag" ]] || fail "the bundle is $(<"$t/lab-server/VERSION"), not $tag"
+  [[ "$(<"$dir/VERSION")" == "${tag#v}" ]] || fail "VERSION is $(<"$dir/VERSION"), not ${tag#v}"
+fi
+echo "verified ${tag:-$(<"$t/lab-server/VERSION")}: ${#RELEASE_FILES[@]} files and lab-agent, against $signers"

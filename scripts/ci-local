@@ -110,7 +110,7 @@ step_installer() {
     done
   fi
   run "installer" env PATH="$gnu$PATH" installer/test.sh
-  run "release tarball" env PATH="$gnu$PATH" release/check.sh
+  run "Lab release files" env PATH="$gnu$PATH" release/check.sh
 }
 
 step_catalogue() {

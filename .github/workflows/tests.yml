@@ -110,9 +110,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
       - name: Install, upgrade in place, refuse tampered and foreign-signed releases
         run: installer/test.sh
-      - name: The release tarball ships the catalogue and the vendored check scripts
+      - name: Every file of a Lab release, built unsigned, then signed with a throwaway key and verified
         run: release/check.sh
 
   catalogue:

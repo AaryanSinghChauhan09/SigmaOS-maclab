@@ -1,25 +1,62 @@
 #!/usr/bin/env bash
-# Build the CLI release tarball: release/build.sh OUTDIR
+# Build every file of a Lab release, unsigned: release/build.sh OUTDIR
 #
-# OUTDIR/omarchy-m-test.tar.gz unpacks to omarchy-m-test/ with bin/, the
-# omarchy_m_test package (the feature catalogue bundled as
-# omarchy_m_test/catalogue.json, Asahi's reference kernel config as
-# omarchy_m_test/asahi-kernel/, omarchy-mac's check scripts under
-# omarchy_m_test/vendor/, the on-screen video check under omarchy_m_test/testcard/) and VERSION. release/check.sh checks a built one. OUTDIR/VERSION is the version
-# on its own, which the CLI's newer-release check reads. Signing happens
-# separately (release.yml), so this runs anywhere with GNU tar.
+#   OUTDIR/omarchy-m-test.tar.gz   the test tool; unpacks to omarchy-m-test/
+#   OUTDIR/VERSION                 its number on its own, which the tool's
+#                                  newer-release check reads
+#   OUTDIR/lab-darwin-arm64, lab-linux-arm64, lab-linux-amd64
+#   OUTDIR/lab-server-darwin-arm64.tar.gz
+#                                  the mini's bundle; unpacks to lab-server/
+#   OUTDIR/.stage/                 the bundle unpacked, for release/sign.sh
+#
+# LAB_RELEASE is the tag being built, vX.Y.Z or vX.Y.Z-rc.N. It is the one
+# number of a Lab release: stamped into omarchy-m-test (over TOOL_VERSION in
+# cli/omarchy_m_test/__init__.py), lab and labd, and into lab-agent beside the
+# agent's own. With no LAB_RELEASE the Go commands say "dev" and the test tool
+# keeps the tree's number.
+#
+# RELEASE_ALLOWED_SIGNERS is the allowed_signers file whose key lab-agent
+# carries (default: release/allowed_signers, the release key).
+#
+# The tarball unpacks with bin/, the omarchy_m_test package (the feature
+# catalogue bundled as omarchy_m_test/catalogue.json, Asahi's reference kernel
+# config as omarchy_m_test/asahi-kernel/, omarchy-mac's check scripts under
+# omarchy_m_test/vendor/, the on-screen video check under
+# omarchy_m_test/testcard/) and VERSION. The bundle holds bin/ (labd, oobd and
+# lab-builder for the mini, the lab-agent handed to Macs), builder/, deploy/,
+# scripts/mini/, VERSION (the tag) and NOTES (the fixed lines of this
+# number's release notes, from release/notes/X.Y.Z.txt). release/check.sh
+# checks a built one. Signing happens separately (release/sign.sh), so this
+# runs anywhere with Go, Python and GNU tar.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-out="$(mkdir -p "$1" && cd "$1" && pwd)"
-version="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import omarchy_m_test as t; print(t.TOOL_VERSION)' "$repo/cli")"
+# shellcheck source=release/lib.sh
+. "$repo/release/lib.sh"
+gnu_tools
+die() { echo "release/build.sh: $*" >&2; exit 1; }
 
+version="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import omarchy_m_test as t; print(t.TOOL_VERSION)' "$repo/cli")"
+tag="${LAB_RELEASE:-}"
+if [[ -n $tag ]]; then
+  [[ $tag =~ $RELEASE_TAG ]] || die "$tag is not a Lab release's tag (vX.Y.Z or vX.Y.Z-rc.N)"
+  version="${tag#v}"
+fi
+signers="${RELEASE_ALLOWED_SIGNERS:-$repo/release/allowed_signers}"
+key="$(release_key "$signers")"
+[[ $key =~ ^[a-z0-9@.-]+\ [A-Za-z0-9+/=]+$ ]] || die "no key in $signers"
+
+out="$(mkdir -p "$1" && cd "$1" && pwd)"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 root="$stage/omarchy-m-test"
 mkdir -p "$root/bin" "$root/omarchy_m_test"
 install -m 0755 "$repo/cli/bin/omarchy-m-test" "$root/bin/omarchy-m-test"
 install -m 0644 "$repo"/cli/omarchy_m_test/*.py "$root/omarchy_m_test/"
+if [[ -n $tag ]]; then
+  sed -E "s/^TOOL_VERSION = \".*\"\$/TOOL_VERSION = \"$version\"/" "$repo/cli/omarchy_m_test/__init__.py" > "$root/omarchy_m_test/__init__.py"
+  grep -qxF "TOOL_VERSION = \"$version\"" "$root/omarchy_m_test/__init__.py" || die "couldn't stamp $version into the test tool"
+fi
 install -m 0644 "$repo/catalogue/catalogue.json" "$root/omarchy_m_test/catalogue.json"
 mkdir -p "$root/omarchy_m_test/asahi-kernel"
 install -m 0644 "$repo/catalogue/asahi-kernel/source.json" "$repo/catalogue/asahi-kernel/config" "$root/omarchy_m_test/asahi-kernel/"
@@ -49,7 +86,23 @@ printf '%s\n' "$version" > "$root/VERSION"
 
 # Reproducible: fixed order, owners and times.
 epoch="${SOURCE_DATE_EPOCH:-$(git -C "$repo" log -1 --format=%ct 2>/dev/null || echo 0)}"
-tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" -C "$stage" -cf - omarchy-m-test \
-  | gzip -9n > "$out/omarchy-m-test.tar.gz"
+pack "$stage" omarchy-m-test "$epoch" > "$out/omarchy-m-test.tar.gz"
 printf '%s\n' "$version" > "$out/VERSION"
-echo "built omarchy-m-test $version: $out/omarchy-m-test.tar.gz"
+
+# lab for its three machines, and the mini's bundle.
+rm -rf "$out/.stage"
+server="$out/.stage/lab-server"
+mkdir -p "$server"
+make -s -C "$repo" release-binaries RELEASE_OUT="$out" LAB_RELEASE="${tag:-dev}" RELEASE_KEY="$key"
+printf '%s\n' "${tag:-dev}" > "$server/VERSION"
+cat "$repo/release/notes/${version%%-rc.*}.txt" 2>/dev/null > "$server/NOTES" || true
+install -m 0644 "$repo/LICENSE" "$repo/THIRD_PARTY_NOTICES.md" "$server/"
+(cd "$repo" && for d in builder deploy scripts/mini; do
+  if [[ -d $d ]]; then find "$d" -type f ! -name '*.pyc' ! -path '*/__pycache__/*' ! -name '.DS_Store'; fi
+done | sort | while read -r f; do
+  install -D -m "$([[ -x $f ]] && echo 0755 || echo 0644)" "$f" "$server/$f"
+done)
+printf '%s\n' "$epoch" > "$out/.stage/epoch"
+pack "$out/.stage" lab-server "$epoch" > "$out/$RELEASE_BUNDLE"
+
+echo "built ${tag:-omarchy-m-test $version and a dev Lab release}, unsigned: $out"
