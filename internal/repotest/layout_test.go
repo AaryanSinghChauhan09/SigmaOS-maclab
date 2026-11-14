@@ -42,9 +42,9 @@ AGENTS.md
 scripts/ci-local
 `
 
-// Docker and Kubernetes went with the fork, and maclab's single-page
-// interface when every page got the one header; the rest are the paths the
-// two trees were joined under.
+// Docker and Kubernetes went with the fork, maclab's single-page interface
+// when every page got the one header, and lab shell with the serial
+// console; the rest are the paths the two trees were joined under.
 const gone = `
 Dockerfile
 .dockerignore
@@ -58,6 +58,7 @@ docs/tickets
 internal/web/static/index.html
 internal/web/static/manifest.json
 internal/web/static/vendor
+cmd/lab/shell.go
 scripts/fonts.py
 .held
 `

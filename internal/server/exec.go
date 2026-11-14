@@ -35,8 +35,17 @@ func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 			err = refuse(403, "%v", e)
 		}
 	}
+	name := v.snapshot().Name
 	if err == nil && !v.alive() {
-		err = refuse(409, "%s is offline, and lab exec reaches a Mac only through lab-agent. %s", v.snapshot().Name, api.NoSerialConsole)
+		err = refuse(409, "%s is offline, and lab exec reaches a Mac only through lab-agent. %s", name, api.NoSerialConsole)
+	}
+	// The request is a session of the Lease before the Lease is asked for
+	// once more: one that ended since the fence passed either shows here or
+	// cuts the session.
+	session, done := s.underLease(r, v, p)
+	defer done()
+	if err == nil && (session == r || !s.holdsLease(v, p)) {
+		err = refuse(409, "your Lease on %s ended as this command arrived, so it was not sent: `lab lease %s`", name, name)
 	}
 	if err != nil {
 		s.execRefused(v, p, a.Command, err)
@@ -48,8 +57,6 @@ func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, statusOf(err), "%v", err)
 		return
 	}
-	session, done := s.underLease(r, v, p)
-	defer done()
 	s.held(w, r, func() (any, error) {
 		res := api.ExecResult{Via: "agent"}
 		if err := v.call(session.Context(), api.CmdExec, "", a, time.Duration(a.TimeoutSec+30)*time.Second, &res); err != nil {
