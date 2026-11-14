@@ -228,7 +228,7 @@ const (
 	// with the last argument 1 only those for Lab-owned Macs.
 	madeBy = ` FROM tokens t JOIN join_commands j ON j.token_hash = t.token_hash
 		WHERE j.made_by = ? AND t.activated_by = '' AND (? = 0 OR j.volunteer_id = 0)`
-	dropOrphans  = `DELETE FROM join_commands WHERE token_hash NOT IN (SELECT token_hash FROM tokens)`
+	dropOrphans = `DELETE FROM join_commands WHERE token_hash NOT IN (SELECT token_hash FROM tokens)`
 )
 
 // scanJoinCommand is the Join command a row holds, nil when there is none.
