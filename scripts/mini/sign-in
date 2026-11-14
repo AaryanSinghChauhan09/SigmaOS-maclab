@@ -29,6 +29,7 @@ done
 (( DRY )) || need_root
 
 dir="$LAB_HOME/secrets"
+no_planted_link
 [[ -d $dir ]] || fail "no $dir: run scripts/mini/setup first"
 
 if (( DRY )); then
@@ -51,14 +52,7 @@ ask() {
 }
 
 # put NAME VALUE: the file NAME in the secrets folder, for the lab account alone.
-put() {
-  local tmp
-  tmp="$(umask 077 && mktemp "$dir/.$1.XXXXXX")"
-  printf '%s\n' "$2" > "$tmp"
-  chown "$LAB_OWNER:$LAB_GROUP" "$tmp"
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$dir/$1"
-}
+put() { printf '%s\n' "$2" | lab_file "$dir/$1"; }
 
 have() { [[ -s $dir/$1 ]]; }
 

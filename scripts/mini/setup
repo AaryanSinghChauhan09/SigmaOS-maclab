@@ -133,7 +133,7 @@ shape() {
 
 make_folder() {
   mkdir -p "$1"
-  chown "$2:$3" "$1"
+  chown -h "$2:$3" "$1"
   chmod "$4" "$1"
 }
 
@@ -148,8 +148,10 @@ folders() {
   for d in "$LAB_ROOT" "$LAB_BUILDS" "$LAB_TOOLS"; do
     folder "$d" "$ROOT_OWNER" "$ROOT_GROUP" 755
   done
-  for d in "$LAB_HOME" "$LAB_HOME/data" "$LAB_HOME/secrets" "$LAB_HOME/run" "$LAB_HOME/log"; do
-    folder "$d" "$LAB_OWNER" "$LAB_GROUP" 700
+  folder "$LAB_HOME" "$LAB_OWNER" "$LAB_GROUP" 700
+  for d in "$LAB_HOME/data" "$LAB_HOME/secrets" "$LAB_HOME/run" "$LAB_HOME/log"; do
+    [[ "$(looks "$d")" != "$(shape d 700) $LAB_OWNER:$LAB_GROUP" ]] || continue
+    change "make $d ($LAB_OWNER:$LAB_GROUP, 700)" lab_folder "$d" 700
   done
 }
 
@@ -309,11 +311,7 @@ seal_token() {
   chmod 0600 "$OOBD_TOKEN"
 }
 
-copy_token() {
-  (umask 077 && cp "$OOBD_TOKEN" "$LABD_OOBD_TOKEN.new")
-  chown "$LAB_OWNER:$LAB_GROUP" "$LABD_OOBD_TOKEN.new"
-  mv "$LABD_OOBD_TOKEN.new" "$LABD_OOBD_TOKEN"
-}
+copy_token() { lab_file "$LABD_OOBD_TOKEN" < "$OOBD_TOKEN"; }
 
 oobd_token() {
   if [[ -d $LAB_SECRETS && ! -r $LAB_SECRETS ]]; then
@@ -378,11 +376,7 @@ controller() {
 # reads its routes from the Deployed build.
 
 install_credential() {
-  rm -f "$TUNNEL_TOKEN.new"
-  (umask 077; cat "$credential" > "$TUNNEL_TOKEN.new")
-  chown "$LAB_OWNER:$LAB_GROUP" "$TUNNEL_TOKEN.new"
-  chmod 0400 "$TUNNEL_TOKEN.new"
-  mv -f "$TUNNEL_TOKEN.new" "$TUNNEL_TOKEN"
+  lab_file "$TUNNEL_TOKEN" 400 < "$credential"
   rm -f "$credential"
 }
 
@@ -424,6 +418,7 @@ tunnel() {
   change "start the tunnel ($CLOUDFLARED_LABEL) under $plist" start_tunnel
 }
 
+no_planted_link
 account
 folders
 release_key

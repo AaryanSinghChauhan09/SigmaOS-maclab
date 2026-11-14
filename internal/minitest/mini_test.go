@@ -135,6 +135,13 @@ const installerStub = `#!/bin/bash
 echo "installer $*" >> "$STUB_LOG"
 `
 
+// as-lab stands in for sudo -u lab: it writes down what the lab account was
+// asked to run, and runs it.
+const asLabStub = `#!/bin/bash
+echo "as-lab $*" >> "$STUB_LOG"
+exec "$@"
+`
+
 // brew keeps its kegs in Cellar/<formula>/<version> and links opt/<formula>
 // to the one in use, as Homebrew does. "install" makes version 1.0.
 const brewStub = `#!/bin/bash
@@ -172,6 +179,7 @@ func newMini(t *testing.T) *mini {
 	write(t, m.bin+"/launchctl", launchctlStub, 0o755)
 	write(t, m.bin+"/dscl", dsclStub, 0o755)
 	write(t, m.bin+"/installer", installerStub, 0o755)
+	write(t, m.bin+"/as-lab", asLabStub, 0o755)
 	write(t, m.root+"/opt/homebrew/bin/brew", brewStub, 0o755)
 	src := filepath.Join(repo(t), "scripts", "mini")
 	entries, err := os.ReadDir(src)
@@ -196,6 +204,7 @@ func newMini(t *testing.T) *mini {
 		"STUB_LOG="+m.log,
 		"STUB_STATE="+filepath.Join(root, "state"),
 		"LAB_VERIFY_TRIES=2",
+		"LAB_AS_LAB="+m.bin+"/as-lab",
 	)
 	return m
 }

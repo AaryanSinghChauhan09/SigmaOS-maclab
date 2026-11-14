@@ -22,6 +22,7 @@ ROOT_OWNER=root
 ROOT_GROUP=wheel
 LAB_OWNER=lab
 LAB_GROUP=lab
+AS_LAB=(sudo -n -u "$LAB_OWNER" --)
 
 # The tests stand a folder in for / (LAB_SYSROOT) and the account running
 # them in for root and lab. sudo drops the variable, and without it the
@@ -29,6 +30,7 @@ LAB_GROUP=lab
 SYSROOT="${LAB_SYSROOT:-}"
 if [[ -n $SYSROOT ]]; then
   ROOT_OWNER="$(id -un)" ROOT_GROUP="$(id -gn)" LAB_OWNER="$(id -un)" LAB_GROUP="$(id -gn)"
+  AS_LAB=("${LAB_AS_LAB:-env}")
   LABD_LISTEN="${LAB_LOOPBACK:-$LABD_LISTEN}"
   OOBD_LISTEN="${LAB_OOBD_LOOPBACK:-$OOBD_LISTEN}"
   FRONT_DOOR="${LAB_FRONT_DOOR:-$FRONT_DOOR}"
@@ -109,6 +111,58 @@ owner_of() {
 looks() {
   # shellcheck disable=SC2012
   ls -ld "$1" 2>/dev/null | awk '{ print substr($1, 1, 10), $3 ":" $4 }'
+}
+
+# The lab account owns /var/lab, so whoever has its rights can put a link
+# there, a hard link too, or swap one in while a script runs. Root therefore
+# writes, chowns and chmods nothing below /var/lab with its own hand: that
+# account does it, which reaches only what it could already write, and a
+# symbolic link found there is refused.
+
+# as_lab COMMAND...: run a program as the lab account.
+as_lab() { (cd / && "${AS_LAB[@]}" "$@"); }
+
+planted() {
+  fail "$1 is a symbolic link (to $(readlink "$1")), and nothing the lab keeps there is one: whoever has the $LAB_OWNER account's rights put it there. Nothing was written through it. Look at what else that account did, remove the link and run this again"
+}
+
+# no_link PATH...: refuse when PATH, or a folder between it and /var/lab, is
+# a symbolic link.
+no_link() {
+  local p
+  for p in "$@"; do
+    while :; do
+      [[ ! -L $p ]] || planted "$p"
+      [[ $p == "$LAB_HOME"/* ]] || break
+      p="$(dirname "$p")"
+    done
+  done
+}
+
+# no_planted_link: the same for /var/lab, its folders and its secrets, to
+# refuse before anything is changed.
+no_planted_link() {
+  local link
+  link="$(find "$LAB_HOME" "$LAB_HOME/secrets" -maxdepth 1 -type l 2>/dev/null | head -n 1 || true)"
+  [[ -z $link ]] || planted "$link"
+}
+
+# lab_folder PATH MODE: a folder below /var/lab, the lab account's.
+lab_folder() {
+  no_link "$1"
+  [[ -d $1 ]] || as_lab mkdir "$1" || fail "$LAB_OWNER could not make the folder $1"
+  { as_lab chown -h "$LAB_OWNER:$LAB_GROUP" "$1" && as_lab chmod "$2" "$1"; } || fail "$1 is not $LAB_OWNER's to set: look at what it is, remove it and run this again"
+}
+
+# lab_file PATH [MODE]: standard input becomes the file PATH below /var/lab,
+# written by the lab account: under PATH.new, which is made only if nothing
+# has that name, then moved into place.
+lab_file() {
+  no_link "$1" "$1.new"
+  [[ ! -d $1 ]] || fail "$1 is a folder"
+  # shellcheck disable=SC2016
+  as_lab /bin/sh -c 'umask 077; set -C; rm -f "$1.new" && cat > "$1.new" && chmod "$2" "$1.new" && mv -f "$1.new" "$1"' lab-file "$1" "${2:-600}" ||
+    fail "$LAB_OWNER could not write $1"
 }
 
 # fetch URL FILE: https, or a file on this machine.

@@ -110,7 +110,7 @@ verify() {
   answers --unix-socket "$LABD_SOCKET" -H 'X-Forwarded-Proto: https' "http://$LAB_HOST/healthz" || say "labd does not answer on $LABD_SOCKET"
   if [[ -f $LABD_LOG ]]; then
     say "the end of $LABD_LOG:"
-    tail -n 20 "$LABD_LOG" | sed 's/^/    /'
+    as_lab tail -n 20 "$LABD_LOG" | sed 's/^/    /'
   fi
   return 1
 }
