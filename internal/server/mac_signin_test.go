@@ -495,7 +495,10 @@ func TestThePersonAndAMaintainerEachEndAMacSignIn(t *testing.T) {
 	if len(l.macSignIns(edithID)) != 2 {
 		t.Fatal("a Mac was signed out at the first click")
 	}
-	// Nobody ends another person's sign-in from their own page.
+	// Nobody ends another person's sign-in from their own page, or is asked about it.
+	if w := grace.post(mine); w.Code != http.StatusNotFound {
+		t.Errorf("grace's first click on edith's Mac: %d", w.Code)
+	}
 	if w := grace.post(mine, "sure", "yes"); w.Code != http.StatusNotFound || len(l.macSignIns(edithID)) != 2 {
 		t.Errorf("grace signing edith's Mac out from her own page: %d", w.Code)
 	}

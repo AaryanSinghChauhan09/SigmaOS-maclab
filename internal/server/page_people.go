@@ -79,8 +79,8 @@ type personOpen struct {
 	BlockSentence string
 	LeavesTeam    string // the sentence of Remove from M team
 	Tokens        []meToken
-	// Macs are the Macs signed in as the person.
-	Macs []macSignedIn
+	// MacsSignedIn are the Macs signed in as the person.
+	MacsSignedIn []macSignedIn
 	// EndAll is the sentence of "End all access", "" when the viewer may
 	// not use it on this person.
 	EndAll string
@@ -201,7 +201,7 @@ func (s *Server) openPerson(me *Person, k knownPerson, handles map[int64]string,
 		}
 	}
 	if macs, err := s.macsSignedInAs(k.AccountID); err == nil {
-		o.Macs = macs
+		o.MacsSignedIn = macs
 	} else {
 		s.log.Printf("People: the Macs signed in as @%s: %v", k.Handle, err)
 	}

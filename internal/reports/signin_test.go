@@ -551,6 +551,23 @@ func TestABlockedPersonGetsTheBlockedSentenceAndTheirMacsReportsAreCommunityRuns
 	}
 }
 
+// A Blocked person's attempt on a Mac someone else is signed in on changes
+// nothing of theirs.
+func TestABlockedPersonsSignInLeavesTheMacSignedInAsItWas(t *testing.T) {
+	d := newSignInDesk(t)
+	d.signInOn(t, "a", account{4242, "MaralcBR"})
+	before := d.store.list(t, `SELECT handle || ' ' || account_id || ' ' || updated_at FROM mac_sign_ins`)
+	d.people.blocked[66] = true
+	d.now = d.now.Add(time.Minute)
+
+	if a := d.signInOn(t, "a", account{66, "shut-out"}); a.status != http.StatusForbidden {
+		t.Fatalf("answered %d %v", a.status, a.body)
+	}
+	if after := d.store.list(t, `SELECT handle || ' ' || account_id || ' ' || updated_at FROM mac_sign_ins`); !reflect.DeepEqual(after, before) {
+		t.Errorf("the Mac's sign-in went from %q to %q", before, after)
+	}
+}
+
 // A Block that lands while the sign-in is on its way leaves no sign-in.
 func TestABlockDuringASignInLeavesNoSignIn(t *testing.T) {
 	d := newSignInDesk(t)
