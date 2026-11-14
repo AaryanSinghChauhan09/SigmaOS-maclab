@@ -127,6 +127,11 @@ type Config struct {
 	// who may also add and remove Maintainers. They are named here and on
 	// no screen.
 	Admins []int64
+	// Signal is the lab's Signal sender; nil records every line for the two
+	// groups and posts none. SignalDir is the folder with the groups' ids
+	// (see groupFiles): a group with no id there gets nothing.
+	Signal    Sender
+	SignalDir string
 	// Clock is where labd reads time; nil is the wall clock.
 	Clock agent.Clock
 }
@@ -154,6 +159,11 @@ type Server struct {
 	callers     *callerLog
 	signIns     signInStates
 	site        *web.Site
+	// lines is the record of what the two Signal groups are told; labGroup
+	// and agents hold a function for each event (lines_lab.go, lines_agents.go).
+	lines    *lines
+	labGroup labGroupLines
+	agents   agentsLines
 }
 
 // clock is where labd reads time: Config.Clock, or the wall clock when unset.
@@ -269,6 +279,9 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, callers: callers}
 	s.start = s.now()
+	s.lines = newLines(st, s.clock(), logger, cfg.Signal, cfg.SignalDir)
+	s.labGroup = labGroupLines{l: s.lines, link: s.pageAddress}
+	s.agents = agentsLines{s.lines}
 	if rules != nil {
 		s.uploads = reports.NewUploads(rep, rules, s.now)
 	}
@@ -332,6 +345,8 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	s.reconcileRunningBuilds()
 	go s.monitor()
 	go s.buildMonitor()
+	go s.lines.run(ctx)
+	go s.summaryLoop()
 	go s.gcLoop()
 	go s.omtScheduler()
 	go s.callerLogLoop()

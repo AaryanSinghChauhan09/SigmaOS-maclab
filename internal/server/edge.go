@@ -100,6 +100,15 @@ func (s *Server) labAddress() string {
 	return s.cfg.PublicURL.String()
 }
 
+// pageAddress is the address of a page of the lab, as a line for a Signal
+// group gives it; "" when labd was given no Lab address.
+func (s *Server) pageAddress(path string) string {
+	if s.cfg.PublicURL == nil {
+		return ""
+	}
+	return strings.TrimSuffix(s.cfg.PublicURL.String(), "/") + path
+}
+
 // labName is the name labd goes by in what it writes: the Lab address's
 // host, or the name r asked for when labd was given no Lab address.
 func (s *Server) labName(r *http.Request) string {

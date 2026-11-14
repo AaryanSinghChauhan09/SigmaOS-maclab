@@ -1,0 +1,97 @@
+package server
+
+import "time"
+
+// brisbane is the time lines are told in. Brisbane keeps one offset all year.
+var brisbane = time.FixedZone("AEST", 10*60*60)
+
+// when is a time as a line says it: Sat 14:30 AEST.
+func when(t time.Time) string { return t.In(brisbane).Format("Mon 15:04 MST") }
+
+// agentsLines are the lines the owner's group "Agents" gets: one for each
+// change of who someone is, each new Lab token and each cut a Maintainer
+// makes, and the lab's operations alerts. The people lines carry the
+// handle; the line for a forgetting carries only who carried it out.
+type agentsLines struct{ l *lines }
+
+func (a agentsLines) MTeamMarked(by, handle string) {
+	a.l.post(lineAgents, by+" marked "+handle+" as M team.")
+}
+
+func (a agentsLines) MTeamUnmarked(by, handle string) {
+	a.l.post(lineAgents, by+" removed the M team mark from "+handle+".")
+}
+
+func (a agentsLines) MaintainerAdded(by, handle string) {
+	a.l.post(lineAgents, by+" made "+handle+" a Maintainer.")
+}
+
+func (a agentsLines) MaintainerRemoved(by, handle string) {
+	a.l.post(lineAgents, by+" removed "+handle+" as a Maintainer.")
+}
+
+func (a agentsLines) Blocked(by, handle string) {
+	a.l.post(lineAgents, by+" blocked "+handle+".")
+}
+
+func (a agentsLines) Unblocked(by, handle string) {
+	a.l.post(lineAgents, by+" unblocked "+handle+".")
+}
+
+func (a agentsLines) RequestToLendAnswered(by, handle string, approved bool) {
+	verb := " declined "
+	if approved {
+		verb = " approved "
+	}
+	a.l.post(lineAgents, by+verb+handle+"'s Request to lend.")
+}
+
+func (a agentsLines) Invited(by, handle string) {
+	a.l.post(lineAgents, by+" gave "+handle+" an Invite.")
+}
+
+// LabTokenMade is a new Lab token: who, its name, its expiry. A zero
+// expires is a token that never expires.
+func (a agentsLines) LabTokenMade(handle, name string, expires time.Time) {
+	end := "which never expires."
+	if !expires.IsZero() {
+		end = "which expires on " + expires.In(brisbane).Format(time.DateOnly) + "."
+	}
+	a.l.post(lineAgents, handle+` made the Lab token "`+name+`", `+end)
+}
+
+// LabTokenRevoked is a Maintainer revoking another person's Lab token.
+func (a agentsLines) LabTokenRevoked(by, handle, name string) {
+	a.l.post(lineAgents, by+" revoked "+handle+`'s Lab token "`+name+`".`)
+}
+
+// EndedAllAccess is a Maintainer using "End all access" on another person.
+func (a agentsLines) EndedAllAccess(by, handle string) {
+	a.l.post(lineAgents, by+` used "End all access" on `+handle+".")
+}
+
+// Forgot is a forgetting: who carried it out and when, and nobody's handle
+// but theirs.
+func (a agentsLines) Forgot(by string, at time.Time) {
+	a.l.post(lineAgents, by+" carried out a forgetting at "+at.In(brisbane).Format("2006-01-02 15:04 MST")+".")
+}
+
+// Trouble tells "Agents" of a trouble named key, once: while it lasts,
+// saying it again posts nothing. It says whether the line was recorded.
+func (a agentsLines) Trouble(key, text string) bool {
+	if !a.l.markOnce("trouble:"+key, "trouble") {
+		return false
+	}
+	a.l.post(lineAgents, text)
+	return true
+}
+
+// Recovered tells "Agents" the trouble named key is over, once, and only
+// if "Agents" was told of it.
+func (a agentsLines) Recovered(key, text string) bool {
+	if !a.l.unmark("trouble:" + key) {
+		return false
+	}
+	a.l.post(lineAgents, text)
+	return true
+}
