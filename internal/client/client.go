@@ -338,9 +338,9 @@ func (c *Client) Jobs(ctx context.Context, device string, limit int) ([]*api.Job
 }
 
 // Wait long-polls until the job is done or timeout passes, returning its latest state.
-// waitSlice is the longest one wait request lasts. A reverse proxy in front of
-// labd may cut a request that sends nothing for a minute (nginx's default),
-// so Wait asks again until timeout instead of holding one request open.
+// waitSlice is the longest one wait request lasts, and the longest labd holds
+// one: the Front door cuts a request that sends nothing for 125 s. Wait asks
+// again until timeout instead of holding one request open.
 const waitSlice = 50 * time.Second
 
 func (c *Client) Wait(ctx context.Context, id string, timeout time.Duration) (*api.Job, error) {

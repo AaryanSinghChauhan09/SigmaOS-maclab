@@ -1895,31 +1895,35 @@ func (s *Server) hJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, j)
 }
 
-// hWait long-polls until the job is done or the timeout passes.
+// hWait holds until the job is done, the job has more events than the
+// caller says it has seen (?events=), or the time asked for passes (?timeout=,
+// in seconds): 50 s at most, so the caller asks again. A waiter that is cut
+// leaves its job as it is.
 func (s *Server) hWait(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	sec, _ := strconv.Atoi(r.URL.Query().Get("timeout"))
-	if sec <= 0 || sec > 3600 {
-		sec = 60
+	deadline := s.now().Add(waitFor(r, "timeout", maxWait))
+	seen := -1
+	if q := r.URL.Query(); q.Has("events") {
+		seen, _ = strconv.Atoi(q.Get("events"))
 	}
-	deadline := s.now().Add(time.Duration(sec) * time.Second)
 	c := callerOf(r)
 	for {
-		// jobInScope asked once, but a wait lasts up to an hour: a person a
+		// jobInScope asked once, but a wait lasts a while: a person a
 		// Maintainer unlinks meanwhile gets nothing more of the job.
 		j, err := s.store.job(id)
 		if err != nil || !s.seesJob(c, j) {
 			httpErr(w, 404, "no job %s", id)
 			return
 		}
-		if j.State == api.JobDone || s.now().After(deadline) {
+		left := deadline.Sub(s.now())
+		if j.State == api.JobDone || (seen >= 0 && len(j.Events) > seen) || left <= 0 {
 			writeJSON(w, j)
 			return
 		}
 		select {
 		case <-r.Context().Done():
 			return
-		case <-s.clock().After(500 * time.Millisecond):
+		case <-s.clock().After(min(500*time.Millisecond, left)):
 		}
 	}
 }

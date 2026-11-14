@@ -871,15 +871,16 @@ func submit(ctx context.Context, c *client.Client, spec api.JobSpec, noWait bool
 	return follow(ctx, c, j.ID)
 }
 
-// follow prints a job's events as they happen, then its result.
+// follow prints a job's events as they happen, then its result. Each wait is
+// one call labd holds for at most 50 s, until the job has more to show.
 func follow(ctx context.Context, c *client.Client, id string) error {
 	seen := 0
 	for {
-		j, err := c.Job(ctx, id)
+		j, err := c.WaitPast(ctx, id, seen)
 		if err != nil {
 			return err
 		}
-		for _, e := range j.Events[seen:] {
+		for _, e := range j.Events[min(seen, len(j.Events)):] {
 			fmt.Printf("  %s  %s\n", e.Time.Format(time.TimeOnly), e.Msg)
 		}
 		seen = len(j.Events)
@@ -891,7 +892,6 @@ func follow(ctx context.Context, c *client.Client, id string) error {
 			}
 			return nil
 		}
-		time.Sleep(2 * time.Second)
 	}
 }
 
