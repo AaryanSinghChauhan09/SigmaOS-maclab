@@ -12,6 +12,7 @@ import (
 const present = `
 cmd
 internal
+internal/reports
 builder
 specs
 tools
