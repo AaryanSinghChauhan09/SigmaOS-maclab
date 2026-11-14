@@ -77,12 +77,21 @@ func (s *Server) deviceLoop(v *dev) {
 			if err != nil || j.State == api.JobDone {
 				continue
 			}
+			if !s.startJob(v) {
+				return
+			}
+			// It waited for a drain to be lifted: it may have been canceled.
+			if j, err = s.store.job(id); err != nil || j.State == api.JobDone {
+				s.endJob()
+				continue
+			}
 			ctx, cancel := context.WithCancel(s.ctx)
 			s.mu.Lock()
 			s.cancels[id] = cancel
 			s.mu.Unlock()
 			s.runJob(ctx, v, j)
 			cancel()
+			s.endJob()
 			s.mu.Lock()
 			delete(s.cancels, id)
 			delete(s.cancelWhy, id)

@@ -155,6 +155,9 @@ func (s *Server) claimBuild(c builderCred, host, where string) (*api.Build, erro
 			return nil, nil
 		}
 	}
+	if s.buildsHeld() {
+		return nil, nil
+	}
 	q, err := s.store.builds(`state='queued' AND (` + where + `) ORDER BY COALESCE(json_extract(data, '$.by_team'), 0) ASC, created ASC LIMIT 1`)
 	if err != nil || len(q) == 0 {
 		return nil, err

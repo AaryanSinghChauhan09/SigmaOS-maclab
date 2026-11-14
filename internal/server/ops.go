@@ -5,9 +5,11 @@ package server
 // Deploy, a Maintenance run (scripts/mini/notify). It is a second Unix
 // socket, which only the account labd runs as can open, and that is the
 // whole credential: no token, nothing in an argument. It takes a line for
-// "Agents" and nothing else, and none of the lab's own routes is on it.
-// The tunnel's socket has no such route: what arrives there comes from
-// the internet.
+// "Agents", and what a Deploy and a Maintenance run need before and after
+// they restart labd: the drain of jobs, and how the Builder and the
+// Out-of-band controller are. None of the lab's own routes is on it. The
+// tunnel's socket has no such route: what arrives there comes from the
+// internet.
 
 import (
 	"fmt"
@@ -43,7 +45,13 @@ func (s *Server) OpsServer() *http.Server {
 //	POST /agents/trouble/{key}    the same, told once while the trouble lasts
 //	POST /agents/recovered/{key}  told only if "Agents" was told of that trouble
 //
-// The answer says whether the line was recorded.
+//	POST /drain                   start no further job; the answer is how many
+//	                              jobs and builds still run, as "2 1"
+//	DELETE /drain                 start jobs again
+//	GET /parts                    "builder ok|silent|none" and
+//	                              "controller ok|bad|none"
+//
+// The answer to a line says whether it was recorded.
 func (s *Server) OpsHandler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("POST /agents/line", func(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +80,9 @@ func (s *Server) OpsHandler() http.Handler {
 	}
 	m.HandleFunc("POST /agents/trouble/{key}", keyed(s.agents.Trouble))
 	m.HandleFunc("POST /agents/recovered/{key}", keyed(s.agents.Recovered))
+	m.HandleFunc("POST /drain", s.opsDrain)
+	m.HandleFunc("DELETE /drain", s.opsLift)
+	m.HandleFunc("GET /parts", s.opsParts)
 	return m
 }
 

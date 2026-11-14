@@ -165,6 +165,9 @@ type Server struct {
 	// the machine-id key, which names the Mac.
 	macSignIns *reports.MacSignIns
 
+	// drain holds queued jobs back before a Deploy or a Maintenance run.
+	drain drain
+
 	mu          sync.Mutex
 	devs        map[string]*dev // by name
 	cancels     map[string]context.CancelFunc
