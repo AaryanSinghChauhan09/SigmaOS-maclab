@@ -1,3 +1,5 @@
+//go:build linux
+
 // lab-esp is a standalone, explicitly reviewed rotation helper; it does not run
 // as a daemon. Applying a plan requires authorization outside this program.
 package main

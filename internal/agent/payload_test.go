@@ -24,6 +24,7 @@ func payloadSpec(files ...api.PayloadFile) api.TestSpec {
 }
 
 func TestAScriptFindsItsPayloadFilesInMACLAB_IN(t *testing.T) {
+	needsLinux(t, "the script calls GNU stat")
 	mod, fw := strings.Repeat("b", 64), strings.Repeat("c", 64)
 	files := map[string]string{
 		strings.Repeat("a", 64): "#!/bin/bash\nset -e\ntest -x \"$MACLAB_IN/mod.ko\"\ncat \"$MACLAB_IN/mod.ko\" \"$MACLAB_IN/fw.bin\" > \"$MACLAB_OUT/got\"\nls \"$MACLAB_IN\" > \"$MACLAB_OUT/names\"\nstat -c %a \"$MACLAB_IN\" > \"$MACLAB_OUT/mode\"\n",

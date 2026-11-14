@@ -1,3 +1,5 @@
+//go:build linux
+
 // lab-workflow is a local resumable coordinator. It uses the existing lab admin
 // client only for explicit submit/wait phases; it installs no daemon or agent.
 package main

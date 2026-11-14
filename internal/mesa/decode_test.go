@@ -35,6 +35,7 @@ func expandTest(t *testing.T, data []byte) []byte {
 	return raw
 }
 func TestStageZstdFrameAndTarTailAdmission(t *testing.T) {
+	needsLinux(t, "/usr/bin/zstd")
 	for _, which := range []string{"valid-large-pad", "valid-max-pad", "nonzero", "unaligned-pad", "excess-pad", "second-tar", "second-zstd-frame", "skippable-frame", "malformed-zstd"} {
 		t.Run(which, func(t *testing.T) {
 			root, spec, fetch, tools, store := fixture(t)
@@ -87,6 +88,7 @@ func TestStageZstdFrameAndTarTailAdmission(t *testing.T) {
 	}
 }
 func TestDecodeDeadlineReapsActualStalledProcessBeforeAndAfterTarEnd(t *testing.T) {
+	needsLinux(t, "/usr/bin/zstd")
 	for _, afterEnd := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before-header", true: "after-tar-end"}[afterEnd], func(t *testing.T) {
 			root, spec, _, _, store := fixture(t)

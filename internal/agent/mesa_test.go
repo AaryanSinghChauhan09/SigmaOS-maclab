@@ -15,6 +15,7 @@ import (
 // The runtime's adversarial tests use temporary files, simulated unit metadata
 // and CPU-only subprocesses. They do not initialize a GPU or systemd service.
 func TestMesaRuntimeHostControls(t *testing.T) {
+	needsLinux(t, "the runtime opens files with O_PATH")
 	if _, e := exec.LookPath("python3"); e != nil {
 		t.Skip("python3 unavailable")
 	}
@@ -115,6 +116,7 @@ func TestOfficialEmbeddedSourceClosureKeepsReviewedBytes(t *testing.T) {
 	}
 }
 func TestOfficialIntegrationHostControls(t *testing.T) {
+	needsLinux(t, "the integration opens files with O_PATH")
 	cmd := exec.Command("python3", "-B", "-m", "unittest", "discover", "-s", ".", "-p", "test_mesa_official_integration.py")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("official source integration: %v\n%s", err, output)

@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package workflow journals reviewed lab operations on the client. It does not
 // own packages, boot entries, recovery references, authorization, or leases.
 package workflow

@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package esprotation implements explicit, reversible UKI retirement. It never
 // discovers deletion candidates, promotes a kernel, changes a default or boots.
 package esprotation

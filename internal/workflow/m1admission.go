@@ -1,3 +1,5 @@
+//go:build linux
+
 package workflow
 
 // This optional adapter runs only in the standalone client process. It changes

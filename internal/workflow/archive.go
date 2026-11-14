@@ -1,3 +1,5 @@
+//go:build linux
+
 package workflow
 
 // Only completed bind outputs may be externalized. Their full canonical bytes

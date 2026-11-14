@@ -305,6 +305,7 @@ func TestJoinCommandForPlainHTTPAndUnsafeURLs(t *testing.T) {
 // record what they were given: the token reaches both on stdin, and no
 // process's arguments, while the download is checked against its sha256.
 func TestJoinCommandRunsWithTheTokenInNoArguments(t *testing.T) {
+	needsLinux(t, "the Join command runs on Omarchy and calls GNU sha256sum")
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("no bash")

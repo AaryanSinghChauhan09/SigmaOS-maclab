@@ -82,6 +82,7 @@ func fixture(t *testing.T) (string, api.MesaSpec, Fetch, map[string]string, map[
 	return root, spec, fetch, tools, store
 }
 func TestStageCoherentPrefix(t *testing.T) {
+	needsLinux(t, "/usr/bin/zstd")
 	root, spec, fetch, tools, _ := fixture(t)
 	m, e := stageWith(context.Background(), root, "j1026-010203-abcd", spec, fetch, tools)
 	if e != nil {
@@ -217,6 +218,7 @@ func TestSafeHashNoDataOpenForSpecialFiles(t *testing.T) {
 }
 
 func TestOfficialArchiveStagesOnlyExactReviewedCASBytes(t *testing.T) {
+	needsLinux(t, "/usr/bin/zstd")
 	for _, bad := range []bool{false, true} {
 		t.Run(fmt.Sprint("bad=", bad), func(t *testing.T) {
 			root, spec, fetch, tools, store := fixture(t)
