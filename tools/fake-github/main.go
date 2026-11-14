@@ -1,5 +1,7 @@
 // Command fake-github serves internal/githubtest on a loopback port, so a
-// labd under development has something to sign people in against:
+// labd under development has something to sign people in against, with a
+// browser or, for a Mac, with the device flow (the code a Mac shows is
+// typed at /login/device):
 //
 //	go run ./tools/fake-github --files /tmp/lab/sign-in --user ada:1001 --user grace:1002
 //	labd --sign-in /tmp/lab/sign-in --github-url http://127.0.0.1:7791 ...

@@ -2,14 +2,18 @@
 
 By default the lab is tests/fake_lab.py, which answers as cli/README.md says
 Omarchy Mac Lab does. With OMARCHY_M_TEST_LABD naming a built labd, the
-upload also runs against that labd, started here on a loopback port with an
-empty data directory and a throwaway machine-id key.
+upload and the status also run against that labd, started here on a loopback
+port with an empty data directory and a throwaway machine-id key. With
+OMARCHY_M_TEST_FAKE_GITHUB naming a built tools/fake-github as well, so does
+the whole of sign-in: the device flow, the sign-in, a Verified upload and the
+sign-out.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -27,6 +31,7 @@ from tests import fake_lab
 from tests.test_seam_a import SCHEMA_DIR
 
 LABD = os.environ.get("OMARCHY_M_TEST_LABD")
+FAKE_GITHUB = os.environ.get("OMARCHY_M_TEST_FAKE_GITHUB")
 SIGNED_GOLDEN = os.path.join(SCHEMA_DIR, "golden", "signed", "m2-max-image2.json")
 
 
@@ -50,6 +55,20 @@ class Mac(RealHost):
     @property
     def output(self) -> str:
         return "\n".join(self.lines)
+
+
+class PersonAtGitHub(Mac):
+    """A Mac whose person types the code it shows at the stand-in for GitHub, as `account`, while the Mac waits."""
+
+    def __init__(self, state: str, github: str, account: int) -> None:
+        super().__init__(state)
+        self.github, self.account = github, account
+
+    def sleep(self, seconds: float) -> None:
+        code = re.search(r"enter: (\S+)", self.output)
+        if code:
+            with urllib.request.urlopen(f"{self.github}/login/device?user_code={code.group(1)}&as={self.account}", timeout=10):
+                pass
 
 
 @unittest.skipUnless(shutil.which("ssh-keygen"), "needs ssh-keygen")
@@ -207,6 +226,38 @@ class LabdTest(unittest.TestCase):
         mac = Mac(state)
         return main([*argv, "--site", url], mac), mac.output
 
+    def fake_github(self, *accounts: str) -> tuple[str, str]:
+        """tools/fake-github on a port of its own choosing: its address, and the folder labd's --sign-in reads."""
+        files = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, files)
+        users = [flag for account in accounts for flag in ("--user", account)]
+        process = subprocess.Popen([FAKE_GITHUB, "--listen=127.0.0.1:0", f"--files={files}", *users],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(process.wait)
+        self.addCleanup(process.stderr.close)
+        self.addCleanup(process.terminate)
+        said = process.stderr.readline()
+        address = re.search(r"on (http://127\.0\.0\.1:\d+) ", said)
+        self.assertIsNotNone(address, f"fake-github said {said!r}")
+        with open(os.path.join(files, "github-client-id"), encoding="ascii") as f:
+            client_id = f.read().strip()
+        for name, value in (("DEVICE_CODE_URL", address.group(1) + "/login/device/code"),
+                            ("TOKEN_URL", address.group(1) + "/login/oauth/access_token"), ("GITHUB_CLIENT_ID", client_id)):
+            patch = mock.patch.object(tester, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        return address.group(1), files
+
+    def golden_signed_by(self, state: str, name: str) -> str:
+        """A golden report, signed by the Mac that keeps its key in `state`, as a run saves it."""
+        with open(os.path.join(SCHEMA_DIR, "golden", f"{name}.json"), encoding="utf-8") as f:
+            report, unsigned_because = signing.sign(Mac(state), json.load(f))
+        self.assertIsNone(unsigned_because)
+        path = os.path.join(state, f"{name}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(report, indent=2) + "\n")
+        return path
+
     def test_upload_a_saved_report_then_the_same_again(self):
         url = self.labd()
 
@@ -229,9 +280,72 @@ class LabdTest(unittest.TestCase):
     def test_status_of_a_mac_that_never_signed_in(self):
         url = self.labd()
         status, said = self.cli(url, "--status")
-        if said.endswith("404 page not found."):
-            self.skipTest("this labd has no Mac sign-in yet: sign-in, status and sign-out against labd wait for it")
         self.assertEqual((status, said.split(":")[0]), (0, "Not signed in"))
+
+    @unittest.skipUnless(FAKE_GITHUB, "set OMARCHY_M_TEST_FAKE_GITHUB to a built tools/fake-github to sign a Mac in against labd")
+    def test_sign_in_status_a_verified_upload_and_sign_out(self):
+        github, files = self.fake_github("ada:1001", "grace:1002")
+        with open(os.path.join(files, "admins"), "w", encoding="ascii") as f:
+            f.write("1001\n")  # an Admin is on the Omarchy M team
+        url = self.labd(f"--sign-in={files}", f"--github-url={github}")
+        state = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, state)
+
+        def cli(*argv: str, account: int = 1001) -> tuple[int, str]:
+            mac = PersonAtGitHub(state, github, account)
+            return main([*argv, "--site", url], mac), mac.output
+
+        verified = "Signed in as @ada. This Mac's runs are published as Verified runs."
+        status, said = cli("--sign-in")
+        self.assertEqual(status, 0, said)
+        self.assertEqual(said.splitlines()[-1], verified)
+        with open(os.path.join(state, tester.LINK_NAME), encoding="utf-8") as f:
+            self.assertEqual(json.load(f), {"link_version": 1, "login": "ada", "tester": True})
+        self.assertEqual(cli("--status"), (0, verified))
+
+        report = self.golden_signed_by(state, "m2-max-image2")
+        status, said = cli("--upload", report)
+        self.assertEqual(status, 0, said)
+        uploaded, keep, counts = said.splitlines()
+        link = uploaded.removeprefix("Uploaded. Your report: ")
+        self.assertTrue(link.startswith(f"{url}/reports/"), said)
+        self.assertEqual(counts, "It counts as a Verified run.")
+        with urllib.request.urlopen(link, timeout=10) as page:
+            self.assertIn("Verified run", page.read().decode("utf-8"))
+        self.assertEqual(cli("--upload", report), (0, f"Already uploaded. Your report: {link}"))
+
+        status, said = cli("--sign-out")
+        self.assertEqual(status, 0, said)
+        self.assertIn("Signed out @ada. From now on this Mac's runs are published as Community runs", said)
+        self.assertFalse(os.path.exists(os.path.join(state, tester.LINK_NAME)))
+        self.assertIn("Not signed in:", cli("--status")[1])
+        status, said = cli("--upload", self.golden_signed_by(state, "m2-max-converged"))
+        self.assertEqual(status, 0, said)
+        self.assertNotIn("Verified", said)
+
+        # Someone outside the Omarchy M team: signed in, and their runs are Community runs.
+        status, said = cli("--sign-in", account=1002)
+        self.assertEqual(status, 0, said)
+        self.assertEqual(said.splitlines()[-1], "Signed in as @grace. This Mac's runs are published as Community runs; "
+                                                "Verified runs come from Macs of the Omarchy M team.")
+        status, said = cli("--upload", self.golden_signed_by(state, "m1-pro-mx-mac"))
+        self.assertEqual(status, 0, said)
+        self.assertNotIn("Verified", said)
+
+    @unittest.skipUnless(FAKE_GITHUB, "set OMARCHY_M_TEST_FAKE_GITHUB to a built tools/fake-github to sign a Mac in against labd")
+    def test_in_preview_the_sign_in_is_refused_with_the_line_pointing_at_the_old_site(self):
+        github, files = self.fake_github("ada:1001")
+        url = self.labd("--preview", f"--sign-in={files}", f"--github-url={github}")
+        state = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, state)
+        mac = PersonAtGitHub(state, github, 1001)
+
+        status = main(["--sign-in", "--site", url], mac)
+
+        self.assertEqual(status, 5)
+        self.assertEqual(mac.output.splitlines()[-1], f"Sign-in failed: {fake_lab.PREVIEW_SIGN_IN} "
+                                                      "Nothing changed; run omarchy-m-test --sign-in to try again.")
+        self.assertFalse(os.path.exists(os.path.join(state, tester.LINK_NAME)))
 
 
 if __name__ == "__main__":

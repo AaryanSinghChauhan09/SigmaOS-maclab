@@ -57,7 +57,7 @@ step_go() {
   # shellcheck disable=SC2086
   run "go test${RACE:+ -race}" go test $RACE -timeout 40m ./...
   run "make all" make all
-  run "omarchy-m-test against labd" in_dir cli env OMARCHY_M_TEST_LABD="$PWD/bin/labd" python3 -m unittest tests.test_lab_wire
+  run "omarchy-m-test against labd" in_dir cli env OMARCHY_M_TEST_LABD="$PWD/bin/labd" OMARCHY_M_TEST_FAKE_GITHUB="$PWD/bin/fake-github" python3 -m unittest tests.test_lab_wire
   run "labd smoke on its own host" bash .github/scripts/labd-smoke.sh bin
   run "labd smoke under a prefix" bash .github/scripts/labd-smoke.sh bin https://example.org/lab
 }

@@ -18,6 +18,7 @@ all:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -ldflags '$(LDFLAGS)' -o bin/lab-linux-arm64 ./cmd/lab
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -ldflags '$(LDFLAGS)' -o bin/oobd-darwin-arm64 ./cmd/oobd
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -ldflags '$(LDFLAGS)' -o bin/lab-builder-darwin-arm64 ./cmd/lab-builder
+	CGO_ENABLED=0 $(GO) build -ldflags '$(LDFLAGS)' -o bin/fake-github ./tools/fake-github
 
 test:
 	$(GO) vet ./...

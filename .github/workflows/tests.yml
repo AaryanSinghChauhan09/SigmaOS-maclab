@@ -28,9 +28,9 @@ jobs:
       - run: go test -race -timeout 40m ./...
       - run: make all
       - name: omarchy-m-test against this labd
-        # Upload, the same report again, and Preview's refusal; sign-in, status and sign-out against the stand-in lab.
+        # Upload, the same report again and Preview's refusals; sign-in through the stand-in for GitHub, status, a Verified upload and sign-out.
         working-directory: cli
-        run: OMARCHY_M_TEST_LABD="$PWD/../bin/labd" python3 -m unittest -v tests.test_lab_wire
+        run: OMARCHY_M_TEST_LABD="$PWD/../bin/labd" OMARCHY_M_TEST_FAKE_GITHUB="$PWD/../bin/fake-github" python3 -m unittest -v tests.test_lab_wire
       - name: labd on its own host and under a prefix
         run: |
           bash .github/scripts/labd-smoke.sh bin
