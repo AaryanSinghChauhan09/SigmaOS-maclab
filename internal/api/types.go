@@ -41,15 +41,26 @@ type OOBConfig struct {
 	Token  string `json:"token,omitempty"`
 }
 
+// Lease holds a Mac for one person. Maintainer is that person's handle, the
+// name the agent already gets with each command; AccountID is the GitHub
+// account the Lease belongs to, which a rename leaves alone; Holder is the
+// free text the person's `lab` sent, so that one person's several agents
+// keep apart.
 type Lease struct {
 	Holder string `json:"holder"`
-	// Maintainer is whose token took the lease; empty for one labd stored
-	// before it recorded that. Only they renew it, release it, or run jobs
-	// under it, whatever holder another Maintainer names.
+	// Maintainer is the handle of whoever took the lease, a Maintainer or an
+	// M team member; empty for one labd stored before it recorded that.
+	// Only they renew it, release it, or run jobs under it, whatever holder
+	// someone else names.
 	Maintainer string `json:"maintainer,omitempty"`
 	// By preserves attribution written by controllers with PR #62.
-	By      string    `json:"by,omitempty"`
-	Expires time.Time `json:"expires"`
+	By string `json:"by,omitempty"`
+	// AccountID is 0 for a lease taken before labd kept people.
+	AccountID int64     `json:"account_id,omitempty"`
+	Expires   time.Time `json:"expires"`
+	// Warning is said once, in the answer to taking the Lease: a Maintainer
+	// who already holds a Mac of the same Configuration is warned and goes on.
+	Warning string `json:"warning,omitempty"`
 }
 
 // HeldBy is whether the lease is holder's, acting for maintainer.
@@ -57,8 +68,8 @@ func (l *Lease) HeldBy(holder, maintainer string) bool {
 	return l.Holder == holder && (l.Owner() == "" || l.Owner() == maintainer)
 }
 
-// Owner names the authenticated Maintainer recorded for the lease. By is
-// the persisted attribution field used before ownership enforcement.
+// Owner names the person recorded for the lease, by handle. By is the
+// persisted attribution field used before ownership enforcement.
 func (l *Lease) Owner() string {
 	if l.Maintainer != "" {
 		return l.Maintainer
@@ -66,13 +77,56 @@ func (l *Lease) Owner() string {
 	return l.By
 }
 
-// Who names the lease holder and the Maintainer who took it.
+// Who names the lease holder and the person who took it.
 func (l *Lease) Who() string {
 	owner := l.Owner()
 	if owner == "" || owner == l.Holder {
 		return l.Holder
 	}
 	return l.Holder + " (" + owner + ")"
+}
+
+// Configuration is a Mac's board together with its CPU and GPU core counts.
+// A count labd could not work out is 0.
+type Configuration struct {
+	Board string `json:"board,omitempty"`
+	CPU   int    `json:"cpu,omitempty"`
+	GPU   int    `json:"gpu,omitempty"`
+	// SetBy is the Maintainer who set or corrected the counts; labd then
+	// leaves them as they are.
+	SetBy string `json:"set_by,omitempty"`
+}
+
+// Known is whether both counts are known.
+func (c Configuration) Known() bool { return c.CPU > 0 && c.GPU > 0 }
+
+// Same is whether c and o count as one Configuration: the same board, and
+// no count known on both sides that differs. So Macs of one board whose
+// counts are unknown are the same Configuration until a Maintainer sets it.
+func (c Configuration) Same(o Configuration) bool {
+	if c.Board != o.Board {
+		return false
+	}
+	if c.CPU > 0 && o.CPU > 0 && c.CPU != o.CPU {
+		return false
+	}
+	return c.GPU == 0 || o.GPU == 0 || c.GPU == o.GPU
+}
+
+func (c Configuration) String() string {
+	board := c.Board
+	if board == "" {
+		board = "board unknown"
+	}
+	switch {
+	case c.Known():
+		return fmt.Sprintf("%s, %d CPU and %d GPU cores", board, c.CPU, c.GPU)
+	case c.CPU > 0:
+		return fmt.Sprintf("%s, %d CPU cores, GPU cores unknown", board, c.CPU)
+	case c.GPU > 0:
+		return fmt.Sprintf("%s, CPU cores unknown, %d GPU cores", board, c.GPU)
+	}
+	return board + ", core counts unknown"
 }
 
 // HumanAction is the one instruction a person needs when the lab cannot recover a device itself.
@@ -106,7 +160,11 @@ type Device struct {
 	Facts                 Facts        `json:"facts"`
 	Health                Health       `json:"health"`
 	Lease                 *Lease       `json:"lease,omitempty"`
-	ActiveJob             string       `json:"active_job,omitempty"`
+	// Configuration is what labd read of the Mac's core counts from a
+	// kernel log, or a Maintainer set. In a view it is the Configuration as
+	// labd works it out, with the board and the repository's table.
+	Configuration *Configuration `json:"configuration,omitempty"`
+	ActiveJob     string         `json:"active_job,omitempty"`
 
 	// VolunteeredBy is the tailnet login whose ./volunteer token enrolled the
 	// Mac, lowercased; empty for a token an admin asked for. It counts toward
@@ -1049,6 +1107,8 @@ type LeaveResponse struct {
 	Back bool `json:"back,omitempty"`
 }
 
+// LeaseRequest takes a Lease, or renews the one the caller holds. TTLSec 0
+// asks for the lab's 4 hours.
 type LeaseRequest struct {
 	Holder string `json:"holder"`
 	TTLSec int    `json:"ttl_sec"`
