@@ -721,8 +721,10 @@ func TestSignInFilesAreReadAsTheSpecSaysSecretsAre(t *testing.T) {
 	if app, admins, err := ReadSignIn("", ""); app != nil || admins != nil || err != nil {
 		t.Errorf("no folder: %v %v %v", app, admins, err)
 	}
-	if app, admins, err := ReadSignIn(dir, ""); app != nil || admins != nil || err != nil {
-		t.Errorf("an empty folder: %v %v %v, want sign-in off", app, admins, err)
+	for _, d := range []string{dir, filepath.Join(dir, "not-made-yet")} {
+		if app, admins, err := ReadSignIn(d, ""); app != nil || admins != nil || err != nil {
+			t.Errorf("a folder without the files: %v %v %v, want sign-in off", app, admins, err)
+		}
 	}
 	write("admins", "# the owner\n 4711 \n\n12\n", 0o644)
 	if app, admins, err := ReadSignIn(dir, ""); app != nil || err != nil || !slices.Equal(admins, []int64{4711, 12}) {

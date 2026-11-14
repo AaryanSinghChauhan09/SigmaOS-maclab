@@ -152,6 +152,7 @@ func TestLabdsLaunchDaemon(t *testing.T) {
 		"--data":       "/var/lab/data",
 		"--public-url": "https://" + shell(t, "LAB_HOST"),
 		"--alias":      "maclab.omarchy.org",
+		"--sign-in":    "/var/lab/secrets",
 	} {
 		if got, ok := flags[flag]; !ok || got != want {
 			t.Errorf("%s is %q, want %q", flag, got, want)
@@ -159,6 +160,9 @@ func TestLabdsLaunchDaemon(t *testing.T) {
 	}
 	if !strings.HasPrefix(flags["--listen"], "127.0.0.1:") {
 		t.Errorf("--listen %s is not loopback", flags["--listen"])
+	}
+	if _, ok := flags["--github-url"]; ok {
+		t.Error("the mini's labd is given a stand-in for GitHub")
 	}
 	if _, ok := flags["--preview"]; !ok {
 		t.Error("labd is not started in Preview")

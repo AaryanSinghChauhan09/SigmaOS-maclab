@@ -1,0 +1,109 @@
+#!/bin/bash
+# Give the lab its sign-in: the OAuth app and the Admins.
+#
+#   sudo scripts/mini/sign-in [--dry-run]
+#
+# Asks for the OAuth app's client id and client secret and for the GitHub
+# account id of each Admin, and writes them where labd reads them
+# (labd --sign-in): github-client-id, github-client-secret and admins in
+# /var/lab/secrets, the lab account's alone. What is typed is never an
+# argument of a command, is not printed and reaches no log. An empty answer
+# keeps what is there. A running labd is then restarted to read them.
+#
+#   --dry-run  say what would be asked and written, and change nothing
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+
+usage() { sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    *) usage ;;
+  esac
+  shift
+done
+(( DRY )) || need_root
+
+dir="$LAB_HOME/secrets"
+[[ -d $dir ]] || fail "no $dir: run scripts/mini/setup first"
+
+if (( DRY )); then
+  say "would ask for the OAuth app's client id, its client secret and the Admins' GitHub account ids"
+  say "would write $dir/github-client-id, $dir/github-client-secret and $dir/admins for $LAB_OWNER alone"
+  say "would restart labd if it is running"
+  exit 0
+fi
+
+# ask PROMPT [hidden]: one line from the terminal, into $answer.
+ask() {
+  answer=""
+  printf '%s: ' "$1" >&2
+  if [[ ${2:-} == hidden && -t 0 ]]; then
+    IFS= read -rs answer || true
+    echo >&2
+  else
+    IFS= read -r answer || true
+  fi
+}
+
+# put NAME VALUE: the file NAME in the secrets folder, for the lab account alone.
+put() {
+  local tmp
+  tmp="$(umask 077 && mktemp "$dir/.$1.XXXXXX")"
+  printf '%s\n' "$2" > "$tmp"
+  chown "$LAB_OWNER:$LAB_GROUP" "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$dir/$1"
+}
+
+have() { [[ -s $dir/$1 ]]; }
+
+ask "The OAuth app's client id (github.com, Settings, Developer settings, OAuth Apps)"
+id="$answer"
+ask "Its client secret (not shown as you type)" hidden
+secret="$answer"
+ask "The Admins' GitHub account ids, separated by spaces (yours: gh api user --jq .id)"
+admins="$answer"
+
+if [[ -n $id ]]; then
+  [[ $id =~ ^[A-Za-z0-9._-]{8,80}$ ]] || fail "that is not a client id: letters, digits, dots and dashes. Nothing was changed"
+else
+  have github-client-id || fail "no client id yet, and none given. Nothing was changed"
+fi
+if [[ -n $secret ]]; then
+  [[ $secret =~ ^[A-Za-z0-9_-]{20,200}$ ]] || fail "that is not a client secret: 20 or more letters and digits. Nothing was changed"
+else
+  have github-client-secret || fail "no client secret yet, and none given. Nothing was changed"
+fi
+lines=""
+if [[ -n $admins ]]; then
+  for a in $admins; do
+    [[ $a =~ ^[1-9][0-9]{0,17}$ ]] || fail "an account id is a number, as gh api user --jq .id prints it. Nothing was changed"
+    lines="$lines$a"$'\n'
+  done
+else
+  have admins || fail "no Admin yet, and none given. Nothing was changed"
+fi
+
+if [[ -n $id ]]; then
+  put github-client-id "$id"
+  say "wrote $dir/github-client-id"
+fi
+if [[ -n $secret ]]; then
+  put github-client-secret "$secret"
+  say "wrote $dir/github-client-secret"
+fi
+if [[ -n $lines ]]; then
+  put admins "${lines%$'\n'}"
+  say "wrote $dir/admins"
+fi
+
+if launchctl print "system/$LABD_LABEL" >/dev/null 2>&1; then
+  change "restart labd to read them" launchctl kickstart -k "system/$LABD_LABEL"
+else
+  say "labd is not running: the next Deploy starts it with these"
+fi

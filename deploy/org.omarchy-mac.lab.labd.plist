@@ -18,6 +18,7 @@
     <string>--alias</string><string>maclab.omarchy.org</string>
     <string>--preview</string>
     <string>--data</string><string>/var/lab/data</string>
+    <string>--sign-in</string><string>/var/lab/secrets</string>
   </array>
   <key>WorkingDirectory</key><string>/var/lab</string>
   <key>Umask</key><integer>63</integer>
