@@ -42,12 +42,13 @@ func (s *Server) hUploadReport(w http.ResponseWriter, r *http.Request) {
 }
 
 // hReportPage is a published report's page. A Hidden report is not found.
+// It reads the report and what its page says of it, not every report.
 func (s *Server) hReportPage(w http.ResponseWriter, r *http.Request) {
-	p := s.published(w)
-	if p == nil {
+	p, run, err := s.reports.Around(s.catalogue, r.PathValue("id"))
+	if err != nil {
+		s.pageFailed(w, err)
 		return
 	}
-	run := p.Run(r.PathValue("id"))
 	if run == nil {
 		s.notFound(w, r)
 		return

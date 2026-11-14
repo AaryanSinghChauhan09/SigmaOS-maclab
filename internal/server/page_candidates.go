@@ -132,6 +132,14 @@ func (s *Server) pCandidate(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r)
 		return
 	}
+	// A set nothing names is not found before every report is read.
+	if runs, err := s.reports.OnCandidateSet(name); err != nil {
+		s.pageFailed(w, err)
+		return
+	} else if len(runs) == 0 {
+		s.notFound(w, r)
+		return
+	}
 	p := s.published(w)
 	if p == nil {
 		return

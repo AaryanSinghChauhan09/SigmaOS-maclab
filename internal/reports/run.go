@@ -18,7 +18,16 @@ type Published struct {
 
 // Published reads the published reports.
 func (s *Store) Published(cat *Catalogue) (*Published, error) {
-	rows, err := s.db.Query(`SELECT ` + reportColumns + ` FROM reports WHERE hidden_at IS NULL ORDER BY created_at, id`)
+	list, err := s.publishedWhere(`1`)
+	if err != nil {
+		return nil, err
+	}
+	return NewPublished(cat, list), nil
+}
+
+// publishedWhere reads the published reports a condition picks, oldest first.
+func (s *Store) publishedWhere(where string, args ...any) ([]*Report, error) {
+	rows, err := s.db.Query(`SELECT `+reportColumns+` FROM reports WHERE hidden_at IS NULL AND `+where+` ORDER BY created_at, id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -31,10 +40,7 @@ func (s *Store) Published(cat *Catalogue) (*Published, error) {
 		}
 		list = append(list, report)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return NewPublished(cat, list), nil
+	return list, rows.Err()
 }
 
 // NewPublished counts the given reports; hidden ones are left out.

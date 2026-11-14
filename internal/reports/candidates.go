@@ -1,6 +1,7 @@
 package reports
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -175,9 +176,9 @@ func (s *CandidateSet) VerdictWords() string {
 	return fmt.Sprintf("Passing: Verified runs on %s, nothing failing", Plural(len(models), "model"))
 }
 
-// The old site's four queries on a report's JSON run on SQLite as they were
-// written for Postgres. The pages count from the published reports read
-// once (Published); these answer the same from reports.db alone.
+// The old site asked Postgres four things of a report's JSON. They run on
+// SQLite as they were written, for what must not read every report: one
+// report's page, and a candidate set nothing names.
 const (
 	whereNamesASet       = `(body -> 'system' ->> 'candidate_set') IS NOT NULL`
 	selectSetName        = `body -> 'system' ->> 'candidate_set'`
@@ -185,40 +186,72 @@ const (
 	whereOnBoardAndStack = `body -> 'machine' ->> 'board' = ? AND body -> 'system' ->> 'stack' = ?`
 )
 
-func (s *Store) publicIDs(query string, args ...any) ([]string, error) {
+func (s *Store) texts(query string, args ...any) ([]string, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []string
+	var list []string
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var text string
+		if err := rows.Scan(&text); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		list = append(list, text)
 	}
-	return ids, rows.Err()
-}
-
-// NamingASet are the published reports whose image names a candidate set, oldest first.
-func (s *Store) NamingASet() ([]string, error) {
-	return s.publicIDs(`SELECT public_id FROM reports WHERE hidden_at IS NULL AND ` + whereNamesASet + ` ORDER BY created_at, id`)
+	return list, rows.Err()
 }
 
 // CandidateSetNames are the candidate sets published reports name.
 func (s *Store) CandidateSetNames() ([]string, error) {
-	return s.publicIDs(`SELECT DISTINCT ` + selectSetName + ` FROM reports WHERE hidden_at IS NULL AND ` + whereNamesASet)
+	return s.texts(`SELECT DISTINCT ` + selectSetName + ` FROM reports WHERE hidden_at IS NULL AND ` + whereNamesASet)
 }
 
-// OnCandidateSet are the published reports whose image names that set, oldest first.
+// OnCandidateSet are the published reports whose image names that set, as
+// public ids, oldest first.
 func (s *Store) OnCandidateSet(name string) ([]string, error) {
-	return s.publicIDs(`SELECT public_id FROM reports WHERE hidden_at IS NULL AND `+whereOnSet+` ORDER BY created_at, id`, name)
+	return s.texts(`SELECT public_id FROM reports WHERE hidden_at IS NULL AND `+whereOnSet+` ORDER BY created_at, id`, name)
 }
 
 // VerifiedOn are the published Verified runs on one board and stack, oldest
 // first: where a regression's earlier pass comes from.
-func (s *Store) VerifiedOn(board, stack string) ([]string, error) {
-	return s.publicIDs(`SELECT public_id FROM reports WHERE hidden_at IS NULL AND verified AND `+whereOnBoardAndStack+` ORDER BY created_at, id`, board, stack)
+func (s *Store) VerifiedOn(board, stack string) ([]*Report, error) {
+	return s.publishedWhere(`verified AND `+whereOnBoardAndStack, board, stack)
+}
+
+// Around reads what one report's page needs and no more: the published
+// report with that public id, the Verified runs on its model and stack, and
+// the names of the candidate sets published runs name. The run is nil when
+// there is no such report, or it is Hidden.
+func (s *Store) Around(cat *Catalogue, publicID string) (*Published, *Run, error) {
+	report, err := s.Report(publicID)
+	if errors.Is(err, ErrNoReport) || (err == nil && report.Hidden) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	doc := report.Document()
+	list, err := s.VerifiedOn(text(member(doc, "machine", "board")), text(member(doc, "system", "stack")))
+	if err != nil {
+		return nil, nil, err
+	}
+	among := false
+	for _, other := range list {
+		among = among || other.ID == report.ID
+	}
+	if !among {
+		list = append(list, report)
+	}
+	names, err := s.CandidateSetNames()
+	if err != nil {
+		return nil, nil, err
+	}
+	p := NewPublished(cat, list)
+	p.sets = map[string]bool{}
+	for _, name := range names {
+		p.sets[name] = true
+	}
+	return p, p.Run(publicID), nil
 }

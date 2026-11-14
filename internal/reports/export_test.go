@@ -123,13 +123,9 @@ func TestTheFourJSONQueriesRunUnchangedOnSQLite(t *testing.T) {
 	if len(p.Runs()) != len(shown) || len(p.CandidateSets()) < 3 {
 		t.Fatalf("%d published runs, %d candidate sets", len(p.Runs()), len(p.CandidateSets()))
 	}
-	var naming []*Run
 	names := []string{}
 	boards := map[[2]string][]*Run{}
 	for _, run := range p.Runs() {
-		if run.CandidateSet() != "" {
-			naming = append(naming, run)
-		}
 		on := [2]string{run.Board(), run.Stack()}
 		if _, seen := boards[on]; !seen {
 			boards[on] = nil
@@ -138,11 +134,6 @@ func TestTheFourJSONQueriesRunUnchangedOnSQLite(t *testing.T) {
 			boards[on] = append(boards[on], run)
 		}
 	}
-	got, err := s.NamingASet()
-	if err != nil {
-		t.Fatal(err)
-	}
-	same("the runs that name a set", got, ids(naming))
 	for _, set := range p.CandidateSets() {
 		names = append(names, set.Name)
 		got, err := s.OnCandidateSet(set.Name)
@@ -154,7 +145,7 @@ func TestTheFourJSONQueriesRunUnchangedOnSQLite(t *testing.T) {
 	if got, err := s.OnCandidateSet("nothing-names-this"); err != nil || len(got) != 0 {
 		t.Errorf("a set nothing names: %v, %v", got, err)
 	}
-	got, err = s.CandidateSetNames()
+	got, err := s.CandidateSetNames()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,15 +154,60 @@ func TestTheFourJSONQueriesRunUnchangedOnSQLite(t *testing.T) {
 	same("the sets named", got, names)
 	verified := 0
 	for on, runs := range boards {
-		got, err := s.VerifiedOn(on[0], on[1])
+		list, err := s.VerifiedOn(on[0], on[1])
 		if err != nil {
 			t.Fatal(err)
+		}
+		var got []string
+		for _, report := range list {
+			got = append(got, report.PublicID)
 		}
 		same(fmt.Sprintf("the Verified runs on %s, %s", on[0], on[1]), got, ids(runs))
 		verified += len(got)
 	}
 	if verified < 5 {
 		t.Errorf("only %d Verified runs were found by board and stack", verified)
+	}
+
+	// One report's page reads the report and what is said of it, and says
+	// what reading every report says: each check's state, the pass a
+	// regression fell from, and whether a set is named.
+	regressions := 0
+	for _, run := range p.Runs() {
+		around, alone, err := s.Around(testCatalogue(t), run.PublicID)
+		if err != nil || alone == nil {
+			t.Fatalf("%s: %v", run.PublicID, err)
+		}
+		if len(around.Runs()) > len(boards[[2]string{run.Board(), run.Stack()}])+1 {
+			t.Errorf("%s: its page read %d reports", run.PublicID, len(around.Runs()))
+		}
+		for i, c := range run.Checks() {
+			if got, want := alone.CheckState(alone.Checks()[i]), run.CheckState(c); got != want {
+				t.Errorf("%s, %s: %q read alone, %q among all", run.PublicID, c.ID, got, want)
+			}
+			if pass := run.RegressedFrom(c.Feature); run.Regression(c.Feature) {
+				regressions++
+				if from := alone.RegressedFrom(c.Feature); from == nil || from.PublicID != pass.PublicID {
+					t.Errorf("%s, %s: the pass it fell from differs", run.PublicID, c.ID)
+				}
+			}
+		}
+		for _, name := range append(names, "nothing-names-this") {
+			if around.NamesSet(name) != p.NamesSet(name) {
+				t.Errorf("%s: whether %s is named differs", run.PublicID, name)
+			}
+		}
+	}
+	if regressions == 0 {
+		t.Error("the corpus has no regression to read alone")
+	}
+	for id := range hidden {
+		if _, run, err := s.Around(testCatalogue(t), id); err != nil || run != nil {
+			t.Errorf("a Hidden report has a page: %v", err)
+		}
+	}
+	if _, run, err := s.Around(testCatalogue(t), "no-such-report"); err != nil || run != nil {
+		t.Errorf("a report that is not there has a page: %v", err)
 	}
 }
 
