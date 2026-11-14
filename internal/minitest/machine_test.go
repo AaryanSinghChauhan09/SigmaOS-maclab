@@ -152,6 +152,7 @@ func (m *mini) machine() {
 	for name, text := range map[string]string{
 		"networksetup": networksetupStub, "ipconfig": ipconfigStub, "defaults": defaultsStub,
 		"pmset": pmsetStub, "sshd": sshdStub, "ps": machinePsStub, "lsof": machineLsofStub, "nc": machineNcStub,
+		"sysctl": sysctlStub,
 	} {
 		write(m.t, filepath.Join(m.tools, name), text, 0o755)
 	}

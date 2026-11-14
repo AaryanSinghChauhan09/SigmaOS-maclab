@@ -3,7 +3,10 @@
      Deploy switched to and listens on this machine only: the tunnel's socket,
      which only lab can open, and a loopback port. scripts/mini/deploy installs
      this file and starts it; nothing here is a secret: the Out-of-band
-     controller's token is in the file named, which only lab reads. -->
+     controller's token is in the file named, which only lab reads. How many
+     parts of an upload go at once is the Front door's test 5's to set
+     (scripts/cutover/front-door/settle): 4 only when measured at least 20%
+     faster from outside the house. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -19,6 +22,7 @@
     <string>--alias</string><string>maclab.omarchy.org</string>
     <string>--preview</string>
     <string>--data</string><string>/var/lab/data</string>
+    <string>--parts-at-once</string><string>1</string>
     <string>--sign-in</string><string>/var/lab/secrets</string>
     <string>--oobd</string><string>http://127.0.0.1:7780</string>
     <string>--oobd-token-file</string><string>/var/lab/secrets/oobd.token</string>

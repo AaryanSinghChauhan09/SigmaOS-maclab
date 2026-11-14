@@ -1,0 +1,89 @@
+#!/bin/bash
+# The running tunnel's transport, for the Front door's test 15, which moves
+# 1 GB each way under QUIC and under HTTP/2 before either is Deployed:
+#
+#   sudo scripts/mini/transport quic|http2
+#       Restarts the tunnel under that transport, whatever the Deployed
+#       route file says, and waits until it holds a connection. It stays so
+#       until "transport deployed" or the next run of the set-up. The lab is
+#       Dark for the seconds the restart takes.
+#   sudo scripts/mini/transport deployed
+#       Puts the tunnel back under the Deployed files.
+#   scripts/mini/transport
+#       Says which transport the tunnel was started under. Changes nothing.
+#
+# It rewrites cloudflared's installed LaunchDaemon file with --protocol in
+# it and nothing else. A tunnel that does not connect under the transport
+# asked for is put back under the Deployed file.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+deploy="$(cd "$here/../.." && pwd)/deploy"
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+plist="$LAUNCHD_DIR/$CLOUDFLARED_LABEL.plist"
+source_plist="$deploy/$CLOUDFLARED_LABEL.plist"
+routes="$LAB_CURRENT/deploy/cloudflared.yml"
+
+(( $# <= 1 )) || usage
+want="${1:-}"
+case "$want" in
+  ""|quic|http2|deployed) ;;
+  *) usage ;;
+esac
+[[ -f $plist && -f $source_plist ]] || fail "the tunnel is not set up on this machine: nothing was changed"
+
+asked="$(awk -F'[<>]' '/<string>--protocol<\/string>/ { print $7 }' "$plist")"
+written="$(sed -n 's/^protocol: \([a-z0-9]*\)$/\1/p' "$routes" 2>/dev/null | head -n 1)"
+if [[ -z $want ]]; then
+  if [[ -n $asked ]]; then
+    say "the tunnel was started under $asked, for a measurement; the Deployed route file says ${written:-nothing}"
+  else
+    say "the tunnel runs under the Deployed route file, which says ${written:-nothing}"
+  fi
+  exit 0
+fi
+need_root
+
+# start FILE: the tunnel under a copy of FILE.
+start() {
+  stopped "$CLOUDFLARED_LABEL" || fail "the tunnel did not stop (20 s)"
+  cp "$1" "$plist.new"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$plist.new"
+  chmod 0644 "$plist.new"
+  mv "$plist.new" "$plist"
+  launchctl enable "system/$CLOUDFLARED_LABEL" || true
+  launchctl bootstrap system "$plist" || fail "launchd did not take $plist"
+}
+
+connected() {
+  local n
+  for (( n = 0; n < ${LAB_READY_TRIES:-30}; n++ )); do
+    if curl -fsS -o /dev/null --max-time 5 "$TUNNEL_READY" 2>/dev/null; then return 0; fi
+    sleep 2
+  done
+  return 1
+}
+
+if [[ $want == deployed ]]; then
+  start "$source_plist"
+  connected || fail "the tunnel is back under the Deployed files and has not connected yet: look at $LAB_HOME/log/cloudflared.log"
+  say "the tunnel runs under the Deployed files again (${written:-no transport written})"
+  exit 0
+fi
+
+made="$(mktemp "${TMPDIR:-/tmp}/transport.XXXXXX")"
+trap 'rm -f "$made"' EXIT
+awk -v p="$want" '
+  /<string>--protocol<\/string>/ { next }
+  /^ *<string>run<\/string>$/ { print "    <string>--protocol</string><string>" p "</string>" }
+  { print }' "$source_plist" > "$made"
+[[ "$(grep -c '<string>--protocol</string>' "$made")" == 1 ]] || fail "cloudflared's LaunchDaemon file has no \"run\" to put the transport before: nothing was changed"
+start "$made"
+if ! connected; then
+  start "$source_plist"
+  fail "the tunnel did not connect under $want: it is back under the Deployed files"
+fi
+say "the tunnel runs under $want until \"transport deployed\" or the next set-up"

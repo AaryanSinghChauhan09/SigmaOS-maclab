@@ -9,6 +9,13 @@
 # Neither the tunnel's id nor its credential is here: both are in the file
 # the LaunchDaemon names with --token-file, which only lab reads.
 
+# The transport to Cloudflare, written out so that it is never cloudflared's
+# own choice. The Front door's test 15 moves 1 GB each way under QUIC and
+# under HTTP/2 and scripts/cutover/front-door/settle writes the faster here;
+# within 10% QUIC stays. Under QUIC the mini's set-up raises the UDP buffer
+# limit. Not measured yet: QUIC.
+protocol: quic
+
 originRequest:
   # An idle connection to labd is dropped after 90 s; labd keeps its side
   # open for 2 minutes, so labd never closes one cloudflared is about to use.

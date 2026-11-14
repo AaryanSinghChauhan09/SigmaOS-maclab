@@ -20,6 +20,8 @@
 #      backup and the Restore drill, the Dead-man switch's ping, container's
 #      server and the Builder. Each starts once it has what it needs, a
 #      Deployed build among it, and the run says what is still missing.
+#      While the Deployed route file puts the tunnel under QUIC, the UDP
+#      buffer limit is raised first to what cloudflared asks for.
 #   2. tailscaled, from the copy and under the lab's own LaunchDaemon file,
 #      joined to the tailnet tagged tag:lab. The Standalone app goes first,
 #      by hand at the mini's screen.
@@ -84,7 +86,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,79p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,81p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
@@ -591,6 +593,36 @@ controller() {
   fi
 }
 
+# The UDP buffer limit. Under QUIC cloudflared asks for a receive buffer of
+# 7.5 MB, and macOS gives a socket at most 8/9 of kern.ipc.maxsockbuf: the
+# limit is raised to fit, now and in sysctl.conf for the next start, and the
+# tunnel is started again to get it. Under HTTP/2, or with the limit already
+# there, nothing is set. The transport is the Deployed route file's, which
+# the Front door's test 15 decides.
+UDP_BUFFER_LIMIT=8441037
+SYSCTL_CONF="$SYSROOT/etc/sysctl.conf"
+UDP_RAISED=0
+
+keep_udp_buffer() {
+  local tmp
+  tmp="$(mktemp "$SYSCTL_CONF.XXXXXX")"
+  { grep -v '^kern\.ipc\.maxsockbuf=' "$SYSCTL_CONF" 2>/dev/null || true; echo "kern.ipc.maxsockbuf=$UDP_BUFFER_LIMIT"; } > "$tmp"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$tmp"
+  chmod 0644 "$tmp"
+  mv "$tmp" "$SYSCTL_CONF"
+}
+
+udp_buffer() {
+  local now
+  grep -qx 'protocol: quic' "$LAB_CURRENT/deploy/cloudflared.yml" 2>/dev/null || return 0
+  now="$(sys sysctl -n kern.ipc.maxsockbuf 2>/dev/null || true)"
+  [[ $now =~ ^[0-9]+$ ]] || fail "this machine does not say its UDP buffer limit (kern.ipc.maxsockbuf)"
+  (( now < UDP_BUFFER_LIMIT )) || return 0
+  change "raise the UDP buffer limit (kern.ipc.maxsockbuf) from $now to $UDP_BUFFER_LIMIT: the tunnel runs under QUIC" sys sysctl -w "kern.ipc.maxsockbuf=$UDP_BUFFER_LIMIT"
+  UDP_RAISED=1
+  grep -qx "kern.ipc.maxsockbuf=$UDP_BUFFER_LIMIT" "$SYSCTL_CONF" 2>/dev/null || change "keep that limit across a restart, in $SYSCTL_CONF" keep_udp_buffer
+}
+
 # The tunnel. Its credential is the right to receive the lab's traffic: it
 # sits where only the lab account reads it and is never printed. cloudflared
 # runs from the root-owned copy, under the lab's own LaunchDaemon file, and
@@ -634,7 +666,7 @@ tunnel() {
   if (( ! DRY )) && [[ ! -x $LAB_TOOLS/current/cloudflared/bin/cloudflared ]]; then
     fail "cloudflared is not in $LAB_TOOLS/current: the tunnel was not started"
   fi
-  if (( TOOLS_COPIED )) || ! cmp -s "$deploy/$CLOUDFLARED_LABEL.plist" "$plist" || ! loaded "$CLOUDFLARED_LABEL"; then restart=1; fi
+  if (( TOOLS_COPIED || UDP_RAISED )) || ! cmp -s "$deploy/$CLOUDFLARED_LABEL.plist" "$plist" || ! loaded "$CLOUDFLARED_LABEL"; then restart=1; fi
   (( restart )) || return 0
   change "start the tunnel ($CLOUDFLARED_LABEL) under $plist" start_tunnel
 }
@@ -1142,6 +1174,7 @@ homebrew
 pins
 oobd_token
 controller
+udp_buffer
 tunnel
 sender
 backups

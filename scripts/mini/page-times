@@ -1,0 +1,65 @@
+#!/bin/bash
+# How long labd takes to render its pages, from labd's own caller log: the
+# Front door's second performance target, measured with no script in a page.
+#
+#   sudo -u lab scripts/mini/page-times
+#
+# It asks labd for each signed-out page twenty times at its loopback port,
+# where no edge answers in its place, and reads the time labd wrote down
+# for each of those requests. It prints numbers only, in milliseconds:
+#
+#   probe_pages=N       pages that answered
+#   probe_requests=N    requests it made to them
+#   probe_p95_ms=N      the 95th percentile of labd's time for those
+#   probe_max_ms=N      the slowest
+#   day_requests=N      every page labd served today, to anyone, signed in or not
+#   day_p95_ms=N        the 95th percentile of those
+#
+# It runs as the lab account, which alone reads the caller log, changes
+# nothing and prints no line of the log.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+[[ $# == 0 ]] || { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+PAGES="/ /matrix /models /features /gaps /aurora /benchmarks /candidates /reports /data /terms /privacy /status"
+TRIES=20
+log_dir="$LAB_DATA/callers"
+[[ -r $log_dir ]] || fail "the caller log ($log_dir) is not readable: run it as the lab account"
+
+tag="lab-page-times/$$.$(date +%s)"
+first="$(date -u +%Y-%m-%d)"
+pages=0
+again=()
+for (( n = 1; n < TRIES; n++ )); do again+=(-o /dev/null URL); done
+for page in $PAGES; do
+  url="http://$LABD_LISTEN$page"
+  [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -A "$tag" "$url" || true)" == 200 ]] || continue
+  pages=$((pages + 1))
+  curl -s --max-time 120 -A "$tag" "${again[@]//URL/$url}" || true
+done
+(( pages > 0 )) || fail "labd answered no page at $LABD_LISTEN"
+last="$(date -u +%Y-%m-%d)"
+
+logs=("$log_dir/$first.log")
+[[ $last == "$first" ]] || logs+=("$log_dir/$last.log")
+
+# times: labd's milliseconds for the page requests on stdin that it answered.
+times() {
+  sed -n 's/.*"method":"GET","path":"\([^"]*\)","status":200,"ms":\([0-9]*\).*/\2 \1/p' \
+    | awk '$2 !~ /^\/(api|assets|healthz|install)(\/|$)/ { print $1 }' | sort -n
+}
+# p95: the 95th percentile of the sorted numbers on stdin; nothing for none.
+p95() { awk '{ v[NR] = $1 } END { if (NR) { i = int(NR * 0.95); if (i < NR * 0.95) i++; print v[i] } }'; }
+
+probe="$(cat "${logs[@]}" 2>/dev/null | grep -F "\"agent\":\"$tag\"" | times || true)"
+[[ -n $probe ]] || fail "labd wrote no time for the requests made here: is this labd's own caller log?"
+day="$(cat "${logs[@]}" 2>/dev/null | times || true)"
+echo "probe_pages=$pages"
+echo "probe_requests=$(wc -l <<<"$probe" | tr -d ' ')"
+echo "probe_p95_ms=$(p95 <<<"$probe")"
+echo "probe_max_ms=$(tail -n 1 <<<"$probe")"
+echo "day_requests=$(wc -l <<<"$day" | tr -d ' ')"
+echo "day_p95_ms=$(p95 <<<"$day")"

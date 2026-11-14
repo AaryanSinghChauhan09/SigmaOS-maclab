@@ -122,6 +122,11 @@ func routes(t *testing.T, text string) (top map[string]map[string]string, rules 
 		case !strings.HasPrefix(line, " ") && strings.HasSuffix(line, ":"):
 			section = strings.TrimSuffix(line, ":")
 			top[section] = map[string]string{}
+		case !strings.HasPrefix(line, " ") && strings.Contains(line, ": "):
+			// One word at the left margin with its value: the transport.
+			k, v, _ := strings.Cut(line, ": ")
+			section = ""
+			top[k] = map[string]string{"": v}
 		case section == "ingress" && strings.HasPrefix(line, "  - "):
 			rules = append(rules, route{})
 			fallthrough
@@ -182,9 +187,15 @@ func TestTheTunnelsRouteFile(t *testing.T) {
 		}
 	}
 	for key := range top {
-		if key != "ingress" && key != "originRequest" {
+		if key != "ingress" && key != "originRequest" && key != "protocol" {
 			t.Errorf("the route file sets %q", key)
 		}
+	}
+	// The transport is written out, never left to cloudflared's choice: the
+	// Front door's test 15 measures both and scripts/cutover/front-door/settle
+	// writes the one that won.
+	if p := top["protocol"][""]; p != "quic" && p != "http2" {
+		t.Errorf("the tunnel's transport is %q, want quic or http2", p)
 	}
 	// The tunnel's id and its credential are in the file only lab reads.
 	if regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-`).MatchString(text) || regexp.MustCompile(`(?m)^(tunnel|credentials-file|token)\b`).MatchString(text) {
