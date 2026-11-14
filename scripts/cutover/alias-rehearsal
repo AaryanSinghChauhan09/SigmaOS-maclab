@@ -349,13 +349,13 @@ else
 fi
 
 # 1. The two hostnames and their records.
-made=1
 for n in "$NAME" "$THIRD"; do
   if ! cloud alias.sh --apply --name "$n"; then
     step fail "made" "Cloudflare did not take the custom hostname $n:"
     said
     break
   fi
+  made=1
   if ! cloud rehearsal-record.sh --apply --name "$n"; then
     step fail "made" "Porkbun did not take the record of $n:"
     said
@@ -483,11 +483,15 @@ fi
 # 6. Everything of the rehearsal is deleted, and the mini is back.
 teardown
 left=""
-for n in "$NAME" "$THIRD"; do
-  cloud alias.sh --check --remove --name "$n" || left+="${left:+; }the custom hostname $n"
-  cloud rehearsal-record.sh --check --remove --name "$n" || left+="${left:+; }the record of $n"
-done
-if [[ -z $left && -z $TORN_BAD ]]; then
+if (( made )); then
+  for n in "$NAME" "$THIRD"; do
+    cloud alias.sh --check --remove --name "$n" || left+="${left:+; }the custom hostname $n"
+    cloud rehearsal-record.sh --check --remove --name "$n" || left+="${left:+; }the record of $n"
+  done
+fi
+if (( ! made )); then
+  rec "deleted: nothing was made, so there is nothing to delete"
+elif [[ -z $left && -z $TORN_BAD ]]; then
   step pass "deleted" "both throwaway hostnames are gone from the zone and both records from Porkbun"
 else
   step fail "deleted" "still there: ${left:-nothing}${TORN_BAD:+. $TORN_BAD}"

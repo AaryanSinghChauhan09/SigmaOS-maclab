@@ -488,6 +488,25 @@ func TestTheRehearsalMakesNothingWhenItCannotRun(t *testing.T) {
 	}
 }
 
+// Before the owner has entered payment details Cloudflare takes no call
+// about custom hostnames: the run says what Cloudflare said, makes nothing
+// at Porkbun, leaves the mini alone and claims no deletion.
+func TestTheRehearsalStopsWhenCloudflareTakesNoCustomHostname(t *testing.T) {
+	p := newPlayed(t, bins(t))
+	p.write(filepath.Join(p.cloud, "alias.sh"), "#!/bin/bash\necho \"alias.sh $*\" >> \"$STATE/calls\"\necho 'alias.sh: GET /zones/{zone}/custom_hostnames: status 403, [1404] not enabled, ray 8f00ba4dfeed1234-BNE'\necho 'alias.sh: Cloudflare did not take a call about custom hostnames. They need payment details'\nexit 1\n")
+	out, code, record := p.rehearse("--agents-line", "seen")
+	if code != 1 || !strings.Contains(record, "- made: FAIL. Cloudflare did not take the custom hostname "+rehearsal) || !strings.Contains(out, "status 403") || !strings.Contains(out, "payment details") {
+		t.Errorf("exit %d\n%s\n%s", code, out, record)
+	}
+	if !strings.Contains(record, "- deleted: nothing was made") || strings.Contains(record, "still there") || !strings.Contains(record, "Result: fail") {
+		t.Errorf("the record:\n%s", record)
+	}
+	calls := p.calls()
+	if strings.Contains(calls, "rehearsal-record.sh") || strings.Contains(calls, "ssh ") || strings.Contains(calls, "--remove") || len(p.left()) != 0 {
+		t.Errorf("after Cloudflare's refusal the run went on:\n%s", calls)
+	}
+}
+
 // The edge's stand-in is the tests' and takes a loopback address only.
 func TestTheEdgesStandInTakesOnlyLoopback(t *testing.T) {
 	for _, name := range []string{"alias-rehearsal", "dark-recordings"} {
