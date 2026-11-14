@@ -463,6 +463,40 @@ func TestSetupBringsTheBuilderUp(t *testing.T) {
 	}
 }
 
+// Given the installed token as its own source, the set-up would find it
+// "already" in place and remove it: the Builder could not start again until
+// a Maintainer adds a builder anew.
+func TestSetupRefusesItsOwnInstalledBuilderTokenAsTheSource(t *testing.T) {
+	need(t, "openssl")
+	m := builderMini(t)
+	k := newKey(t)
+	m.ok("setup", "--release-key", k.signers, "--container-user", account(t), "--builder-token", tokenFile(t, madeUpToken+"\n", 0o600))
+	installed := m.path(builderToken)
+	if strings.TrimSpace(read(t, installed)) != madeUpToken {
+		t.Fatalf("the token was not installed at %s", installed)
+	}
+	os.Remove(m.log)
+
+	for _, args := range [][]string{{"--builder-token", installed}, {"--dry-run", "--builder-token", installed}} {
+		out := m.refused("setup", args...)
+		if !strings.Contains(out, "is where the set-up keeps the Builder's token") {
+			t.Errorf("setup %v does not say why:\n%s", args, out)
+		}
+		if strings.Contains(out, "setup: remove ") || strings.Contains(out, "would remove ") {
+			t.Errorf("setup %v went on to remove it:\n%s", args, out)
+		}
+		if strings.Contains(out, madeUpToken) {
+			t.Errorf("setup %v shows the token:\n%s", args, out)
+		}
+	}
+	if got := read(t, installed); got != madeUpToken+"\n" || mode(t, installed) != 0o600 {
+		t.Fatalf("the Builder's token is %d bytes at %v after the set-up was given it as its own source", len(got), mode(t, installed))
+	}
+	if strings.Contains(m.callsOrNone(), "bootout") {
+		t.Errorf("a refused run stopped something:\n%s", m.callsOrNone())
+	}
+}
+
 // The scratch folder is root's own. A link at its name is refused: root
 // would hand every build's folder to whatever the link names.
 func TestSetupRefusesALinkAtTheBuildersScratchFolder(t *testing.T) {

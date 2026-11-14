@@ -233,6 +233,7 @@ if [[ -n $builder_token ]]; then
   if [[ "$(wc -l < "$builder_token" | tr -d ' ')" -gt 1 ]] || ! grep -Eq '^bldr_[0-9a-f]{40}$' "$builder_token"; then
     fail "$builder_token is not a builder's token, as lab builder add -o writes it"
   fi
+  [[ ! $builder_token -ef $BUILDER_TOKEN ]] || fail "$builder_token is where the set-up keeps the Builder's token: it is in place, and a file given here is removed once taken. Leave --builder-token out"
 fi
 case "$builder_cpus" in
   "" | 10 | 8 | 6) ;;
