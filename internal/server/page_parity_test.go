@@ -55,9 +55,9 @@ func pinnedIn(main *node) []pinnedElement {
 	return list
 }
 
-// notYet are the old pages' elements that wait for a later page of the
+// waitsForBenchmarks are the old pages' elements that wait for a later page of the
 // port: a model's benchmark scores come with Benchmarks.
-func notYet(e pinnedElement) bool {
+func waitsForBenchmarks(e pinnedElement) bool {
 	return e.ID == "benchmarks" || contains(e.Class, "score-row")
 }
 
@@ -122,7 +122,7 @@ func TestThePagesPinWhatTheOldSitesPin(t *testing.T) {
 		got := ours[target]
 		var kept []pinnedElement
 		for _, e := range want {
-			if !notYet(e) {
+			if !waitsForBenchmarks(e) {
 				kept = append(kept, e)
 			}
 		}
