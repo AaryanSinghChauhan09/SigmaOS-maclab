@@ -420,6 +420,21 @@ honoured. `--dry-run` says what it would do and changes nothing.
 prompt and runs the import and its three checks on an emptied `reports.db`,
 while the lab is in Preview.
 
+The lab opens once (the Cutover's step 25). `scripts/cutover/open`, on the
+server, asks labd on its ops socket: from that answer reports and Mac sign-in
+are accepted, Preview's banner and `noindex` are gone, the home page says for
+30 days that `omarchy-m-testing.org` is now here, and the install lines serve
+the latest Lab release. labd keeps the opening in `labd.db`: an open lab stays
+open whatever `--preview` says, and nothing closes it again. `labd stage
+--data DIR` says whether a data directory's lab has opened. The day around
+that step is `scripts/cutover/day`, on the owner's Mac: with no option it
+says every step in order and asks nothing; `--run` checks what must be true
+before each step, does the script's part and stops at each step that is the
+owner's with the words to type or click. `scripts/cutover/back` is the way
+back before the opening, `scripts/cutover/confirmed` the checklist after it,
+`scripts/cutover/ready` the list of which gate tests have a green record
+under `docs/acceptance/`.
+
 To run a lab of your own while developing:
 
 ```sh
