@@ -1,0 +1,43 @@
+{{define "head"}}{{with .Data}}{{if .Reloads}}<meta http-equiv="refresh" content="10">
+{{end}}{{end}}{{end}}
+
+{{define "asked"}}{{if .AskedBy}}@{{.AskedBy}}{{if .ByTeam}} <span class="badge kind-mteam">M team</span>{{end}}{{else if .ByLab}}<span class="dim">the lab</span>{{else}}<span class="dim">not recorded</span>{{end}}{{end}}
+
+{{define "main"}}{{with .Data}}<p class="dim"><a href="{{href "/builds"}}">Builds</a> /</p>
+<h1>{{.ID}}</h1>
+<p class="subtitle">{{.What}}{{if .Source}}, from {{.Source}}{{end}}.</p>
+<section class="card">
+<h2 class="card-title">build</h2>
+<p><span class="badge {{.StateClass}}">{{.State}}</span>{{if .Doing}} <span class="dim">{{.Doing}}</span>{{end}}{{if .Error}} {{.Error}}{{end}}</p>
+<dl class="facts">
+<dt>Asked by</dt><dd>{{template "asked" .}}</dd>
+<dt>Asked</dt><dd>{{.When}}</dd>
+{{if .Started}}<dt>Started</dt><dd>{{.Started}}{{if .Builder}}, on {{.Builder}}{{end}}</dd>
+{{end}}{{if .Took}}<dt>Took</dt><dd>{{.Took}}</dd>
+{{end}}{{if .Source}}<dt>Source</dt><dd>{{.Source}}</dd>
+{{end}}{{if or .For .Config}}<dt>Config</dt><dd>{{if .For}}{{.For}}'s{{end}}{{if .Config}} <code>{{.Config}}</code>{{end}}</dd>
+{{end}}{{if .Artifact}}<dt>Artifact</dt><dd><code>{{.Artifact}}</code>{{if .Size}} <span class="dim">{{.Size}}</span>{{end}}{{if .Reused}} <span class="dim">reused</span>{{end}}</dd>
+{{end}}</dl>
+{{if .CanCancel}}<p>{{template "take" ($.Take (print "/builds/" .ID "/cancel") "Cancel" .CancelSentence)}}</p>
+{{end}}</section>
+{{if .Files}}<section class="card">
+<h2 class="card-title">files ({{len .Files}})</h2>
+<div class="scroll"><table class="list stack">
+<thead><tr><th>File</th><th>Size</th><th>sha256</th></tr></thead>
+<tbody>
+{{range .Files}}<tr>
+<td data-label="File"><a href="{{href (print "/api/builds/" $.Data.ID "/files/" .Name)}}">{{.Name}}</a></td>
+<td data-label="Size" class="nowrap">{{.Size}}</td>
+<td data-label="sha256"><code>{{.SHA}}</code></td>
+</tr>
+{{end}}</tbody>
+</table></div>
+</section>
+{{end}}<section class="card">
+<h2 class="card-title">log</h2>
+{{if .Log}}<p class="dim">Its last lines. <a href="{{href (print "/api/builds/" .ID "/log")}}">The whole log</a></p>
+<pre class="command log">{{range .Log}}{{.}}
+{{end}}</pre>
+{{else}}<p class="dim">No log yet.</p>
+{{end}}</section>
+{{end}}{{end}}

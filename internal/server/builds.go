@@ -652,6 +652,13 @@ func (s *Server) hCancelBuild(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, "%v", err)
 		return
 	}
+	s.cancelBuild(b)
+	w.Write([]byte("canceling\n"))
+}
+
+// cancelBuild cancels a build that is queued, or tells the builder running
+// it to stop.
+func (s *Server) cancelBuild(b *api.Build) {
 	switch b.State {
 	case api.BuildQueued:
 		b.State, b.Error = api.BuildCanceled, "canceled before it started"
@@ -661,7 +668,6 @@ func (s *Server) hCancelBuild(w http.ResponseWriter, r *http.Request) {
 		s.builds.cancel[b.ID] = true
 		s.builds.mu.Unlock()
 	}
-	w.Write([]byte("canceling\n"))
 }
 
 // reconcileRunningBuilds settles, when labd starts and before it serves, the

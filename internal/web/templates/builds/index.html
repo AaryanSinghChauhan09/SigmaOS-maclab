@@ -1,0 +1,23 @@
+{{define "asked"}}{{if .AskedBy}}@{{.AskedBy}}{{if .ByTeam}} <span class="badge kind-mteam">M team</span>{{end}}{{else if .ByLab}}<span class="dim">the lab</span>{{else}}<span class="dim">not recorded</span>{{end}}{{end}}
+
+{{define "main"}}{{with .Data}}<h1>Builds</h1>
+<p class="subtitle">Kernel and package builds on the lab's Builder, one at a time, and who asked for each.</p>
+<section class="card">
+<h2 class="card-title">builds ({{len .Builds}})</h2>
+{{if .Builds}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Build</th><th>What</th><th>Config of</th><th>Asked by</th><th>State</th><th>When</th><th>Took</th></tr></thead>
+<tbody>
+{{range .Builds}}<tr id="build-{{.ID}}">
+<td data-label="Build" class="nowrap"><a href="{{href (print "/builds/" .ID)}}">{{.ID}}</a></td>
+<td data-label="What">{{.What}}{{if .Source}}<br><span class="dim">{{.Source}}</span>{{end}}</td>
+<td data-label="Config of">{{if .For}}{{.For}}{{else}}<span class="dim">–</span>{{end}}</td>
+<td data-label="Asked by">{{template "asked" .}}</td>
+<td data-label="State"><span class="badge {{.StateClass}}">{{.State}}</span>{{if .Doing}} <span class="dim">{{.Doing}}</span>{{end}}</td>
+<td data-label="When" class="nowrap">{{.When}}</td>
+<td data-label="Took" class="nowrap">{{if .Took}}{{.Took}}{{else}}<span class="dim">–</span>{{end}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+{{else}}<p class="dim">Nothing has been built yet. <code>lab build</code> asks for one; so does a job whose kernel is a GitHub address.</p>
+{{end}}</section>
+{{end}}{{end}}
