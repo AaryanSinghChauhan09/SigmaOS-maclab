@@ -220,7 +220,10 @@ be_lab
 if (( ! DRY )); then
   lock="$LAB_HOME/run/backup.lock"
   if ! mkdir "$lock" 2>/dev/null; then
-    if kill -0 "$(cat "$lock/pid" 2>/dev/null || echo 0)" 2>/dev/null; then
+    pid="$(cat "$lock/pid" 2>/dev/null || true)"
+    # A lock with no pid yet may be a run that has just taken it.
+    [[ -n $pid ]] || { sleep 2; pid="$(cat "$lock/pid" 2>/dev/null || true)"; }
+    if [[ $pid =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
       fail "another backup is running"
     fi
     rm -rf "$lock"

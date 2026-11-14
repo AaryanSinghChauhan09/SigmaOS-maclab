@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -554,5 +555,61 @@ func TestABackupWithoutItsKeysSaysWhichIsMissing(t *testing.T) {
 	}
 	if out := b.refused("backup", "restic", "elsewhere", "snapshots"); !strings.Contains(out, "scripts/mini/backup restic house|offsite") {
 		t.Errorf("a third target:\n%s", out)
+	}
+}
+
+func TestOneBackupAtATime(t *testing.T) {
+	b := newBackedUp(t)
+	lock := b.path("var/lab/run/backup.lock")
+	// A backup that is running: this test's own process holds the lock.
+	write(t, lock+"/pid", strconv.Itoa(os.Getpid())+"\n", 0o600)
+	if out := b.refused("backup"); !strings.Contains(out, "another backup is running") || b.told() != "" {
+		t.Errorf("with a backup running:\n%s", out)
+	}
+	// A lock left with no pid in it, as a power cut leaves one, or with the
+	// number of no process, is taken over.
+	for _, pid := range []string{"", "0\n", "99999999\n", "-1\n"} {
+		os.RemoveAll(lock)
+		if err := os.MkdirAll(lock, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if pid != "" {
+			write(t, lock+"/pid", pid, 0o600)
+		}
+		if out, code := b.run("backup"); code != 0 || exists(lock) {
+			t.Errorf("with a lock holding the pid %q: exit %d, lock left %v\n%s", pid, code, exists(lock), out)
+		}
+	}
+}
+
+// The backups and the Restore drill read restic's answers with jq, from the
+// path macOS itself fills.
+func TestSetupStopsWithoutJq(t *testing.T) {
+	m, k := withBackups(t)
+	own := filepath.Join(filepath.Dir(m.root), "macos")
+	if err := os.MkdirAll(own, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"/sbin", "/usr/sbin", "/bin", "/usr/bin"} {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Name() != "jq" {
+				os.Remove(filepath.Join(own, e.Name()))
+				os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(own, e.Name()))
+			}
+		}
+	}
+	for i, v := range m.env {
+		if strings.HasPrefix(v, "PATH=") {
+			m.env[i] = "PATH=" + m.bin + ":" + own
+		}
+	}
+	for _, args := range [][]string{{"--dry-run", "--release-key", k.signers}, {"--release-key", k.signers}} {
+		if out := m.refused("setup", args...); !strings.Contains(out, "no jq") {
+			t.Errorf("setup %v without jq:\n%s", args, out)
+		}
+	}
+	if m.daemonLoaded(litestreamLabel) || m.daemonLoaded(backupLabel) {
+		t.Error("a backup was started on a machine with no jq")
 	}
 }
