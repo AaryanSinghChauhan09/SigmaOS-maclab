@@ -678,6 +678,17 @@ of the Release, and its sentence says so when the Release is not qualified or
 its Qualification was revoked. Revoking undoes nothing: a Mac already
 promoted stays promoted, marked "promoted from a revoked Release".
 
+The same is on the Releases page (`/releases`, the M team and Maintainers):
+the list, one Release opened in place, Record verdict for an M team member
+while there is none, and for a Maintainer Change, Revoke and Promote on each
+Mac with a passed Installed run. Each asks twice with the lab's sentence. The
+page starts nothing: freezing and Installed runs stay in `lab`. A visitor
+sees one line, on Candidates, beside the candidate set a Release matches:
+"Qualified by the lab", "Not qualified" or "Qualification revoked", with the
+date. A Release matches a set when a Verified run on the set lists every
+package of the Release at its version, or when the set is known by the
+Release's `omarchy` package (`internal/reports/candidate_sets.yml`).
+
 ### Leaving
 
 A Volunteer can leave at any time, and the Maintainers can end an enrollment.

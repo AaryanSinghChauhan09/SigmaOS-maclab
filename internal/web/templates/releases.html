@@ -40,7 +40,7 @@
 {{range .Macs}}<tr class="release-mac" id="{{.ID}}">
 <td data-label="Mac" class="nowrap">{{.Mac}}</td>
 <td data-label="Configuration">{{.Configuration}}</td>
-<td data-label="Latest Installed run">{{if .Run}}<a href="{{href .RunPath}}">{{.Run}}</a> <span title="{{.RunOutcome}}">{{.RunWords}}</span>{{else}}<span class="dim">none</span>{{end}}</td>
+<td data-label="Installed run">{{if .Run}}<a href="{{href .RunPath}}">{{.Run}}</a> <span title="{{.RunOutcome}}">{{.RunWords}}</span>{{else}}<span class="dim">none</span>{{end}}</td>
 <td data-label="Runs">{{.Runs}}</td>
 <td data-label="Promoted">{{if .Promoted}}{{.Promoted}}{{if .Mark}} <span class="badge state-revoked">{{.Mark}}</span>{{end}}{{else}}<span class="dim">not promoted</span>{{end}}{{if .Never}} <span class="dim">{{.Never}}</span>{{end}}{{if .PromoteAction}} <form class="inline" method="post" action="{{href .PromoteAction}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Promote</button></form>{{end}}</td>
 </tr>
@@ -51,7 +51,7 @@
 <div class="wide release-verdict">
 <h3>Verdict</h3>
 {{range .Warnings}}<p class="release-warning">Warning: {{.}}. Nothing changes by itself.</p>
-{{end}}{{if or .Record .Change}}<form class="form form-inline" method="post" action="{{href .VerdictAction}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">
+{{end}}{{if .Asking}}{{else if or .Record .Change}}<form class="form form-inline" method="post" action="{{href .VerdictAction}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">
 <input type="text" name="note" required maxlength="1000" size="40" placeholder="note: say why (required)" aria-label="Note (required)" autocomplete="off">
 {{if .Change}}<button class="button button-small" type="submit" name="state" value="qualified">Change to qualified</button>
 <button class="button button-small" type="submit" name="state" value="not_qualified">Change to not qualified</button>

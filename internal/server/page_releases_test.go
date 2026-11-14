@@ -238,16 +238,16 @@ func TestAReleaseOpensInPlaceWithWhatItIsItsMacsAndItsVerdictHistory(t *testing.
 		}
 		same(t, who+": its Macs", attrsOf(macs.all(t, "tr.release-mac"), "id"), []string{"release-9.9-mac-m1-pro", "release-9.9-mac-m2-max"})
 		pro := macs.sole(t, `tr.release-mac[id="release-9.9-mac-m1-pro"]`)
-		for label, want := range map[string]string{"Mac": "m1-pro", "Configuration": "j316s, 10 CPU and 16 GPU cores", "Latest Installed run": "job-a2 passed", "Runs": "2", "Promoted": "promoted by @ravi"} {
+		for label, want := range map[string]string{"Mac": "m1-pro", "Configuration": "j316s, 10 CPU and 16 GPU cores", "Installed run": "job-a2 passed", "Runs": "2", "Promoted": "promoted by @ravi"} {
 			if got := pro.sole(t, `td[data-label="`+label+`"]`).words(); !strings.Contains(got, want) {
 				t.Errorf("%s: m1-pro's %s: %q, want %q", who, label, got, want)
 			}
 		}
-		if !pro.hasText(t, `td[data-label="Latest Installed run"] a[href="/jobs/job-a2"]`, "job-a2") {
+		if !pro.hasText(t, `td[data-label="Installed run"] a[href="/jobs/job-a2"]`, "job-a2") {
 			t.Errorf("%s: the latest Installed run is not linked to its job", who)
 		}
 		max := macs.sole(t, `tr.release-mac[id="release-9.9-mac-m2-max"]`)
-		for label, want := range map[string]string{"Latest Installed run": "job-b1 failed", "Runs": "1", "Promoted": "not promoted"} {
+		for label, want := range map[string]string{"Installed run": "job-b1 failed", "Runs": "1", "Promoted": "not promoted"} {
 			if got := max.sole(t, `td[data-label="`+label+`"]`).words(); !strings.Contains(got, want) {
 				t.Errorf("%s: m2-max's %s: %q, want %q", who, label, got, want)
 			}
@@ -314,6 +314,9 @@ func TestAnMTeamMemberRecordsAVerdictOnlyWhileThereIsNoneAndIsAskedTwice(t *test
 	if form.attr("action") != "/releases/9.9/verdict" || form.count(t, `input[name="sure"][value="yes"]`) != 1 ||
 		form.count(t, `input[name="state"][value="qualified"]`) != 1 || form.count(t, `input[name="note"][value="boots on the Pro"]`) != 1 || form.count(t, `input[name="csrf_token"]`) != 1 {
 		t.Errorf("the second click does not carry what the first asked")
+	}
+	if got := verdictButtons(t, asked); got != "" {
+		t.Errorf("the verdict's own buttons stay beside the sentence: %q", got)
 	}
 	if !asked.hasText(t, `.asking a[href="/releases?open=9.9"]`, "Leave it as it is") {
 		t.Error("the sentence offers no way back")
