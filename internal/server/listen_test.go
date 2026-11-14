@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -205,6 +207,67 @@ func TestTheSocketIsItsOwnersAndThePortIsLoopback(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(file); string(b) != "keep" {
 		t.Error("labd replaced a file that was no socket")
+	}
+}
+
+// Opening a socket leaves the process's umask alone: it is the whole
+// process's, and a file made by anything else at that moment would be closed
+// to its own readers too. Two sockets opened at once used to leave the
+// process on the socket's umask for good.
+func TestOpeningASocketLeavesTheProcessUmaskAlone(t *testing.T) {
+	umask := syscall.Umask(0)
+	syscall.Umask(umask)
+	want := os.FileMode(0o666) &^ os.FileMode(umask)
+	if want&0o066 == 0 {
+		t.Skipf("under umask %04o a file is its owner's alone already: nothing to tell apart", umask)
+	}
+	dir := shortDir(t)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			path := filepath.Join(dir, "s"+string(rune('a'+i)))
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				ln, err := listenSocket("--socket", path)
+				if err != nil {
+					t.Errorf("opening %s: %v", path, err)
+					return
+				}
+				if st, err := os.Lstat(path); err != nil || st.Mode()&os.ModeSocket == 0 || st.Mode().Perm() != 0o600 {
+					t.Errorf("the socket at %s: %v, %v, want a socket at 0600", path, st, err)
+				}
+				ln.Close()
+			}
+		}()
+	}
+	file := filepath.Join(dir, "a-file")
+	for n := 0; n < 3000 && !t.Failed(); n++ {
+		f, err := os.OpenFile(file, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := f.Stat()
+		f.Close()
+		os.Remove(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != want {
+			t.Errorf("a file made while a socket was opened got mode %04o, want %04o", st.Mode().Perm(), want)
+		}
+	}
+	close(stop)
+	wg.Wait()
+	after := syscall.Umask(umask)
+	if after != umask {
+		t.Errorf("the process's umask is %04o after the sockets were opened, was %04o", after, umask)
 	}
 }
 

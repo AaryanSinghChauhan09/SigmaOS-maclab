@@ -17,7 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"syscall"
+	"sync"
 	"time"
 )
 
@@ -108,19 +108,45 @@ func listenSocket(flag, path string) (net.Listener, error) {
 	case !errors.Is(err, os.ErrNotExist):
 		return nil, err
 	}
-	// The socket is born closed to everyone else: a chmod after the bind
-	// would leave a moment when it is not.
-	old := syscall.Umask(0o177)
-	ln, err := net.Listen("unix", path)
-	syscall.Umask(old)
+	// The socket is born closed to everyone else: a chmod after a bind at
+	// its path would leave a moment when it is not. It is bound in a folder
+	// beside its path that only its owner can enter, and moved to its path
+	// once its mode is set. The umask would do it in one step, but the umask
+	// is the whole process's: whatever else makes a file at that moment gets
+	// it too, and two sockets opened at once leave it changed for good.
+	born, err := os.MkdirTemp(filepath.Dir(path), ".s")
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		ln.Close()
+	defer os.RemoveAll(born)
+	first := filepath.Join(born, "s")
+	ln, err := net.Listen("unix", first)
+	if err != nil {
 		return nil, err
 	}
-	return ln, nil
+	unix := ln.(*net.UnixListener)
+	unix.SetUnlinkOnClose(false)
+	if err = os.Chmod(first, 0o600); err == nil {
+		err = os.Rename(first, path)
+	}
+	if err != nil {
+		unix.Close()
+		return nil, err
+	}
+	return &socket{UnixListener: unix, path: path}, nil
+}
+
+// socket is a listening Unix socket that was moved to path after its bind.
+// Closing it removes it from there.
+type socket struct {
+	*net.UnixListener
+	path string
+	once sync.Once
+}
+
+func (s *socket) Close() error {
+	s.once.Do(func() { os.Remove(s.path) })
+	return s.UnixListener.Close()
 }
 
 // Serve serves hs on every listener and returns when one of them stops.
