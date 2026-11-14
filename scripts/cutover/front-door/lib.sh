@@ -152,7 +152,7 @@ local_lab() {
   LOCAL_DATA="$LOCAL_ROOT/var/lab/data"
   mkdir -p "$HOME" "$TMPDIR" "$WORK/sign-in" "$LOCAL_ROOT/var/lab"
   echo 1 > "$WORK/sign-in/admins"
-  "$BIN/labd" --listen=127.0.0.1:0 --data="$LOCAL_DATA" --sign-in="$WORK/sign-in" --omt=false --omt-site= > "$WORK/labd.log" 2>&1 &
+  "$BIN/labd" --listen=127.0.0.1:0 --data="$LOCAL_DATA" --sign-in="$WORK/sign-in" --omt=false > "$WORK/labd.log" 2>&1 &
   LABD_PID=$!
   port=""
   for n in $(seq 100); do

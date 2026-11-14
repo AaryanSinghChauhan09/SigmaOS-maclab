@@ -259,7 +259,7 @@ func newMadeUpLab(t *testing.T) *madeUpLab {
 		t.Fatal(err)
 	}
 	data := filepath.Join(l.root, "var", "lab", "data")
-	l.url = start(t, regexp.MustCompile(`labd listening on (http://127\.0\.0\.1:\d+)`), filepath.Join(l.bin, "labd"), "--listen=127.0.0.1:0", "--data="+data, "--sign-in="+signIn, "--github-url="+github, "--omt=false", "--omt-site=")
+	l.url = start(t, regexp.MustCompile(`labd listening on (http://127\.0\.0\.1:\d+)`), filepath.Join(l.bin, "labd"), "--listen=127.0.0.1:0", "--data="+data, "--sign-in="+signIn, "--github-url="+github, "--omt=false")
 
 	token, code := run(t, l.env(l.ownerHome), "", "/bin/sh", "-c", `"$0" break-glass --data="$1" --account-id=1001 owner 2>/dev/null`, filepath.Join(l.bin, "labd"), data)
 	if code != 0 {
