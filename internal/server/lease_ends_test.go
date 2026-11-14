@@ -263,6 +263,62 @@ func TestALeaseThatRunsOutUnderItsJobIsExtendedUntilTheJobEnds(t *testing.T) {
 	l.labLines("grace leased sim-mac until ", "grace's Lease on sim-mac expired.")
 }
 
+// An extended Lease lasts until its job ends and no further: nothing new
+// starts under it, a lab exec whose line was already written included,
+// until its holder renews it.
+func TestAnExtendedLeasePassesNothingNew(t *testing.T) {
+	l := newLab(t, true)
+	l.baseline()
+	grace := l.member("grace")
+	l.leaseAs(grace, 0)
+	running := l.longJobAs(grace, "7.2-run", 12*time.Second)
+
+	// It runs out while the Exec record's line is written.
+	l.s.execRecorded = func() {
+		l.leaseRunsOutNow()
+		l.s.lapse(l.s.dev(l.name))
+	}
+	r, body := l.execAs(grace, "id as-it-ran-out")
+	l.s.execRecorded = nil
+	if r.StatusCode != http.StatusConflict || !strings.Contains(body, "renew it") || !strings.Contains(body, "not sent") {
+		t.Errorf("a lab exec whose Lease ran out before it was queued: %s %s", r.Status, body)
+	}
+	l.wantLeaseEvents("taken", "extended")
+
+	for _, f := range l.fenced() {
+		r, body := f.ask(grace.Token)
+		// The job an extension is for keeps the Mac busy, which refuses a reset first.
+		named := f.what == "a reset" || strings.Contains(body, "renew it (`lab lease "+l.name+"`)") && strings.Contains(body, "job "+running)
+		if r.StatusCode != http.StatusConflict || !named {
+			t.Errorf("on her extended Lease, grace asked for %s: %s %s", f.what, r.Status, body)
+		}
+	}
+	if j, _ := l.jobNow(running); j.State == api.JobDone {
+		t.Fatalf("the job the Lease is extended for ended meanwhile: %s %s", j.Outcome, j.Summary)
+	}
+	got := execLines(t, l.s, l.name)
+	if len(got) != 2 {
+		t.Fatalf("the Exec record has %d lines, want the two refused: %+v", len(got), got)
+	}
+	for _, e := range got {
+		if e.State != api.ExecRefused || e.ExitCode != nil || !strings.Contains(e.Why, "renew it") {
+			t.Errorf("the Exec record of a lab exec on an extended Lease: %+v", e)
+		}
+	}
+
+	// Renewed, it is a Lease again.
+	if renewed := l.leaseAs(grace, 0); renewed.Extended {
+		t.Fatalf("the renewed Lease: %+v", renewed)
+	}
+	if r, body := l.execAs(grace, "uname -r"); r.StatusCode != 200 || !strings.Contains(body, "sim ran: uname -r") {
+		t.Fatalf("under her renewed Lease, grace ran lab exec: %s %s", r.Status, body)
+	}
+	if r, body := l.as(grace.Token, "GET", "/api/devices/"+l.name+"/screens", nil); r.StatusCode != 200 {
+		t.Fatalf("under her renewed Lease, grace asked for the kept screens: %s %s", r.Status, body)
+	}
+	l.expect(l.jobAPI(running, 60*time.Second), api.OutcomePass)
+}
+
 // leaseRunsOutNow moves the Lease's end to a moment ago, as the clock
 // would.
 func (l *lab) leaseRunsOutNow() {

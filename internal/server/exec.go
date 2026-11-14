@@ -65,11 +65,14 @@ func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 	}
 	// Writing the line took time, and the Lease is asked for a last time in
 	// the moment the command is queued: the Mac's agent takes nothing that
-	// was queued after the Lease ended or the session was cut.
+	// was queued after the Lease ended, ran out under its job, or the
+	// session was cut.
 	stillLeased := func() error {
 		switch l := v.liveLeaseLocked(); {
 		case r.Context().Err() != nil:
 			return errNotSent{errors.New("its caller left before it was sent")}
+		case l != nil && leaseIsOf(l, p) && l.Extended:
+			return errNotSent{refuse(409, "%s, so this command was not sent", extendedOnly(l, name, fenceExec.what))}
 		case l == nil || !leaseIsOf(l, p) || session.Context().Err() != nil:
 			return errNotSent{ended()}
 		}

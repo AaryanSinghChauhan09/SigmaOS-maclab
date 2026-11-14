@@ -321,8 +321,9 @@ var (
 
 // fence is why p may not do f on v now, or nil. An M team member needs
 // their own Lease on the Mac. A Maintainer acts on a free Mac, and under
-// another person's Lease waits or ends it. Screenshots and the live journal
-// are fenced in mayDo, where a Volunteer's Mac's rules for them are.
+// another person's Lease waits or ends it. A Lease extended for its running
+// job passes nothing new, its holder's either. Screenshots and the live
+// journal are fenced in mayDo, where a Volunteer's Mac's rules for them are.
 func (s *Server) fence(v *dev, p Person, f fenced) error {
 	if !p.OnMTeam() {
 		return refuse(403, "%s on a Mac is for the M team and Maintainers", f.what)
@@ -332,8 +333,8 @@ func (s *Server) fence(v *dev, p Person, f fenced) error {
 	l, name := v.liveLeaseLocked(), v.d.Name
 	switch {
 	case l != nil && leaseIsOf(l, p):
-		if l.Extended && f == fenceJobs {
-			return refuse(409, "your Lease on %s ran out at %s and lasts only until job %s ends: renew it (`lab lease %s`) to queue more", name, l.Expires.Format(time.TimeOnly), l.Job, name)
+		if l.Extended {
+			return refuse(409, "%s", extendedOnly(l, name, f.what))
 		}
 		return nil
 	case !p.isMaintainer():
@@ -344,6 +345,13 @@ func (s *Server) fence(v *dev, p Person, f fenced) error {
 		return refuse(409, "%s needs your own Lease on %s, a Maintainer's too: `lab lease %s`", f.what, name, name)
 	}
 	return nil
+}
+
+// extendedOnly is what the holder of l, a Lease extended for its running
+// job, is told when they ask for something new under it: the extension is
+// that job's and passes nothing else.
+func extendedOnly(l *api.Lease, mac, what string) string {
+	return fmt.Sprintf("your Lease on %s ran out at %s and lasts only until job %s ends, with nothing new under it: renew it (`lab lease %s`) for %s", mac, l.Expires.Format(time.TimeOnly), l.Job, mac, what)
 }
 
 // until says when l ends: at its end, or, extended past it, with its job.

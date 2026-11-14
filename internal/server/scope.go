@@ -386,8 +386,11 @@ func (s *Server) mayDoLocked(c caller, v *dev, a action) error {
 		}
 		return fmt.Errorf("a Mac may not ask for %s on %s", a.what, d.Name)
 	case c.team != "":
-		if l := v.liveLeaseLocked(); l == nil || l.AccountID == 0 || l.AccountID != c.account {
+		switch l := v.liveLeaseLocked(); {
+		case l == nil || l.AccountID == 0 || l.AccountID != c.account:
 			return fmt.Errorf("an M team member needs their own Lease on %s for %s: `lab lease %s`", d.Name, a.what, d.Name)
+		case l.Extended:
+			return errors.New(extendedOnly(l, d.Name, a.what))
 		}
 	case c.login != "":
 		if !s.seesLocked(c, v) {
