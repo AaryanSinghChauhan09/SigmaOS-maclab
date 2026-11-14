@@ -1,5 +1,5 @@
-// Command oobd runs on the controller host attached to a test Mac's DFU port
-// and gives labd hard reset and the serial console.
+// Command oobd is the Out-of-band controller: a root LaunchDaemon on the
+// mini that sends Hard resets through the mini's three rear ports.
 package main
 
 import (
@@ -10,29 +10,39 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/omacom/omarchy-maclab/internal/oob"
 	"github.com/omacom/omarchy-maclab/internal/oobd"
 )
 
 func main() {
-	listen := flag.String("listen", ":7780", "")
-	token := flag.String("token", os.Getenv("OOBD_TOKEN"), "bearer token labd must present")
-	tool := flag.String("tool", "/usr/local/bin/macvdmtool", "macvdmtool (or a compatible reset tool)")
-	serial := flag.String("serial", "/dev/cu.debug-console", "serial device the target's console appears on")
-	baud := flag.Int("baud", 115200, "")
-	logFile := flag.String("log", "", "also append the console to this file")
-	camera := flag.String("camera", "", "JPEG a capture process keeps updating with the newest frame of a camera pointed at the Mac")
+	listen := flag.String("listen", "127.0.0.1:7780", "the loopback address labd reaches the controller at: it listens nowhere else")
+	tokenFile := flag.String("token-file", "/usr/local/lab/secrets/oobd.token", "the file that holds the token labd must present: this account's alone (0600)")
+	tool := flag.String("tool", "/usr/local/lab/current/bin/macvdmtool", "the reset tool: omacom/macvdmtool, which takes --rid")
 	flag.Parse()
-	if *token == "" {
-		log.Fatal("set --token (or OOBD_TOKEN): anyone who can reach oobd can hard-reset the Mac")
+	if flag.NArg() != 0 {
+		log.Fatalf("oobd takes no argument: %v", flag.Args())
+	}
+	if err := oobd.Loopback(*listen); err != nil {
+		log.Fatal(err)
+	}
+	token, err := oob.ReadToken(*tokenFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s, err := oobd.New(oobd.Config{Token: token, Tool: oobd.ExecTool{Path: *tool}, Ports: oobd.DefaultPorts()}, log.Default())
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := os.Stat(*tool); err != nil {
+		log.Printf("the reset tool is not at %s: every reset will be refused until a Deploy brings it", *tool)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	s := oobd.New(oobd.Config{Token: *token, Tool: *tool, SerialDev: *serial, Baud: *baud, LogFile: *logFile, Camera: *camera}, log.Default())
-	go s.ReadSerial(ctx)
-	hs := &http.Server{Addr: *listen, Handler: s.Handler()}
+	hs := &http.Server{Addr: *listen, Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() { <-ctx.Done(); hs.Close() }()
-	log.Printf("oobd on %s: reset via %s, console %s", *listen, *tool, *serial)
+	log.Printf("oobd on %s: ports with RID 0, 1 and 2, resets through %s", *listen, *tool)
 	if err := hs.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

@@ -1,14 +1,17 @@
-// Package oobd runs on the controller host physically attached to a test Mac:
-// a macOS Mac with macvdmtool today, a Linux box with a Central Scrutinizer later.
-// It serves hard reset and the serial console to labd.
+// Package oobd is the Out-of-band controller: one process on the mini that
+// sends a Hard reset to a Lab-owned Mac through one of the mini's rear ports.
+// Every request names its port, and one reset tool run happens at a time.
 package oobd
 
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,78 +19,120 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/omacom/omarchy-maclab/internal/oob"
 )
 
+// MiniRIDs are the mini's three rear USB-C ports as the reset tool numbers
+// them: middle 0, left 1, right 2, facing the back.
+var MiniRIDs = []int{0, 1, 2}
+
+// Tool is the reset tool. The real one is a program (ExecTool).
+type Tool interface {
+	// Run runs one command against the port with this RID and returns what
+	// the tool printed.
+	Run(ctx context.Context, rid int, command string) (string, error)
+}
+
+// Ports reads what this machine sees on a port, touching nothing.
+type Ports interface {
+	Read(ctx context.Context, rid int) (oob.Port, error)
+}
+
 type Config struct {
+	// Token is what labd presents. A controller with none is not made.
 	Token string
-	// Tool is the reset backend command, run as `<Tool> reboot serial` and `<Tool> nop`.
-	Tool      string
-	SerialDev string
-	Baud      int
-	LogFile   string
-	// Camera is a JPEG a capture process keeps overwriting with the newest frame.
-	Camera string
+	// RIDs are the ports of this machine; none means the mini's.
+	RIDs  []int
+	Tool  Tool
+	Ports Ports
 }
 
 type Server struct {
 	cfg Config
 	log *log.Logger
 
-	toolMu sync.Mutex // macvdmtool must not run concurrently
-
-	mu      sync.Mutex
-	ring    []string
-	subs    map[chan string]bool
-	raw     map[chan []byte]bool
-	port    *os.File
-	openErr string
-	last    time.Time
-	typed   time.Time // last write into the console by a person or agent
-	rx      time.Time // last byte received from the Mac (not oobd's own markers)
-
-	armUntil  time.Time
-	lastFrame []byte
+	// toolMu is held for every tool run, and across a reset's last look at
+	// its port, so that one run happens at a time over all ports.
+	toolMu sync.Mutex
 }
 
-func New(cfg Config, logger *log.Logger) *Server {
-	return &Server{cfg: cfg, log: logger, subs: map[chan string]bool{}, raw: map[chan []byte]bool{}}
+func New(cfg Config, logger *log.Logger) (*Server, error) {
+	if cfg.Token == "" {
+		return nil, errors.New("no token: anyone on this machine could reset a Mac")
+	}
+	if cfg.Tool == nil || cfg.Ports == nil {
+		return nil, errors.New("no reset tool or no port reader")
+	}
+	if len(cfg.RIDs) == 0 {
+		cfg.RIDs = MiniRIDs
+	}
+	return &Server{cfg: cfg, log: logger}, nil
+}
+
+// Loopback reports whether addr is a loopback address and a port, which is
+// the only place the controller listens.
+func Loopback(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return fmt.Errorf("%q is not ADDRESS:PORT", addr)
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("%q is not a loopback address: the Out-of-band controller listens on this machine only", addr)
+	}
+	return nil
 }
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
-	m.HandleFunc("GET /v1/status", s.auth(s.hStatus))
-	m.HandleFunc("GET /v1/camera", s.auth(s.hCamera))
-	m.HandleFunc("GET /v1/camera/stream", s.auth(s.hCameraStream))
-	m.HandleFunc("POST /v1/reset", s.auth(s.hReset))
-	m.HandleFunc("POST /v1/serial/arm", s.auth(s.hArm))
-	m.HandleFunc("GET /v1/serial", s.auth(s.hSerial))
-	m.HandleFunc("GET /v1/serial/raw", s.auth(s.hRaw))
-	m.HandleFunc("POST /v1/serial/write", s.auth(s.hWrite))
+	m.HandleFunc("GET /v1/ports/{rid}/status", s.port(s.hStatus))
+	m.HandleFunc("POST /v1/ports/{rid}/reset", s.port(s.hReset))
 	return m
 }
 
-func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
+func (s *Server) rids() string {
+	list := make([]string, len(s.cfg.RIDs))
+	for i, r := range s.cfg.RIDs {
+		list[i] = strconv.Itoa(r)
+	}
+	return strings.Join(list, ", ")
+}
+
+// port lets a request through when it comes from this machine, carries the
+// token and names one of this machine's ports, written as the plain number.
+func (s *Server) port(h func(http.ResponseWriter, *http.Request, int)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if s.cfg.Token != "" && subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.Token)) != 1 {
-			http.Error(w, "bad token", 401)
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+			http.Error(w, "the Out-of-band controller answers this machine only", http.StatusForbidden)
 			return
 		}
-		h(w, r)
+		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.Token)) != 1 {
+			http.Error(w, "bad token", http.StatusUnauthorized)
+			return
+		}
+		name := r.PathValue("rid")
+		for _, rid := range s.cfg.RIDs {
+			if name == strconv.Itoa(rid) {
+				h(w, r, rid)
+				return
+			}
+		}
+		s.log.Printf("refused RID %q", name)
+		http.Error(w, fmt.Sprintf("no port with RID %q: this machine's are %s", name, s.rids()), http.StatusBadRequest)
 	}
 }
 
-func (s *Server) tool(ctx context.Context, args ...string) (string, error) {
-	s.toolMu.Lock()
-	defer s.toolMu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+// run is one tool run. A run that has started is left to finish even when
+// its caller goes away: a tool killed halfway leaves the port in the mode it
+// was working in.
+func (s *Server) run(ctx context.Context, rid int, command string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, s.cfg.Tool, args...).CombinedOutput()
-	s.log.Printf("%s %s: err=%v\n%s", s.cfg.Tool, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	if err != nil {
-		return string(out), fmt.Errorf("%s %s: %v: %s", s.cfg.Tool, strings.Join(args, " "), err, lastLine(string(out)))
-	}
-	return string(out), nil
+	out, err := s.cfg.Tool.Run(ctx, rid, command)
+	s.log.Printf("RID %d %s: err=%v\n%s", rid, command, err, strings.TrimSpace(out))
+	return out, err
 }
 
 func lastLine(s string) string {
@@ -95,324 +140,111 @@ func lastLine(s string) string {
 	return l[len(l)-1]
 }
 
-func (s *Server) hStatus(w http.ResponseWriter, r *http.Request) {
-	out, err := s.tool(r.Context(), "nop")
-	s.mu.Lock()
-	serial := "serial: " + s.cfg.SerialDev
-	if s.openErr != "" {
-		serial += " (" + s.openErr + ")"
-	} else if !s.last.IsZero() {
-		serial += fmt.Sprintf(" (last line %s ago)", time.Since(s.last).Round(time.Second))
-	}
-	s.mu.Unlock()
+func (s *Server) hStatus(w http.ResponseWriter, r *http.Request, rid int) {
+	p, err := s.cfg.Ports.Read(r.Context(), rid)
 	if err != nil {
-		http.Error(w, err.Error()+"\n"+serial, 502)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	fmt.Fprintf(w, "%s\n%s\n", strings.TrimSpace(out), serial)
+	p.RID = rid
+	if r.URL.Query().Get("probe") == "1" {
+		s.toolMu.Lock()
+		out, err := s.run(r.Context(), rid, "nop")
+		s.toolMu.Unlock()
+		p.Tool, p.ToolFailed = strings.TrimSpace(out), err != nil
+		if p.Tool == "" && err != nil {
+			p.Tool = err.Error()
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(p)
 }
 
-// hReset hard-reboots the target and puts it straight back into serial mode.
-func (s *Server) hReset(w http.ResponseWriter, r *http.Request) {
-	s.emit("[oobd] hard reset requested")
-	// Reboot on its own: `reboot serial` also switches serial mode on after
-	// the reset, and that second step can fail against a Mac that is already
-	// going down, reporting a reset that happened as failed (labd then
-	// resets it again). Serial mode is restored by the arm loop instead.
-	if _, err := s.tool(r.Context(), "reboot"); err != nil {
-		http.Error(w, err.Error(), 502)
+// seen reads the port state a reset carries: nothing at all, or both the
+// product id and the plug count of the Sighting.
+func seen(r *http.Request) (*oob.Seen, error) {
+	b, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err != nil {
+		return nil, err
+	}
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return nil, nil
+	}
+	var fields map[string]json.RawMessage
+	var want oob.Seen
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return nil, errors.New("the body is not a JSON object")
+	}
+	if len(fields) != 2 || fields["product_id"] == nil || fields["plug_count"] == nil {
+		return nil, errors.New("a reset carries product_id and plug_count, both, or no body")
+	}
+	if err := json.Unmarshal(b, &want); err != nil || want.ProductID <= 0 || want.PlugCount <= 0 {
+		return nil, errors.New("product_id and plug_count are numbers above 0")
+	}
+	return &want, nil
+}
+
+func (s *Server) hReset(w http.ResponseWriter, r *http.Request, rid int) {
+	want, err := seen(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.startArm(3 * time.Minute)
-	w.Write([]byte("ok\n"))
-}
-
-// startArm keeps re-arming serial mode for up to d while the console is silent.
-func (s *Server) startArm(d time.Duration) {
-	s.mu.Lock()
-	until := time.Now().Add(d)
-	running := !s.armUntil.IsZero()
-	if until.After(s.armUntil) {
-		s.armUntil = until
-	}
-	s.mu.Unlock()
-	if !running {
-		go s.armLoop()
-	}
-}
-
-// hArm puts the target into serial mode. With ?for=N it keeps re-arming for
-// up to N seconds while the console is silent: the Mac drops out of serial
-// mode on every reboot, and comes back at an unknown moment.
-func (s *Server) hArm(w http.ResponseWriter, r *http.Request) {
-	secs, _ := strconv.Atoi(r.URL.Query().Get("for"))
-	if secs <= 0 {
-		if _, err := s.tool(r.Context(), "serial"); err != nil {
-			http.Error(w, err.Error(), 502)
-			return
-		}
-		w.Write([]byte("ok\n"))
+	s.toolMu.Lock()
+	defer s.toolMu.Unlock()
+	if r.Context().Err() != nil {
+		s.log.Printf("RID %d reset: its caller left while it waited; nothing was sent", rid)
 		return
 	}
-	s.startArm(time.Duration(min(secs, 600)) * time.Second)
-	w.WriteHeader(202)
-	w.Write([]byte("arming\n"))
-}
-
-func (s *Server) armLoop() {
-	start := time.Now()
-	var armed time.Time // our last re-arm, made while the console was silent
-	defer func() {
-		s.mu.Lock()
-		s.armUntil = time.Time{}
-		s.mu.Unlock()
-	}()
-	for {
-		s.mu.Lock()
-		until, rx, typed := s.armUntil, s.rx, s.typed
-		s.mu.Unlock()
-		if time.Now().After(until) {
-			return
-		}
-		// Every re-arm puts a stray byte on the line, and whatever is reading
-		// the console takes it as a keypress: a shell gets garbage, GRUB's
-		// menu stops its countdown and waits forever, U-Boot aborts autoboot.
-		// So stop the moment serial mode is proven back.
-		//
-		// Proof 1: the Mac sent output after one of our re-arms.
-		if !armed.IsZero() && rx.After(armed) {
-			s.log.Printf("serial: output after re-arm, stopping re-arm")
-			return
-		}
-		// Proof 2: someone is typing and the Mac echoes it back.
-		if time.Since(typed) < 30*time.Second && rx.After(typed) {
-			s.log.Printf("serial: console is echoing typed input, stopping re-arm")
-			return
-		}
-		flowing := time.Since(rx) < 3*time.Second
-		if flowing && time.Since(start) > 30*time.Second {
-			s.log.Printf("serial: flowing again after %s, stopping re-arm", time.Since(start).Round(time.Second))
-			return
-		}
-		if !flowing {
-			if _, err := s.tool(context.Background(), "serial"); err == nil {
-				armed = time.Now()
-				s.emit("[oobd] serial re-armed")
-			}
-		}
-		time.Sleep(4 * time.Second)
-	}
-}
-
-// hSerial sends the buffered console, then (with follow=1) streams new lines.
-func (s *Server) hSerial(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	fl, _ := w.(http.Flusher)
-	ch := make(chan string, 1000)
-	s.mu.Lock()
-	follow := r.URL.Query().Get("follow") == "1"
-	if follow {
-		s.subs[ch] = true
-	} else {
-		for _, l := range s.ring {
-			fmt.Fprintln(w, l)
-		}
-	}
-	s.mu.Unlock()
-	if !follow {
-		return
-	}
-	defer func() {
-		s.mu.Lock()
-		delete(s.subs, ch)
-		s.mu.Unlock()
-	}()
-	if fl != nil {
-		fl.Flush()
-	}
-	keep := time.NewTicker(30 * time.Second)
-	defer keep.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case l := <-ch:
-			fmt.Fprintln(w, l)
-		case <-keep.C:
-			fmt.Fprintln(w, "") // keeps idle connections from being reaped
-		}
-		if fl != nil {
-			fl.Flush()
-		}
-	}
-}
-
-func (s *Server) emit(line string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.last = time.Now()
-	s.ring = append(s.ring, line)
-	if len(s.ring) > 5000 {
-		s.ring = s.ring[len(s.ring)-5000:]
-	}
-	for ch := range s.subs {
-		select {
-		case ch <- line:
-		default: // a slow reader loses lines rather than stalling the console
-		}
-	}
-	if s.cfg.LogFile != "" {
-		if f, err := os.OpenFile(s.cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
-			fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006-01-02T15:04:05.000"), line)
-			f.Close()
-		}
-	}
-}
-
-// ReadSerial keeps the serial device open, reopening it whenever it goes away.
-// ReadSerial keeps the serial device open, reopening it whenever it goes away.
-// Raw bytes go to console clients as they arrive; complete lines go to the log.
-func (s *Server) ReadSerial(ctx context.Context) {
-	for ctx.Err() == nil {
-		f, err := openSerial(s.cfg.SerialDev, s.cfg.Baud)
+	if want != nil {
+		p, err := s.cfg.Ports.Read(r.Context(), rid)
 		if err != nil {
-			s.mu.Lock()
-			changed := s.openErr != err.Error()
-			s.openErr = err.Error()
-			s.mu.Unlock()
-			if changed {
-				s.log.Printf("serial: %v (retrying)", err)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(5 * time.Second):
-			}
-			continue
-		}
-		s.mu.Lock()
-		s.openErr = ""
-		s.port = f
-		s.mu.Unlock()
-		s.log.Printf("serial: reading %s", s.cfg.SerialDev)
-		stop := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-			case <-stop:
-			}
-			f.Close()
-		}()
-		var partial []byte
-		buf := make([]byte, 4096)
-		for {
-			n, err := f.Read(buf)
-			if n > 0 {
-				chunk := append([]byte(nil), buf[:n]...)
-				s.emitRaw(chunk)
-				partial = append(partial, chunk...)
-				for {
-					i := bytesIndex(partial, '\n')
-					if i < 0 {
-						break
-					}
-					if l := strings.TrimRight(string(partial[:i]), "\r"); l != "" {
-						s.emit(l)
-					}
-					partial = partial[i+1:]
-				}
-				if len(partial) > 8192 {
-					s.emit(string(partial))
-					partial = nil
-				}
-			}
-			if err != nil {
-				s.log.Printf("serial: %s closed: %v", s.cfg.SerialDev, err)
-				break
-			}
-		}
-		close(stop)
-		s.mu.Lock()
-		s.port = nil
-		s.mu.Unlock()
-		time.Sleep(time.Second)
-	}
-}
-
-func bytesIndex(b []byte, c byte) int {
-	for i, x := range b {
-		if x == c {
-			return i
-		}
-	}
-	return -1
-}
-
-func (s *Server) emitRaw(b []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.last = time.Now()
-	s.rx = s.last
-	for ch := range s.raw {
-		select {
-		case ch <- b:
-		default:
-		}
-	}
-}
-
-// hRaw streams the console byte for byte, for interactive shells.
-func (s *Server) hRaw(w http.ResponseWriter, r *http.Request) {
-	fl, _ := w.(http.Flusher)
-	ch := make(chan []byte, 1024)
-	s.mu.Lock()
-	s.raw[ch] = true
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		delete(s.raw, ch)
-		s.mu.Unlock()
-	}()
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.WriteHeader(200)
-	if fl != nil {
-		fl.Flush()
-	}
-	for {
-		select {
-		case <-r.Context().Done():
+			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
-		case b := <-ch:
-			if _, err := w.Write(b); err != nil {
-				return
-			}
-			if fl != nil {
-				fl.Flush()
-			}
+		}
+		var why string
+		switch {
+		case !p.Connected:
+			why = "is not connected"
+		case p.ProductID != want.ProductID:
+			why = fmt.Sprintf("shows product id %d, not the %d it was seen with", p.ProductID, want.ProductID)
+		case p.PlugCount != want.PlugCount:
+			why = fmt.Sprintf("has plug count %d, not the %d it was seen with", p.PlugCount, want.PlugCount)
+		}
+		if why != "" {
+			s.log.Printf("RID %d reset refused: the port %s", rid, why)
+			http.Error(w, fmt.Sprintf("the port with RID %d %s: no reset was sent", rid, why), http.StatusConflict)
+			return
 		}
 	}
+	if out, err := s.run(r.Context(), rid, "reboot"); err != nil {
+		http.Error(w, fmt.Sprintf("the reset tool failed on RID %d: %v: %s", rid, err, lastLine(out)), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, "{\"rid\":%d}\n", rid)
 }
 
-// hWrite types bytes into the target's console.
-func (s *Server) hWrite(w http.ResponseWriter, r *http.Request) {
-	b, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+// ExecTool is the pinned reset tool, omacom/macvdmtool, whose --rid is
+// required and strictly parsed. It is run as `<Path> --rid <n> <command>`
+// with the two commands the controller has a use for.
+type ExecTool struct{ Path string }
+
+func (t ExecTool) Run(ctx context.Context, rid int, command string) (string, error) {
+	if command != "reboot" && command != "nop" {
+		return "", fmt.Errorf("the controller does not run %q of the reset tool", command)
+	}
+	if rid < 0 {
+		return "", fmt.Errorf("RID %d", rid)
+	}
+	if _, err := os.Stat(t.Path); err != nil {
+		return "", fmt.Errorf("the reset tool is not installed at %s", t.Path)
+	}
+	cmd := exec.CommandContext(ctx, t.Path, "--rid", strconv.Itoa(rid), command)
+	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
+		return string(out), fmt.Errorf("%v: %s", err, lastLine(string(out)))
 	}
-	s.mu.Lock()
-	f := s.port
-	s.mu.Unlock()
-	if f == nil {
-		http.Error(w, "serial port is not open", 503)
-		return
-	}
-	if _, err := f.Write(b); err != nil {
-		http.Error(w, err.Error(), 502)
-		return
-	}
-	s.mu.Lock()
-	s.typed = time.Now()
-	s.mu.Unlock()
-	w.WriteHeader(204)
+	return string(out), nil
 }
