@@ -75,7 +75,8 @@ func loopback(host string) bool {
 // Open takes the address of the old site's Postgres, whole, as Railway
 // shows it: postgresql://user:password@host:port/database. Nothing is read
 // from the environment or from a file in its place. Beyond this machine
-// the connection is made over TLS or not at all. Open connects to nothing.
+// the connection is made over TLS or not at all, and the password is
+// answered only to SCRAM. Open connects to nothing.
 func Open(address string) (*Postgres, error) {
 	notOne := sayf("that is not a Postgres address: one reads %s", shape)
 	u, err := url.Parse(strings.TrimSpace(address))
@@ -125,6 +126,9 @@ func Open(address string) (*Postgres, error) {
 			}
 		}
 		cfg.Fallbacks = overTLS
+		// TLS here may not check who answers (sslmode prefer and require do
+		// not), so the password goes only into SCRAM, which never shows it.
+		cfg.RequireAuth = "scram-sha-256"
 	}
 	cfg.ConnectTimeout = 20 * time.Second
 	db := stdlib.OpenDB(*cfg)
@@ -180,6 +184,8 @@ func plain(err error) error {
 		return said("the connection was refused at that host and port")
 	case errors.As(err, &unknown), errors.As(err, &hostname), errors.As(err, &invalid), errors.As(err, &record), errors.As(err, &alert):
 		return said("TLS with the old site's Postgres failed")
+	case errors.As(err, &connect) && strings.Contains(connect.Error(), "require_auth"):
+		return said("the old site's Postgres asked for the password in a way that shows it; it is answered only to SCRAM")
 	case errors.As(err, &connect):
 		return said("no connection could be made to the old site's Postgres")
 	}

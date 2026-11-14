@@ -310,6 +310,53 @@ func TestAnAddressBeyondThisMachineIsReadOverTLSOnly(t *testing.T) {
 	}
 }
 
+// Beyond this machine the password is answered only to SCRAM, which never
+// shows it: a server, or whoever stands in for one, that asks for it in
+// clear or as an MD5 gets no answer.
+func TestBeyondThisMachineThePasswordIsNeverShown(t *testing.T) {
+	remote := config(t, "postgresql://u:sekret@db.example.net:5432/railway")
+	if remote.RequireAuth != "scram-sha-256" {
+		t.Errorf("beyond this machine the client answers %q, want only scram-sha-256", remote.RequireAuth)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	sent := make(chan []byte, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			sent <- nil
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 4096)
+		c.SetDeadline(time.Now().Add(10 * time.Second))
+		c.Read(buf)                                  // the startup message
+		c.Write([]byte{'R', 0, 0, 0, 8, 0, 0, 0, 3}) // "send the password in clear"
+		n, _ := c.Read(buf)
+		sent <- append([]byte(nil), buf[:n]...)
+	}()
+	asked := config(t, "postgres://u:sekret@"+ln.Addr().String()+"/d?sslmode=disable")
+	asked.RequireAuth = remote.RequireAuth
+	db := stdlib.OpenDB(*asked)
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = db.PingContext(ctx)
+	if err == nil {
+		t.Fatal("a server that asks for the password in clear was taken")
+	}
+	db.Close()
+	if got := <-sent; bytes.Contains(got, []byte("sekret")) {
+		t.Errorf("the password was sent in clear")
+	}
+	if got := plain(err).Error(); got != "the old site's Postgres asked for the password in a way that shows it; it is answered only to SCRAM" {
+		t.Errorf("the failure reads %q", got)
+	}
+}
+
 func TestNothingOfTheEnvironmentReachesTheAddress(t *testing.T) {
 	t.Setenv("PGHOST", "env.example.net")
 	t.Setenv("PGPORT", "1")
