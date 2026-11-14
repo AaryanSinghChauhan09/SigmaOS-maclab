@@ -387,4 +387,33 @@ func TestOneDrillAtATime(t *testing.T) {
 	if exists(d.path("var/lab/run/restore-drill.lock")) {
 		t.Error("the drill left its lock")
 	}
+	// A lock with no pid in it yet may be a drill that has just taken it.
+	lock := d.path("var/lab/run/restore-drill.lock")
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.WriteFile(lock+"/pid", []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
+	}()
+	if out := d.refused("restore-drill"); !strings.Contains(out, "another Restore drill is running") || !exists(lock+"/pid") {
+		t.Errorf("with a drill that has just taken the lock:\n%s", out)
+	}
+}
+
+// A drill that stops outside its checks still tells the owner, once.
+func TestADrillThatBreaksOffTellsTheOwner(t *testing.T) {
+	d := newDrilled(t)
+	// Where a good drill writes that it went well, nothing can be written.
+	if err := os.Mkdir(d.path("var/lab/log/restore-drill.ok"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out := d.refused("restore-drill")
+	if got := d.told(); !strings.Contains(got, " agents The Restore drill failed: it stopped before it was done") || strings.Count(got, "\n") != 1 {
+		t.Errorf("the owner is told %q\n%s", got, out)
+	}
+	if len(d.scratch()) != 0 || len(d.out.pinged()) != 0 {
+		t.Errorf("the drill left %v, or pinged its check %v", d.scratch(), d.out.pinged())
+	}
+
 }

@@ -176,7 +176,9 @@ func TestTheDeadManSwitchSendsNothingWhenTheLabDoesNotAnswer(t *testing.T) {
 		"something else answers there":           {func(o *outside) { o.body = "<html>parked</html>\n" }, "did not answer ok"},
 		"the answer did not cross Cloudflare":    {func(o *outside) { o.ray = "" }, "not through Cloudflare"},
 		"Cloudflare answered from its cache":     {func(o *outside) { o.cache = "HIT" }, "from Cloudflare's cache"},
-		"a redirect":                             {func(o *outside) { o.status = http.StatusMovedPermanently; o.body = "" }, "did not answer ok"},
+		"a redirect":                             {func(o *outside) { o.status = http.StatusMovedPermanently; o.body = "" }, "did not answer 200"},
+		"a redirect that reads ok":               {func(o *outside) { o.status = http.StatusFound }, "did not answer 200"},
+		"an answer that is no page":              {func(o *outside) { o.status = http.StatusNonAuthoritativeInfo }, "did not answer 200"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := newMini(t)

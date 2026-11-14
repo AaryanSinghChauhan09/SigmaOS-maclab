@@ -227,6 +227,8 @@ fi
 lock="$LAB_HOME/run/restore-drill.lock"
 if ! mkdir "$lock" 2>/dev/null; then
   pid="$(cat "$lock/pid" 2>/dev/null || true)"
+  # A lock with no pid yet may be a drill that has just taken it.
+  [[ -n $pid ]] || { sleep 2; pid="$(cat "$lock/pid" 2>/dev/null || true)"; }
   if [[ $pid =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
     fail "another Restore drill is running"
   fi
@@ -234,7 +236,16 @@ if ! mkdir "$lock" 2>/dev/null; then
   mkdir "$lock"
 fi
 echo $$ > "$lock/pid"
-trap 'rm -rf "$lock" ${SCRATCH:+"$SCRATCH"}' EXIT
+# However it ends, the lock and what was restored go; an end outside the
+# checks, which have a line of their own, is one line to "Agents" too.
+TOLD=0
+# shellcheck disable=SC2317,SC2329
+ended() {
+  local status=$?
+  rm -rf "$lock" ${SCRATCH:+"$SCRATCH"}
+  (( status == 0 || TOLD )) || notify "The Restore drill failed: it stopped before it was done."
+}
+trap ended EXIT
 # What a drill that was cut short restored holds the lab's data.
 rm -rf "$LAB_HOME/run"/restore-drill.??????
 SCRATCH="$(mktemp -d "$LAB_HOME/run/restore-drill.XXXXXX")"
@@ -243,6 +254,7 @@ drill house "the house copy"
 drill offsite "the off-site copy"
 
 if [[ -n $FAILED ]]; then
+  TOLD=1
   notify "The Restore drill failed: $FAILED."
   exit 1
 fi

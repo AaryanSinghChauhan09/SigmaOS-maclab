@@ -50,6 +50,7 @@ dark() {
 # a cf-ray on what it passes on, and labd's /healthz is never cached: an
 # answer without the first or out of the cache says nothing about the tunnel.
 answer="$(curl -fsS --max-time 20 -A lab-dead-man -D - "$url" 2>/dev/null | tr -d '\r')" || dark "the lab did not answer at $url"
+[[ "$(grep '^HTTP/' <<<"$answer" | tail -n 1)" =~ ^HTTP/[0-9.]+\ 200( |$) ]] || dark "the lab did not answer 200 at $url"
 [[ "$(tail -n 1 <<<"$answer")" == ok ]] || dark "the lab did not answer ok at $url"
 grep -qi '^cf-ray: .' <<<"$answer" || dark "$url answered, but not through Cloudflare"
 ! grep -qi '^cf-cache-status: hit' <<<"$answer" || dark "$url was answered from Cloudflare's cache, not by labd"
