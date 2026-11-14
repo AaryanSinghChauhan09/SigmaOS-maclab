@@ -374,6 +374,37 @@ func TestAMaintainerLiftsTheNetworkOnlyPolicy(t *testing.T) {
 	}
 }
 
+// The recovery policy's route asks for the Maintainer's own Lease by
+// account, as every fence does: a Maintainer renamed inside their Lease
+// still holds it, and another who has their old handle does not.
+func TestTheRecoveryPolicyAsksForTheLeaseByAccount(t *testing.T) {
+	l := leaseLab(t)
+	v := l.lrMac("m1-pro", "j316s", nil)
+	l.lrMaintainer().mustLease("m1-pro", "ravi@laptop", 0)
+	was := v.snapshot().Lease.Owner()
+
+	l.gh.AddUser(maintainerID, was+"-renamed")
+	renamed := l.signedIn(maintainerID)
+	l.gh.AddUser(lrKen, was)
+	other := l.signedIn(lrKen)
+	if err := l.s.setMaintainer(lrKen, true); err != nil {
+		t.Fatal(err)
+	}
+	ask := func(b *browser, holder string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(api.RecoveryModeRequest{Mode: api.RecoveryNetworkOnly, Holder: holder, Transaction: "by-account"})
+		return b.write("POST", "/api/devices/m1-pro/recovery-mode", string(body), "Content-Type", "application/json")
+	}
+	if w := ask(other, "ravi@laptop"); w.Code != http.StatusConflict || v.snapshot().EffectiveRecoveryMode != "" {
+		t.Fatalf("another Maintainer, who has the holder's old handle, set the policy under their Lease: %d %s", w.Code, w.Body)
+	}
+	if w := ask(renamed, "someone-else@laptop"); w.Code != http.StatusConflict || v.snapshot().EffectiveRecoveryMode != "" {
+		t.Fatalf("the holder set the policy under another holder label: %d %s", w.Code, w.Body)
+	}
+	if w := ask(renamed, "ravi@laptop"); w.Code != 200 || v.snapshot().EffectiveRecoveryMode != api.RecoveryNetworkOnly {
+		t.Fatalf("the holder, renamed inside their Lease, set the policy: %d %s", w.Code, w.Body)
+	}
+}
+
 // byMaintainer is req as a Maintainer's, for a handler called past the
 // routes' own wrappers.
 func byMaintainer(req *http.Request) *http.Request {
