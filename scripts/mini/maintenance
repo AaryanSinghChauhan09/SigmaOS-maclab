@@ -151,7 +151,7 @@ stopped_early() {
 }
 
 first_half() {
-  local list f before after pins_before line name old new labels=() big label skipped="" stamp
+  local list before after pins_before name old new labels=() big label stamp
   [[ -L $LAB_CURRENT ]] || fail "no build is Deployed: a Maintenance run installs what the Deployed build pins"
   [[ $here -ef $LAB_CURRENT/scripts/mini ]] || fail "run the Deployed build's own: sudo /usr/local/lab/current/scripts/mini/maintenance. What runs after the restart is that one"
   [[ -f $deploy/homebrew-formulae && -f $deploy/pins ]] || fail "the Deployed build has no deploy/ folder"
@@ -239,7 +239,6 @@ first_half() {
     if [[ $big == "?" ]]; then
       note "macOS: $label; nothing was installed"
     elif (( big && ! major )); then
-      skipped+="${skipped:+; }$label"
       note "macOS: $label is a major macOS and was left alone: it waits until container, the reset tool and tailscaled are confirmed on it (--major)"
     else
       labels+=("$label")
@@ -407,7 +406,7 @@ second_half() {
     [[ ! -S $OPS_SOCKET ]] || ! loaded "$LABD_LABEL" || break
     sleep 1
   done
-  tell "Maintenance run on the mini: back after the restart with no Unlock, on macOS $(macos_now). Checking every service and tool."
+  tell "Maintenance run on the mini: back after the planned restart, on macOS $(macos_now). Checking every service and tool."
 
   note "every service:"
   "$here/check" services 2>&1 | into_report || failed "not every service is up (scripts/mini/check services)"

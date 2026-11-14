@@ -319,7 +319,7 @@ func TestTheMaintenanceRunAfterTheRestartVerifiesAndReports(t *testing.T) {
 	out := r.went("--after-restart")
 
 	order(t, r.calls(),
-		"ops POST /agents/line Maintenance run on the mini: back after the restart with no Unlock, on macOS 27.2.2",
+		"ops POST /agents/line Maintenance run on the mini: back after the planned restart, on macOS 27.2.2",
 		"ops GET /parts",
 		"restic snapshots --latest 1 --json",
 		"ports \n",
