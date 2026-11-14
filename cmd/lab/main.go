@@ -5,7 +5,6 @@ package main
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,6 +18,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -72,12 +72,13 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
   lab retry <job> [--no-wait]         run a finished job again: same Mac, kernel (or source commit), tests and cmdline
   lab publish <job>                   publish a Known-good run's omarchy-m-test report on the lab: a Maintainer any
                                       job's, an M team member their own job's. Never a test-kernel or an Installed run
-  lab lease <device> [--ttl 4h] | lab release <device> [--force]
+  lab lease <device> [--ttl 4h] | lab release <device> [--force [--why "…"]]
                                       take a Lease on a Mac, for 4 hours unless --ttl says otherwise (a Maintainer
                                       up to 24h): until it ends only your jobs run on it, and others' queued
                                       jobs wait. Running it again renews the Lease: it ends 4 hours from then.
                                       An M team member holds one Mac of each Configuration. Only you release
                                       your Lease; --force ends another person's (Maintainers), and is recorded
+                                      with the reason --why gives
   lab installed list                  every Release with its verdict
   lab installed freeze-manifest --release R <manifest.json> <payload.sha256> [--approved-by a,b] [--for MAC]
                                       from then the Release is listed, with you as who froze it. An M team
@@ -112,6 +113,20 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
 // The tag of the Lab release this build came from, stamped in by the Makefile.
 var version = "dev"
 
+// commands are lab's commands, the table of the spec's section 10 and no
+// other word. atHome are the ones main runs itself, before dispatch.
+var (
+	commands = []string{
+		"boot-test", "login", "builder", "status", "enroll", "remove", "device", "baseline", "build", "package",
+		"builds", "build-log", "build-get", "exec", "run", "crashtest", "pack", "jobs", "job", "wait", "cancel",
+		"logs", "gate", "exclude", "retry", "publish", "lease", "release", "installed", "reset", "oob", "audit",
+		"upload", "mcp", "version",
+	}
+	atHome = []string{"boot-test", "login", "pack", "mcp", "version"}
+)
+
+func known(cmd string) bool { return slices.Contains(commands, cmd) }
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Print(usage)
@@ -128,15 +143,20 @@ func main() {
 		err = login(args, os.Stdin, os.Stdout)
 	case "forget", "maintainer", "shell", "console", "serial", "recovery-mode":
 		err = retired(cmd)
+	case "help", "-h", "--help":
+		fmt.Print(usage)
 	case "pack":
 		err = pack(args)
 	case "mcp":
 		err = serveMCP(ctx)
-	case "help", "-h", "--help":
-		fmt.Print(usage)
 	case "version":
 		err = showVersion(ctx, os.Stdout)
 	default:
+		// An unknown word is said to be one before any login is asked for.
+		if !known(cmd) {
+			err = unknown(cmd)
+			break
+		}
 		var c *client.Client
 		if c, err = client.Load(); err == nil {
 			c.Note = func(format string, args ...any) { fmt.Fprintf(os.Stderr, "lab: "+format+"\n", args...) }
@@ -151,7 +171,31 @@ func main() {
 
 // leaseLine is what lab lease prints for a Lease taken or renewed.
 func leaseLine(device string, l *api.Lease) string {
-	return fmt.Sprintf("%s leased by %s until %s", device, l.Who(), l.Expires.Local().Format("15:04:05 on Mon 2 Jan"))
+	return fmt.Sprintf("%s leased by %s until %s", device, l.Who(), leaseEnd(l))
+}
+
+// leaseEnd is when a Lease ends, in the person's own time.
+func leaseEnd(l *api.Lease) string {
+	end := l.Expires.Local().Format("15:04:05 on Mon 2 Jan")
+	if l.Extended {
+		end += ", extended until its job ends"
+	}
+	return end
+}
+
+// lastLeaseEnding says how the last Lease on a free Mac ended, with who
+// ended it and why, from the Mac's Lease record; "" when the newest line is
+// not an ending, or the lab does not show the record to the caller.
+func lastLeaseEnding(ctx context.Context, c *client.Client, mac string) string {
+	events, err := c.LeaseRecord(ctx, mac, 1)
+	if err != nil || len(events) == 0 {
+		return ""
+	}
+	switch e := events[0]; e.Event {
+	case api.LeaseReleased, api.LeaseExpired, api.LeaseEnded:
+		return e.Time.Local().Format("15:04:05 on Mon 2 Jan") + ", " + e.Line()
+	}
+	return ""
 }
 
 func holder() string {
@@ -223,7 +267,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 	}
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	switch cmd {
-	case "status", "devices":
+	case "status":
 		pos := parse(fs, args)
 		var err error
 		if len(pos) > 0 {
@@ -503,7 +547,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		if err != nil {
 			return err
 		}
-		return getBuildFiles(ctx, c, b, *out)
+		return getBuildFiles(ctx, c, b, *out, os.Stdout)
 
 	case "installed":
 		return installedCmd(ctx, c, args)
@@ -599,7 +643,7 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 	case "gate":
 		fams := fs.String("families", "", "chip families that must pass, comma-separated (default all: m1,m1-pro,m2,m2-pro,m3,m3-pro)")
 		evidence := fs.String("evidence", "", "write the report to this file as a JSON evidence record")
-		volunteers := fs.Bool("volunteers", false, "count volunteers' Macs (enrolled with ./volunteer) too; by default they're listed, not counted")
+		volunteers := fs.Bool("volunteers", false, "count Volunteers' Macs too; by default they're listed, not counted")
 		exclude := fs.String("exclude", "", "jobs to set aside for this report only, comma-separated, e.g. a failure the lab caused; they're listed as excluded")
 		pos := parse(fs, args)
 		if err := need(pos, 1, "lab gate <kernel> [--families m1,m2] [--volunteers] [--exclude job,..] [--evidence file]"); err != nil {
@@ -745,12 +789,16 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 	case "release":
 		who := fs.String("holder", holder(), "")
 		force := fs.Bool("force", false, "end the Lease even if another person took it (Maintainers); the lab records that you did")
+		why := fs.String("why", "", "with --force: the reason, one line, kept in the Lease record and said in the Lab group")
 		pos := parse(fs, args)
-		if err := need(pos, 1, "lab release <device> [--force]"); err != nil {
+		if err := need(pos, 1, `lab release <device> [--force [--why "…"]]`); err != nil {
 			return err
 		}
 		if *force {
-			return c.ForceRelease(ctx, pos[0])
+			return c.ForceRelease(ctx, pos[0], *why)
+		}
+		if *why != "" {
+			return errors.New("--why goes with --force: releasing your own Lease needs no reason")
 		}
 		return c.Release(ctx, pos[0], *who)
 
@@ -821,8 +869,10 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		}
 		return err
 	}
-	return fmt.Errorf("unknown command %q (lab help)", cmd)
+	return unknown(cmd)
 }
+
+func unknown(cmd string) error { return fmt.Errorf("unknown command %q (lab help)", cmd) }
 
 var reSHA = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -1130,7 +1180,7 @@ func showDevices(ctx context.Context, c *client.Client) error {
 	for _, d := range devs {
 		lease := ""
 		if d.Lease != nil {
-			lease = d.Lease.Who()
+			lease = d.Lease.Who() + " until " + leaseEnd(d.Lease)
 		}
 		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.State, d.Tier, cableWord(d.Cable), d.Kernel, ago(d.LastSeen), d.ActiveJob, lease)
 	}
@@ -1241,9 +1291,6 @@ func showDevice(ctx context.Context, c *client.Client, name string) error {
 	fmt.Printf("  model:       %s, %s\n", d.Facts.DTModel, orDash(d.Label, "no label"))
 	if d.IsVolunteer() {
 		fmt.Printf("  kind:        Volunteer's Mac: %s, %s\n", d.VolunteerName, d.Contact)
-		if by := cmp.Or(d.VolunteeredBy, d.LinkedLogin); by != "" {
-			fmt.Printf("  seen by:     %s on the tailnet\n", by)
-		}
 	} else {
 		fmt.Printf("  kind:        Lab-owned Mac\n")
 	}
@@ -1272,7 +1319,9 @@ func showDevice(ctx context.Context, c *client.Client, name string) error {
 		}
 	}
 	if d.Lease != nil {
-		fmt.Printf("  lease:       %s until %s\n", d.Lease.Who(), d.Lease.Expires.Format(time.TimeOnly))
+		fmt.Printf("  lease:       %s until %s\n", d.Lease.Who(), leaseEnd(d.Lease))
+	} else if last := lastLeaseEnding(ctx, c, name); last != "" {
+		fmt.Printf("  last lease:  %s\n", last)
 	}
 	if d.ActiveJob != "" {
 		fmt.Printf("  job:         %s (%d queued)\n", d.ActiveJob, d.Queued)
@@ -1574,14 +1623,14 @@ func followBuild(ctx context.Context, c *client.Client, b *api.Build, noWait boo
 		os.Exit(3)
 	}
 	if out != "" {
-		return getBuildFiles(ctx, c, b, out)
+		return getBuildFiles(ctx, c, b, out, os.Stdout)
 	}
 	return nil
 }
 
 // getBuildFiles downloads named build outputs, each checked against the
 // sha256 the build recorded.
-func getBuildFiles(ctx context.Context, c *client.Client, b *api.Build, dir string) error {
+func getBuildFiles(ctx context.Context, c *client.Client, b *api.Build, dir string, out io.Writer) error {
 	if len(b.Files) == 0 {
 		return fmt.Errorf("build %s has no named files to download", b.ID)
 	}
@@ -1593,10 +1642,10 @@ func getBuildFiles(ctx context.Context, c *client.Client, b *api.Build, dir stri
 		if err := c.BuildFile(ctx, b.ID, f.Name, f.SHA256, dst); err != nil {
 			return err
 		}
-		fmt.Printf("%s  %s\n", f.SHA256, dst)
+		fmt.Fprintf(out, "%s  %s\n", f.SHA256, dst)
 	}
 	if b.Recipe != "" {
-		if err := getRecipe(ctx, c, b, dir); err != nil {
+		if err := getRecipe(ctx, c, b, dir, out); err != nil {
 			fmt.Fprintf(os.Stderr, "lab: the packages are complete, but not the recipe: %v\n", err)
 		}
 	}
@@ -1605,7 +1654,7 @@ func getBuildFiles(ctx context.Context, c *client.Client, b *api.Build, dir stri
 
 // getRecipe unpacks the recipe a package build was made from, exactly as
 // uploaded (PKGBUILD, patches, data files), into dir/recipe/.
-func getRecipe(ctx context.Context, c *client.Client, b *api.Build, dir string) error {
+func getRecipe(ctx context.Context, c *client.Client, b *api.Build, dir string, out io.Writer) error {
 	tarball := filepath.Join(dir, api.RecipeFile)
 	if err := c.BuildFile(ctx, b.ID, api.RecipeFile, b.Recipe, tarball); err != nil {
 		return err
@@ -1618,7 +1667,7 @@ func getRecipe(ctx context.Context, c *client.Client, b *api.Build, dir string) 
 	if o, err := exec.Command("tar", "-C", rdir, "--no-same-owner", "-xf", tarball).CombinedOutput(); err != nil {
 		return fmt.Errorf("unpacking: %v: %s", err, o)
 	}
-	fmt.Printf("%s  %s/ (the recipe as uploaded)\n", b.Recipe, rdir)
+	fmt.Fprintf(out, "%s  %s/ (the recipe as uploaded)\n", b.Recipe, rdir)
 	return nil
 }
 

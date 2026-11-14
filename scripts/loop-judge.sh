@@ -31,7 +31,7 @@ The job booted a test kernel once. That kernel may have been broken on purpose i
 - hang_early: a hang with interrupts off before SMP, so only the bootloader's watchdog resets the Mac
 - hang_late: userspace never starts while the kernel stays alive
 - netdown: a healthy kernel whose Wi-Fi driver fails to load
-Read the evidence with the lab tools, for this job only: lab_job first, then lab_log for the kernel and journal logs.
+Read the evidence with the lab tools, for this job only: lab_job first, then lab_logs for the kernel and journal logs.
 Don't read other jobs. Decide from the evidence, not from the job's outcome alone.
 Answer with one JSON object and nothing else:
 {"fault": "<one of the modes above, or unsure>", "lab_outcome_agrees": <true if the lab's outcome fits what you found>,
@@ -42,7 +42,7 @@ EOF
 
 out=$(cd "$work" && claude -p "$prompt" --model "$MODEL" --mcp-config "$cfg" --strict-mcp-config --no-session-persistence \
 	--tools "" --setting-sources "" --permission-mode dontAsk \
-	--allowedTools "mcp__maclab__lab_job,mcp__maclab__lab_log" \
+	--allowedTools "mcp__maclab__lab_job,mcp__maclab__lab_logs" \
 	--output-format json </dev/null) || :
 
 # A failed run (not logged in, API error) exits 1 with the reason in .result: say it.

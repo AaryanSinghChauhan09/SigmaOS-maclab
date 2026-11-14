@@ -192,9 +192,19 @@ func (c *Client) Release(ctx context.Context, name, holder string) error {
 }
 
 // ForceRelease ends a Mac's lease whoever holds it, as a Maintainer ending
-// another's: labd records who ended it.
-func (c *Client) ForceRelease(ctx context.Context, name string) error {
-	return c.do(ctx, "DELETE", "/api/devices/"+url.PathEscape(name)+"/lease?force=1", nil, nil)
+// another's: labd records who ended it, and why when a reason is given.
+func (c *Client) ForceRelease(ctx context.Context, name, why string) error {
+	q := url.Values{"force": {"1"}}
+	if why != "" {
+		q.Set("why", why)
+	}
+	return c.do(ctx, "DELETE", "/api/devices/"+url.PathEscape(name)+"/lease?"+q.Encode(), nil, nil)
+}
+
+// LeaseRecord is the newest lines of a Mac's Lease record, newest first.
+func (c *Client) LeaseRecord(ctx context.Context, name string, limit int) ([]api.LeaseEvent, error) {
+	var out []api.LeaseEvent
+	return out, c.do(ctx, "GET", "/api/devices/"+url.PathEscape(name)+"/leases?limit="+strconv.Itoa(limit), nil, &out)
 }
 
 func (c *Client) Reset(ctx context.Context, name, by string) (string, error) {
