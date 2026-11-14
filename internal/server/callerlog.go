@@ -301,23 +301,34 @@ func rayID(r *http.Request) string {
 }
 
 // answer is the writer a handler gets: it remembers the status for the
-// caller log.
+// caller log, and has the answer's cache policy stated before its headers
+// go (see statePolicy).
 type answer struct {
 	http.ResponseWriter
 	status int
+	// before is called once, with the status, before the headers are sent.
+	before func(status int)
+}
+
+func (a *answer) starts(code int) {
+	if a.status != 0 {
+		return
+	}
+	a.status = code
+	if a.before != nil {
+		a.before(code)
+	}
 }
 
 func (a *answer) WriteHeader(code int) {
-	if a.status == 0 {
-		a.status = code
+	if code >= 200 || code == http.StatusSwitchingProtocols {
+		a.starts(code)
 	}
 	a.ResponseWriter.WriteHeader(code)
 }
 
 func (a *answer) Write(b []byte) (int, error) {
-	if a.status == 0 {
-		a.status = http.StatusOK
-	}
+	a.starts(http.StatusOK)
 	return a.ResponseWriter.Write(b)
 }
 
@@ -326,6 +337,7 @@ func (a *answer) Unwrap() http.ResponseWriter { return a.ResponseWriter }
 
 // Flush flushes, for the handlers that ask the writer itself.
 func (a *answer) Flush() {
+	a.starts(http.StatusOK)
 	if f, ok := a.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
@@ -333,22 +345,19 @@ func (a *answer) Flush() {
 
 // ReadFrom keeps the writer's own way of sending a file.
 func (a *answer) ReadFrom(src io.Reader) (int64, error) {
-	if a.status == 0 {
-		a.status = http.StatusOK
-	}
+	a.starts(http.StatusOK)
 	return io.Copy(a.ResponseWriter, src)
 }
 
 // logged serves r through h and writes its line when h returns: a stream's
 // line is written when the stream ends.
-func (s *Server) logged(w http.ResponseWriter, r *http.Request, h func(http.ResponseWriter, *http.Request)) {
+func (s *Server) logged(w http.ResponseWriter, r *http.Request, h func(*answer, *http.Request)) {
 	start := s.now()
 	c := &call{addr: callerAddr(r), ray: rayID(r)}
 	a := &answer{ResponseWriter: w}
 	defer func() {
-		if a.status == 0 {
-			a.status = http.StatusOK
-		}
+		// A handler that wrote nothing answers 200 as it returns.
+		a.starts(http.StatusOK)
 		s.callers.write(callerLine{Time: start, Addr: c.addr, Who: c.who, Ray: c.ray, Method: clip(r.Method, 16), Path: clip(r.URL.Path, 512),
 			Status: a.status, Millis: s.since(start).Milliseconds(), Agent: clip(r.UserAgent(), 200)})
 	}()

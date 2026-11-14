@@ -23,12 +23,13 @@ package server
 //     listen.go). Nothing forwarded is ever an identity.
 //   - The edge marks a request that arrived as TLS early data, which can be
 //     replayed: under /api/ it gets 425.
-//   - Every answer says nosniff and no-referrer, no page may frame labd, and
-//     an answer whose handler states no cache policy says no-store. API
-//     answers, which include files Macs uploaded, are sandboxed, so an
-//     uploaded page can't run script with labd's origin. Over https the
-//     browser is told to stay on https (HSTS). In Preview every answer tells
-//     crawlers not to index it.
+//   - Every answer says nosniff and no-referrer, and no page may frame
+//     labd. API answers, which include files Macs uploaded, are sandboxed,
+//     so an uploaded page can't run script with labd's origin. Over https
+//     the browser is told to stay on https (HSTS). In Preview every answer
+//     tells crawlers not to index it.
+//   - Every answer states a cache policy (statePolicy): no-store, unless its
+//     handler states its own or the edge may keep it.
 
 import (
 	"fmt"
@@ -37,8 +38,85 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
+
+// The cache policy. A public page or an export, asked for with no session,
+// may be kept at the edge: fresh for a minute, then served stale while the
+// edge fetches it again, for up to a day, and for a day while labd fails.
+// The edge's lifetime goes in the header only Cloudflare reads, which it
+// takes in place of Cache-Control and does not pass on; s-maxage,
+// must-revalidate or no-cache in a header the edge reads would end stale
+// serving. What the browser gets makes it ask again every time.
+// docs/acceptance/cache-policy.md has the pair and what it rests on.
+const (
+	cacheNever      = "no-store"
+	cacheSession    = "private, no-store"
+	cacheBrowser    = "public, max-age=0"
+	cacheEdgeHeader = "Cloudflare-CDN-Cache-Control"
+	cacheEdge       = "max-age=60, stale-while-revalidate=86400, stale-if-error=86400"
+)
+
+// keptPaths and keptUnder are the paths whose answer the edge may keep,
+// under labd's prefix: the public pages, /install and the exports. The
+// first cache rule of scripts/cloud/edge.json names the same ones, and a
+// path ending in neverKeptEnd is none of them. A public page that must
+// never be kept, as /status, stays out of both.
+var (
+	keptPaths = []string{
+		"/", "/matrix", "/models", "/features", "/gaps", "/aurora", "/benchmarks", "/candidates", "/reports", "/data", "/install", "/terms", "/privacy",
+		"/api/v1/reports", "/api/v1/reports.json", "/api/v1/reports.csv", "/api/v1/checks", "/api/v1/checks.csv",
+		"/api/v1/matrix", "/api/v1/matrix.json", "/api/v1/benchmarks", "/api/v1/benchmarks.json", "/api/v1/aurora", "/api/v1/aurora.json",
+	}
+	keptUnder = []string{"/models/", "/features/", "/candidates/", "/reports/"}
+)
+
+const neverKeptEnd = "/deletion"
+
+// sessionCookieText is how the edge's rule knows a request that carries the
+// session cookie, by either of its names.
+const sessionCookieText = "lab_session="
+
+func edgeKeeps(path string) bool {
+	if strings.HasSuffix(path, neverKeptEnd) {
+		return false
+	}
+	return slices.Contains(keptPaths, path) || slices.ContainsFunc(keptUnder, func(under string) bool { return strings.HasPrefix(path, under) })
+}
+
+// carriesSession reports whether r carries the session cookie, as the
+// edge's rule reads it: known to labd or not.
+func carriesSession(r *http.Request) bool {
+	return slices.ContainsFunc(r.Header.Values("Cookie"), func(c string) bool { return strings.Contains(c, sessionCookieText) })
+}
+
+// statePolicy states the cache policy of the answer to r, whose path under
+// labd's prefix is path, as its headers go. A handler that stated its own
+// keeps it: the interface's files, /install, an artifact, a page rendered
+// for a session. Anything else asked for with the session cookie is that
+// session's alone. The edge may keep only a good answer to a read of a
+// path it keeps, asked for with no credential and setting no cookie.
+// Everything else is no-store: any error, so that the edge goes on serving
+// the copy it has.
+func statePolicy(hdr http.Header, r *http.Request, path string, status int) {
+	switch hdr.Get("Cache-Control") {
+	case "":
+		// net/http takes the header off a file it could not serve.
+		hdr.Set("Cache-Control", cacheNever)
+	case cacheNever:
+	default:
+		return
+	}
+	read := r.Method == http.MethodGet || r.Method == http.MethodHead
+	switch {
+	case carriesSession(r):
+		hdr.Set("Cache-Control", cacheSession)
+	case read && status == http.StatusOK && r.Header.Get("Authorization") == "" && len(hdr.Values("Set-Cookie")) == 0 && edgeKeeps(path):
+		hdr.Set("Cache-Control", cacheBrowser)
+		hdr.Set(cacheEdgeHeader, cacheEdge)
+	}
+}
 
 // rePublicPath is a prefix's path: segments of safe characters.
 var rePublicPath = regexp.MustCompile(`^(/[A-Za-z0-9._~-]+)*$`)
@@ -178,11 +256,12 @@ func sameOriginAs(o, origin string) bool {
 func (s *Server) edge(h http.Handler) http.Handler {
 	base := s.basePath()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.logged(w, r, func(w http.ResponseWriter, r *http.Request) {
+		s.logged(w, r, func(a *answer, r *http.Request) {
+			var w http.ResponseWriter = a
 			hdr := w.Header()
 			hdr.Set("X-Content-Type-Options", "nosniff")
 			hdr.Set("Referrer-Policy", "no-referrer")
-			hdr.Set("Cache-Control", "no-store")
+			hdr.Set("Cache-Control", cacheNever)
 			if s.Preview() {
 				hdr.Set("X-Robots-Tag", "noindex")
 			}
@@ -236,6 +315,8 @@ func (s *Server) edge(h http.Handler) http.Handler {
 			} else {
 				hdr.Set("Content-Security-Policy", "frame-ancestors 'none'")
 			}
+			asked := r
+			a.before = func(status int) { statePolicy(hdr, asked, asked.URL.Path, status) }
 			if !s.sameOriginOK(w, r, origin) {
 				return
 			}

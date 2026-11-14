@@ -137,14 +137,29 @@ func TestTheRulesAreTheSpecs(t *testing.T) {
 			t.Errorf("the public pages' cache rule lacks %s", want)
 		}
 	}
-	if strings.Contains(px, "/api") || px == "true" {
+	// Under /api/ the rule names the exports and nothing else: each by its
+	// whole path, never a prefix.
+	if px == "true" || strings.Contains(px, `"/api/"`) || strings.Contains(strings.ReplaceAll(px, `"/api/v1/`, ""), "/api") {
 		t.Errorf("the public pages' cache rule reaches beyond public paths: %s", px)
 	}
 	if public["action_parameters"].(map[string]any)["cache"] != true {
 		t.Error("the public pages' rule does not make them cacheable")
 	}
-	if x := bypass["expression"].(string); !strings.Contains(x, api) || bypass["action_parameters"].(map[string]any)["cache"] != false {
+	bx := bypass["expression"].(string)
+	if !strings.Contains(bx, api) || bypass["action_parameters"].(map[string]any)["cache"] != false {
 		t.Errorf("the last cache rule does not bypass cache on /api/*: %v", bypass)
+	}
+	// The exports are cached as the public pages are, so the bypass leaves
+	// out exactly the paths under /api/ the first rule names, and only for
+	// a request without the session cookie.
+	inSet := regexp.MustCompile(`http\.request\.uri\.path in \{([^}]*)\}`)
+	exports := regexp.MustCompile(`"/api/v1/[^"]*"`).FindAllString(inSet.FindStringSubmatch(px)[1], -1)
+	left := inSet.FindStringSubmatch(bx)
+	if len(exports) == 0 || left == nil || strings.Join(exports, " ") != left[1] {
+		t.Errorf("the bypass leaves out %v; the exports the first rule names are %v", left, exports)
+	}
+	if !strings.HasSuffix(bx, ` and (http.cookie contains "lab_session=" or not http.request.uri.path in {`+strings.Join(exports, " ")+`}))`) {
+		t.Errorf("the bypass does not cover an export asked for with the session cookie: %s", bx)
 	}
 	// Never a forced edge lifetime, never "cache everything".
 	all, _ := json.Marshal(cache)
