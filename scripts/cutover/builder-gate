@@ -426,7 +426,10 @@ rec "the kernel is built from $kernel with $(if [[ -n $config ]]; then echo "the
 
 ran10="-" ran8="-" ran6="-"
 n="$cores"
+runs=0
 while :; do
+  runs=$((runs + 1))
+  (( runs <= 3 )) || give_up "the rule asked for a fourth run: there are three numbers of cores"
   attempt "$n"
   case "$n" in
     10) ran10="$RESULT" ;;
