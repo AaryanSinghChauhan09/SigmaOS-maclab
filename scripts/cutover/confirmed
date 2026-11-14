@@ -1,0 +1,168 @@
+#!/bin/bash
+# The Confirmed checklist (spec section 16, step 28), on the owner's Mac,
+# after the lab has opened: what a script can check of its five points, and
+# a list of what is the owner's to look at.
+#
+#   confirmed                 a dry run: what it would check. Nothing is asked
+#   confirmed --run --mini USER@HOST --old-links FILE [--token-file FILE]
+#
+#   --old-links FILE   two lines, in a file only you can read: an old
+#                      report's link and an old deletion link, both at
+#                      omarchy-m-testing.org. A deletion link holds its
+#                      secret, so neither is an argument and neither is
+#                      printed. Opening a deletion link deletes nothing: its
+#                      page asks first.
+#   --mini USER@HOST   the mini, for point 5
+#   --acceptance DIR   where the record goes (default docs/acceptance)
+#
+# 1. The smoke script is green against the Lab address: install, upload a
+#    golden report, see it, delete it by its link (release/smoke.sh).
+# 2. The old install line gives the lab's installer, which takes the latest
+#    Lab release, and that release is 0.2.0; the old report link and the
+#    old deletion link land on the same path and query at the Lab address.
+# 3. The lab's Sign in link names the existing OAuth app. Yours: sign in,
+#    and see People show the 14 marked.
+# 4. Yours: each Lab-owned Mac shows as signed in, and the lab has published
+#    one Verified run from each.
+# 5. On the mini (scripts/cutover/confirmed-mini): one backup by hand and
+#    restored; the daily summary sent once by hand; the Dead-man switch's
+#    record since the lab opened. Yours: see the summary arrive in the Lab
+#    group, and the check green at healthchecks.io since the opening.
+#
+# It writes DATE-confirmed.md with a line for each point. Confirmed itself
+# is the owner's dated line at its end: the script never writes it.
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/cutover/owner.sh
+. "$here/owner.sh"
+
+usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+mode=dry
+links=""
+while (( $# )); do
+  case "$1" in
+    --dry-run) mode=dry ;;
+    --run) mode=run ;;
+    --old-links) (( $# >= 2 )) || usage; links="$2"; shift ;;
+    --mini) (( $# >= 2 )) || usage; MINI="$2"; shift ;;
+    --token-file) (( $# >= 2 )) || usage; TOKEN_FILE="$2"; shift ;;
+    --acceptance) (( $# >= 2 )) || usage; ACCEPTANCE="$2"; shift ;;
+    -h | --help) usage ;;
+    *) echo "$ME: an option it does not take: $1. Nothing was done." >&2; exit 2 ;;
+  esac
+  shift
+done
+[[ -z $MINI || $MINI =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]] || fail "--mini is USER@HOST"
+
+if [[ $mode == dry ]]; then
+  say "a dry run of the Confirmed checklist. Nothing is asked of anything."
+  echo "  1. would run: SITE=$ADDRESS release/smoke.sh"
+  echo "  2. would fetch $OLD/install and $ADDRESS/install and compare them; read $RELEASES/latest/download/VERSION, want $VERSION;"
+  echo "     ask the two links of --old-links FILE at $OLD_NAME and want a 308 to the same path and query at $ADDRESS, then a 200 there"
+  echo "  3. would read the client id in $ADDRESS/sign-in's forward, want $CLIENT_ID. Yours: sign in; People shows the $M_TEAM marked"
+  echo "  4. yours: each Lab-owned Mac shows as signed in on Macs; Reports has one Verified run from each, published by the lab"
+  echo "  5. would run: $(mini_line confirmed-mini)"
+  echo "     yours: the daily summary arrived in the Lab group; healthchecks.io shows the Dead-man switch green since the lab opened"
+  echo "  would write $ACCEPTANCE/$(today)-confirmed.md. The dated line \"Confirmed: $(today), <your name>\" is yours to add"
+  exit 0
+fi
+
+[[ -n $links && -n $MINI ]] || usage
+[[ -f $links ]] || fail "no file $links"
+# shellcheck disable=SC2012
+case "$(ls -lnL "$links" | cut -c1-10)" in
+  -r-------- | -rw-------) ;;
+  *) fail "$links can be read by others: chmod 600 it. A deletion link holds its secret" ;;
+esac
+[[ "$(lab_from_outside)" == open ]] || fail "$ADDRESS does not answer as an open lab ($(lab_from_outside)): the checklist is for a Live lab"
+
+failed=0
+lines=()
+point() {
+  local n="$1" word="$2"
+  shift 2
+  lines+=("$n. $word: $*")
+  say "point $n: $word: $*"
+  [[ $word == pass ]] || failed=1
+}
+
+# 1
+log="$(mktemp "${TMPDIR:-/tmp}/lab-confirmed.XXXXXX")"
+trap 'rm -f "$log"' EXIT
+if SITE="$ADDRESS" "$SMOKE" > "$log" 2>&1; then
+  point 1 pass "the smoke script is green against $ADDRESS: installed, uploaded a golden report, saw it, deleted it by its link"
+else
+  point 1 fail "the smoke script against $ADDRESS: $(grep -v '<' "$log" | tail -n 1 | cut -c1-200)"
+fi
+
+# 2
+old_install="$(ask -L "$OLD/install" | shasum -a 256 | cut -d' ' -f1)"
+lab_install="$(ask "$ADDRESS/install" | shasum -a 256 | cut -d' ' -f1)"
+latest="$(ask -L "$RELEASES/latest/download/VERSION" | head -n 1 | tr -d '\r')"
+if [[ $old_install != "$lab_install" ]]; then
+  point 2 fail "the old install line ($OLD/install) does not give the lab's installer"
+elif ! ask "$ADDRESS/install" | grep -q '/releases/latest/download'; then
+  point 2 fail "the lab's installer does not take the latest Lab release"
+elif [[ $latest != "$VERSION" ]]; then
+  point 2 fail "the latest Lab release is not $VERSION"
+else
+  point 2 pass "the old install line gives the lab's installer, which takes the latest Lab release, $VERSION"
+fi
+n=0
+while IFS= read -r link || [[ -n $link ]]; do
+  link="${link//[[:space:]]/}"
+  [[ -n $link ]] || continue
+  n=$((n + 1))
+  what="the old report link"
+  [[ $link != *deletion* ]] || what="the old deletion link"
+  [[ $link == "https://$OLD_NAME/"* ]] || { point 2 fail "line $n of the links file is not a link at $OLD_NAME"; continue; }
+  rest="${link#"https://$OLD_NAME"}"
+  if [[ "$(quiet_status "$OLD$rest")" != 308 || "$(quiet_location "$OLD$rest")" != "$ADDRESS$rest" ]]; then
+    point 2 fail "$what is not forwarded with a 308 to the same path and query at $ADDRESS"
+  elif [[ "$(quiet_status "$ADDRESS$rest")" != 200 ]]; then
+    point 2 fail "$what lands on a page of the lab that does not answer 200"
+  else
+    point 2 pass "$what lands on its page at the lab through $OLD_NAME, path and query kept"
+  fi
+done < "$links"
+(( n == 2 )) || point 2 fail "the links file holds $n link(s), want two: an old report's and an old deletion link"
+
+# 3
+app="$(sign_in_app)"
+if [[ $app == "$CLIENT_ID" ]]; then
+  point 3 pass "the lab's Sign in link names the existing OAuth app"
+else
+  point 3 fail "the lab's Sign in link names client id ${app:-none}, not $CLIENT_ID"
+fi
+
+# 5
+facts="$(on_mini confirmed-mini | tee /dev/stderr | tr -d '\r' | grep -E '^(backup|restore|summary|dead_man_dark_minutes)=[a-z0-9]+$' | tr '\n' ' ')"
+if [[ $facts == "backup=pass restore=pass summary=recorded dead_man_dark_minutes=0 " ]]; then
+  point 5 pass "on the mini: one backup by hand and restored; the daily summary recorded for the Lab group; no Dark minute since the lab opened"
+else
+  point 5 fail "on the mini: ${facts:-it said nothing}"
+fi
+
+mkdir -p "$ACCEPTANCE"
+record="$ACCEPTANCE/$(today)-confirmed.md"
+{
+  echo "# The Confirmed checklist"
+  echo
+  echo "Run $(stamp) (Brisbane) by \`scripts/cutover/confirmed --run\`, against $ADDRESS."
+  echo
+  for line in "${lines[@]}"; do echo "- $line"; done
+  echo
+  echo "The owner's to look at, each seen before the dated line is written:"
+  echo
+  echo "- 3. Signed in with the existing OAuth app; People shows the $M_TEAM marked."
+  echo "- 4. Each Lab-owned Mac shows as signed in; the lab has published one Verified run from each."
+  echo "- 5. The daily summary arrived in the Lab group; healthchecks.io shows the Dead-man switch green since the lab opened."
+  echo
+  if (( failed )); then echo "Result: fail"; else echo "Result: pass, what a script can check"; fi
+} > "$record"
+say "the record is $record"
+if (( failed )); then
+  fail "the checklist is not green: the lines above say which point. Confirmed waits"
+fi
+say "what a script can check is green. Look at the three that are yours; then add your dated line as the record's last line: Confirmed: $(today), <your name>"

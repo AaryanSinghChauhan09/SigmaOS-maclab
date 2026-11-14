@@ -1,0 +1,91 @@
+#!/bin/bash
+# The mini's part of the Confirmed checklist (spec section 16, point 5),
+# after the lab has opened. With sudo:
+#
+#   sudo confirmed-mini [--dry-run]
+#
+# 1. One backup run by hand, and restored: the nightly backup and then the
+#    Restore drill, each as the lab account, as their LaunchDaemons run
+#    them. Each must leave its own mark.
+# 2. The daily summary, sent once by hand to the Lab group: labd is asked
+#    on its ops socket.
+# 3. The Dead-man switch's record since the lab opened: every minute in
+#    which the mini found the lab Dark and did not ping the check. None is
+#    green; healthchecks.io has the view from outside, which is yours to
+#    read.
+#
+# It ends with a line for each, "name=value", which scripts/cutover/confirmed
+# puts in the record. It refuses on a lab that has not opened.
+#
+#   --dry-run  say what would run, and run nothing
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/cutover/mini.sh
+. "$here/mini.sh"
+
+usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    *) echo "$ME: an argument it does not take. Nothing was done." >&2; usage ;;
+  esac
+  shift
+done
+
+scripts="$LAB_CURRENT/scripts/mini"
+dead_log="$LAB_HOME/log/dead-man.log"
+
+if (( DRY )); then
+  say "would check: a Lab release is Deployed and the lab has opened"
+  say "would run, as $LAB_OWNER: $scripts/backup, then $scripts/restore-drill; each must leave its mark ($BACKUP_OK, $DRILL_OK)"
+  say "would ask labd on $OPS_SOCKET for the daily summary: POST /summary"
+  say "would count the lines of $dead_log since the lab opened"
+  say "nothing was run"
+  exit 0
+fi
+
+need_root
+deployed
+no_planted_link
+is="$(lab_stage)"
+[[ $is == "live "* ]] || fail "the lab has not opened ($is): the Confirmed checklist is for a Live lab"
+since="${is#live }"
+
+# newer FILE THAN: FILE was written after the file THAN.
+newer() { as_lab test "$1" -nt "$2"; }
+
+begin="$(mktemp "${TMPDIR:-/tmp}/lab-confirmed.XXXXXX")"
+# shellcheck disable=SC2064
+trap "rm -f '$begin'" EXIT
+chmod 644 "$begin"
+
+backup=fail restore=fail summary=fail
+say "the nightly backup, by hand"
+if as_lab "$scripts/backup" && newer "$BACKUP_OK" "$begin"; then backup=pass; fi
+if [[ $backup == pass ]]; then
+  say "the Restore drill, by hand"
+  if as_lab "$scripts/restore-drill" && newer "$DRILL_OK" "$begin"; then restore=pass; fi
+else
+  say "the backup did not pass: nothing is restored from it"
+fi
+
+if [[ -S $OPS_SOCKET && "$(as_lab curl -fsS --max-time 20 --unix-socket "$OPS_SOCKET" -X POST http://labd/summary 2>/dev/null)" == recorded ]]; then
+  summary=recorded
+  say "the daily summary is recorded for the Lab group: see it arrive there"
+fi
+
+no_link "$dead_log"
+dark="$(as_lab cat "$dead_log" 2>/dev/null | awk -v since="$since" '{ for (i = 1; i <= NF; i++) if ($i ~ /^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:]+Z$/) { if ($i >= since) n++; break } } END { print n + 0 }')"
+if [[ $dark == 0 ]]; then
+  say "the Dead-man switch: no minute since the lab opened ($since) in which the mini found the lab Dark"
+else
+  say "the Dead-man switch: $dark minute(s) since the lab opened ($since) in which the mini found the lab Dark: read $dead_log"
+fi
+
+echo "backup=$backup"
+echo "restore=$restore"
+echo "summary=$summary"
+echo "dead_man_dark_minutes=$dark"
+[[ $backup == pass && $restore == pass && $summary == recorded && $dark == 0 ]]

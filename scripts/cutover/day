@@ -1,0 +1,529 @@
+#!/bin/bash
+# The day (the Cutover's steps 18 to 32; spec section 16): one script, on
+# the owner's Mac, that goes through the steps in order, checks what must
+# be true before each, does what a script can and stops at each step that
+# is the owner's, saying exactly what to type or click.
+#
+#   day                    a dry run: every step in order, what it would
+#                          check and do. Nothing is asked of anything
+#   day --where            which steps are done, and which is next
+#   day --run [OPTIONS]    go on from the first step that is not done
+#   day --run --done N     the owner's step N is done: check what can be
+#                          checked of it, write it down, go on
+#   day --run --go         step 25, the lab's opening: the owner says go
+#
+#   --mini USER@HOST       the mini, for the steps that run there (22, 25)
+#   --public-key FILE      on the mini, the Machine public key of one of
+#                          your Macs, for the import's second check
+#                          (default ~/machine-key.pub)
+#   --m-team N             how many M team members step 24 marks (14)
+#   --front-door "OPTIONS" options for the Front door's runner at step 18,
+#                          as one word: --mac, --mini, --job, --for 2
+#                          "--release R" and the rest (front-door/run --help)
+#   --token-file FILE      the Cloudflare API token, in a file only you can
+#                          read; without it each cloud script asks, and
+#                          does not show it
+#   --without-alias-rehearsal
+#                          go past step 19 with no passed Alias rehearsal:
+#                          after the nameservers move it cannot run
+#   --acceptance DIR       the dated records (default docs/acceptance)
+#   --state FILE           the day's own record of the steps done
+#
+# It sends no message, types no password, moves no nameserver, approves no
+# tag and deletes nothing: at such a step it stops, with status 3, and
+# names the owner's part. A check that fails stops it at that step with
+# the reason, status 1. Started again it is at the same step: what is done
+# is in the day's record, a line a step. Step 25 is the point of no return;
+# no later step runs before the lab is seen open from outside. The way back
+# before step 25 is scripts/cutover/back.
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/cutover/owner.sh
+. "$here/owner.sh"
+
+usage() { sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+STEPS="18 19 20 21 22 23 24 24a 25 26 27 28 29 30 31 32"
+mode=dry
+done_step=""
+go=0
+where=0
+# shellcheck disable=SC2088
+public_key="~/machine-key.pub"
+front_door=""
+no_alias=0
+
+while (( $# )); do
+  case "$1" in
+    --dry-run) mode=dry ;;
+    --run) mode=run ;;
+    --where) where=1 ;;
+    --go) go=1 ;;
+    --done) (( $# >= 2 )) || usage; done_step="$2"; shift ;;
+    --mini) (( $# >= 2 )) || usage; MINI="$2"; shift ;;
+    --public-key) (( $# >= 2 )) || usage; public_key="$2"; shift ;;
+    --m-team) (( $# >= 2 )) || usage; M_TEAM="$2"; shift ;;
+    --front-door) (( $# >= 2 )) || usage; front_door="$2"; shift ;;
+    --token-file) (( $# >= 2 )) || usage; TOKEN_FILE="$2"; shift ;;
+    --without-alias-rehearsal) no_alias=1 ;;
+    --acceptance) (( $# >= 2 )) || usage; ACCEPTANCE="$2"; shift ;;
+    --state) (( $# >= 2 )) || usage; STATE="$2"; shift ;;
+    -h | --help) usage ;;
+    *) echo "$ME: an option it does not take: $1. Nothing was done." >&2; exit 2 ;;
+  esac
+  shift
+done
+[[ $M_TEAM =~ ^[0-9]{1,3}$ ]] || usage
+[[ -z $MINI || $MINI =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]] || fail "--mini is USER@HOST"
+[[ $public_key =~ ^[A-Za-z0-9._/~-]+$ ]] || fail "--public-key is a file's path on the mini, with no space in it"
+[[ -z $done_step || " $STEPS " == *" $done_step "* ]] || fail "there is no step $done_step: the day's steps are $STEPS"
+if [[ $mode == dry ]] && { [[ -n $done_step ]] || (( go )); }; then
+  fail "--done and --go go with --run. Nothing was done."
+fi
+
+# dump_file: the day's final dump on the mini, named by the day of the Freeze.
+dump_file() {
+  local day
+  day="$(done_at 20 2>/dev/null | cut -d' ' -f1)" || day=""
+  day="${day:-$(today)}"
+  echo "/var/lab/import/the-day-${day//-/}.dump"
+}
+
+# What each step is: its title, who does it, what must be true first.
+title() {
+  case "$1" in
+    18) echo "The Front door's fourteen tests are run again" ;;
+    19) echo "$OLD_NAME's DNS moves to Cloudflare" ;;
+    20) echo "Freeze: Railway is disconnected and the site service is stopped" ;;
+    21) echo "Final dump of the old site's three tables, onto the mini" ;;
+    22) echo "The import fills an emptied reports.db; its three checks pass" ;;
+    23) echo "The OAuth app moves to the Lab address and the lab switches to it" ;;
+    24) echo "The owner signs in and marks the $M_TEAM M team members on People" ;;
+    24a) echo "/terms and /privacy are live; privacy@omarchy-mac.org has had its test message" ;;
+    25) echo "The lab opens. Point of no return" ;;
+    26) echo "$VERSION's three files become the old repository's last release" ;;
+    27) echo "One line in the M team's Signal group" ;;
+    28) echo "The Confirmed checklist, and the owner's dated line" ;;
+    29) echo "The Railway project is deleted; the dump on the mini is deleted" ;;
+    30) echo "The old repository gets its licence and its pointer, loses its signing secret and is archived" ;;
+    31) echo "The M4 Pro's old daemons and standing token go; the Porkbun key is swapped" ;;
+    32) echo "The asks and the posts" ;;
+  esac
+}
+who() {
+  case "$1" in
+    18) echo "scripts" ;;
+    22) echo "scripts, owner looks" ;;
+    24a) echo "owner, scripts" ;;
+    25) echo "scripts, owner starts" ;;
+    31) echo "owner only" ;;
+    *) echo "owner" ;;
+  esac
+}
+first() {
+  case "$1" in
+    18) echo "Ready: all nine items green in $ACCEPTANCE (scripts/cutover/ready)" ;;
+    19) echo "step 18 green; the Alias rehearsal has passed, since it needs this name still on Porkbun's nameservers" ;;
+    20) echo "Cloudflare shows the old zone active and its certificate issued (scripts/cloud/old-name.sh zone --check)" ;;
+    21) echo "step 20: $OLD_NAME no longer serves the old site" ;;
+    22) echo "step 21: the final dump is on the mini; the lab is in Preview" ;;
+    23) echo "step 22: the import passed and the owner has looked" ;;
+    24) echo "step 23: the lab's Sign in link names the existing OAuth app" ;;
+    24a) echo "step 24; /terms and /privacy answer and the home page's footer links to both" ;;
+    25) echo "steps 24 and 24a; the lab is in Preview; the owner says go (--go). labd itself counts the $M_TEAM marked" ;;
+    26 | 27) echo "step 25: the lab is seen open at $ADDRESS" ;;
+    28) echo "step 25; no copy of the lab's data is kept longer than 6 months" ;;
+    29) echo "Confirmed (step 28)" ;;
+    30) echo "Confirmed (step 28); step 26" ;;
+    31) echo "Confirmed (step 28)" ;;
+    32) echo "Confirmed (step 28); the Lab group and the Configurations in place" ;;
+  esac
+}
+
+opened() {
+  is_done 25 || { WHY="step 25 is not done: the lab has not opened"; return 1; }
+  [[ "$(lab_from_outside)" == open ]] || { WHY="the day's record says the lab opened, and $ADDRESS does not answer as an open lab ($(lab_from_outside)): nothing after step 25 runs before it"; return 1; }
+}
+confirmed() {
+  opened || return 1
+  is_done 28 || { WHY="Confirmed is not written yet (step 28)"; return 1; }
+}
+
+# must N: whether what must be true before step N is. WHY says what is not.
+WHY=""
+must() {
+  local file is
+  case "$1" in
+    18)
+      "$here/ready" --records "$ACCEPTANCE" > /dev/null || { WHY="not Ready. $("$here/ready" --records "$ACCEPTANCE" | grep 'not green' | head -n 3 | tr '\n' ' ')"; return 1; }
+      ;;
+    19)
+      is="$(done_at 18 2>/dev/null | cut -d' ' -f1)" || is=""
+      [[ -n $is ]] || { WHY="step 18 is not done"; return 1; }
+      file="$ACCEPTANCE/$is-front-door.md"
+      grep -qx 'Result: pass, all fourteen' "$file" 2>/dev/null || { WHY="step 18 is not green: $file does not say \"Result: pass, all fourteen\""; return 1; }
+      if ! (( no_alias )); then
+        file="$(newest_record alias-rehearsal)"
+        if [[ -z $file ]] || ! grep -q '^Result: pass' "$file"; then
+          WHY="no passed Alias rehearsal under $ACCEPTANCE (step 17a): once the nameservers move it cannot run. Run it first, or go on without it with --without-alias-rehearsal"
+          return 1
+        fi
+      fi
+      ;;
+    20)
+      cloud old-name.sh zone --check || { WHY="Cloudflare does not show $OLD_NAME active with its certificate issued yet: the Freeze waits for it"; return 1; }
+      ;;
+    21)
+      ! old_site_answers || { WHY="$OLD_NAME still serves the old site: the Freeze (step 20) is not done"; return 1; }
+      ;;
+    22 | 23 | 24 | 24a | 25)
+      is="$(lab_from_outside)"
+      if [[ $1 == 25 ]] && is_done 25a; then is=preview; fi
+      [[ $is == preview ]] || { WHY="the lab does not answer as a lab in Preview at $ADDRESS ($is)"; return 1; }
+      case "$1" in
+        24 | 24a | 25)
+          is="$(sign_in_app)"
+          [[ $is == "$CLIENT_ID" ]] || { WHY="the lab's Sign in link does not name the existing OAuth app (client id ${is:-none}, want $CLIENT_ID): step 23 is not done"; return 1; }
+          ;;
+      esac
+      if [[ $1 == 24a || $1 == 25 ]]; then
+        for file in /terms /privacy; do
+          [[ "$(status_of "$ADDRESS$file")" == 200 ]] || { WHY="$ADDRESS$file does not answer 200"; return 1; }
+        done
+        is="$(ask "$ADDRESS/" | grep -o -E 'href="[^"]*/(terms|privacy)"' | sort -u | wc -l | tr -d ' ')"
+        (( is >= 2 )) || { WHY="the home page's footer does not link to /terms and /privacy"; return 1; }
+      fi
+      if [[ $1 == 25 ]]; then
+        (( go )) || is_done 25c || { WHY="the owner has not said go"; return 3; }
+      fi
+      ;;
+    26 | 27 | 28) opened || return 1 ;;
+    29 | 31 | 32) confirmed || return 1 ;;
+    30)
+      confirmed || return 1
+      is_done 26 || { WHY="step 26 is not done"; return 1; }
+      ;;
+  esac
+  return 0
+}
+
+# tell N: the owner's part of step N, exactly.
+tell() {
+  local t
+  t="$(token_option)"
+  case "$1" in
+    18)
+      cat <<EOF
+  the script runs: scripts/cutover/front-door/run --lab ${front_door:-<your --front-door options>}
+  About an hour and a quarter. Test 2 needs a Release that is not frozen yet
+  (--front-door '--for 2 "--release R"'); test 12 cannot run twice within 15 minutes.
+  Status 3 from the runner is a test that stopped for you: settle it, then run this again.
+EOF
+      ;;
+    19)
+      cat <<EOF
+  1. The zone, in the same account, with the records Porkbun serves today (still pointing at Railway). Type:
+       scripts/cloud/old-name.sh zone --apply$t
+  2. The nameservers, at Porkbun. This is the move, and it is yours. Type:
+       DOMAIN=$OLD_NAME scripts/cloud/nameservers.sh --apply$t
+  3. Wait until Cloudflare shows the zone active and its certificate issued. Type, until it passes:
+       scripts/cloud/old-name.sh zone --check$t
+  4. DNSSEC, once the zone is active. Click, in Cloudflare: $OLD_NAME > DNS > Settings > DNSSEC > Enable.
+     Put the DS record it shows in at Porkbun (Domain Management > $OLD_NAME > DNSSEC). Then type:
+       scripts/cloud/old-name.sh dnssec --check$t
+  Then: $0 --run --done 19
+EOF
+      ;;
+    20)
+      cat <<EOF
+  Before you stop it: upload one throwaway report to $OLD_NAME and keep its deletion link.
+  The import's third check (step 22) asks for it, and it must be in the dump.
+  Then, in Railway, in the old site's project:
+  1. Click the service "site" > Settings > Source > Disconnect (from $OLD_REPO).
+  2. Click the service "site" > its running deployment > the menu > Remove, so that nothing serves.
+     Leave "Postgres" as it is: it stays up.
+  Then: $0 --run --done 20
+EOF
+      ;;
+    21)
+      cat <<EOF
+  Have ready Railway's DATABASE_PUBLIC_URL (Postgres > Variables). Type, and paste the address at the prompt (it is not shown):
+       $(mini_line "rehearsal-import dump --dump $(dump_file)")
+  Then: $0 --run --done 21
+EOF
+      ;;
+    22)
+      cat <<EOF
+  the script runs: $(mini_line "rehearsal-import run --public-key $public_key --dumped $(dump_file)")
+  It asks you for the deletion link of the throwaway report, at its own prompt.
+  Then you look: sign in at $ADDRESS and read Reports. Spot-check a few against what the old site showed.
+  Then: $0 --run --done 22
+EOF
+      ;;
+    23)
+      cat <<EOF
+  1. Click, on GitHub: Settings > Developer settings > OAuth Apps > the old site's app (client id $CLIENT_ID).
+     Application name: Omarchy Mac Lab. Homepage URL: https://$LAB_HOST
+     Authorization callback URL: https://$LAB_HOST/auth/github/callback
+     Update application. Then "Generate a new client secret", and copy it.
+  2. Give the lab the app. Type, and paste the client id and the new secret at the prompts (not shown; an empty answer keeps the Admins):
+       ssh -t ${MINI:-<the mini>} 'sudo /usr/local/lab/current/scripts/mini/sign-in'
+     labd is restarted and signs people in with the existing app from then on.
+  Then: $0 --run --done 23
+EOF
+      ;;
+    24)
+      cat <<EOF
+  Sign in at $ADDRESS/sign-in with GitHub. On People ($ADDRESS/people), mark each of the $M_TEAM M team members:
+  type the handle, choose "M team", confirm. The lab opens only when labd counts exactly $M_TEAM marked.
+  Then: $0 --run --done 24
+EOF
+      ;;
+    24a)
+      cat <<EOF
+  the script checks: $ADDRESS/terms and /privacy answer, and the home page's footer links to both.
+  Yours: privacy@omarchy-mac.org exists and one test message has arrived. Type, with your mailbox:
+       scripts/cloud/zone-settings.sh --check --forward-to <MAILBOX>$t
+  Send one message to privacy@omarchy-mac.org from another account and see it arrive.
+  Then: $0 --run --done 24a
+EOF
+      ;;
+    25)
+      if ! is_done 25c; then
+        cat <<EOF
+  When you say go ($0 --run --go --mini ${MINI:-USER@HOST}), the script starts, in this order, each once:
+       $(mini_line "open --m-team $M_TEAM")
+       scripts/cloud/purge-cache.sh --apply$t
+       scripts/cloud/old-name.sh redirect --apply$t
+  The first opens the lab: reports and Mac sign-in accepted, Preview's banner and noindex off,
+  "$OLD_NAME is now here" on the home page, the install lines serving the latest Lab release.
+  There is no way back from it. No Deploy happens: the lab opens on the Release candidate it runs.
+  Then it stops for the one part that is yours:
+EOF
+      fi
+      cat <<EOF
+  $VERSION published in the new repository. Type, from the commit the Release candidate was built from:
+       git tag -s v$VERSION <that commit> && git push origin v$VERSION
+  Click, on GitHub: $NEW_REPO > Actions > the release run > Review deployments > release > Approve and deploy.
+  Then: $0 --run --done 25
+EOF
+      ;;
+    26)
+      cat <<EOF
+  Type:
+       gh release download v$VERSION --repo $NEW_REPO --dir /tmp/lab-$VERSION --pattern omarchy-m-test.tar.gz --pattern omarchy-m-test.tar.gz.sig --pattern VERSION
+       gh release create v$VERSION --repo $OLD_REPO --title "$VERSION" --notes "The last release here. Omarchy Mac Lab is at https://$LAB_HOST and https://github.com/$NEW_REPO" /tmp/lab-$VERSION/omarchy-m-test.tar.gz /tmp/lab-$VERSION/omarchy-m-test.tar.gz.sig /tmp/lab-$VERSION/VERSION
+  Then: $0 --run --done 26
+EOF
+      ;;
+    27)
+      cat <<EOF
+  Send, in the M team's Signal group, this one line:
+       $OLD_NAME moved to $LAB_HOST today. Old links still work. Update omarchy-m-test when it asks.
+  Then: $0 --run --done 27
+EOF
+      ;;
+    28)
+      cat <<EOF
+  Type, with an old report's link and an old deletion link in a file only you read (one a line):
+       scripts/cutover/confirmed --mini ${MINI:-USER@HOST} --old-links <FILE>
+  It runs what a script can of the five points and lists what is yours to look at.
+  See that no copy of the lab's data is kept longer than 6 months (the backup's own rule; its last run says so).
+  When the lab passed, write the dated line as the last line of the record it names, and commit it:
+       Confirmed: $(today), <your name>
+  Then: $0 --run --done 28
+EOF
+      ;;
+    29)
+      cat <<EOF
+  1. Click, in Railway: the old site's project > Settings > Danger > Delete project.
+  2. Type:
+       ssh -t ${MINI:-<the mini>} 'sudo -u lab rm $(dump_file)'
+  Then: $0 --run --done 29
+EOF
+      ;;
+    30)
+      cat <<EOF
+  In a clone of $OLD_REPO, on main: add the MIT LICENSE; put this line at the top of README.md:
+       This project moved: Omarchy Mac Lab is at https://$LAB_HOST, its source at https://github.com/$NEW_REPO.
+  Commit and push. Then type:
+       gh repo edit $OLD_REPO --description "Moved to https://github.com/$NEW_REPO (https://$LAB_HOST)" --homepage https://$LAB_HOST
+       gh secret delete RELEASE_SIGNING_KEY --repo $OLD_REPO
+       gh repo archive $OLD_REPO
+  Then: $0 --run --done 30
+EOF
+      ;;
+    31)
+      cat <<EOF
+  On the M4 Pro, yours alone:
+  1. Remove the oobd and lab-builder LaunchDaemons. Type, for each of the two files in /Library/LaunchDaemons:
+       sudo launchctl bootout system /Library/LaunchDaemons/<file>.plist && sudo rm /Library/LaunchDaemons/<file>.plist
+  2. Delete the standing Cloudflare token from the Keychain (Keychain Access > login > the item > Delete).
+     The copy in Bitwarden stays, for emergencies, with no expiry.
+  3. At Porkbun: make an API key without "purchase", limited to omarchy-mac.org; put it in the Keychain in place
+     of the "full" key; delete the "full" key. Drop the dead CLOUDFLARE_KEY line where it is kept.
+  Then: $0 --run --done 31
+EOF
+      ;;
+    32)
+      cat <<EOF
+  In this order, all yours: ask the three members with Macs in Chris's lab, directly; then the M team post;
+  then the public notice on "Lend a Mac" ($ADDRESS/lend); then ask the people outside the team.
+  The Lab group and each Mac's Configuration are in place first.
+  Then: $0 --run --done 32
+EOF
+      ;;
+  esac
+}
+
+# seen N: at --done N, what can be checked of the owner's step. WHY says
+# what is not so.
+seen() {
+  local is
+  case "$1" in
+    20) ! old_site_answers || { WHY="$OLD_NAME still serves the old site: the service is not stopped"; return 1; } ;;
+    22) is_done 22a || { WHY="the import has not run yet: $0 --run starts it"; return 1; } ;;
+    23)
+      is="$(sign_in_app)"
+      [[ $is == "$CLIENT_ID" ]] || { WHY="the lab's Sign in link names client id ${is:-none}, not the existing app's ($CLIENT_ID)"; return 1; }
+      ;;
+    25)
+      is_done 25c || { WHY="the opening has not run: $0 --run --go starts it"; return 1; }
+      is="$(ask -L "$RELEASES/latest/download/VERSION" | head -n 1 | tr -d '\r')"
+      [[ $is == "$VERSION" ]] || { WHY="the latest Lab release of $NEW_REPO is not $VERSION (it says \"${is:0:20}\"): the tag is not approved and published yet"; return 1; }
+      ;;
+    28)
+      is="$(newest_record confirmed)"
+      if [[ -z $is ]] || ! grep -q '^Confirmed: [0-9]\{4\}-[0-9][0-9]-[0-9][0-9]' "$is"; then
+        WHY="no record DATE-confirmed.md under $ACCEPTANCE has your dated line (\"Confirmed: $(today), <your name>\")"
+        return 1
+      fi
+      ;;
+  esac
+  return 0
+}
+
+# the_opening: step 25's three acts, each once, in order. A second start
+# goes on after the last one that was done.
+the_opening() {
+  local is
+  if ! is_done 25a; then
+    on_mini "open --m-team $M_TEAM" || fail "step 25 stops here: the mini did not open the lab. It says why above; the lab is as it was unless it says it opened"
+    is="$(lab_from_outside)"
+    [[ $is == open ]] || fail "step 25 stops here: the mini says the lab opened and $ADDRESS does not answer as an open lab ($is). Ask the mini: $(mini_line "open stage")"
+    record 25a "the lab opened"
+    say "the lab is open. From here problems are fixed forward"
+  fi
+  if ! is_done 25b; then
+    cloud purge-cache.sh --apply || stop "step 25 stops for you: the one purge of the edge's cache did not run. Start it: scripts/cloud/purge-cache.sh --apply$(token_option). Then: $0 --run --go"
+    record 25b "the edge's cache purged"
+  fi
+  if ! is_done 25c; then
+    cloud old-name.sh redirect --apply || stop "step 25 stops for you: the old name's redirect is not on. Start it: scripts/cloud/old-name.sh redirect --apply$(token_option). Then: $0 --run --go"
+    record 25c "the old name's 308 rule on"
+  fi
+  ask "$ADDRESS/install" | grep -q "/releases/latest/download" || fail "step 25 stops here: the install line at $ADDRESS/install does not serve the latest Lab release"
+  is="$(header_of "$OLD/some/page?x=1" Location)"
+  if [[ -z ${LAB_DAY_OLD:-} && $is != "https://$LAB_HOST/some/page?x=1" ]]; then
+    say "note: $OLD_NAME does not answer with the redirect from here yet (Location \"${is:0:80}\"): resolvers may still ask Porkbun for up to 24 hours"
+  fi
+}
+
+# act N: the script's own part of step N. Status 3 stops for the owner.
+act() {
+  local rc
+  case "$1" in
+    18)
+      say "the Front door's fourteen tests, through the Lab address"
+      # shellcheck disable=SC2086
+      eval "set -- $front_door"
+      "$RUNNER" --lab "$@"
+      rc=$?
+      case "$rc" in
+        0) return 0 ;;
+        3) stop "step 18 stopped for you: a test could not be carried through (the runner's list says which). Settle it and run this again" ;;
+        *) fail "step 18 stops here: the Front door's tests did not all pass (the runner's list says which)" ;;
+      esac
+      ;;
+    22)
+      if ! is_done 22a; then
+        on_mini "rehearsal-import run --public-key $public_key --dumped $(dump_file)" || fail "step 22 stops here: the import or one of its three checks did not pass on the mini. It says which above"
+        record 22a "the import and its three checks passed"
+      fi
+      ;;
+    25) the_opening ;;
+  esac
+  return 0
+}
+
+# scripted N: whether step N has a part the script does before the owner's.
+scripted() { [[ $1 == 18 || $1 == 22 || $1 == 25 ]]; }
+# owned N: whether step N ends with a part that is the owner's.
+owned() { [[ $1 != 18 ]]; }
+
+next_step() {
+  local n
+  for n in $STEPS; do
+    is_done "$n" || { echo "$n"; return 0; }
+  done
+}
+
+if (( where )); then
+  for n in $STEPS; do
+    if at="$(done_at "$n")"; then echo "step $n: done $at"; else echo "step $n: not done"; fi
+  done
+  n="$(next_step)"
+  if [[ -n $n ]]; then echo "$ME: next is step $n: $(title "$n")"; else echo "$ME: every step of the day is done"; fi
+  exit 0
+fi
+
+if [[ $mode == dry ]]; then
+  say "a dry run of the day. Nothing is asked of the lab, the mini, Cloudflare, Railway or GitHub, and nothing is written."
+  for n in $STEPS; do
+    echo
+    echo "Step $n. $(title "$n") ($(who "$n"))"
+    echo "  must be true first: $(first "$n")"
+    tell "$n"
+  done
+  echo
+  say "the way back before step 25: scripts/cutover/back. From step 25 there is none."
+  exit 0
+fi
+
+n="$(next_step)"
+[[ -n $n ]] || { say "every step of the day is done"; exit 0; }
+if [[ -n $done_step ]]; then
+  [[ $done_step == "$n" ]] || fail "the day is at step $n, not $done_step: steps are done in order, and none is skipped. Nothing was written"
+  owned "$n" || fail "step $n is the script's own: $0 --run does it"
+  must "$n"
+  rc=$?
+  if [[ $rc == 1 ]]; then fail "step $n stops here: $WHY"; fi
+  seen "$n" || fail "step $n is not done yet: $WHY"
+  record "$n"
+  say "step $n is done: $(title "$n")"
+  n="$(next_step)"
+  [[ -n $n ]] || { say "every step of the day is done"; exit 0; }
+fi
+
+while [[ -n $n ]]; do
+  echo
+  say "step $n: $(title "$n") ($(who "$n"))"
+  must "$n"
+  rc=$?
+  if [[ $rc == 3 ]]; then
+    tell "$n"
+    stop "step $n waits for you to say go: $0 --run --go"
+  fi
+  [[ $rc == 0 ]] || fail "step $n stops here: $WHY"
+  if scripted "$n"; then
+    act "$n" || exit $?
+  fi
+  if owned "$n"; then
+    tell "$n"
+    stop "step $n is yours. When it is done: $0 --run --done $n"
+  fi
+  record "$n"
+  say "step $n is done"
+  n="$(next_step)"
+done
+say "every step of the day is done"

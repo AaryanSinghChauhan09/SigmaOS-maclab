@@ -1,0 +1,104 @@
+#!/bin/bash
+# The way back, before step 25 (spec section 16, "The way back"): the old
+# site serves again and the lab stays in Preview. About 10 minutes.
+#
+#   back                 a dry run: what it would check, and the owner's part
+#   back --run           check that there is a way back, and say the owner's
+#                        part for the steps the day's record holds
+#   back --run --done    the owner's part is done: check it, and put the
+#                        day's record back to before the Freeze
+#
+#   --mini USER@HOST     the mini, for the line that gives the lab the
+#                        development OAuth app again
+#   --state FILE         the day's record (the one scripts/cutover/day keeps)
+#
+# It refuses once the lab has opened: step 25 is the point of no return,
+# and from there problems are fixed forward. It starts no service, moves no
+# callback and types no secret: it says what to click and type, and checks
+# from outside that it was done. What is not taken back: the old name's
+# zone on Cloudflare, which still points at Railway, and the dump and the
+# import on the mini, which the next day's import replaces.
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/cutover/owner.sh
+. "$here/owner.sh"
+
+usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+mode=dry
+finished=0
+while (( $# )); do
+  case "$1" in
+    --dry-run) mode=dry ;;
+    --run) mode=run ;;
+    --done) finished=1 ;;
+    --mini) (( $# >= 2 )) || usage; MINI="$2"; shift ;;
+    --state) (( $# >= 2 )) || usage; STATE="$2"; shift ;;
+    -h | --help) usage ;;
+    *) echo "$ME: an option it does not take: $1. Nothing was done." >&2; exit 2 ;;
+  esac
+  shift
+done
+[[ $mode == run || $finished == 0 ]] || fail "--done goes with --run. Nothing was done."
+[[ -z $MINI || $MINI =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]] || fail "--mini is USER@HOST"
+
+# owners WHICH: the owner's part, for the steps that were done (all, in a dry run).
+owners() {
+  if [[ $1 == all ]] || is_done 23; then
+    cat <<EOF
+  The callback (step 23). Click, on GitHub: Settings > Developer settings > OAuth Apps > the app (client id $CLIENT_ID).
+     Authorization callback URL: https://$OLD_NAME/auth/github/callback
+     Homepage URL: https://$OLD_NAME. Update application.
+  Give the lab the development app again. Type, and paste the development app's client id and secret at the prompts:
+       ssh -t ${MINI:-<the mini>} 'sudo /usr/local/lab/current/scripts/mini/sign-in'
+EOF
+  fi
+  if [[ $1 == all ]] || is_done 20; then
+    cat <<EOF
+  The old site (step 20). In Railway, in the old site's project:
+     Click the service "site" > Settings > Source > Connect Repo > $OLD_REPO.
+     Click the service "site" > Deployments > the last one > Redeploy. "Postgres" was never stopped.
+EOF
+  fi
+  cat <<EOF
+  Nothing else is taken back: $OLD_NAME's zone on Cloudflare still points at Railway, and the lab stays in Preview.
+  Then: $0 --run --done
+EOF
+}
+
+if [[ $mode == dry ]]; then
+  say "a dry run of the way back. Nothing is asked of anything."
+  echo "  would check: the day's record does not hold the opening (step 25), and $ADDRESS still answers as a lab in Preview"
+  echo "  would say, for the steps the day's record holds:"
+  owners all
+  echo "  would check, at --done: $OLD/ answers 200 again; the lab's Sign in link no longer names the existing OAuth app"
+  echo "  would then keep the day's record as it was beside it, and put it back to before the Freeze: the day starts again at step 18"
+  exit 0
+fi
+
+if is_done 25a || is_done 25; then
+  fail "the lab has opened ($(done_at 25a 2>/dev/null || done_at 25)): step 25 is the point of no return. There is no way back; from here problems are fixed forward"
+fi
+is="$(lab_from_outside)"
+[[ $is != open ]] || fail "$ADDRESS answers as an open lab: step 25 is the point of no return. There is no way back; from here problems are fixed forward"
+if ! is_done 20 && ! is_done 23; then
+  say "the day's record holds neither the Freeze nor the callback's move: nothing public has changed, and there is nothing to take back"
+  exit 0
+fi
+
+if ! (( finished )); then
+  say "the way back, from step $(tail -n 1 "$STATE" | cut -f1) of the day:"
+  owners held
+  exit 3
+fi
+
+old_site_answers || fail "$OLD/ does not answer 200 yet: the old site's service is not serving again"
+if is_done 23; then
+  app="$(sign_in_app)"
+  [[ $app != "$CLIENT_ID" ]] || fail "the lab's Sign in link still names the existing OAuth app ($CLIENT_ID): give the lab the development app again"
+fi
+kept="$STATE.taken-back-$(TZ=Australia/Brisbane date +%Y%m%d-%H%M%S)"
+cp "$STATE" "$kept" || fail "could not keep the day's record as $kept. Nothing was changed"
+awk -F '\t' '$1 == "19"' "$kept" > "$STATE"
+say "the old site serves again and the lab is in Preview. The day's record is back to before the Freeze (what it held is in $kept)"
+say "another day starts with: $CUTOVER/day --run"

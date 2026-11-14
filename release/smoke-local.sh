@@ -9,8 +9,10 @@
 # install line labd serves pins the key that signed the download. labd runs
 # on a loopback port with an empty data directory and a machine-id key made
 # here. Then the same labd in Preview: its install line names the Release
-# candidate it was built as, and it takes no report. Nothing leaves this
-# machine and the release key is never read.
+# candidate it was built as, and it takes no report. Then that labd is
+# opened, as on the day (the Cutover's step 25), and the same smoke test is
+# green against it. Nothing leaves this machine and the release key is never
+# read.
 #
 # Needs go, curl, python3, ssh-keygen, GNU tar.
 set -euo pipefail
@@ -103,4 +105,20 @@ grep -qF 'releases/latest/download' "$t/install-lab-preview.sh" && fail "in Prev
 code="$(curl -sS -o "$t/refused.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' "$site/api/v1/reports")"
 [[ $code == 403 ]] && grep -qF 'is not open yet' "$t/refused.json" || fail "a lab in Preview took a report ($code)"
 
-echo "local smoke ok: $tag installed from labd's /install with the key made here; uploaded, seen, refused the second time and deleted; lab installed from /install/lab; in Preview both install lines name $tag"
+echo "== labd, opened from Preview: the same smoke test"
+mkdir -m 700 "$t/sign-in" "$t/run"
+printf 'made-up-client-id\n' > "$t/sign-in/github-client-id"
+(umask 077; printf 'made-up-client-secret\n' > "$t/sign-in/github-client-secret")
+ops() { curl -sS --max-time 10 --unix-socket "$t/run/ops.sock" "$@"; }
+start --preview --sign-in "$t/sign-in" --ops-socket "$t/run/ops.sock"
+[[ "$(ops http://labd/stage)" == preview ]] || fail "a labd started with --preview does not say it is in Preview"
+curl -sS -D - -o /dev/null "$site/healthz" | tr -d '\r' | grep -qix 'x-robots-tag: noindex' || fail "in Preview labd does not say noindex"
+[[ "$(ops -o /dev/null -w '%{http_code}' -X POST 'http://labd/open?m-team=1')" == 409 ]] || fail "labd opened with the wrong count of M team members"
+ops -X POST 'http://labd/open?m-team=0' | grep -q '^live 20' || fail "labd did not open"
+curl -sS -D - -o /dev/null "$site/healthz" | tr -d '\r' | grep -qi '^x-robots-tag:' && fail "an opened lab still says noindex"
+curl -fsS "$site/" | grep -qF 'omarchy-m-testing.org is now here' || fail "an opened lab's home page does not say the old site is now here"
+curl -fsS "$site/install" | grep -qF 'releases/latest/download' || fail "an opened lab's /install does not take the latest Lab release"
+curl -fsS "$site/install/lab" | grep -qF 'releases/latest/download' || fail "an opened lab's /install/lab does not take the latest Lab release"
+SITE="$site" OMARCHY_M_TEST_RELEASES="file://$t/release" "$repo/release/smoke.sh"
+
+echo "local smoke ok: $tag installed from labd's /install with the key made here; uploaded, seen, refused the second time and deleted; lab installed from /install/lab; in Preview both install lines name $tag; opened from Preview, the same again"
