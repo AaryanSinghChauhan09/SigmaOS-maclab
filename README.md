@@ -408,16 +408,52 @@ checks its sha256 and runs `setup`, handing it the token on stdin. By hand:
 printf '%s\n' enr_... | sudo ./lab-agent setup --server https://<labd> --token-stdin --gui-user <you> --autologin
 ```
 
-Before it changes anything, `setup` shows labd's participation terms (what the
-lab may do to the Mac) and goes on only when you type `yes`. Without a terminal
-it stops, unless `--accept-terms <sha256>` names the exact terms you read
-(`GET <labd>/api/join/terms` with the token). labd keeps the sha256 of the
-terms each Mac accepted, and takes no enrollment that accepted others. With
-`--tailscale-authkey`, which joins the tailnet before labd can be reached,
-`--accept-terms` is required: the join happens on that acceptance, and if
-labd's terms then turn out to differ, setup stops before enrolling (the join
-stays). The one-liner holds the token, so keep it private; the token stays
-out of URLs, labd's log and the arguments of the curl and sudo it starts.
+With a token, `setup` is what the Join command runs on the Mac, in this
+order:
+
+1. **Pre-checks.** They read the Mac, change nothing and reach no lab. One
+   that fails stops setup, and the lab is told nothing: the Mac must be an
+   Apple Silicon Mac on Linux running Omarchy; the Join command must be run
+   as yourself (it asks for sudo itself); the Mac must not be in this lab
+   already, nor Lab-owned in another; it must not be running a lab kernel;
+   its disk must not wait for a passphrase at every start (reinstall without
+   encryption, or `scripts/lab-only-autounlock` on an install that is for the
+   lab only: whoever holds the Mac can then read that disk); the bootloader
+   must be able to restart it unattended, the tools the lab needs must be
+   there, and test kernels need 300 MB. Two only warn: a system that cannot
+   be snapshotted gets no Installed runs, and a laptop on battery starts
+   jobs only on AC power.
+2. **Another lab.** A Mac is in one lab at a time. Setup names the other
+   lab and asks once; on `y` the Mac leaves it properly, after the terms and
+   before it enrolls: that lab is told, then its boot entries, units and
+   device secret go. The Mac arrives with a new device id and secret, and
+   the other lab's Audit log is set aside (`audit.log.before-<time>`), not
+   copied here.
+3. **The terms.** Setup shows the lab's terms and goes on only when you type
+   `yes`. Without a terminal it stops, unless `--accept-terms <sha256>` names
+   the exact terms you read (`<Lab address>/terms`). The lab records the
+   acceptance with the person, the Mac, the time and that sha256, and takes
+   no enrollment that accepted other terms. Until the `yes`, the lab has
+   been sent nothing about the Mac: setup only read the terms from it.
+4. **Enrolling.** The lab tests the Join command once more and says here
+   what would refuse the Mac (Blocked, cap reached, name taken). A
+   Volunteer's Mac arrives at Qualification with publishing off, whatever it
+   had before; an Availability window it had is kept.
+5. **The window.** Setup ends by asking once for the weekly Availability
+   window (`mon-fri 19:00-07:00`); Enter decides later. A Mac with no window
+   takes nothing from the lab.
+
+A system counts as Omarchy when pacman's records of installed packages
+(`/var/lib/pacman/local`) hold `omarchy` or `omarchy-mac` (a converged
+image), `omarchy-dev` (the omarchy-mx-mac fork) or `omarchy-mac-keyring` (a
+legacy omarchy-mac install), or when Omarchy's own `omarchy-version` is in
+`/usr/share/omarchy/bin` or in `~/.local/share/omarchy/bin` of whoever ran the
+Join command (a legacy install from a checkout). It is `omarchy-m-test`'s
+rule, read from files, since the pre-checks run nothing
+(`TestHowASystemIsRecognisedAsOmarchy`).
+
+The one-liner holds the token, so keep it private; the token stays out of
+URLs, labd's log and the arguments of the curl and sudo it starts.
 
 `setup` makes these changes. Each one is idempotent and backed up:
 
@@ -706,7 +742,7 @@ leaving every other line as it was, and the staged kernels), its systemd
 units, the Lab-boot autologin drop-in, sysctl and watchdog files and the device
 secret, and tells labd. If labd can't be reached, lab-agent keeps trying
 and finishes leaving once it has told labd. Then it prints what is left to
-remove by hand: the lab-agent package and the Tailscale node. The Audit log
+remove by hand: the lab-agent package. The Audit log
 (`/var/lib/maclab/audit.log`) and Access level stay, and `log` still reads
 them. Only a Volunteer's Mac has `leave`; a Lab-owned Mac's enrollment is
 ended by the Maintainers.
@@ -1417,44 +1453,9 @@ screenshots need a Maintainer's token and answer 403 without one, and device
 views never carry the controller's token. A Maintainer's token works from
 anywhere, on the tailnet or off it, for the UI, `lab` and scripts.
 
-To add a Mac, make a one-off auth key in the admin console (Settings, Keys,
-Generate auth key): not reusable, pre-approved, tagged `tag:maclab`, short
-expiry. On the Mac, put it in a file only you can read, run setup with it,
-and remove the file:
-
-```sh
-(umask 077; cat > tskey)    # paste the key, Enter, then Ctrl-D
-sudo ./lab-agent setup --server http://<labd tailnet IP>:7770 --token enr_... --tailscale-authkey-file tskey
-shred -u tskey
-```
-
-Setup refuses a key file that group or others may read: make a new key
-then, since anyone could have read that one. `--tailscale-authkey -` reads
-the key from stdin instead, and asks for it when stdin is a terminal. A key
-given straight to `--tailscale-authkey` is refused: by the time setup sees
-it, the process list and sudo's journal entry show it, and whoever sees the
-Mac in labd can read that journal through it. Revoke such a key and make a new one.
-
-Before anything else, setup runs `tailscale up --auth-key=file:... --advertise-tags=tag:maclab
---ssh --hostname=maclab-<name>` (`--tailscale-hostname` to choose; a first setup
-uses the machine's hostname, since the lab name only arrives with enrollment).
-The key goes to tailscale in a root-only temporary file, removed as soon as
-`tailscale up` returns. On a Mac that is logged in already, setup adds
-`--force-reauth`, without which tailscale ignores the new key, so a rerun
-with a key from another tailnet really moves the Mac. If tailscale won't
-run without naming the Mac's other settings (an exit node, routes), setup
-lists the settings that go back to their defaults, then runs it again with
-`--reset`. It keeps `--shields-up` if the Mac had it, and says so: that
-blocks every connection into the Mac, Tailscale SSH included. Then
-it checks that the Mac has a new login, is tagged `tag:maclab`, and is on
-the tailnet labd is on (when `--server` is a tailnet address or a `ts.net`
-name). If it isn't, setup logs the Mac out (`tailscale logout`)
-rather than leave it on the wrong tailnet, or untagged, with Tailscale SSH
-on, and says so; make a new key and run setup again. Last, it checks that
-labd answers. It never prints or stores the key, and removes the key file
-when stopped by Ctrl-C, SIGTERM or a dropped SSH session (SIGHUP).
-Re-joining can cut a Tailscale SSH session, and tailscale may refuse to do
-it from one; run setup from the console or over plain SSH then.
+`lab-agent setup` no longer joins a tailnet: its `--tailscale-authkey-file`,
+`--tailscale-authkey` and `--tailscale-hostname` flags are gone. A Mac reaches
+the lab at the Lab address, over https.
 
 A minimal policy: Macs reach only labd, admins reach labd and SSH into the
 Macs as root, and the rest of the tailnet reaches labd to volunteer a Mac

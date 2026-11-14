@@ -375,6 +375,8 @@ func (l *Linux) SetUp(ctx context.Context, o SetupOptions, cfg *Config) error {
 	p, w := l.Preflight()
 	if len(p) > 0 {
 		say("preflight problems:\n  - %s", strings.Join(p, "\n  - "))
+	} else if cfg.Enrollment.IsVolunteer() {
+		say("preflight OK. The lab runs this Mac's first check itself, in its first open window: it restarts twice.")
 	} else {
 		say("preflight OK. Next: `lab baseline %s` proves the one-shot boot before any test kernel runs.", cfg.Name)
 	}

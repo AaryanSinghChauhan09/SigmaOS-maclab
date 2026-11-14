@@ -128,8 +128,6 @@ Apply in this order:
   - Where the UI or `lab enroll` can't make the one-liner, they show the fallback: `printf '%s\n' '<token>' | sudo ./lab-agent setup --token-stdin …`.
 - `lab-agent setup` shows the terms and needs a typed `yes` on the terminal **before it changes anything**.
   - Without a terminal it stops, unless `--accept-terms <sha256>` names the exact current terms (unattended runs by a Maintainer).
-  - With `--tailscale-authkey` and a token, setup needs `--accept-terms <sha256>` up front, and stops before any change without it.
-    After joining the tailnet it checks that labd's terms are the ones named.
 - The token is used up by the first enrollment and bound to that Mac's activation key; another Mac with the token gets 403.
   - If setup is interrupted, re-running it on the same Mac works until its first check-in, and only while labd keeps running: the
     activation state is in labd's memory.

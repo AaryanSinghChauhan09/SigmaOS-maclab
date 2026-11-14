@@ -427,6 +427,15 @@ func join(ctx context.Context, o SetupOptions, m SetupMac, f JoinFacts, policy l
 		}
 		say("left the lab at %s, which knew this Mac as %s", pre.Other.Server, pre.Other.Name)
 	}
+	// A Mac that left a lab while that lab could not be reached: setup is
+	// about to drop the record lab-agent would have told it from.
+	if rec, _ := readLeft(work); rec != nil && !rec.Told {
+		if rec.tellLabd(ctx) {
+			say("told the lab at %s that this Mac, %s there, left it", rec.Server, rec.Name)
+		} else {
+			say("the lab at %s has still not heard that this Mac, %s there, left it: end that enrollment from its side", rec.Server, rec.Name)
+		}
+	}
 	facts := m.Facts()
 	if facts.AgentVersion == "" {
 		facts.AgentVersion, facts.LabRelease = Version, LabRelease

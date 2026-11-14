@@ -275,6 +275,24 @@ func TestJoinDoesNotLeaveALabItCannotTell(t *testing.T) {
 	}
 }
 
+// A Mac that left a lab which could not be reached then, and now joins
+// another: the lab it left hears of it before the record of it goes.
+func TestJoinTellsALabTheMacLeftUnheard(t *testing.T) {
+	lab, other, sim := newJoinLab(t), newJoinLab(t), goodMac(t)
+	if err := writeLeft(sim.WorkDir, &left{Server: other.srv.URL, DeviceID: "d-old", Name: "old-name", Secret: "dev_old"}); err != nil {
+		t.Fatal(err)
+	}
+	if run := lab.join(sim, "yes\n\n", nil); run.err != nil {
+		t.Fatal(run.err)
+	}
+	if got := other.heard(); !slices.Equal(got, []string{"POST /api/agent/left"}) || other.sent("/api/agent/left", nil) != "Bearer dev_old" {
+		t.Errorf("the lab the Mac had left heard %q", got)
+	}
+	if HasLeft(sim.WorkDir) {
+		t.Error("the Mac is in the lab and still on record as having left")
+	}
+}
+
 // Row 5: running a lab kernel.
 func TestJoinStopsOnALabKernel(t *testing.T) {
 	stops(t, func(f *JoinFacts) { f.Cmdline = "root=UUID=x rw maclab.job=j-123" }, "lab kernel", "j-123", "your own kernel")
