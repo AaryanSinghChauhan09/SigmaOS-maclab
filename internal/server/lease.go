@@ -521,7 +521,7 @@ const (
 	byAMaintainer leaseCause = iota
 	leftTeam
 	blocked
-	macLeft
+	macWentAway
 )
 
 // endedByMaintainer is a Lease a Maintainer ended; why may be empty.
@@ -550,7 +550,7 @@ func allAccessEnded(by Person) leaseEnding {
 // which way. The leaving itself ends every job on the Mac, so the Lease's
 // end only cuts its holder's sessions.
 func leftWithItsMac(how string) leaseEnding {
-	return leaseEnding{event: api.LeaseEnded, why: "the Mac left the lab (" + how + ")", cause: macLeft, asToday: true}
+	return leaseEnding{event: api.LeaseEnded, why: "the Mac left the lab (" + how + ")", cause: macWentAway, asToday: true}
 }
 
 // endLeaseOfLeaving ends the Lease on v, a Mac that is leaving the lab,
@@ -577,7 +577,7 @@ func (e leaseEnding) said(l *api.Lease) string {
 		return "its Lease was ended by @" + e.by.Handle + ": " + e.why
 	case e.cause == byAMaintainer:
 		return "its Lease was ended by @" + e.by.Handle
-	case e.cause == macLeft:
+	case e.cause == macWentAway:
 		return "its Lease ended: " + e.why
 	}
 	return "its Lease ended: @" + l.Owner() + " " + map[leaseCause]string{leftTeam: "left the M team", blocked: "was Blocked"}[e.cause]
@@ -618,7 +618,7 @@ func (s *Server) endLease(v *dev, l *api.Lease, e leaseEnding) bool {
 		s.labGroup.LeaseEndedLeftTeam(handle, name)
 	case e.cause == blocked:
 		s.labGroup.LeaseEndedBlocked(handle, name)
-	case e.cause == macLeft:
+	case e.cause == macWentAway:
 		s.labGroup.LeaseEndedMacLeft(handle, name)
 	default:
 		s.labGroup.LeaseEndedByMaintainer(e.by.Handle, handle, name, e.why)

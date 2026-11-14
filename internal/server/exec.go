@@ -66,7 +66,7 @@ func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 	// Writing the line took time, and the Lease is asked for a last time in
 	// the moment the command is queued: the Mac's agent takes nothing that
 	// was queued after the Lease ended, ran out under its job, or the
-	// session was cut.
+	// session was cut. sendIf asks it holding v.mu.
 	stillLeased := func() error {
 		switch l := v.liveLeaseLocked(); {
 		case r.Context().Err() != nil:
