@@ -316,9 +316,7 @@ func TestThePortCheckAsksEveryPortAndResetsNothing(t *testing.T) {
 		"RID 0 (Port-USB-C@1): connected, transports CC,USB2, product id 29453, plug count 42, connection id 5A0E1B7C-0000-4000-8000-00000000A001",
 		"RID 1 (Port-USB-C@2): nothing connected, plug count 27",
 		"RID 2 (Port-USB-C@3): connected, transports CC,USB2,CIO, product id 29448, plug count 40",
-		"RID 0: the tool answers: Connection: Source",
-		"RID 1: the tool says: No connection detected",
-		"RID 2: the tool answers: Connection: Source",
+		`Connection: Source`,
 		"no RID: --rid is required",
 		"a RID that is not a number: Invalid --rid value",
 		"a negative RID: Invalid --rid value",
@@ -338,10 +336,15 @@ func TestThePortCheckAsksEveryPortAndResetsNothing(t *testing.T) {
 	if strings.Contains(out, "FAIL") {
 		t.Errorf("a check failed:\n%s", out)
 	}
-	// Three ports by the script, three through the controller, four bad RIDs.
+	// While the controller runs it alone gives the tool a port, so that the
+	// tool never runs twice at once: three ports through the controller, and
+	// by the script the four bad RIDs, which reach no port.
+	if strings.Contains(out, "the tool answers") || strings.Contains(out, "the tool says") {
+		t.Errorf("the script ran the tool on a port beside the controller:\n%s", out)
+	}
 	runs := m.toolRuns()
-	if len(runs) != 10 {
-		t.Errorf("the tool ran %d times, want 10:\n%s", len(runs), strings.Join(runs, "\n"))
+	if len(runs) != 7 {
+		t.Errorf("the tool ran %d times, want 7:\n%s", len(runs), strings.Join(runs, "\n"))
 	}
 	for _, run := range runs {
 		if !strings.HasSuffix(run, "nop") || strings.Contains(run, "reboot") {
@@ -365,6 +368,20 @@ func TestThePortCheckFailsWhenABadRIDIsNotRefused(t *testing.T) {
 		if !strings.HasSuffix(run, "nop") {
 			t.Errorf("the port check ran the tool with %q", run)
 		}
+	}
+}
+
+// A tool that fails on a connected port is a failed check, though the
+// controller answers 200 with what it saw of the port.
+func TestThePortCheckFailsWhenTheToolFailsThroughTheController(t *testing.T) {
+	m, _ := portsMini(t, strings.Replace(strictTool, `0|2) echo`, `2) echo "IOKit says no"; exit 1 ;;
+  0) echo`, 1))
+	out := m.refused("ports")
+	if !strings.Contains(out, "FAIL  RID 2: the tool failed on a connected port") || !strings.Contains(out, "IOKit says no") {
+		t.Errorf("a tool that fails through the controller passed:\n%s", out)
+	}
+	if strings.Contains(out, "FAIL  RID 1") || strings.Contains(out, "FAIL  RID 0") {
+		t.Errorf("a port with nothing on it, or a good one, failed the check:\n%s", out)
 	}
 }
 

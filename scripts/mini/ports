@@ -4,8 +4,9 @@
 #   sudo scripts/mini/ports [--tool FILE]
 #
 # For each port (RID 0 is the middle one, 1 the left, 2 the right, facing the
-# back): what the mini sees on it, the reset tool's own answer, and the
-# Out-of-band controller's. Then the tool is given four bad RIDs (none, not a
+# back): what the mini sees on it and the reset tool's answer, asked through
+# the Out-of-band controller while it runs, so that the tool is never run
+# twice at once. Then the tool is given four bad RIDs (none, not a
 # number, negative, no such port) and the controller one, and each must be
 # refused. Last, the controller must run under launchd and listen on this
 # machine only. Nothing is reset: the one command the tool is ever given
@@ -19,7 +20,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/lib.sh
 . "$here/lib.sh"
 
-usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 tool="$RESET_TOOL"
 while (( $# )); do
@@ -76,7 +77,16 @@ absent() {
   echo "$n"
 }
 
-echo "The ports, as the mini sees them and as the reset tool answers (nop):"
+# A running controller alone gives the tool a port: its lock is what keeps
+# two runs of the tool apart.
+controller=0
+if loaded "$OOBD_LABEL"; then controller=1; fi
+
+if (( controller )); then
+  echo "The ports, as the mini sees them:"
+else
+  echo "The ports, as the mini sees them and as the reset tool answers (nop):"
+fi
 for rid in "${RIDS[@]}"; do
   IFS='|' read -r name active plugs uuid transports product <<<"$(seen "$rid")"
   if [[ -z $name ]]; then
@@ -88,6 +98,7 @@ for rid in "${RIDS[@]}"; do
   else
     good "RID $rid ($name): nothing connected, plug count $plugs"
   fi
+  (( ! controller )) || continue
   out="$("$tool" --rid "$rid" nop 2>&1)"
   code=$?
   if [[ $active == Yes && $code != 0 ]]; then
@@ -123,7 +134,7 @@ refused "a RID with no such port ($none)" --rid "$none" nop
 
 echo
 echo "The Out-of-band controller:"
-if ! launchctl print "system/$OOBD_LABEL" >/dev/null 2>&1; then
+if (( ! controller )); then
   bad "$OOBD_LABEL is not loaded: scripts/mini/setup starts it once a build is Deployed"
 elif [[ ! -s $OOBD_TOKEN ]]; then
   bad "no token at $OOBD_TOKEN: scripts/mini/setup makes it"
@@ -137,7 +148,10 @@ else
   }
   for rid in "${RIDS[@]}"; do
     answer="$(ask "/v1/ports/$rid/status?probe=1")"
-    if [[ "$(tail -n 1 <<<"$answer")" == 200 ]]; then
+    IFS='|' read -r _ active _ <<<"$(seen "$rid")"
+    if [[ "$(tail -n 1 <<<"$answer")" == 200 && $active == Yes && $answer == *'"tool_failed":true'* ]]; then
+      bad "RID $rid: the tool failed on a connected port: $(sed '$d' <<<"$answer" | tr -d '\n')"
+    elif [[ "$(tail -n 1 <<<"$answer")" == 200 ]]; then
       good "RID $rid: $(sed '$d' <<<"$answer" | tr -d '\n')"
     else
       bad "RID $rid: the controller answered $(tail -n 1 <<<"$answer")"
