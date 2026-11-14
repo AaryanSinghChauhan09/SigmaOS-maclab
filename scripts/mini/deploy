@@ -1,0 +1,184 @@
+#!/bin/bash
+# Deploy a Lab release on the mini:
+#
+#   sudo scripts/mini/deploy [--dry-run] [--from URL] vX.Y.Z[-rc.N]
+#
+# Downloads the server bundle and its .sig, checks it against the release key
+# pinned on the mini, unpacks it beside the running build, switches to it,
+# restarts labd (never the mini) and verifies labd on this machine. When that
+# check fails it puts the previous build back by itself. The last three
+# builds are kept. It names an exact version: never "latest". It touches no
+# tool: those change in a Maintenance run. Needs only what macOS has.
+#
+#   --dry-run   download and check the bundle, then say what would change
+#   --from URL  where the two files are, instead of that tag's GitHub Release:
+#               https://..., or file:///a/folder on this machine
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+
+usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+from=""
+tag=""
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --from) [[ $# -ge 2 ]] || usage; from="$2"; shift ;;
+    -h | --help) usage ;;
+    -*) usage ;;
+    *) [[ -z $tag ]] || usage; tag="$1" ;;
+  esac
+  shift
+done
+[[ $tag != latest ]] || fail 'name an exact version, such as v0.2.0 or v0.2.0-rc.1: "latest" is never Deployed'
+[[ $tag =~ $RELEASE_TAG ]] || fail "\"$tag\" is not a Lab release's tag: vX.Y.Z or vX.Y.Z-rc.N"
+from="${from:-$RELEASE_URL/$tag}"
+(( DRY )) || need_root
+[[ -s $LAB_SIGNERS ]] || fail "no release key is pinned at $LAB_SIGNERS: run scripts/mini/setup --release-key FILE first"
+
+plist="$LAUNCHD_DIR/$LABD_LABEL.plist"
+work="$(mktemp -d "${TMPDIR:-/tmp}/lab-deploy.XXXXXX")"
+lock=""
+stage=""
+# shellcheck disable=SC2317,SC2329
+cleanup() {
+  rm -rf "$work"
+  [[ -z $stage ]] || rm -rf "$stage"
+  [[ -z $lock ]] || rmdir "$lock" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# running: the tag of the build labd runs from, or nothing.
+running() {
+  if [[ -L $LAB_CURRENT ]]; then basename "$(readlink "$LAB_CURRENT")"; fi
+}
+
+loaded() { launchctl print "system/$LABD_LABEL" >/dev/null 2>&1; }
+
+stop_labd() {
+  local n
+  loaded || return 0
+  launchctl bootout "system/$LABD_LABEL" 2>/dev/null || true
+  for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    loaded || return 0
+    sleep 1
+  done
+  fail "labd did not stop ($n s): nothing was switched"
+}
+
+# switch_to TAG: stop labd, point the mini at that build, start labd from it
+# under the build's own LaunchDaemon file.
+switch_to() {
+  stop_labd
+  ln -sfn "builds/$1" "$LAB_CURRENT"
+  touch "$LAB_BUILDS/$1"
+  cp "$LAB_BUILDS/$1/deploy/$LABD_LABEL.plist" "$plist"
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$plist"
+  chmod 0644 "$plist"
+  launchctl enable "system/$LABD_LABEL" || true
+  launchctl bootstrap system "$plist" || say "launchd did not take $plist"
+}
+
+answers() { [[ "$(curl -fsS --max-time 5 "$@" 2>/dev/null)" == ok ]]; }
+
+# verify: launchd runs labd, and it answers on its loopback port and on the
+# tunnel's socket. A binary that cannot run on this machine fails here.
+verify() {
+  local n
+  for (( n = ${LAB_VERIFY_TRIES:-30}; n > 0; n-- )); do
+    if loaded && answers "http://$LABD_LISTEN/healthz" &&
+      answers --unix-socket "$LABD_SOCKET" -H 'X-Forwarded-Proto: https' "http://$LAB_HOST/healthz"; then
+      return 0
+    fi
+    sleep 1
+  done
+  loaded || say "launchd does not have $LABD_LABEL loaded"
+  answers "http://$LABD_LISTEN/healthz" || say "labd does not answer at http://$LABD_LISTEN/healthz"
+  answers --unix-socket "$LABD_SOCKET" -H 'X-Forwarded-Proto: https' "http://$LAB_HOST/healthz" || say "labd does not answer on $LABD_SOCKET"
+  if [[ -f $LABD_LOG ]]; then
+    say "the end of $LABD_LOG:"
+    tail -n 20 "$LABD_LOG" | sed 's/^/    /'
+  fi
+  return 1
+}
+
+# The last three builds stay; the running one always does.
+prune() {
+  local n=0 b now
+  now="$(running)"
+  # shellcheck disable=SC2012
+  ls -1t "$LAB_BUILDS" | while read -r b; do
+    n=$((n + 1))
+    if (( n > 3 )) && [[ $b != "$now" ]]; then
+      rm -rf "${LAB_BUILDS:?}/$b"
+      say "removed the build $b: the last three are kept"
+    fi
+  done
+}
+
+previous="$(running)"
+if [[ $previous == "$tag" ]]; then
+  if verify; then
+    say "$tag is already the running build, and labd answers"
+    exit 0
+  fi
+  fail "$tag is already the running build, and labd does not answer: Deploy another version"
+fi
+
+fetch "$from/$RELEASE_BUNDLE" "$work/$RELEASE_BUNDLE" || fail "could not download $from/$RELEASE_BUNDLE"
+fetch "$from/$RELEASE_BUNDLE.sig" "$work/$RELEASE_BUNDLE.sig" || fail "could not download $from/$RELEASE_BUNDLE.sig: a bundle with no signature is not installed"
+verified "$work/$RELEASE_BUNDLE" || fail "$RELEASE_BUNDLE does not match its signature by the release key pinned on this machine ($LAB_SIGNERS): nothing was changed"
+say "$RELEASE_BUNDLE matches its signature by the pinned release key"
+
+if (( DRY )); then
+  stage="$work/unpacked"
+else
+  mkdir -p "$LAB_BUILDS"
+  mkdir "$LAB_ROOT/.deploying" 2>/dev/null || fail "another Deploy is running ($LAB_ROOT/.deploying)"
+  lock="$LAB_ROOT/.deploying"
+  rm -rf "$LAB_BUILDS"/.incoming.*
+  stage="$LAB_BUILDS/.incoming.$$"
+fi
+mkdir "$stage"
+tar -xpzf "$work/$RELEASE_BUNDLE" -C "$stage" --no-same-owner
+new="$stage/lab-server"
+[[ -f $new/VERSION ]] || fail "the bundle has no VERSION"
+[[ "$(<"$new/VERSION")" == "$tag" ]] || fail "the bundle is $(<"$new/VERSION"), not $tag: nothing was changed"
+[[ -x $new/bin/labd ]] || fail "the bundle has no bin/labd"
+[[ -f $new/deploy/$LABD_LABEL.plist ]] || fail "the bundle has no LaunchDaemon file for labd"
+
+if (( DRY )); then
+  say "would unpack $tag to $LAB_BUILDS/$tag"
+  say "would switch $LAB_CURRENT from ${previous:-nothing} to $tag"
+  say "would restart $LABD_LABEL under $plist"
+  say "would verify labd at http://$LABD_LISTEN/healthz and on $LABD_SOCKET, and put ${previous:-nothing} back if it does not answer"
+  exit 0
+fi
+
+chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$new"
+chmod -R ug-s,go-w "$new"
+rm -rf "${LAB_BUILDS:?}/$tag"
+mv "$new" "$LAB_BUILDS/$tag"
+say "unpacked $tag to $LAB_BUILDS/$tag"
+
+switch_to "$tag"
+if verify; then
+  prune
+  say "Deployed $tag: labd answers on its loopback port and its socket${previous:+; $previous is kept as the way back}"
+  exit 0
+fi
+
+say "labd of $tag failed its check"
+if [[ -n $previous ]]; then
+  switch_to "$previous"
+  rm -rf "${LAB_BUILDS:?}/$tag"
+  verify || fail "$tag was not Deployed, and $previous, put back, does not answer either: the lab is Dark"
+  fail "$tag was not Deployed: $previous is back and answers"
+fi
+stop_labd
+rm -f "$LAB_CURRENT" "$plist"
+rm -rf "${LAB_BUILDS:?}/$tag"
+fail "$tag was not Deployed: there was no build before it, so labd is stopped"
