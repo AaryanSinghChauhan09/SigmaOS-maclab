@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/testhome"
 )
 
 var execArgs = api.ExecArgs{Command: "true"}
@@ -20,15 +21,13 @@ var execArgs = api.ExecArgs{Command: "true"}
 // No test of the client reads or writes the config directory of whoever
 // runs the tests: the package has a home of its own.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "lab-client-tests-home")
-	if err != nil {
-		panic(err)
+	testhome.Main(m)
+}
+
+func TestTheTestsLoginIsKeptInTheirOwnHome(t *testing.T) {
+	if rest, err := filepath.Rel(testhome.Dir(), LoginPath()); testhome.Dir() == "" || err != nil || strings.HasPrefix(rest, "..") {
+		t.Fatalf("the tests keep lab's login at %s, outside their own home %q", LoginPath(), testhome.Dir())
 	}
-	os.Setenv("HOME", dir)
-	os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
 }
 
 // home gives the test a config directory of its own and no MACLAB_*

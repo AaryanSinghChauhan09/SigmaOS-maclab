@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+
+	"github.com/omacom/omarchy-maclab/internal/testhome"
 )
 
 // The package's tests wait on real clocks: one after another they take over
@@ -37,6 +39,12 @@ func (named) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func TestMain(m *testing.M) {
+	// No test reads or writes the home of whoever runs the tests. The copies
+	// of this binary share the home the first one made.
+	exit := os.Exit
+	if os.Getenv("LAB_TEST_SHARD") == "" {
+		exit = testhome.Set()
+	}
 	http.DefaultClient.Transport = named{}
 	// macOS keeps its temporary folder behind a symlink (/var), and the code
 	// under test refuses paths with a symlink among their ancestors.
@@ -52,11 +60,11 @@ func TestMain(m *testing.M) {
 	flag.Parse()
 	n := shards()
 	if n < 2 {
-		os.Exit(m.Run())
+		exit(m.Run())
 	}
 	names, err := testNames()
 	if err != nil || len(names) < n {
-		os.Exit(m.Run())
+		exit(m.Run())
 	}
 	// This process runs every 2n-th test, so that its own result, test log and
 	// timeout are real ones; n-1 copies take the rest one test at a time,
@@ -130,7 +138,7 @@ func TestMain(m *testing.M) {
 		code = 1
 		fmt.Printf("FAIL in their own processes: %s\n", strings.Join(failed, " "))
 	}
-	os.Exit(code)
+	exit(code)
 }
 
 func shards() int {

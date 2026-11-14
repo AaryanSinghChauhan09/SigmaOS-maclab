@@ -8,26 +8,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/omacom/omarchy-maclab/internal/client"
+	"github.com/omacom/omarchy-maclab/internal/testhome"
 )
 
 // No test of lab reads or writes the config directory of whoever runs the
 // tests: the package has a home of its own, and each test that logs in a
 // fresh one.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "lab-tests-home")
-	if err != nil {
-		panic(err)
-	}
-	os.Setenv("HOME", dir)
-	os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
+	testhome.Main(m)
 }
 
 // aLab answers as Omarchy Mac Lab does to the Lab token lab_good, and says
