@@ -600,3 +600,124 @@ func TestTheComparisonAndEveryScoreDownloadUnderCC0(t *testing.T) {
 		t.Error("the median of two machines")
 	}
 }
+
+// What tester_gating_test.rb asks: Verified runs colour the matrix on their
+// own, and a candidate set's page shows what they found per model and
+// feature. Its case of a person taken off the list is not carried: a report
+// keeps the verdict stamped when it came.
+func m2Summary(t *testing.T, l *publicLab, feature string) *node {
+	t.Helper()
+	return summaryCell(t, l.page("/matrix"), feature, "converged")
+}
+
+func TestVerifiedRunsColourTheMatrixOnTheirOwnAndOutweighCommunityRuns(t *testing.T) {
+	gpuFails := []string{"gpu.driver", "fails", "gpu.vulkan", "fails"}
+
+	// One Verified run colours the cell on its own; a Community run does not.
+	l := newPublicLab(t, nil)
+	l.add(goldenDoc(t, "m2-max-image2"), "a")
+	if got := m2Summary(t, l, "gpu").attr("data-state"); got != "unconfirmed" {
+		t.Errorf("one Community run: %q", got)
+	}
+	l = newPublicLab(t, nil)
+	l.add(goldenDoc(t, "m2-max-image2"), "verified:a")
+	gpu := m2Summary(t, l, "gpu")
+	if gpu.attr("data-state") != "works" || gpu.attr("data-verified") != "tester" || !strings.Contains(gpu.attr("class"), "cell-works cell-tester") ||
+		!strings.Contains(gpu.attr("title"), "works: verified, 1 verified machine works") {
+		t.Errorf("one Verified run: %v", gpu.attrs)
+	}
+	for _, row := range rowsOf(l.exported("/api/v1/matrix.json"), "rows") {
+		if row["board"] == m2Board {
+			same(t, "matrix.json's cell", at(row, "cells", "gpu"), any(doc{"state": "works", "tentative": "works", "machines": doc{"works": 1.0}, "tester_machines": doc{"works": 1.0}}))
+		}
+	}
+
+	// Verified runs outweigh Community runs; a newer Verified pass retires an older Verified failure.
+	l = newPublicLab(t, nil)
+	l.add(goldenWith(t, "m2-max-image2", gpuFails...), "verified:a")
+	l.add(goldenDoc(t, "m2-max-image2"), "b")
+	l.add(goldenDoc(t, "m2-max-image2"), "c")
+	if gpu = m2Summary(t, l, "gpu"); gpu.attr("data-state") != "fails" || !strings.Contains(gpu.attr("title"), "; 3 machines in all") {
+		t.Errorf("a Verified failure against two Community passes: %v", gpu.attrs)
+	}
+	l.add(goldenDoc(t, "m2-max-image2"), "verified:d")
+	if got := m2Summary(t, l, "gpu").attr("data-state"); got != "works" {
+		t.Errorf("after a newer Verified pass: %q", got)
+	}
+
+	// A newer Verified failure stands: an older pass doesn't retire it, so the machines disagree.
+	l = newPublicLab(t, nil)
+	l.add(goldenDoc(t, "m2-max-image2"), "verified:a")
+	l.add(goldenWith(t, "m2-max-image2", gpuFails...), "verified:d")
+	if got := m2Summary(t, l, "gpu").attr("data-state"); got != "partial" {
+		t.Errorf("a newer Verified failure: %q", got)
+	}
+	// A machine that fails after it passed can't retire another machine's failure.
+	l.add(goldenWith(t, "m2-max-image2", gpuFails...), "verified:a")
+	if got := m2Summary(t, l, "gpu").attr("data-state"); got != "regression" {
+		t.Errorf("both machines failing after a pass: %q", got)
+	}
+
+	// A machine's latest run decides: a Community run after its Verified run takes the colour away.
+	l = newPublicLab(t, nil)
+	l.add(goldenDoc(t, "m2-max-image2"), "verified:a")
+	l.store("later", goldenWith(t, "m2-max-image2", gpuFails...), "key:verified:a", l.at, false)
+	if gpu = m2Summary(t, l, "gpu"); gpu.attr("data-state") != "unconfirmed" || gpu.attr("data-verified") != "" {
+		t.Errorf("a Community run after the machine's Verified run: %v", gpu.attrs)
+	}
+}
+
+func TestACandidateSetsPageShowsWhatVerifiedRunsFoundPerModelAndFeature(t *testing.T) {
+	const set = "edge-2026.09.27"
+	gpuFails := []string{"gpu.driver", "fails", "gpu.vulkan", "fails"}
+
+	// Only Community runs: the set waits.
+	l := newPublicLab(t, nil)
+	first := l.add(onSet(goldenDoc(t, "m2-max-image2"), set), "a")
+	l.add(onSet(goldenDoc(t, "m2-max-image2"), set), "b")
+	if l.page("/candidates").count(t, `tr.candidate-row[id="candidate-`+set+`"][data-verdict="waiting"]`) != 1 {
+		t.Error("the list does not show the set waiting")
+	}
+	page := l.page("/candidates/" + set)
+	if !page.hasText(t, "#verdict", "Waiting") || page.count(t, "tr.matrix-row") != 0 || page.count(t, "tr.report-row") != 2 {
+		t.Error("a set with Community runs only")
+	}
+	// The report's page links its candidate set.
+	if !l.page("/reports/"+first).hasText(t, `a[href="/candidates/`+set+`"]`, set) {
+		t.Error("the report does not link its set")
+	}
+	// Hidden reports don't count.
+	l.exec(`UPDATE reports SET hidden_at = ?`, l.at.UnixMicro())
+	if l.status("/candidates/"+set) != 404 || l.page("/candidates").count(t, "tr.candidate-row") != 0 {
+		t.Error("hidden reports still make a set")
+	}
+
+	// Verified runs with every feature working: the view is per model and feature, Verified runs only.
+	l = newPublicLab(t, nil)
+	l.add(onSet(working(t, "m2-max-image2"), set), "verified:a")
+	l.add(onSet(goldenWith(t, "m2-max-image2", gpuFails...), set), "b")
+	l.add(goldenWith(t, "m2-max-image2", gpuFails...), "verified:a")
+	page = l.page("/candidates/" + set)
+	if !page.hasText(t, `#verdict[data-verdict="ready"]`, "Passing: Verified runs on 1 model, nothing failing") {
+		t.Errorf("the verdict: %q", page.sole(t, "#verdict").words())
+	}
+	if page.count(t, `tr.matrix-row[data-board="`+m2Board+`"] td[data-feature="gpu"][data-state="works"][data-verified="tester"]`) != 1 ||
+		page.count(t, "tr.report-row") != 2 || page.count(t, "tr.report-row .badge-tester") != 1 {
+		t.Error("the set's matrix or its runs")
+	}
+
+	// A Verified failure blocks the set and is listed.
+	l = newPublicLab(t, nil)
+	l.add(onSet(working(t, "m2-max-image2"), set), "verified:a")
+	l.add(onSet(working(t, "m1-pro-mx-mac", gpuFails...), set), "verified:b")
+	page = l.page("/candidates/" + set)
+	if !page.hasText(t, `#verdict[data-verdict="blocked"]`, "Failing: 1 failure, 0 regressions") || page.count(t, `#failures li.finding[data-state="fails"]`) != 1 {
+		t.Errorf("the verdict: %q", page.sole(t, "#verdict").words())
+	}
+	if finding := page.sole(t, "#failures li.finding").words(); !strings.Contains(finding, "MacBook Pro") || !strings.Contains(finding, "GPU") {
+		t.Errorf("the finding: %q", finding)
+	}
+	if l.page("/candidates").count(t, `tr.candidate-row[data-verdict="blocked"]`) != 1 {
+		t.Error("the list does not show the set failing")
+	}
+}
