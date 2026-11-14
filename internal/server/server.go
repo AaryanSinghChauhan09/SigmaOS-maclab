@@ -202,6 +202,10 @@ type Server struct {
 	// cables are the Sightings: which Lab-owned Mac is on which of the
 	// Out-of-band controller's ports (see sighting.go).
 	cables *cables
+
+	// execRecorded, which only a test sets, runs once a lab exec's line is
+	// in the Exec record and before its command is queued for the Mac.
+	execRecorded func()
 }
 
 // clock is where labd reads time: Config.Clock, or the wall clock when unset.

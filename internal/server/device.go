@@ -607,6 +607,15 @@ func (v *dev) sendFor(c caller, kind, job string, args any) string {
 // now): no other boot ever gets the command. It returns the command's ID
 // and that boot.
 func (v *dev) sendForBoot(c caller, boot, kind, job string, args any) (string, string) {
+	id, boot, _ := v.sendIf(c, boot, kind, job, args, nil)
+	return id, boot
+}
+
+// sendIf is sendForBoot for a command that goes only while may, when
+// given, finds no reason against it. may is asked in the hold of v.mu that
+// queues the command, so nothing changes between the two; on its refusal
+// nothing is queued.
+func (v *dev) sendIf(c caller, boot, kind, job string, args any, may func() error) (string, string, error) {
 	maintainer := orStr(c.maintainer, c.team) // the handle of whoever asked, in the field the agent has
 	if maintainer == "" && c.login == "" && job != "" {
 		if j, err := v.s.store.job(job); err == nil {
@@ -616,6 +625,12 @@ func (v *dev) sendForBoot(c caller, boot, kind, job string, args any) (string, s
 	b, _ := json.Marshal(args)
 	cmd := api.Command{ID: nextCmdID(), Kind: kind, JobID: job, Maintainer: maintainer, VolunteerLogin: c.login, Args: b}
 	v.mu.Lock()
+	defer v.mu.Unlock()
+	if may != nil {
+		if err := may(); err != nil {
+			return "", "", err
+		}
+	}
 	v.grantLocked(cmd)
 	v.pending = append(v.pending, cmd)
 	if boot == "" {
@@ -623,8 +638,7 @@ func (v *dev) sendForBoot(c caller, boot, kind, job string, args any) (string, s
 	}
 	v.target[cmd.ID] = boot
 	v.bump()
-	v.mu.Unlock()
-	return cmd.ID, boot
+	return cmd.ID, boot, nil
 }
 
 // waitFor blocks until cond (called with mu held) returns true, the timeout
@@ -727,10 +741,23 @@ func (v *dev) callNote(ctx context.Context, kind, job string, args any, timeout 
 // command goes out, the command is lost: a test labd sends for a Lab boot
 // that has already gone down must not run on the boot that replaced it.
 func (v *dev) callNoteOn(ctx context.Context, boot, kind, job string, args any, timeout time.Duration, out any, note func(string)) error {
+	return v.callWhile(ctx, boot, kind, job, args, timeout, out, note, nil)
+}
+
+// callIf is call for a command that goes only while may finds no reason
+// against it (see sendIf): its refusal is returned, and nothing was sent.
+func (v *dev) callIf(ctx context.Context, kind, job string, args any, timeout time.Duration, out any, may func() error) error {
+	return v.callWhile(ctx, "", kind, job, args, timeout, out, nil, may)
+}
+
+func (v *dev) callWhile(ctx context.Context, boot, kind, job string, args any, timeout time.Duration, out any, note func(string), may func() error) error {
 	v.mu.Lock()
 	name := v.d.Name
 	v.mu.Unlock()
-	id, boot := v.sendForBoot(callerOfCtx(ctx), boot, kind, job, args)
+	id, boot, err := v.sendIf(callerOfCtx(ctx), boot, kind, job, args, may)
+	if err != nil {
+		return err
+	}
 	deadline := v.s.now().Add(timeout)
 	var (
 		res            api.CommandResult

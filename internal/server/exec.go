@@ -40,36 +40,56 @@ func (s *Server) hExec(w http.ResponseWriter, r *http.Request) {
 		err = refuse(409, "%s is offline, and lab exec reaches a Mac only through lab-agent. %s", name, api.NoSerialConsole)
 	}
 	// The request is a session of the Lease before the Lease is asked for
-	// once more: one that ended since the fence passed either shows here or
+	// again: one that ended since the fence passed either shows here or
 	// cuts the session.
 	session, done := s.underLease(r, v, p)
 	defer done()
+	ended := func() error {
+		return refuse(409, "your Lease on %s ended as this command arrived, so it was not sent: `lab lease %s`", name, name)
+	}
 	if err == nil && (session == r || !s.holdsLease(v, p)) {
-		err = refuse(409, "your Lease on %s ended as this command arrived, so it was not sent: `lab lease %s`", name, name)
+		err = ended()
 	}
 	if err != nil {
 		s.execRefused(v, p, a.Command, err)
 		httpErr(w, statusOf(err), "%v", err)
 		return
 	}
-	ended, err := s.execSent(v, p, a.Command)
+	record, err := s.execSent(v, p, a.Command)
 	if err != nil {
 		httpErr(w, statusOf(err), "%v", err)
 		return
 	}
+	if s.execRecorded != nil {
+		s.execRecorded()
+	}
+	// Writing the line took time, and the Lease is asked for a last time in
+	// the moment the command is queued: the Mac's agent takes nothing that
+	// was queued after the Lease ended or the session was cut.
+	stillLeased := func() error {
+		switch l := v.liveLeaseLocked(); {
+		case r.Context().Err() != nil:
+			return errNotSent{errors.New("its caller left before it was sent")}
+		case l == nil || !leaseIsOf(l, p) || session.Context().Err() != nil:
+			return errNotSent{ended()}
+		}
+		return nil
+	}
 	s.held(w, r, func() (any, error) {
 		res := api.ExecResult{Via: "agent"}
-		if err := v.call(session.Context(), api.CmdExec, "", a, time.Duration(a.TimeoutSec+30)*time.Second, &res); err != nil {
-			err = leaseCut(session, r, v, err)
-			if r.Context().Err() != nil {
-				ended(nil, errors.New("its caller left before the Mac answered"))
-			} else {
-				ended(nil, err)
+		if err := v.callIf(session.Context(), api.CmdExec, "", a, time.Duration(a.TimeoutSec+30)*time.Second, &res, stillLeased); err != nil {
+			switch {
+			case errors.As(err, new(errNotSent)):
+			case r.Context().Err() != nil:
+				err = errors.New("its caller left before the Mac answered")
+			default:
+				err = leaseCut(session, r, v, err)
 			}
+			record(nil, err)
 			return nil, err
 		}
 		res.Via = "agent"
-		ended(&res, nil)
+		record(&res, nil)
 		return res, nil
 	})
 }

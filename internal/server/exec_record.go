@@ -8,6 +8,7 @@ package server
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -103,6 +104,13 @@ func (s *Server) execRefused(v *dev, p Person, command string, why error) {
 	}
 }
 
+// errNotSent is a command whose line the Exec record already had when its
+// Lease was found ended: it never went to the Mac, and the line ends as
+// refused.
+type errNotSent struct{ error }
+
+func (e errNotSent) Unwrap() error { return e.error }
+
 // execSent records p's command as it goes to v, and returns what records
 // how it ended. A command whose line cannot be written is not sent: no
 // lab exec runs outside the record.
@@ -116,9 +124,12 @@ func (s *Server) execSent(v *dev, p Person, command string) (ended func(*api.Exe
 	}
 	return func(res *api.ExecResult, failed error) {
 		var err error
-		if failed != nil {
+		switch {
+		case errors.As(failed, new(errNotSent)):
+			err = s.store.endExec(id, api.ExecRefused, 0, 0, failed.Error())
+		case failed != nil:
 			err = s.store.endExec(id, api.ExecLost, 0, s.since(e.Time).Seconds(), failed.Error())
-		} else {
+		default:
 			err = s.store.endExec(id, api.ExecRan, res.ExitCode, res.Seconds, "")
 		}
 		if err != nil {

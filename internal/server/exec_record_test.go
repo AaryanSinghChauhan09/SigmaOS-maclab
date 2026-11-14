@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -139,6 +140,62 @@ func TestAnExecWhoseAnswerNeverCameIsRecorded(t *testing.T) {
 	got := execLines(t, l.s, l.name)
 	if len(got) != 1 || got[0].State != api.ExecLost || got[0].ExitCode != nil || got[0].Command != "sleep 600" || !strings.Contains(got[0].Why, "Lease on "+l.name+" ended") {
 		t.Fatalf("the Exec record of a cut exec: %+v", got)
+	}
+}
+
+// A Lease that ends while the Exec record's line is written leaves nothing
+// to run: the command is queued for the Mac only in the moment that finds
+// the Lease still its person's and their session not cut. The line that
+// said it was going ends as refused.
+func TestAnExecIsNotQueuedOnceItsLeaseEnded(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	grace := l.member("grace")
+	v := l.s.dev(l.name)
+	var reached atomic.Int32
+	l.sim.OnExec = func(string) (string, bool) {
+		reached.Add(1)
+		return "", false
+	}
+	ends := []struct {
+		when string
+		end  func()
+	}{
+		// What endLease leaves for a moment: the Lease gone, its line not
+		// yet in the Lease record, the holder's sessions not yet cut.
+		{"gone-not-cut", func() {
+			v.mu.Lock()
+			v.d.Lease = nil
+			v.mu.Unlock()
+		}},
+		{"released", func() {
+			if r, body := l.as(grace.Token, "DELETE", "/api/devices/"+l.name+"/lease", nil); r.StatusCode != 200 {
+				t.Errorf("grace releasing: %s %s", r.Status, body)
+			}
+		}},
+	}
+	for _, c := range ends {
+		l.leaseAs(grace, 0)
+		l.s.execRecorded = c.end
+		r, body := l.execAs(grace, "id "+c.when)
+		l.s.execRecorded = nil
+		if r.StatusCode != http.StatusConflict || !strings.Contains(body, "it was not sent") {
+			t.Errorf("an exec whose Lease ended (%s) before it was queued: %s %s", c.when, r.Status, body)
+		}
+	}
+	// Long enough for the Mac to have taken a command that was queued.
+	time.Sleep(1500 * time.Millisecond)
+	if n := reached.Load(); n != 0 {
+		t.Errorf("%d commands reached the Mac after their Lease ended", n)
+	}
+	got := execLines(t, l.s, l.name)
+	if len(got) != len(ends) {
+		t.Fatalf("the Exec record has %d lines, want %d: %+v", len(got), len(ends), got)
+	}
+	for i, e := range got {
+		if e.State != api.ExecRefused || e.ExitCode != nil || e.Command != "id "+ends[i].when || !strings.Contains(e.Why, "Lease on "+l.name+" ended") {
+			t.Errorf("the Exec record of an exec whose Lease ended (%s) before it was queued: %+v", ends[i].when, e)
+		}
 	}
 }
 
