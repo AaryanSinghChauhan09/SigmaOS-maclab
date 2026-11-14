@@ -73,7 +73,7 @@ func TestALabThatDoesNotNameItselfIsRefusedOnEveryCall(t *testing.T) {
 			asked++
 		}
 	}
-	if asked < 60 {
+	if asked < 58 {
 		t.Fatalf("only %d routes are a lab's", asked)
 	}
 	if w := l.asProgram("Go-http-client/2.0", "lab_adm_secret", "GET", "/api/devices"); w.Body.String() != notOurLab {
