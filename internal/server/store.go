@@ -186,17 +186,37 @@ func (s *store) activateAndSave(hash, keyHash string, now time.Time, d *api.Devi
 // revokeTokens deletes the enrollment tokens for a name, used or not, and
 // says how many there were.
 func (s *store) revokeTokens(name string) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM tokens WHERE name=?`, name)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.dropTokens(name)
 }
 
 // spendTokens uses up the enrollment tokens for a name: its Mac has checked in.
 func (s *store) spendTokens(name string) error {
-	_, err := s.db.Exec(`DELETE FROM tokens WHERE name=?`, name)
+	_, err := s.dropTokens(name)
 	return err
+}
+
+// dropTokens deletes the tokens for a name with what was kept beside them
+// (see join_commands), and says how many tokens there were.
+func (s *store) dropTokens(name string) (int64, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM tokens WHERE name=?`, name)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		if _, err := tx.Exec(dropOrphans); err != nil {
+			return 0, err
+		}
+	}
+	return n, tx.Commit()
 }
 
 func (s *store) saveJob(j *api.Job) error {
