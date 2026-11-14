@@ -465,6 +465,18 @@ func TestTheCheckNamesWhatIsNotAsTheSetUpLeavesIt(t *testing.T) {
 		{"the previous copy can be written by another account", 0, func() func() {
 			return chmod(tools+"/previous/cloudflared/bin", 0o775)
 		}, "FAIL  the previous copy, the way back after a bad upgrade"},
+		{"a file of the copy leads back to Homebrew", 1, func() func() {
+			return file(tools+"/current/restic/bin/wrapper", "#!/bin/sh\nexec /opt/homebrew/opt/restic/bin/restic \"$@\"\n", 0o755)
+		}, "restic/bin/wrapper names Homebrew's folder (/opt/homebrew/opt/restic/bin/restic)"},
+		{"a link of the previous copy leaves it", 1, func() func() {
+			if err := os.Symlink("/usr/lib", tools+"/previous/restic/lib"); err != nil {
+				t.Fatal(err)
+			}
+			return func() { os.Remove(tools + "/previous/restic/lib") }
+		}, "FAIL  the previous copy, the way back after a bad upgrade, "},
+		{"a key of a known shape is an argument", 2, func() func() {
+			return fact("ps", "/sbin/launchd\n/usr/local/lab/tools/current/tailscale/bin/tailscale up --auth-key=tskey-auth-kMadeUp11CNTRL-onlyATest\n")
+		}, "FAIL  a secret is an argument of: /usr/local/lab/tools/current/tailscale/bin/tailscale"},
 		{"a formula is not installed", 0, func() func() {
 			os.Rename(w.path("opt/homebrew/opt/cloudflared"), w.path("opt/homebrew/opt/away"))
 			return func() { os.Rename(w.path("opt/homebrew/opt/away"), w.path("opt/homebrew/opt/cloudflared")) }

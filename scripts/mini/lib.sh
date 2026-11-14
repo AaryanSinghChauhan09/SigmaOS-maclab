@@ -184,6 +184,58 @@ sys() {
   fi
 }
 
+# loads PROGRAM: what a Mach-O file has the loader fetch: the libraries it
+# names and the folders it has them looked for in. Its own name as a library
+# is not among them. otool comes with the Command Line Tools, which Homebrew
+# cannot be installed without.
+loads() {
+  local commands
+  commands="$(otool -l "$1" 2>/dev/null)" && [[ $commands == *"Load command 0"* && $commands != *"Unknown load command"* ]] || return 1
+  awk '$1 == "cmd" { cmd = $2 }
+    ($1 == "name" || $1 == "path") && cmd != "LC_ID_DYLIB" { sub(/^ *(name|path) /, ""); sub(/ \(offset [0-9]+\)$/, ""); print }' <<<"$commands"
+}
+
+# leans COPY: why a copy of the Homebrew tools still leads back to Homebrew,
+# or nothing when it does not. A link that leaves the copy does. So does a
+# file that names Homebrew's folder, such as a script that runs a program
+# there. A program is judged by what it loads: its own name as a library and
+# the places it was built from, which it also carries, take it nowhere. The
+# set-up refuses a copy that leans; the check looks at the copies in place.
+leans() {
+  local new="$1" real link to at="" file asked
+  real="$(cd "$new" && pwd -P)"
+  while IFS= read -r -d '' link; do
+    to="$(readlink "$link")"
+    if [[ -d $link ]]; then
+      at="$(cd "$link" 2>/dev/null && pwd -P)" || at=""
+    else
+      at="$(cd "$(dirname "$link")" && cd "$(dirname "$to")" 2>/dev/null && pwd -P)" || at=""
+    fi
+    if [[ $at != "$real" && $at != "$real"/* ]]; then
+      echo "${link#"$new"/} is a link that leaves the copy (to $to)"
+      return 0
+    fi
+  done < <(find "$new" -type l -print0)
+  while IFS= read -r -d '' file; do
+    case "$(od -An -tx1 -N4 "$file" | tr -d ' \n')" in
+      cffaedfe | cafebabe)
+        if ! asked="$(loads "$file")"; then
+          echo "${file#"$new"/} names Homebrew's folder, and otool could not say what it loads"
+          return 0
+        fi
+        asked="$(grep -F -m 1 /opt/homebrew <<<"$asked" || true)"
+        if [[ -n $asked ]]; then
+          echo "${file#"$new"/} loads from Homebrew's folder ($asked)"
+          return 0
+        fi
+        ;;
+      *)
+        echo "${file#"$new"/} names Homebrew's folder ($(grep -aoE '/opt/homebrew[A-Za-z0-9._/@+-]*' "$file" | head -n 1))"
+        return 0 ;;
+    esac
+  done < <(grep -rlF --null /opt/homebrew "$new" 2>/dev/null || true)
+}
+
 # formulae: the Homebrew formulae of deploy/homebrew-formulae, one a line.
 # The script that sources this names the folder in $deploy.
 # shellcheck disable=SC2154

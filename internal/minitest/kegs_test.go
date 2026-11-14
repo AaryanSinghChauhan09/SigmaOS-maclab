@@ -52,8 +52,9 @@ func (m *mini) keg(name, version string, files map[string]string) {
 	}
 }
 
-// theLabsKegs are the four tools of deploy/homebrew-formulae, each with the
-// files its formula installs.
+// theLabsKegs are the five tools of deploy/homebrew-formulae, each with the
+// files its formula installs. tailscale's command is the tests' stand-in,
+// since the set-up asks it whether the mini is on the tailnet.
 func (m *mini) theLabsKegs() {
 	m.t.Helper()
 	prefix := m.path("opt/homebrew")
@@ -73,6 +74,13 @@ func (m *mini) theLabsKegs() {
 	})
 	m.keg("litestream", "0.5.18", map[string]string{
 		"bin/litestream": program + "litestream 0.5.18",
+	})
+	m.keg("tailscale", "1.104.7", map[string]string{
+		"bin/tailscale":                       tailscaleStub,
+		"bin/tailscaled":                      program + "tailscaled 1.104.7",
+		"etc/bash_completion.d/tailscale":     "# bash completion for tailscale\n",
+		"homebrew.mxcl.tailscale.plist":       "<plist><string>" + prefix + "/opt/tailscale/bin/tailscaled</string></plist>\n",
+		"share/zsh/site-functions/_tailscale": "#compdef tailscale\n",
 	})
 	m.keg("restic", "0.19.1", map[string]string{
 		"bin/restic":                       program + "restic 0.19.1",
@@ -157,7 +165,7 @@ func TestTheCopyTakesTheLabsToolsAsHomebrewLaysThemOut(t *testing.T) {
 			t.Errorf("%s in the copy cannot be run: %v", name, mode(t, tool))
 		}
 	}
-	if got := read(t, tools+"/current/VERSIONS"); got != "litestream 0.5.18\ncloudflared 2026.10.1\nrestic 0.19.1\nsignal-cli 0.14.9\n" {
+	if got := read(t, tools+"/current/VERSIONS"); got != "litestream 0.5.18\ncloudflared 2026.10.1\nrestic 0.19.1\nsignal-cli 0.14.9\ntailscale 1.104.7\n" {
 		t.Errorf("VERSIONS: %q", got)
 	}
 	if !exists(tools + "/current/restic/share/man/man1/restic.1") {

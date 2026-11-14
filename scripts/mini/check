@@ -13,7 +13,8 @@
 #     system daemon, no LaunchDaemon file of any kind naming a path under
 #     Homebrew, and the Tailscale Standalone app gone;
 #   - the copy of the Homebrew tools in use and the previous one, each
-#     root's alone, with the versions in them;
+#     root's alone and leading nowhere back into Homebrew, with the versions
+#     in them;
 #   - every formula of deploy/homebrew-formulae installed, by version;
 #   - container at its pin and the reset tool's checksum;
 #   - the mini on the tailnet, tagged tag:lab, the old node gone;
@@ -31,7 +32,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 (( $# == 0 )) || usage
 need_root
@@ -96,10 +97,10 @@ open_to_others() {
   done
 }
 
-# unsealed FOLDER: the first thing in FOLDER that is not root's, that another
-# account can write, or that is a link into Homebrew.
+# unsealed FOLDER: the first thing in FOLDER that is not root's, or that
+# another account can write.
 unsealed() {
-  find "$1" \( ! -user "$ROOT_OWNER" -o \( ! -type l \( -perm -020 -o -perm -002 \) \) -o \( -type l \( -lname "$BREW_PREFIX/*" -o -lname '/opt/homebrew/*' \) \) \) -print 2>/dev/null | head -n 1
+  find "$1" \( ! -user "$ROOT_OWNER" -o \( ! -type l \( -perm -020 -o -perm -002 \) \) \) -print 2>/dev/null | head -n 1
 }
 
 daemons() {
@@ -205,17 +206,20 @@ foreign() {
 
 # copy WHICH LINK: one copy of the Homebrew tools, by the link that names it.
 copy() {
-  local dir open stray
+  local dir open stray why
   if ! dir="$(resolve "$2")" || [[ ! -d $dir || "$(dirname "$dir")" != "$(resolve "$LAB_TOOLS")" ]]; then
     bad "$1: $(shown "$2") does not lead to a folder in $(shown "$LAB_TOOLS")"
     return
   fi
   open="$(open_to_others "$dir")"
   stray="$(unsealed "$dir")"
+  why="$(leans "$dir")"
   if [[ -n $open ]]; then
     bad "$1, $(basename "$dir"): $(shown "$open") can be changed by another account than $ROOT_OWNER"
   elif [[ -n $stray ]]; then
-    bad "$1, $(basename "$dir"): $(shown "$stray") is not $ROOT_OWNER's alone, or is a link into Homebrew"
+    bad "$1, $(basename "$dir"): $(shown "$stray") is not $ROOT_OWNER's alone"
+  elif [[ -n $why ]]; then
+    bad "$1, $(basename "$dir"): $why"
   else
     good "$1, $(basename "$dir"), which only $ROOT_OWNER can write: $(tr '\n' ' ' < "$dir/VERSIONS" 2>/dev/null | sed 's/ $//')"
   fi
