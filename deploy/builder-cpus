@@ -1,0 +1,7 @@
+# The cores a build gets on the mini's Builder: 10, or 8 or 6 once the
+# Builder's gate test has missed with more (spec section 8). Every build
+# gets 16 GB. scripts/cutover/front-door/settle cores writes the number.
+# The mini's set-up gives the Builder the fewer of this and what it already
+# runs with: the cores go down by themselves, and back up only with
+# scripts/mini/setup --builder-cpus.
+10

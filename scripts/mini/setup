@@ -73,7 +73,9 @@
 #                       It is put where only root reads it, and FILE is
 #                       removed.
 #   --builder-cpus N    the cores a build gets: 10, or 8 or 6 after a failed
-#                       gate test. Every build gets 16 GB.
+#                       gate test. Every build gets 16 GB. Without it a build
+#                       gets the fewer of what deploy/builder-cpus says and
+#                       what the Builder already runs with.
 #   --builder-rootfs FILE
 #                       ArchLinuxARM-aarch64-latest.tar.gz, Arch Linux ARM's
 #                       root file system, which the package image is built
@@ -93,7 +95,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 deploy="$(cd "$here/../.." && pwd)/deploy"
 
-usage() { sed -n '2,88p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,90p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ACCOUNT=lab
 key=""
@@ -969,8 +971,12 @@ installed_cpus() {
   awk '/<string>--cpus<\/string>/ { sub(/.*<string>--cpus<\/string><string>/, ""); sub(/<.*/, ""); print; exit }' "$LAUNCHD_DIR/$BUILDER_LABEL.plist" 2>/dev/null || true
 }
 
+# deployed_cpus: the cores deploy/builder-cpus gives a build, where the
+# Builder's gate test wrote them down.
+deployed_cpus() { sed -e 's/#.*//' "$deploy/builder-cpus" 2>/dev/null | awk 'NF && !seen { print $1; seen = 1 }' || true; }
+
 builder() {
-  local user cpus pair name size tag dir watch="$LAB_CURRENT/scripts/mini/container" again=0 token_new=0
+  local user cpus settled pair name size tag dir watch="$LAB_CURRENT/scripts/mini/container" again=0 token_new=0
   local rootfs="$BUILDER_PKG_CONTEXT/$BUILDER_ROOTFS" rootfs_new=0
 
   user="$(cat "$CONTAINER_USER_FILE" 2>/dev/null || true)"
@@ -993,7 +999,19 @@ builder() {
     return 0
   fi
   [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "$CONTAINER_USER_FILE does not hold an account's name"
-  cpus="${builder_cpus:-$(installed_cpus)}"
+  # The cores go down by themselves and never back up: without the option
+  # a build gets the fewer of what deploy/ says and what the Builder
+  # already runs with.
+  settled="$(deployed_cpus)"
+  case "$settled" in
+    "" | 10 | 8 | 6) ;;
+    *) fail "deploy/builder-cpus says $settled: a build gets 10 cores, or 8 or 6" ;;
+  esac
+  cpus="$builder_cpus"
+  if [[ -z $cpus ]]; then
+    cpus="$(installed_cpus)"
+    if [[ -n $settled && ( -z $cpus || $settled -lt $cpus ) ]]; then cpus="$settled"; fi
+  fi
   cpus="${cpus:-10}"
 
   [[ ! -L $BUILDER_IO ]] || fail "$BUILDER_IO is a symbolic link (to $(readlink "$BUILDER_IO")), and the Builder's scratch folder is a folder of $ROOT_OWNER's own: nothing was written through it. Look at who put it there, remove the link and run this again"

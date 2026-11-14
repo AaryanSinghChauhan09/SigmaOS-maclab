@@ -1,6 +1,6 @@
 #!/bin/bash
-# The rules that turn the Front door's measurements into the lab's two
-# settings, and write them in deploy/ (spec section 6):
+# The rules that turn the gate tests' measurements into the lab's settings,
+# and write them in deploy/ (spec sections 6 and 8):
 #
 #   settle outside ONE FOUR DOWN
 #       The transfers from outside the house, in Mbit/s: uploads with 1 part
@@ -14,12 +14,22 @@
 #   settle transport QUIC_UP QUIC_DOWN HTTP2_UP HTTP2_DOWN
 #       The tunnel's transport: the faster for the same bytes up and down;
 #       within 10% QUIC stays. Written as protocol in deploy/cloudflared.yml.
+#   settle cores TEN EIGHT SIX
+#       The Builder's gate test at 10, 8 and 6 cores a build (spec section
+#       8). For each: the slowest 95th percentile of labd's page times
+#       while its builds ran, in milliseconds; "fail" when a build failed,
+#       a volume outgrew its size or labd gave no page at all; "-" when it
+#       was not run. The most cores that kept the pages under 100 ms are
+#       written in deploy/builder-cpus. While a smaller number is still to
+#       be run it says which and ends with status 4. When 6 did not pass
+#       either it stops with status 3: that is the owner's to look at.
+#       Nothing is written either time.
 #
 #   --deploy DIR   the folder to write in (default: this checkout's deploy/)
 #   --dry-run      say the decision, write nothing
 #
-# Every number is Mbit/s. The change is to the checkout: commit it, cut a
-# Release candidate and Deploy it for the mini to run it.
+# Every number is Mbit/s, but for cores. The change is to the checkout:
+# commit it, cut a Release candidate and Deploy it for the mini to run it.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +38,7 @@ deploy="$here/../../../deploy"
 dry=0
 args=()
 
-usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 say() { echo "$ME: $*"; }
 fail() { echo "$ME: $*" >&2; exit 1; }
 is() { awk "BEGIN { exit !($1) }"; }
@@ -39,6 +49,7 @@ while (( $# )); do
     --deploy) (( $# >= 2 )) || usage; deploy="$2"; shift ;;
     --dry-run) dry=1 ;;
     -h|--help) usage ;;
+    -) args+=("$1") ;;
     -*) fail "an option it does not take: $1. Nothing was done." ;;
     *) args+=("$1") ;;
   esac
@@ -127,6 +138,44 @@ case "$what" in
     put "$deploy/cloudflared.yml" '^protocol: [a-z0-9]+$' "protocol: $protocol"
     if [[ $protocol == quic ]]; then
       say "under QUIC the mini's set-up raises the UDP buffer limit: run scripts/mini/setup there after the Deploy"
+    fi
+    ;;
+  cores)
+    (( ${#args[@]} == 4 )) || usage
+    counts=(10 8 6)
+    chosen="" next="" took="" missed=""
+    for i in 0 1 2; do
+      n="${counts[$i]}" r="${args[$((i + 1))]}"
+      case "$r" in
+        -)
+          # Not run: the cores above it missed, so it comes next; with
+          # nothing above it, the run started lower.
+          [[ -z $missed ]] || { next="$n"; break; }
+          ;;
+        fail) missed="$missed, $n (failed: see the record)" ;;
+        *)
+          [[ $r =~ ^[0-9]+(\.[0-9]+)?$ ]] || fail "\"$r\" is not a page time in milliseconds, \"fail\" or \"-\". Nothing was done."
+          if is "$r < 100"; then
+            chosen="$n" took="$r"
+            break
+          fi
+          missed="$missed, $n ($r ms)"
+          ;;
+      esac
+    done
+    missed="${missed#, }"
+    if [[ -n $chosen ]]; then
+      say "$chosen cores a build: labd's pages took $took ms at the 95th percentile while the Builder's gate test built, under 100${missed:+. Missed with more: $missed}"
+      put "$deploy/builder-cpus" '^[0-9]+$' "$chosen"
+      say "the mini's set-up gives the Builder its cores: run scripts/mini/setup there after the Deploy"
+    elif [[ -n $next ]]; then
+      say "not settled: the Builder's gate test missed at $missed. It runs again at $next cores a build. Nothing was written."
+      exit 4
+    elif [[ -n $missed ]]; then
+      say "STOP: the Builder's gate test did not pass at $missed. The spec has no step under 6 cores (section 8). This is for the owner to decide: nothing was written."
+      exit 3
+    else
+      fail "no run of the Builder's gate test was given. Nothing was done."
     fi
     ;;
   *) usage ;;
