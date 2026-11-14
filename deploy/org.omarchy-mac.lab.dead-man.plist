@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Dead-man switch's ping on the mini, as the unprivileged lab account,
+     once a minute. It runs the Deployed build's own script, which fetches
+     the Lab address through Cloudflare and, only when labd answers there,
+     pings the check kept outside the house. scripts/mini/setup installs this
+     file; the check's address is not here: it is a file only lab reads. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.omarchy-mac.lab.dead-man</string>
+  <key>UserName</key><string>lab</string>
+  <key>GroupName</key><string>lab</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lab/current/scripts/mini/dead-man</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/lab</string>
+  <key>Umask</key><integer>63</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>/var/lab/log/dead-man.log</string>
+  <key>StandardErrorPath</key><string>/var/lab/log/dead-man.log</string>
+</dict>
+</plist>

@@ -1,0 +1,58 @@
+#!/bin/bash
+# The Dead-man switch's ping, run once a minute as the lab account by its
+# LaunchDaemon:
+#
+#   scripts/mini/dead-man [--dry-run]
+#
+# Fetches the Lab address from the internet's side, through Cloudflare and
+# the tunnel, as a visitor does. Only when labd answers there does it ping
+# the check kept outside the house, at healthchecks.io. A minute in which the
+# lab does not answer sends nothing: the check's silence is what tells the
+# owner, by Signal and email from healthchecks.io itself, that the lab is
+# Dark. Nothing is sent to "Agents": the lab's own sender is Dark with it.
+#
+#   --dry-run   say what would run, and run nothing
+#
+# By hand: sudo -u lab /usr/local/lab/current/scripts/mini/dead-man
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mini/lib.sh
+. "$here/lib.sh"
+umask 077
+
+usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+while (( $# )); do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    *) usage ;;
+  esac
+  shift
+done
+[[ -n $SYSROOT || "$(id -un)" == "$LAB_OWNER" ]] || fail "run it as $LAB_OWNER: sudo -u $LAB_OWNER $0"
+
+url="$FRONT_DOOR/healthz"
+if (( DRY )); then
+  say "would fetch $url and, only if labd answers ok there through Cloudflare, ping the check dead-man"
+  say "nothing was run"
+  exit 0
+fi
+[[ -s $CHECKS/dead-man ]] || fail "no check to ping yet: the set-up puts its address at $CHECKS/dead-man (--checks FOLDER). The lab was not asked"
+
+# launchd's log has no times of its own.
+dark() {
+  say "$(date -u +%Y-%m-%dT%H:%M:%SZ) $1: the check was not pinged"
+  exit 1
+}
+
+# The answer's headers, then labd's own line. Every edge of Cloudflare puts
+# a cf-ray on what it passes on, and labd's /healthz is never cached: an
+# answer without the first or out of the cache says nothing about the tunnel.
+answer="$(curl -fsS --max-time 20 -A lab-dead-man -D - "$url" 2>/dev/null | tr -d '\r')" || dark "the lab did not answer at $url"
+[[ "$(tail -n 1 <<<"$answer")" == ok ]] || dark "the lab did not answer ok at $url"
+grep -qi '^cf-ray: .' <<<"$answer" || dark "$url answered, but not through Cloudflare"
+! grep -qi '^cf-cache-status: hit' <<<"$answer" || dark "$url was answered from Cloudflare's cache, not by labd"
+
+ping_check dead-man || exit 1
+[[ ! -t 1 ]] || say "the lab answered through Cloudflare, and the check was pinged"
