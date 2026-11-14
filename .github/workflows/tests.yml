@@ -121,6 +121,8 @@ jobs:
         run: installer/test.sh
       - name: Every file of a Lab release, built unsigned, then signed with a throwaway key and verified
         run: release/check.sh
+      - name: The smoke test against a labd started here, open, then the install line in Preview
+        run: release/smoke-local.sh
 
   catalogue:
     name: Feature catalogue

@@ -118,6 +118,10 @@ type Config struct {
 	// on every answer. MinLab is the oldest lab release it takes; empty is
 	// MinLabRelease (see labcli.go).
 	Release, MinLab string
+	// ReleaseKey is the release key this labd was built with, as "ssh-ed25519
+	// <base64>": the install line pins it (install_line.go). Empty is the
+	// key the install script carries.
+	ReleaseKey string
 	// MachineIDKey is the 64 bytes a report's Mac is told from another by
 	// (reports.NewRules): a permanent secret, reproduced from the old site's.
 	// Without it labd takes no reports.
@@ -148,6 +152,8 @@ type Server struct {
 	// uploads takes reports in; nil without the machine-id key.
 	uploads   *reports.Uploads
 	catalogue *reports.Catalogue
+	// installScript is what /install serves (install_line.go).
+	installScript []byte
 	// macOSReference gives a board's macOS numbers; nil is the catalogue's.
 	macOSReference func(board string) *reports.MacOSReference
 	log            *log.Logger
@@ -274,6 +280,10 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	installLine, err := installScript(cfg)
+	if err != nil {
+		return nil, err
+	}
 	var rules *reports.Rules
 	if cfg.MachineIDKey != nil {
 		if rules, err = reports.NewRules(cfg.MachineIDKey); err != nil {
@@ -293,7 +303,7 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		st.db.Close()
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, cancelWhy: map[string]string{}, callers: callers}
+	s := &Server{cfg: cfg, store: st, reports: rep, catalogue: features, installScript: installLine, log: logger, ctx: ctx, devs: map[string]*dev{}, cancels: map[string]context.CancelFunc{}, cancelWhy: map[string]string{}, callers: callers}
 	s.start = s.now()
 	s.lines = newGroupLines(st, s.clock(), logger, cfg.Signal, cfg.SignalDir)
 	s.labGroup = labGroupLines{l: s.lines, link: s.pageAddress}
@@ -651,6 +661,7 @@ func (s *Server) routes() []route {
 		// each is signed by the Mac's Machine key.
 		{"POST /api/v1/tester_bindings", anyone, s.hMacSignIn},
 		{"POST /api/v1/tester_requests", anyone, s.hMacRequest},
+		{"GET /install", anyone, s.hInstall},
 		{"GET /reports/{id}", anyone, s.hReportPage},
 		{"GET /reports/{id}/deletion", anyone, s.hReportDeletion},
 		{"POST /reports/{id}", anyone, s.hReportDelete},

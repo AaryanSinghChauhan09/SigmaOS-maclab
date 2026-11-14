@@ -2,12 +2,14 @@ GO ?= go
 LDFLAGS = -s -w
 
 # The Lab release a build says it is (release/build.sh passes the tag), and
-# the release key lab-agent carries: the one in release/allowed_signers.
+# the release key lab-agent carries and labd's install line pins: the one in
+# release/allowed_signers.
 LAB_RELEASE ?= dev
 RELEASE_KEY ?= $(shell awk 'NF { print $$(NF-1), $$NF; exit }' release/allowed_signers)
 MODULE = github.com/omacom/omarchy-maclab
 STAMP = -X main.version=$(LAB_RELEASE)
 AGENT_STAMP = -X $(MODULE)/internal/agent.LabRelease=$(LAB_RELEASE) -X '$(MODULE)/internal/agent.ReleaseKey=$(RELEASE_KEY)'
+LABD_STAMP = $(STAMP) -X 'main.releaseKey=$(RELEASE_KEY)'
 
 all:
 	mkdir -p bin
@@ -39,7 +41,7 @@ release-binaries:
 	GOOS=darwin GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS) $(STAMP)" -o "$(RELEASE_OUT)/lab-darwin-arm64" ./cmd/lab
 	GOOS=linux GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS) $(STAMP)" -o "$(RELEASE_OUT)/lab-linux-arm64" ./cmd/lab
 	GOOS=linux GOARCH=amd64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS) $(STAMP)" -o "$(RELEASE_OUT)/lab-linux-amd64" ./cmd/lab
-	GOOS=darwin GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS) $(STAMP)" -o "$(SERVER_BIN)/labd" ./cmd/labd
+	GOOS=darwin GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS) $(LABD_STAMP)" -o "$(SERVER_BIN)/labd" ./cmd/labd
 	GOOS=darwin GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS)" -o "$(SERVER_BIN)/oobd" ./cmd/oobd
 	GOOS=darwin GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS)" -o "$(SERVER_BIN)/lab-builder" ./cmd/lab-builder
 	GOOS=linux GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS) $(AGENT_STAMP)" -o "$(SERVER_BIN)/lab-agent-linux-arm64" ./cmd/lab-agent

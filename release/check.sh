@@ -160,6 +160,7 @@ bundle_check() { # bundle_check DIR: the unpacked bundle under DIR
   [[ -x $s/bin/lab-agent-linux-arm64 ]] || fail "the bundle has no executable bin/lab-agent-linux-arm64"
   [[ "$(platform "$s/bin/lab-agent-linux-arm64")" == "linux arm64" ]] || fail "the bundle's lab-agent was built for $(platform "$s/bin/lab-agent-linux-arm64")"
   stamped "$s/bin/labd" "$tag" || fail "labd doesn't carry $tag"
+  stamped "$s/bin/labd" "$key" || fail "labd doesn't carry the release key its install line pins"
   stamped "$s/bin/lab-agent-linux-arm64" "$tag" || fail "lab-agent doesn't carry the Lab release it came from"
   stamped "$s/bin/lab-agent-linux-arm64" "$key" || fail "lab-agent doesn't carry the release key"
   if stamped "$s/bin/lab-agent-linux-arm64" "$(release_key "$repo/release/allowed_signers")"; then fail "lab-agent carries a second release key"; fi
