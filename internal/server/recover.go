@@ -25,6 +25,8 @@ var panicGrace = 60 * time.Second
 // aliveWindow at its end, which a slow check-in can miss. It goes by when
 // the check-in came (heard), not by LastSeen, which is when labd had saved
 // it: a check-in from before the Mac went down, saved slowly, says nothing.
+// That check-in must also still be the Mac's last word at the deadline (see
+// stillHeardLocked).
 func (v *dev) waitBack(ctx context.Context, oldBoot string, since, upAfter time.Time, timeout, selfRecovery time.Duration) (steps []string, ok, neverLeft bool, err error) {
 	var reason string
 	err = v.waitFor(ctx, timeout+selfRecovery, func() bool {
@@ -49,7 +51,7 @@ func (v *dev) waitBack(ctx context.Context, oldBoot string, since, upAfter time.
 	}
 	v.mu.Lock()
 	back := v.d.BootID != oldBoot && v.d.LastSeen.After(since)
-	stillUp := v.d.BootID == oldBoot && v.heard.After(upAfter)
+	stillUp := v.d.BootID == oldBoot && v.heard.After(upAfter) && v.stillHeardLocked(v.s.now())
 	v.mu.Unlock()
 	if back {
 		return nil, true, false, nil
@@ -67,6 +69,14 @@ func (v *dev) waitBack(ctx context.Context, oldBoot string, since, upAfter time.
 	}
 	steps, ok = v.ladder(ctx, reason, timeout, stillUp)
 	return steps, ok, neverLeft, nil
+}
+
+// stillHeardLocked is whether the Mac's last check-in is still its word at
+// now: heard within quietGrace, or since gone to sleep or into a spell off
+// the network it announced. One check-in and then silence for good, with
+// nothing said, is a hang. Caller holds mu.
+func (v *dev) stillHeardLocked(now time.Time) bool {
+	return now.Sub(v.heard) <= v.s.quietGrace() || !v.asleep.IsZero() || v.quietLocked(now)
 }
 
 // ladder is the recovery ladder: a soft reboot, a Hard reset (twice), then a

@@ -498,3 +498,39 @@ func TestACheckInSavedSlowlyAcrossTheGraceIsNoSignTheMacStayedUp(t *testing.T) {
 	j := l.wait(id, 60*time.Second)
 	l.expect(j, api.OutcomeHung)
 }
+
+// A Mac lost during a test that checks in once more on the same boot and
+// then goes silent for good, saying nothing of sleep, has not "never left":
+// that check-in is not the last word before the deadline. It hung, is Hard
+// reset, and the test it was running is recorded as gone down with it.
+func TestOneCheckInOnTheSameBootThenSilenceIsAHangNotLostContact(t *testing.T) {
+	l := newLab(t, true)
+	l.baseline()
+	l.sim.SuspendFor = 8 * time.Second
+	l.s.cfg.TestGrace = 2 * time.Second
+	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-ok behavior=ok"), Tests: []api.TestSpec{{Name: "quiet-suspend-wifi", Builtin: "x", TimeoutSec: 10}}})
+	var lost time.Time
+	l.waitJob(id, func(j *api.Job) bool {
+		for _, e := range j.Events {
+			if strings.HasPrefix(e.Msg, "lost the Mac") {
+				lost = e.Time
+				return true
+			}
+		}
+		return false
+	})
+	boot := l.s.dev(l.name).snapshot().BootID
+	l.waitDevice(func(d api.Device) bool { return d.BootID == boot && d.LastSeen.After(lost) })
+	go l.sim.Quiet(10 * time.Minute) // a hang: silent, nothing said
+	j := l.wait(id, 2*time.Minute)
+	if j.Outcome == api.OutcomeLostContact {
+		t.Fatalf("a Mac heard once and then silent for good ended lost_contact: %s", j.Summary)
+	}
+	went := false
+	for _, tr := range j.Result.Tests {
+		went = went || tr.Name == "quiet-suspend-wifi" && strings.Contains(tr.Error, "went down")
+	}
+	if !went {
+		t.Fatalf("the test the Mac hung in is not recorded as gone down with it: %s %s %+v", j.Outcome, j.Summary, j.Result.Tests)
+	}
+}
