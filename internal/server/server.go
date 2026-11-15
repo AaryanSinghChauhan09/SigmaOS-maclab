@@ -1536,9 +1536,23 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person) (said string
 	v.mu.Unlock()
 	rctx, cancel := context.WithTimeout(ctx, s.cfg.ResetWait)
 	go s.fenceWhileWaiting(rctx, cancel, v, p)
-	sent := sentReset{at: s.now(), prev: prev, boot: v.snapshot().BootID}
+	// The Mac as it is when the controller sends the reset: one that
+	// restarted by itself while the reset waited is not taken as back.
+	sent := sentReset{prev: prev}
+	var mark sync.Mutex
+	dispatched := false
+	rctx = oob.OnSending(rctx, func() {
+		mark.Lock()
+		defer mark.Unlock()
+		sent.at, sent.boot, dispatched = s.now(), v.snapshot().BootID, true
+	})
 	sent.port, err = v.resetOOB(rctx)
 	cancel()
+	mark.Lock()
+	if !dispatched {
+		sent.at, sent.boot = s.now(), v.snapshot().BootID
+	}
+	mark.Unlock()
 	v.mu.Lock()
 	v.resetting = false
 	if err == nil {

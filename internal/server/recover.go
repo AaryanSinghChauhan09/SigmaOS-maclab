@@ -86,9 +86,9 @@ func (v *dev) ladder(ctx context.Context, reason string, bootTimeout time.Durati
 // was in.
 type sentReset struct {
 	port string
+	// at is when the controller sent it, and boot the Mac's boot id then.
 	at   time.Time
 	prev api.DeviceState
-	// boot is the Mac's boot id before the reset went out.
 	boot string
 }
 

@@ -169,6 +169,7 @@ func (c *Client) Reset(ctx context.Context, rid int, seen *Seen) error {
 	if seen != nil {
 		body, _ = json.Marshal(seen)
 	}
+	onSending, _ := ctx.Value(sendingKey{}).(func())
 	run, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	var mu sync.Mutex
@@ -184,8 +185,12 @@ func (c *Client) Reset(ctx context.Context, rid int, seen *Seen) error {
 	run = httptrace.WithClientTrace(run, &httptrace.ClientTrace{Got1xxResponse: func(code int, _ textproto.MIMEHeader) error {
 		if code == http.StatusProcessing {
 			mu.Lock()
+			first := !sending
 			sending = true
 			mu.Unlock()
+			if first && onSending != nil {
+				onSending()
+			}
 		}
 		return nil
 	}})
@@ -197,6 +202,15 @@ func (c *Client) Reset(ctx context.Context, rid int, seen *Seen) error {
 		return &NotSent{Err: ctx.Err()}
 	}
 	return err
+}
+
+type sendingKey struct{}
+
+// OnSending has Reset call f as the controller says the reset is going out
+// (its 102), before the tool's answer: the moment of the reset, for a caller
+// that must know the Mac as it was then.
+func OnSending(ctx context.Context, f func()) context.Context {
+	return context.WithValue(ctx, sendingKey{}, f)
 }
 
 // NotSent is a reset given up before the controller began it: its caller

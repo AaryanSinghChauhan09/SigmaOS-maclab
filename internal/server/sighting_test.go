@@ -776,3 +776,72 @@ func TestAProvingResetOfAPortThatChangesMeanwhileIsNotSent(t *testing.T) {
 		t.Fatal("a Proving reset that was not sent placed the Mac")
 	}
 }
+
+// waitResetting waits until a person's Hard reset of the lab's Mac waits
+// its turn at the controller.
+func (l *lab) waitResetting() {
+	l.t.Helper()
+	v := l.s.dev(l.name)
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		waiting := v.oobCallCancel != nil
+		v.mu.Unlock()
+		if waiting {
+			return
+		}
+		if time.Now().After(end) {
+			l.t.Fatal("the Hard reset never reached the controller")
+		}
+	}
+}
+
+// ladderSaid waits for the line labd logs when the ladder after a
+// person's Hard reset ends, and returns it.
+func (l *lab) ladderSaid() string {
+	l.t.Helper()
+	want := l.name + ": Hard reset by " + harnessMaintainer + ": ok="
+	for end := time.Now().Add(20 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		for _, line := range strings.Split(l.logs.String(), "\n") {
+			if strings.Contains(line, want) {
+				return line
+			}
+		}
+		if time.Now().After(end) {
+			l.t.Fatalf("the ladder after the reset never ended:\n%s", l.logs.String())
+		}
+	}
+}
+
+// The ladder after a person's Hard reset knows the Mac as it was when the
+// controller sent the reset, not when it was asked for: a Mac that
+// restarts by itself while the reset waits its turn is not taken as
+// recovered before the reset's own reboot.
+func TestAMacThatRestartsWhileItsResetWaitsIsNotTakenAsRecovered(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	l.oob.slow(300 * time.Millisecond)
+	probing, release := l.oob.holdProbes(t)
+	probed := make(chan error, 1)
+	go func() { _, err := l.oob.client.Probe(context.Background(), portLeft); probed <- err }()
+	<-probing
+	answer := make(chan string, 1)
+	go func() { r, body := l.resetAs(harnessToken, l.name, ""); answer <- r.Status + " " + body }()
+	l.waitResetting()
+
+	before := l.bootOf(l.name)
+	l.sim.PowerCycle()
+	l.waitDevice(func(d api.Device) bool { return d.BootID != before })
+	own := l.bootOf(l.name)
+	release()
+	if err := <-probed; err != nil {
+		t.Fatal(err)
+	}
+	if got := <-answer; !strings.Contains(got, "Hard reset sent to "+l.name) {
+		t.Fatalf("the reset that waited: %s", got)
+	}
+	said := l.ladderSaid()
+	if now := l.bootOf(l.name); now == own || !strings.Contains(said, "ok=true") {
+		t.Fatalf("the ladder ended (%s) with the Mac on the boot it restarted to by itself, before the reset's reboot", said)
+	}
+	l.wantResets("the one reset", portRight)
+}
