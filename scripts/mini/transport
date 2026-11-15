@@ -60,20 +60,22 @@ put() {
 
 # The way back is armed before the tunnel is first stopped: however the run
 # ends before the tunnel is up again, it runs under the file it ran under.
+# It stays armed until the tunnel is started again, and a further stop does
+# not cut it short.
 was="$(mktemp "${TMPDIR:-/tmp}/transport-was.XXXXXX")"
 made=""
 armed=0
 # shellcheck disable=SC2329
 way_back() {
   (( armed )) || return 0
-  armed=0
   if put "$was"; then
+    armed=0
     say "the tunnel runs again under the LaunchDaemon file it ran under before"
   else
     say "the tunnel could not be started again: start it with sudo launchctl bootstrap system $plist"
   fi
 }
-trap 'way_back; rm -f "$was" ${made:+"$made"}' EXIT
+trap 'trap "" HUP INT TERM; way_back; rm -f "$was" ${made:+"$made"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT TERM
 cp "$plist" "$was"

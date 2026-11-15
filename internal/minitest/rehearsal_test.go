@@ -1,12 +1,16 @@
 package minitest
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const (
@@ -258,5 +262,61 @@ func TestRehearsalAliasLeavesBothStartedWhenLaunchdRefuses(t *testing.T) {
 	out = m.refused("rehearsal-alias", "deployed")
 	if read(t, labd) != deployedLabd || !m.loaded() {
 		t.Errorf("a tunnel that would not start kept labd from going back:\n%s\n%s", out, m.calls())
+	}
+}
+
+// stoppedTwice runs script, stops it with a TERM once the log holds first,
+// and again while a cp from a file whose path holds slow runs: the second
+// stop lands in the script's own way back. It returns what the script said.
+func (m *mini) stoppedTwice(first, slow, script string, args ...string) string {
+	m.t.Helper()
+	mark := filepath.Join(filepath.Dir(m.root), "state", "slow-cp")
+	write(m.t, m.bin+"/cp", `#!/bin/bash
+if [[ $1 == *"`+slow+`"* ]]; then
+  touch "`+mark+`"
+  /bin/sleep 2
+fi
+exec /bin/cp "$@"
+`, 0o755)
+	cmd := exec.Command(filepath.Join(m.tree, "scripts", "mini", script), args...)
+	cmd.Env = append(m.env, "LAB_READY_TRIES=60")
+	cmd.Dir = filepath.Dir(m.tree)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		m.t.Fatal(err)
+	}
+	wait := func(what string, done func() bool) {
+		for deadline := time.Now().Add(30 * time.Second); !done(); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				cmd.Process.Kill()
+				cmd.Wait()
+				m.t.Fatalf("%s never came:\n%s\n%s", what, out.String(), m.callsOrNone())
+			}
+		}
+	}
+	wait(first, func() bool { return strings.Contains(m.callsOrNone(), first) })
+	cmd.Process.Signal(syscall.SIGTERM)
+	wait("the way back", func() bool { return exists(mark) })
+	cmd.Process.Signal(syscall.SIGTERM)
+	if err := cmd.Wait(); err == nil {
+		m.t.Fatalf("%s ended as done:\n%s", script, out.String())
+	}
+	return out.String()
+}
+
+// A second stop while transport puts the tunnel back does not leave it
+// stopped: the way back stays armed, and runs to its end.
+func TestTransportStoppedDuringItsWayBackLeavesTheTunnelStarted(t *testing.T) {
+	m := tunnelUp(t)
+	m.transport("quic")
+	m.ready(false)
+	daemon := m.path("Library/LaunchDaemons/" + cloudflaredLabel + ".plist")
+	before := read(t, daemon)
+
+	out := m.stoppedTwice("launchctl bootstrap system "+daemon, "transport-was", "transport", "http2")
+
+	if !m.tunnelLoaded() || read(t, daemon) != before {
+		t.Errorf("the tunnel is loaded %v, under its file as before %v:\n%s\n%s", m.tunnelLoaded(), read(t, daemon) == before, out, m.calls())
 	}
 }
