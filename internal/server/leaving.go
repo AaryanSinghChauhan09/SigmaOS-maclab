@@ -78,9 +78,22 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 		v.mu.Unlock()
 		return errMacGone
 	}
+	if v.resetting {
+		// it would go to a retired Mac
+		v.mu.Unlock()
+		return refuse(http.StatusConflict, "a Hard reset of %s is on its way: end its enrollment once it has gone out and the Mac is back", name)
+	}
 	v.forgotten = true
+	// The recovery ladder's Hard reset waiting at the controller is called
+	// off, and no other sets out (resetOOB): the Mac is retired once the
+	// controller's call has ended.
+	if v.oobCallCancel != nil {
+		v.oobCallCancel()
+	}
 	d := v.d
 	v.mu.Unlock()
+	v.oobCallMu.Lock()
+	v.oobCallMu.Unlock()
 	if s.dev(name) != v {
 		return errMacGone
 	}
@@ -145,6 +158,15 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 		s.notify(s.notice(d, noticeEnded, jobWording{}))
 	}
 	return nil
+}
+
+// statusOr500 is a refusal's status, or 500 for any other error.
+func statusOr500(err error) int {
+	var r *refusal
+	if errors.As(err, &r) {
+		return r.code
+	}
+	return http.StatusInternalServerError
 }
 
 // retired does what leaving the lab does to a Mac's record, d as it stood:
@@ -283,7 +305,7 @@ func (s *Server) hEndEnrollment(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errMacGone):
 		httpErr(w, 404, "no device %q", name)
 	case err != nil:
-		httpErr(w, 500, "%v", err)
+		httpErr(w, statusOr500(err), "%v", err)
 	default:
 		w.Write([]byte("enrollment ended\n"))
 	}

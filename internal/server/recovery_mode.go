@@ -37,6 +37,11 @@ func (v *dev) resetOOB(ctx context.Context) (port string, err error) {
 	v.oobCallMu.Lock()
 	defer v.oobCallMu.Unlock()
 	v.mu.Lock()
+	if v.forgotten {
+		name := v.d.Name
+		v.mu.Unlock()
+		return "", refuse(http.StatusNotFound, "no Hard reset was sent: %s is leaving the lab", name)
+	}
 	op, cancel := context.WithCancel(ctx)
 	v.oobCallCancel = cancel
 	v.mu.Unlock()

@@ -1416,7 +1416,7 @@ func (s *Server) forget(v *dev, by Person, holder string, force bool) (int, erro
 	case errors.Is(err, errMacGone):
 		return 404, fmt.Errorf("no device %q", v.snapshot().Name)
 	case err != nil:
-		return 500, err
+		return statusOr500(err), err
 	}
 	close(v.gone)
 	return 200, nil
@@ -1533,6 +1533,9 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person) (said string
 	case v.goneWhy != "":
 		v.mu.Unlock()
 		return "", refuse(http.StatusNotFound, "no Hard reset was sent: %s", v.goneWhy)
+	case v.forgotten:
+		v.mu.Unlock()
+		return "", refuse(http.StatusNotFound, "no Hard reset was sent: %s is leaving the lab", name)
 	}
 	v.resetting = true
 	v.mu.Unlock()
