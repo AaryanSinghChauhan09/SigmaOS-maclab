@@ -152,6 +152,6 @@ func (s *Server) acceptTerms(p Person) ([]string, error) {
 	if len(macs) == 0 {
 		return nil, refuse(http.StatusConflict, "None of your Macs is waiting for the lab's terms.")
 	}
-	s.log.Printf("@%s accepted the terms %s on My Macs for %v", p.Handle, short(t.SHA256), macs)
+	s.log.Printf("account %d accepted the terms %s on My Macs for %v", p.AccountID, short(t.SHA256), macs)
 	return macs, nil
 }

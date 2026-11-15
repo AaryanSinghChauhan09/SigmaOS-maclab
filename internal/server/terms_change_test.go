@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -287,5 +288,21 @@ func TestTheTermsAreAskedAgainAtEachCheckIn(t *testing.T) {
 	l.checkin("dev_vol-air", api.Checkin{})
 	if l.s.view(l.s.dev("vol-air")).TermsWaiting {
 		t.Error("a Volunteer marked M team after the start is still held, with no Accept banner")
+	}
+}
+
+// labd's own log is outside what a forgetting reaches, so an acceptance is
+// logged with the account, never the handle.
+func TestAnAcceptanceIsLoggedWithNoHandle(t *testing.T) {
+	l, _ := termsLab(t)
+	logs := &lockedBuffer{b: &bytes.Buffer{}}
+	l.s.log.SetOutput(logs)
+	deploy(l)
+	if w := l.signedIn(linusID).post("/my-macs/accept-terms"); w.Code != http.StatusSeeOther {
+		t.Fatalf("Accept: %d %s", w.Code, w.Body)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "accepted the terms") || strings.Contains(got, "linus") {
+		t.Errorf("the acceptance in labd's log:\n%s", got)
 	}
 }
