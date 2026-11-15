@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -1172,6 +1173,44 @@ func TestAForgettingWaitsForARetiredMacsAuditCopy(t *testing.T) {
 	for _, e := range es {
 		if e.Maintainer != "" || e.AccountID != 0 {
 			t.Errorf("an entry still names her: %+v", e)
+		}
+	}
+}
+
+// The Maintainer who ended a Mac's enrollment during an Installed run, and
+// was Forgotten before the run was sealed, is named in neither copy of the
+// run's record: the seal's own summary and last event say who ended it.
+func TestAnInstalledRunSealedAfterItsEnderIsForgottenNamesNobody(t *testing.T) {
+	l := macLab(t, nil)
+	l.signedIn(edithID)
+	l.lrMac("m1", "j293", nil)
+	l.pjJob("j-41", "m1", maintainerID, "ravi", l.clock.Now(), func(j *api.Job) { j.State, j.Outcome, j.Summary = api.JobTesting, "", "" })
+	j, err := l.s.store.job("j-41")
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, err := l.s.forgetInJobs(newForgetting(edithID, "edith"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	end()
+
+	ir := &installedRun{r: &jobRun{s: l.s, v: l.s.dev("m1"), j: j},
+		c: &installedCtx{release: "9.9", dir: l.s.frozenDir("9.9")}, res: api.InstalledResult{Release: "9.9"}}
+	gone := leaving{how: leftByMaintainer, by: Person{AccountID: edithID, Handle: "edith", Maintainer: true}}
+	outcome, summary := ir.seal(api.OutcomeCanceled, "canceled: "+gone.reason(), l.clock.Now())
+	if outcome != api.OutcomeCanceled {
+		t.Fatalf("sealed %s: %s", outcome, summary)
+	}
+	byName := regexp.MustCompile(`(?i)(^|[^a-z0-9-])edith($|[^a-z0-9-])`)
+	for _, p := range []string{filepath.Join(ir.evDir(), "job.json"), filepath.Join(ir.c.dir, "installed", "m1", "j-41", "job.json")} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if byName.Match(b) {
+			rel, _ := filepath.Rel(l.s.cfg.DataDir, p)
+			t.Errorf("%s still names the Maintainer who ended the enrollment:\n%s", rel, b)
 		}
 	}
 }

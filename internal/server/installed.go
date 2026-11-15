@@ -602,16 +602,18 @@ func (ir *installedRun) seal(outcome, summary string, at time.Time) (string, str
 		jobMu.Lock()
 		j, err := ir.r.s.store.job(ir.r.j.ID)
 		if err == nil {
+			res := ir.res
+			j.State, j.Outcome, j.Summary = api.JobDone, outcome, summary
+			j.Events = append(j.Events, api.JobEvent{Time: at, Msg: "done: " + outcome + ": " + summary})
+			j.Result.Installed = &res
+			// The last fields can name a forgotten person too (who ended
+			// the Mac's enrollment): the forgettings go over the whole record.
 			ir.r.s.forgottenLocked(j)
 		}
 		jobMu.Unlock()
 		if err != nil {
 			return err
 		}
-		res := ir.res
-		j.State, j.Outcome, j.Summary = api.JobDone, outcome, summary
-		j.Events = append(j.Events, api.JobEvent{Time: at, Msg: "done: " + outcome + ": " + summary})
-		j.Result.Installed = &res
 		b, err := json.MarshalIndent(j, "", "  ")
 		if err != nil {
 			return err
