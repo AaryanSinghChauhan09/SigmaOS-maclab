@@ -391,3 +391,42 @@ func TestASlowEnrollmentBodyIsCutOff(t *testing.T) {
 		t.Errorf("answer to a slow body: %q", b)
 	}
 }
+
+// A Join command refused at its test for the cap or the name is not bound to
+// the Mac that asked: setup forgets its key on a refusal, and the same line
+// run again once the cap is raised or the name is free enrolls that Mac.
+func TestAJoinCommandRefusedAtItsTestRunsAgainOnceTheCapIsRaised(t *testing.T) {
+	l, _ := lendLab(t)
+	ravi := l.signedIn(maintainerID)
+	ravi.did("/people/mark", "handle", "edith", "as", "invite")
+	ravi.did("/people/mark", "handle", "grace", "as", "invite")
+	edith, grace := l.signedIn(edithID), l.signedIn(graceID)
+
+	_, token := edith.makeJoin("edith-6")
+	for i := 1; i <= lendCap; i++ {
+		l.addMac(fmt.Sprintf("edith-%d", i), edithID)
+	}
+	if w := l.joinCheck(token, keyA); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Cap reached") {
+		t.Fatalf("at the cap: %d %s", w.Code, w.Body)
+	}
+	ravi.did(fmt.Sprintf("/people/%d/cap", edithID), "macs", "7")
+	if w := l.joinCheck(token, keyB); w.Code != http.StatusOK {
+		t.Fatalf("the same Join command after the cap was raised: %d %s", w.Code, w.Body)
+	}
+	if w := l.enrollWith(token, keyB); w.Code != http.StatusOK {
+		t.Fatalf("enrolling after the cap was raised: %d %s", w.Code, w.Body)
+	}
+
+	_, token = grace.makeJoin("taken")
+	l.addMac("taken", 0)
+	if w := l.joinCheck(token, keyA); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Name taken") {
+		t.Fatalf("a name taken: %d %s", w.Code, w.Body)
+	}
+	// The Mac called taken leaves, which frees its name.
+	l.s.mu.Lock()
+	delete(l.s.devs, "taken")
+	l.s.mu.Unlock()
+	if w := l.joinCheck(token, keyB); w.Code != http.StatusOK {
+		t.Fatalf("the same Join command once the name is free: %d %s", w.Code, w.Body)
+	}
+}

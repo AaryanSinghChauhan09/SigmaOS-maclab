@@ -60,11 +60,12 @@ func (s *Server) hJoinTerms(w http.ResponseWriter, r *http.Request) {
 }
 
 // hJoinCheck is the Join command testing its token on the Mac, after the
-// pre-checks and the accepted terms, before anything changes. The first Mac to ask binds the
-// token: from then on it serves the Mac with that activation key and no
-// other. What would refuse the enrollment (Blocked, cap reached, name
-// taken) is said here already, so that a Mac leaves no other lab for a
-// lab that will not take it.
+// pre-checks and the accepted terms, before anything changes. The first Mac
+// to ask that the lab would take binds the token: from then on it serves the
+// Mac with that activation key and no other. What would refuse the
+// enrollment (Blocked, cap reached, name taken) is said here already, before
+// the token is bound, so that a Mac leaves no other lab for a lab that will
+// not take it.
 func (s *Server) hJoinCheck(w http.ResponseWriter, r *http.Request) {
 	var req api.JoinCheckRequest
 	if !decodeBody(w, r, enrollBodyMax, &req) {
@@ -80,15 +81,22 @@ func (s *Server) hJoinCheck(w http.ResponseWriter, r *http.Request) {
 		s.refusedToken(w, r, 401, tokenRefused)
 		return
 	}
-	if mine, err := s.store.bindToken(tokHash, keyHash); err != nil || !mine {
+	if t.BoundTo != "" && t.BoundTo != keyHash {
 		s.refusedToken(w, r, 403, tokenOtherMacs)
 		return
 	}
+	// What would refuse the enrollment is asked before the token is bound,
+	// so that the same line runs again once the cap is raised or the name
+	// is free: setup forgets its key on a refusal.
 	if t.ActivatedBy == "" {
 		if err := s.mayEnroll(t); err != nil {
 			s.refusedEnrollment(w, t.Name, err)
 			return
 		}
+	}
+	if mine, err := s.store.bindToken(tokHash, keyHash); err != nil || !mine {
+		s.refusedToken(w, r, 403, tokenOtherMacs)
+		return
 	}
 	kind := api.KindLabOwned
 	if t.Volunteer {
