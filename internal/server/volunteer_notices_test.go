@@ -872,3 +872,14 @@ func TestASendThatFailsLogsNoTopic(t *testing.T) {
 		t.Errorf("a topic that is no address: %s", got)
 	}
 }
+
+// Each Notice has its own transport: one that kept its connection open
+// would keep a socket and its goroutines per Notice.
+func TestANoticeKeepsNoConnectionOpen(t *testing.T) {
+	s := &Server{}
+	for _, own := range []bool{true, false} {
+		if tr, ok := s.noticeClient(own).Transport.(*http.Transport); !ok || !tr.DisableKeepAlives {
+			t.Errorf("own %v: the notice transport keeps connections alive", own)
+		}
+	}
+}

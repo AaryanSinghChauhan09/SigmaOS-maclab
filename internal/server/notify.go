@@ -270,7 +270,7 @@ func sendFailure(err error) string {
 // connects only to a public address, judged on the address it actually
 // connects to.
 func (s *Server) noticeClient(own bool) *http.Client {
-	t := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 10 * time.Second}
+	t := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 10 * time.Second}
 	if s.cfg.noticeTLS != nil {
 		t.TLSClientConfig = s.cfg.noticeTLS.Clone()
 	}
