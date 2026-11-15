@@ -25,10 +25,6 @@ set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
-# What this test checks is slice 40's (Notices); until it lands on build a
-# failure of the rule is "waits", not "fail". Delete this line when it does.
-WAITS_FOR=40
-
 hd_options "$@"
 volunteers="" redirect=""
 set -- ${REST[@]+"${REST[@]}"}
