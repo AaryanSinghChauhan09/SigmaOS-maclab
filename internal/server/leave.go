@@ -82,6 +82,13 @@ func (s *Server) leave(v *dev, why string) ([]string, error) {
 			j.State, j.Outcome, j.Canceled = api.JobDone, api.OutcomeCanceled, true
 			j.Summary = "canceled before it started: " + name + " left the lab (" + why + ")"
 		})
+		// The Mac's loop may have read it as queued just before (see cancelJob).
+		s.mu.Lock()
+		cancel = s.cancels[j.ID]
+		s.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 	}
 	return canceled, nil
 }

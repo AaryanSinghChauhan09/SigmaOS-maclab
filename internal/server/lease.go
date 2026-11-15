@@ -750,14 +750,19 @@ func (s *Server) leasesOf(p Person) []string {
 // its Mac returns to its Known-good kernel. why, when given, is said in the
 // job's summary.
 func (s *Server) cancelJob(id, why string) bool {
-	s.mu.Lock()
-	cancel := s.cancels[id]
-	if cancel != nil && why != "" {
-		s.cancelWhy[id] = why
+	running := func() bool {
+		s.mu.Lock()
+		cancel := s.cancels[id]
+		if cancel != nil && why != "" {
+			s.cancelWhy[id] = why
+		}
+		s.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return cancel != nil
 	}
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if running() {
 		return true
 	}
 	canceled := false
@@ -771,7 +776,10 @@ func (s *Server) cancelJob(id, why string) bool {
 			j.Summary += ": " + why
 		}
 	})
-	return canceled
+	// A Mac's loop takes a job from the queue by setting its cancel and then
+	// reading it once more: if it read the job as queued before it was marked
+	// done above, its cancel is set by now.
+	return running() || canceled
 }
 
 // canceledWhy is why job id was canceled, when whoever canceled it said.

@@ -80,16 +80,16 @@ func (s *Server) deviceLoop(v *dev) {
 			if !s.startJob(v) {
 				return
 			}
-			// It waited for a drain to be lifted: it may have been canceled.
-			if j, err = s.store.job(id); err != nil || j.State == api.JobDone {
-				s.endJob()
-				continue
-			}
+			// Its cancel is set before it is read again: cancelJob either
+			// finds the cancel or has marked the job done by that read. It
+			// waited for a drain to be lifted, too: it may have been canceled.
 			ctx, cancel := context.WithCancel(s.ctx)
 			s.mu.Lock()
 			s.cancels[id] = cancel
 			s.mu.Unlock()
-			s.runJob(ctx, v, j)
+			if j, err = s.store.job(id); err == nil && j.State != api.JobDone {
+				s.runJob(ctx, v, j)
+			}
 			cancel()
 			s.endJob()
 			s.mu.Lock()
