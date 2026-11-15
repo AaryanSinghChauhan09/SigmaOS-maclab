@@ -48,19 +48,6 @@ const macTermsAccepted = "terms-accepted"
 // termsCut is why changed terms ended a Lease.
 const termsCut = "the lab's terms changed and its Volunteer has not accepted them yet"
 
-// asksTerms is whether the Volunteer of d has terms to accept: d is a
-// Volunteer's Mac in the lab, the terms it was accepted under are not the
-// shipped ones, and its Volunteer is not on the M team or a Maintainer.
-func (s *Server) asksTerms(d api.Device) bool {
-	if !d.IsVolunteer() || d.State == api.StateLeft {
-		return false
-	}
-	if _, sum := s.terms(); d.TermsSHA256 == sum {
-		return false
-	}
-	return !s.acceptsNoTerms(d.VolunteerID)
-}
-
 // acceptsNoTerms is whether the person is on the M team or a Maintainer.
 func (s *Server) acceptsNoTerms(accountID int64) bool {
 	if accountID == 0 {
@@ -71,34 +58,49 @@ func (s *Server) acceptsNoTerms(accountID int64) bool {
 }
 
 // termsTookEffect holds each Mac whose Volunteer has the shipped terms to
-// accept, ending its Lease as a Pause does, and tells them by one Notice for
-// each Mac and each text. labd calls it as it starts, which is when changed
-// terms reach the lab.
+// accept. labd calls it as it starts, which is when changed terms reach the
+// lab.
 func (s *Server) termsTookEffect() {
-	_, sum := s.terms()
 	for _, v := range s.allDevs() {
-		waits := s.asksTerms(v.snapshot())
-		v.mu.Lock()
-		v.termsWait = waits
-		if waits {
-			if v.d.TermsNoticed != sum {
-				v.d.TermsNoticed = sum
-				v.saveLocked()
-				v.s.notify(v.s.notice(v.d, noticeTerms, jobWording{}))
-			}
-			if l := v.d.Lease; l != nil && l.Expires.After(s.now()) {
-				cut := *l
-				cut.Expires = s.now()
-				v.d.Lease, v.leaseCut = &cut, termsCut
-				v.saveLocked()
-			}
+		s.decideTerms(v)
+	}
+}
+
+// decideTerms is whether v waits for its Volunteer: v is a Volunteer's
+// Mac in the lab, the terms it was accepted under are not the shipped ones,
+// and its Volunteer is not on the M team or a Maintainer. It is decided at
+// the start and again at each check-in, since a mark may change between. A
+// Mac that waits has its Lease ended as a Pause does, and its Volunteer is
+// told by one Notice for each Mac and each text.
+func (s *Server) decideTerms(v *dev) {
+	_, sum := s.terms()
+	d := v.snapshot()
+	noTerms := d.IsVolunteer() && s.acceptsNoTerms(d.VolunteerID)
+	v.mu.Lock()
+	waits := v.d.VolunteerID == d.VolunteerID && !noTerms && v.d.IsVolunteer() && v.d.State != api.StateLeft && v.d.TermsSHA256 != sum
+	changed := v.termsWait != waits
+	v.termsWait = waits
+	if waits {
+		if v.d.TermsNoticed != sum {
+			v.d.TermsNoticed = sum
+			v.saveLocked()
+			v.s.notify(v.s.notice(v.d, noticeTerms, jobWording{}))
 		}
+		if l := v.d.Lease; l != nil && l.Expires.After(s.now()) {
+			cut := *l
+			cut.Expires = s.now()
+			v.d.Lease, v.leaseCut = &cut, termsCut
+			v.saveLocked()
+			changed = true
+		}
+	}
+	if changed {
 		v.publishLocked()
 		v.bump()
-		v.mu.Unlock()
-		if waits {
-			s.lapse(v)
-		}
+	}
+	v.mu.Unlock()
+	if waits {
+		s.lapse(v)
 	}
 }
 

@@ -299,6 +299,7 @@ func (s *Server) firstBaselineEnded(v *dev, job, outcome string) {
 
 // heartbeat records a check-in. Commands are handed out separately by deliver.
 func (v *dev) heartbeat(ci api.Checkin) {
+	defer v.s.decideTerms(v) // after the unlock below
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	now := v.s.now()

@@ -252,3 +252,40 @@ func TestARefusedTopicShowsOnMyMacs(t *testing.T) {
 		t.Errorf("another card says its topic is refused: %s", facts)
 	}
 }
+
+// Whether a Mac waits for its Volunteer is decided again at each check-in,
+// not only at the start: a Volunteer taken off the M team afterwards lends
+// with no acceptance no longer, and one marked afterwards is held no more.
+func TestTheTermsAreAskedAgainAtEachCheckIn(t *testing.T) {
+	l, ntfy := termsLab(t)
+	deploy(l)
+	if l.s.view(l.s.dev("team-air")).TermsWaiting {
+		t.Fatal("an M team member's Mac waits at the start")
+	}
+	ravi := l.signedIn(maintainerID)
+	l.lrUnmark(graceID)
+	if w := l.checkin("dev_team-air", api.Checkin{}); w.Code != http.StatusOK {
+		t.Fatalf("check-in: %d %s", w.Code, w.Body)
+	}
+	if !l.s.view(l.s.dev("team-air")).TermsWaiting {
+		t.Fatal("a Volunteer taken off the M team after the start still lends with no acceptance")
+	}
+	if code, _, body := ravi.lease("team-air", "ravi@desk", time.Hour); code != http.StatusConflict || body != termsWaitingLine("team-air")+"\n" {
+		t.Errorf("a Lease on it: %d %q", code, body)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := termsNotices(ntfy.at("/team-air-topic")); len(got) != 1 {
+		t.Errorf("its Volunteer was told %d times, want once: %+v", len(got), got)
+	}
+	l.checkin("dev_team-air", api.Checkin{})
+	time.Sleep(200 * time.Millisecond)
+	if got := termsNotices(ntfy.at("/team-air-topic")); len(got) != 1 {
+		t.Errorf("a second check-in told them again: %d", len(got))
+	}
+
+	l.lrMember(linusID)
+	l.checkin("dev_vol-air", api.Checkin{})
+	if l.s.view(l.s.dev("vol-air")).TermsWaiting {
+		t.Error("a Volunteer marked M team after the start is still held, with no Accept banner")
+	}
+}
