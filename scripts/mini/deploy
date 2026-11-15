@@ -13,13 +13,15 @@
 #   4. stops labd and copies both databases as they are then;
 #   5. switches to the build and restarts the lab's services, never the
 #      mini: labd, and the Out-of-band controller and the Builder where the
-#      set-up has started them;
+#      set-up has started them; a controller the set-up installed but could
+#      not start yet, with no build to run it from, is started;
 #   6. verifies labd on this machine and, once the tunnel is installed here,
 #      through the Front door; and that the Builder asks labd for work and
 #      the Out-of-band controller answers it;
 #   7. reports in "Agents".
 #
-# When the check fails it Deploys the previous version by itself. Going back
+# When the check fails it Deploys the previous version by itself; with none
+# before it, labd stays stopped, and a controller it started is stopped. Going back
 # from a release that says "No way back." (its build carries
 # deploy/no-way-back) also puts the databases back as step 4 copied them:
 # what arrived since is lost. The last three builds are kept. It names an
@@ -71,6 +73,9 @@ announced=0
 # Set while labd is stopped for a switch whose check has not passed: an exit
 # then, whatever failed, puts the previous build back.
 switching=0
+# Set once this Deploy started the controller: a first Deploy that fails
+# stops it again.
+started_oobd=0
 # shellcheck disable=SC2317,SC2329
 cleanup() {
   local status=$?
@@ -152,10 +157,13 @@ restore_snapshot() {
 # switch_to TAG: stop labd, point the mini at that build, start labd from it
 # under the build's own LaunchDaemon file, and have what else runs from the
 # build start again: the Out-of-band controller and the Builder, which the
-# set-up installs. cloudflared reads its routes from the build when it
-# starts, so it is restarted when they are other routes.
+# set-up installs. The controller's file is in place before the first
+# Deploy, with no build to run it from: then it is started here, so that
+# labd, which holds its token, finds it answering. cloudflared reads its
+# routes from the build when it starts, so it is restarted when they are
+# other routes.
 switch_to() {
-  local routes=0 label
+  local routes=0 label fresh=""
   if tunnel_installed && ! cmp -s "$LAB_CURRENT/deploy/cloudflared.yml" "$LAB_BUILDS/$1/deploy/cloudflared.yml"; then routes=1; fi
   stop_labd
   ln -sfn "builds/$1" "$LAB_CURRENT"
@@ -165,7 +173,18 @@ switch_to() {
   chmod 0644 "$plist"
   launchctl enable "system/$LABD_LABEL" || true
   launchctl bootstrap system "$plist" || say "launchd did not take $plist"
+  if ! loaded "$OOBD_LABEL" && [[ -f $OOBD_PLIST ]]; then
+    fresh="$OOBD_LABEL"
+    launchctl enable "system/$OOBD_LABEL" || true
+    if launchctl bootstrap system "$OOBD_PLIST" && loaded "$OOBD_LABEL"; then
+      started_oobd=1
+      say "started $OOBD_LABEL from the build of $1"
+    else
+      say "launchd did not start $OOBD_LABEL from $OOBD_PLIST: see /var/log/oobd.log"
+    fi
+  fi
   for label in "$OOBD_LABEL" "$BUILDER_LABEL"; do
+    [[ $label != "$fresh" ]] || continue
     loaded "$label" || continue
     if launchctl kickstart -k "system/$label"; then
       say "restarted $label from the build of $1"
@@ -249,6 +268,9 @@ way_back() {
     fail "$tag was not Deployed: $previous is back and answers"
   fi
   stop_labd
+  if (( started_oobd )); then
+    stopped "$OOBD_LABEL" || say "$OOBD_LABEL did not stop (20 s)"
+  fi
   rm -f "$LAB_CURRENT" "$plist"
   rm -rf "${LAB_BUILDS:?}/$tag"
   tell "Deploy of $tag on the mini failed its check. There was no build before it, so labd is stopped.$lost"
@@ -321,7 +343,7 @@ if (( DRY )); then
   say "would tell \"Agents\" and drain jobs, waiting up to $wait minutes for those that run"
   say "would stop labd and copy $LAB_DATABASES to $BEFORE_DEPLOY/$tag"
   say "would switch $LAB_CURRENT from ${previous:-nothing} to $tag"
-  say "would restart $LABD_LABEL under $plist, and $OOBD_LABEL and $BUILDER_LABEL where they are loaded: never the mini, and no tool"
+  say "would restart $LABD_LABEL under $plist, $OOBD_LABEL and $BUILDER_LABEL where they are loaded, and start $OOBD_LABEL where it is installed and not loaded: never the mini, and no tool"
   say "would verify labd at http://$LABD_LISTEN/healthz and on $LABD_SOCKET, and put ${previous:-nothing} back if it does not answer"
   if tunnel_installed; then
     say "would verify labd through the Front door at $FRONT_DOOR/healthz as well"

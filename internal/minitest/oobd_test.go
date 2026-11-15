@@ -149,7 +149,7 @@ func TestSetupMakesTheControllersTokenForRootAndForLab(t *testing.T) {
 	if strings.Contains(m.calls(), "bootstrap") || m.oobdLoaded() {
 		t.Errorf("the controller was started with no build Deployed:\n%s", m.calls())
 	}
-	if !strings.Contains(out, "run the set-up again after the first Deploy") {
+	if !strings.Contains(out, "the first Deploy starts it") {
 		t.Errorf("the set-up doesn't say when the controller starts:\n%s", out)
 	}
 

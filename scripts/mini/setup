@@ -565,8 +565,8 @@ pins() {
 
 # The Out-of-band controller. Its token is made here and never shown: root's
 # copy where only root reads, labd's copy where only the lab account does.
-# Its LaunchDaemon runs it from the Deployed build, so it starts once there
-# is one, and again whenever its token or its file changed.
+# Its LaunchDaemon runs it from the Deployed build, so the first Deploy
+# starts it; the set-up starts it again whenever its token or its file changed.
 
 TOKEN_NEW=0
 
@@ -633,7 +633,7 @@ controller() {
     again=1
   fi
   if [[ ! -x $LAB_CURRENT/bin/oobd ]]; then
-    say "the Out-of-band controller starts once a build is Deployed: run the set-up again after the first Deploy"
+    say "the Out-of-band controller is installed: the first Deploy starts it, from the build it Deploys"
     return 0
   fi
   [[ -x $RESET_TOOL ]] || say "the Deployed build has no reset tool ($RESET_TOOL): the controller answers status and refuses every reset"

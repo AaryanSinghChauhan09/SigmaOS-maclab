@@ -650,3 +650,110 @@ func TestDeployRefusesALinkPlantedWhereTheCopiesGo(t *testing.T) {
 		t.Errorf("the mini runs %q (loaded %v) after the refusal:\n%s", m.current(), m.loaded(), m.calls())
 	}
 }
+
+// controllerFollows has the made-up labd, which holds the controller's
+// token, say the controller answers while launchd has it, and not otherwise.
+func (m *mini) controllerFollows(o *ops) (stop func()) {
+	m.t.Helper()
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			parts := "builder none\ncontroller bad\n"
+			if m.oobdLoaded() {
+				parts = "builder none\ncontroller ok\n"
+			}
+			o.set(func(o *ops) { o.parts = parts })
+		}
+	}()
+	return func() { close(done); wg.Wait() }
+}
+
+// installedController is the mini as the set-up leaves it before the first
+// Deploy: the controller's token and LaunchDaemon file in place, the
+// controller not started, since no build was there to run it from.
+func (m *mini) installedController() {
+	m.t.Helper()
+	write(m.t, m.path(rootToken), "root's token\n", 0o600)
+	write(m.t, m.path(labToken), "root's token\n", 0o600)
+	write(m.t, m.path(oobdPlist), "<plist><!-- oobd --></plist>\n", 0o644)
+}
+
+func TestAFirstDeployStartsTheControllerTheSetUpInstalled(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	m.installedController()
+	stop := m.controllerFollows(o)
+	defer stop()
+	tag := "v0.2.0-rc.1"
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+
+	out := m.ok("deploy", "--from", r.from(tag), tag)
+
+	if m.current() != tag || !m.loaded() || !m.oobdLoaded() {
+		t.Fatalf("the mini runs %q, labd loaded %v, controller loaded %v\n%s", m.current(), m.loaded(), m.oobdLoaded(), out)
+	}
+	order(t, m.calls(),
+		"launchctl bootstrap system "+m.path("Library/LaunchDaemons/"+labdLabel+".plist"),
+		"launchctl bootstrap system "+m.path(oobdPlist),
+		"ops GET /parts",
+	)
+	if !strings.Contains(out, "started "+oobdLabel) || !strings.Contains(out, "Deployed "+tag) {
+		t.Errorf("no word of the controller's start or the Deploy:\n%s", out)
+	}
+}
+
+func TestAFirstDeployWhoseControllerCannotStartChangesNothingElse(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	m.installedController()
+	m.bootstrapFails(oobdLabel, "99")
+	stop := m.controllerFollows(o)
+	defer stop()
+	tag := "v0.2.0-rc.1"
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+
+	out := m.refused("deploy", "--from", r.from(tag), tag)
+
+	for _, want := range []string{
+		"launchd did not start " + oobdLabel,
+		"the Out-of-band controller does not answer labd",
+		tag + " was not Deployed: there was no build before it, so labd is stopped",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q:\n%s", want, out)
+		}
+	}
+	if m.current() != "" || len(m.builds()) != 0 || m.loaded() || m.oobdLoaded() {
+		t.Errorf("left behind: current %q, builds %v, labd loaded %v, controller loaded %v\n%s", m.current(), m.builds(), m.loaded(), m.oobdLoaded(), out)
+	}
+	for p, want := range map[string]string{rootToken: "root's token\n", labToken: "root's token\n", oobdPlist: "<plist><!-- oobd --></plist>\n"} {
+		if got := read(t, m.path(p)); got != want {
+			t.Errorf("%s is %q, was %q", p, got, want)
+		}
+	}
+}
+
+func TestAFirstDeployThatFailsStopsTheControllerItStarted(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.installedController()
+	bad := "v0.2.0-rc.1"
+	bundle(t, k, filepath.Join(r.dir, bad), bad, false)
+
+	out := m.refused("deploy", "--from", r.from(bad), bad)
+
+	if m.current() != "" || m.loaded() || m.oobdLoaded() {
+		t.Errorf("left behind: current %q, labd loaded %v, controller loaded %v\n%s", m.current(), m.loaded(), m.oobdLoaded(), out)
+	}
+	if !exists(m.path(oobdPlist)) {
+		t.Error("the controller's LaunchDaemon file was removed")
+	}
+}
