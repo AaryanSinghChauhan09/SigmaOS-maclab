@@ -554,6 +554,38 @@ func TestTheMaintenanceRunsDryRunChangesNothing(t *testing.T) {
 	}
 }
 
+// The second half has no dry run: asked for one, it refuses, and the run
+// that waits is left as it was, for the real second half.
+func TestTheSecondHalfsDryRunChangesNothing(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.newer("cloudflared", "2.0", "")
+	r.went()
+	r.ops.set(func(o *ops) { o.lines = nil })
+	r.latest("v0.2.0")
+	waiting := []string{"usr/local/lab/maintenance/run", "usr/local/lab/maintenance/upgraded", "Library/LaunchDaemons/" + maintenanceLabel + ".plist"}
+
+	for _, args := range [][]string{{"--dry-run", "--after-restart"}, {"--after-restart", "--dry-run"}} {
+		os.Remove(r.log)
+		out := r.stopped(args...)
+		if !strings.Contains(out, "no dry run") || !strings.Contains(out, "nothing was changed") {
+			t.Errorf("maintenance %v said:\n%s", args, out)
+		}
+		if calls := r.callsOrNone(); calls != "" {
+			t.Errorf("maintenance %v called:\n%s", args, calls)
+		}
+		for _, f := range waiting {
+			if !exists(r.path(f)) {
+				t.Errorf("maintenance %v removed %s", args, f)
+			}
+		}
+		if len(r.ops.told()) != 0 {
+			t.Errorf("maintenance %v told \"Agents\" %q", args, r.ops.told())
+		}
+	}
+	r.went("--after-restart")
+}
+
 func TestTheMaintenanceRunDeploysANewerLabRelease(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
