@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
@@ -45,13 +46,12 @@ func TestRequiredWatchdogVersionContract(t *testing.T) {
 }
 
 func TestRequiredWatchdogStoredJobRejectsOlderAgent(t *testing.T) {
-	l := newLab(t, false)
+	// The Mac runs the older lab-agent: a version set on labd's record alone
+	// is put back by the Mac's next check-in with its facts.
+	l := newLabWith(t, labConfig{agent: func(a *agent.Config) { a.Self = &agent.Self{Version: "0.8.0"} }})
 	l.baseline()
 	v := l.s.dev(l.name)
-	v.mu.Lock()
-	v.d.Facts.AgentVersion = "0.8.0"
-	boot := v.d.BootID
-	v.mu.Unlock()
+	boot := l.waitDevice(func(d api.Device) bool { return d.Facts.AgentVersion == "0.8.0" }).BootID
 	now := time.Now()
 	j := &api.Job{ID: "j1104-000000-dead", DeviceID: v.snapshot().ID, State: api.JobQueued, Created: now, Updated: now,
 		Spec: api.JobSpec{Device: l.name, Tests: []api.TestSpec{{Name: "preflight", Builtin: "boot-health", RequireWatchdog: true}}}}
