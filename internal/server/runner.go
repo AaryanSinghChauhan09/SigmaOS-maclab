@@ -703,7 +703,7 @@ func (r *jobRun) execute(ctx context.Context) (string, string) {
 			tr.Error = "the job was canceled during this test"
 		}
 		if t.Builtin == omtTest && err == nil {
-			r.omtResult(&tr)
+			r.omtResult(t.Name, &tr)
 		}
 		if r.ir != nil && err == nil {
 			switch t.Name {

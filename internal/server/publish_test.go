@@ -1077,3 +1077,35 @@ func TestTwoAsksForOneJobPublishItOnce(t *testing.T) {
 		t.Errorf("after two asks the job says %+v", o)
 	}
 }
+
+// A lab run's report is the one the test labd asked for left in the job's
+// own folder. A Mac that answers with another name, one that climbs into
+// another job's folder, gives its job no report, and nothing of the other
+// job is published as this one's.
+func TestALabRunsReportIsTheAskedTestsInTheJobsOwnFolder(t *testing.T) {
+	l := publishLab(t, nil)
+	l.lrMac("m2-max", "j416c", nil)
+	l.lrMac("m1-pro", "j316s", nil)
+	ravi := l.lrMaintainer()
+	l.ran("j-victim", "m1-pro", 0, labReport(t, "m1-pro", lrKnownGood, nil), nil)
+	for i, name := range []string{"../../../j-victim/test-omarchy-m-test", "x/../../../j-victim/test-omarchy-m-test", "../../../j-victim/test-omarchy-m-test"} {
+		j := l.ran("j-own", "m2-max", 0, nil, func(j *api.Job) { j.Result.OMT = nil })
+		os.RemoveAll(l.s.jobDir("j-own"))
+		j.State = api.JobCollecting
+		tr := api.TestResult{Name: name, Passed: true}
+		asked := omtTest
+		if i == 2 {
+			asked = name // a name labd would never have asked for
+		}
+		(&jobRun{s: l.s, j: j, v: l.s.dev("m2-max")}).omtResult(asked, &tr)
+		j.State = api.JobDone
+		l.s.updateJob(j, func(*api.Job) {})
+		if tr.Passed || j.Result.OMT != nil {
+			t.Errorf("a Mac answering %q gave its job a report: passed %v, %+v", name, tr.Passed, j.Result.OMT)
+		}
+		ravi.notPublished("j-own", http.StatusConflict, "no omarchy-m-test report")
+	}
+	if n := len(l.everyReport()); n != 0 {
+		t.Errorf("%d reports were published", n)
+	}
+}

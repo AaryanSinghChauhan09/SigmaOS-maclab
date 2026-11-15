@@ -107,12 +107,17 @@ func omtSpec() api.TestSpec {
 
 // omtResult reads the report a finished omarchy-m-test left in the job,
 // compares it with the Mac's known-good report, and records it as the new
-// baseline when this run was on the known-good kernel.
-func (r *jobRun) omtResult(tr *api.TestResult) {
+// baseline when this run was on the known-good kernel. name is the test labd
+// asked for, never the name the Mac answered with: the report is that
+// test's, inside the job's own folder.
+func (r *jobRun) omtResult(name string, tr *api.TestResult) {
 	j := r.j
-	file := omtReportFile(tr.Name)
-	path := filepath.Join(r.s.jobDir(j.ID), file)
-	data, err := os.ReadFile(path)
+	file := omtReportFile(name)
+	var data []byte
+	err := errors.New("not the job's own file")
+	if filepath.IsLocal(file) && !strings.ContainsAny(name, `/\`) {
+		data, err = os.ReadFile(filepath.Join(r.s.jobDir(j.ID), file))
+	}
 	if err != nil {
 		if tr.Passed {
 			tr.Passed, tr.Error = false, "omarchy-m-test wrote no report"
