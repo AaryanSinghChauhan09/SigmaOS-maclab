@@ -544,6 +544,134 @@ func TestGoingBackFromAnOrdinaryReleaseKeepsWhatArrived(t *testing.T) {
 	}
 }
 
+// The way back from a release that says "No way back." is also a Deploy of
+// an older version by hand: that, too, puts the databases back as they were
+// before the marked release, and what arrived since is lost.
+func TestDeployingAnOlderVersionOverANoWayBackReleaseRestoresTheDatabases(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	m.databases()
+	old, marked := "v0.2.0", "v0.3.0"
+	bundle(t, k, filepath.Join(r.dir, old), old, true)
+	bundle(t, k, filepath.Join(r.dir, marked), marked, true)
+	noWayBack(t, k, filepath.Join(r.dir, marked), marked, true)
+	m.ok("deploy", "--from", r.from(old), old)
+	m.ok("deploy", "--from", r.from(marked), marked)
+	m.sql("labd.db", "INSERT INTO seen VALUES('after')")
+	m.sql("reports.db", "DROP TABLE seen; CREATE TABLE rewritten(x)")
+	o.set(func(o *ops) { o.lines = nil })
+
+	out := m.ok("deploy", "--from", r.from(old), old)
+
+	if m.current() != old || !m.loaded() {
+		t.Fatalf("the mini runs %q (loaded %v)\n%s", m.current(), m.loaded(), out)
+	}
+	for _, db := range []string{"labd.db", "reports.db"} {
+		if got := m.sql(db, "SELECT group_concat(what, ', ') FROM seen"); got != "before" {
+			t.Errorf("%s holds %q, want what it held before %s\n%s", db, got, marked, out)
+		}
+	}
+	order(t, m.calls(), "launchctl bootout system/"+labdLabel, "launchctl bootstrap system "+m.path("Library/LaunchDaemons/"+labdLabel+".plist"))
+	if !strings.Contains(out, marked+` says "No way back."`) {
+		t.Errorf("no word of why the databases went back:\n%s", out)
+	}
+	if got := strings.Join(o.told(), "\n"); !strings.Contains(got, "as they were before "+marked) || !strings.Contains(got, "what arrived since is lost") {
+		t.Errorf("\"Agents\" was told %q", got)
+	}
+}
+
+// An older version Deployed over a marked release that fails its check puts
+// the marked release back on the databases it had, not on the older ones.
+func TestAnOlderVersionThatFailsOverANoWayBackReleaseLeavesItItsDatabases(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.databases()
+	old, marked, bad := "v0.2.0", "v0.3.0", "v0.2.1"
+	bundle(t, k, filepath.Join(r.dir, old), old, true)
+	bundle(t, k, filepath.Join(r.dir, marked), marked, true)
+	noWayBack(t, k, filepath.Join(r.dir, marked), marked, true)
+	bundle(t, k, filepath.Join(r.dir, bad), bad, false)
+	m.ok("deploy", "--from", r.from(old), old)
+	m.ok("deploy", "--from", r.from(marked), marked)
+	m.sql("labd.db", "INSERT INTO seen VALUES('after')")
+
+	out := m.refused("deploy", "--from", r.from(bad), bad)
+
+	if m.current() != marked || !m.loaded() {
+		t.Fatalf("the mini runs %q (loaded %v)\n%s", m.current(), m.loaded(), out)
+	}
+	if got := m.sql("labd.db", "SELECT group_concat(what, ', ') FROM seen"); got != "before, after" {
+		t.Errorf("labd.db holds %q, want what %s had\n%s", got, marked, out)
+	}
+}
+
+// Going forward from a marked release is no way back: nothing is restored.
+func TestDeployingANewerVersionOverANoWayBackReleaseKeepsTheDatabases(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.databases()
+	old, marked, newer := "v0.2.0", "v0.3.0", "v0.4.0"
+	for _, tag := range []string{old, marked, newer} {
+		bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+	}
+	noWayBack(t, k, filepath.Join(r.dir, marked), marked, true)
+	m.ok("deploy", "--from", r.from(old), old)
+	m.ok("deploy", "--from", r.from(marked), marked)
+	m.sql("labd.db", "INSERT INTO seen VALUES('after')")
+
+	out := m.ok("deploy", "--from", r.from(newer), newer)
+
+	if got := m.sql("labd.db", "SELECT group_concat(what, ', ') FROM seen"); got != "before, after" {
+		t.Errorf("labd.db holds %q\n%s", got, out)
+	}
+	if strings.Contains(out, "No way back") {
+		t.Errorf("the databases went back:\n%s", out)
+	}
+}
+
+// An rc of the marked version is older than it.
+func TestAReleaseCandidateIsOlderThanItsRelease(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.databases()
+	rc, marked := "v0.3.0-rc.2", "v0.3.0"
+	bundle(t, k, filepath.Join(r.dir, rc), rc, true)
+	bundle(t, k, filepath.Join(r.dir, marked), marked, true)
+	noWayBack(t, k, filepath.Join(r.dir, marked), marked, true)
+	m.ok("deploy", "--from", r.from(rc), rc)
+	m.ok("deploy", "--from", r.from(marked), marked)
+	m.sql("labd.db", "INSERT INTO seen VALUES('after')")
+
+	out := m.ok("deploy", "--from", r.from(rc), rc)
+
+	if got := m.sql("labd.db", "SELECT group_concat(what, ', ') FROM seen"); got != "before" {
+		t.Errorf("labd.db holds %q\n%s", got, out)
+	}
+}
+
+func TestADeployDryRunOverANoWayBackReleaseNamesTheRestore(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	m.databases()
+	old, marked := "v0.2.0", "v0.3.0"
+	bundle(t, k, filepath.Join(r.dir, old), old, true)
+	bundle(t, k, filepath.Join(r.dir, marked), marked, true)
+	noWayBack(t, k, filepath.Join(r.dir, marked), marked, true)
+	m.ok("deploy", "--from", r.from(old), old)
+	m.ok("deploy", "--from", r.from(marked), marked)
+	m.sql("labd.db", "INSERT INTO seen VALUES('after')")
+	o.set(func(o *ops) { o.lines = nil })
+
+	out := m.ok("deploy", "--dry-run", "--from", r.from(old), old)
+
+	if !strings.Contains(out, "would put the databases back as they were before "+marked) {
+		t.Errorf("the dry run doesn't name the restore:\n%s", out)
+	}
+	if got := m.sql("labd.db", "SELECT group_concat(what, ', ') FROM seen"); got != "before, after" || m.current() != marked || len(o.told()) != 0 {
+		t.Errorf("a dry run changed something: labd.db %q, running %q, told %q", got, m.current(), o.told())
+	}
+}
+
 func TestADeployThatCannotCopyTheDatabasesPutsThePreviousBuildBack(t *testing.T) {
 	m, k, r := deployed(t)
 	m.ops()

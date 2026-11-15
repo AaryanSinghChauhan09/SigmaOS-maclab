@@ -24,7 +24,9 @@
 # before it, labd stays stopped, and a controller it started is stopped. Going back
 # from a release that says "No way back." (its build carries
 # deploy/no-way-back) also puts the databases back as step 4 copied them:
-# what arrived since is lost. The last three builds are kept. It names an
+# what arrived since is lost. So does a Deploy of an older version over a
+# running release that says it: the databases go back as they were before
+# that release, after step 4. The last three builds are kept. It names an
 # exact version: never "latest". It touches no tool and never calls
 # Homebrew: tools, container and macOS change in a Maintenance run; the
 # tunnel is restarted only when the build brings other routes. Needs only
@@ -76,6 +78,10 @@ switching=0
 # Set once this Deploy started the controller: a first Deploy that fails
 # stops it again.
 started_oobd=0
+# Set once this Deploy, of an older version over a release that says "No
+# way back.", began to put the databases back: going back from it puts the
+# marked release's own databases back too.
+went_back=0
 # shellcheck disable=SC2317,SC2329
 cleanup() {
   local status=$?
@@ -126,12 +132,12 @@ snapshot() {
   done
 }
 
-# restore_snapshot: the databases as they were before the Deploy of $tag.
-# Litestream is stopped meanwhile and starts on the restored files with
-# nothing of its own kept, so that it sends them whole.
+# restore_snapshot BUILD [WHY]: the databases as they were before the Deploy
+# of BUILD; WHY is said when one cannot be put back. Litestream is stopped meanwhile and starts on the restored files
+# with nothing of its own kept, so that it sends them whole.
 # shellcheck disable=SC2317,SC2329
 restore_snapshot() {
-  local dir="$BEFORE_DEPLOY/$tag" name litestream=0
+  local build="$1" dir="$BEFORE_DEPLOY/$1" name litestream=0
   no_link "$BEFORE_DEPLOY" "$dir"
   if loaded "$LITESTREAM_LABEL"; then
     stopped "$LITESTREAM_LABEL" || say "Litestream did not stop (20 s)"
@@ -142,11 +148,11 @@ restore_snapshot() {
     if [[ -f $dir/$name ]]; then
       # shellcheck disable=SC2016
       as_lab /bin/sh -c 'set -e; cp "$1" "$2.restored"; rm -rf "$2-wal" "$2-shm" "$3"; mv -f "$2.restored" "$2"' restore "$dir/$name" "$LAB_DATA/$name" "$LAB_DATA/.$name-litestream" ||
-        fail "$name could not be put back from $dir: the lab is Dark, with $tag's databases in place"
-      say "put $name back as it was before the Deploy of $tag"
+        fail "$name could not be put back from $dir${2:+: $2}"
+      say "put $name back as it was before the Deploy of $build"
     elif [[ -e $LAB_DATA/$name ]]; then
       as_lab rm -rf "$LAB_DATA/$name" "$LAB_DATA/$name-wal" "$LAB_DATA/$name-shm" "$LAB_DATA/.$name-litestream"
-      say "removed $name: there was none before the Deploy of $tag"
+      say "removed $name: there was none before the Deploy of $build"
     fi
   done
   if (( litestream )); then
@@ -251,10 +257,16 @@ verify() {
 way_back() {
   local lost=""
   switching=0 announced=0
-  if [[ -f $LAB_BUILDS/$tag/deploy/no-way-back && -d $BEFORE_DEPLOY/$tag && "$(running)" == "$tag" ]]; then
+  if (( went_back )) && [[ -d $BEFORE_DEPLOY/$tag ]]; then
+    went_back=0
+    stop_labd
+    say "the databases go back as $previous had them"
+    restore_snapshot "$tag" "the lab is Dark"
+    lost=" The databases are as $previous had them."
+  elif [[ -f $LAB_BUILDS/$tag/deploy/no-way-back && -d $BEFORE_DEPLOY/$tag && "$(running)" == "$tag" ]]; then
     stop_labd
     say "$tag says \"No way back.\": the databases go back as they were before it"
-    restore_snapshot
+    restore_snapshot "$tag" "the lab is Dark, with $tag's databases in place"
     lost=" The databases are as they were before it: what arrived since is lost."
   fi
   if [[ -n $previous ]]; then
@@ -298,7 +310,28 @@ prune() {
   done
 }
 
+# older A B: release A comes before release B; an rc before its release.
+older() {
+  local a b i x y
+  IFS=.- read -r -a a <<<"${1#v}"
+  IFS=.- read -r -a b <<<"${2#v}"
+  for i in 0 1 2; do
+    x="${a[i]}" y="${b[i]}"
+    (( 10#$x == 10#$y )) || { (( 10#$x < 10#$y )); return; }
+  done
+  x="${a[4]:-}" y="${b[4]:-}"
+  [[ -n $x ]] || return 1
+  [[ -n $y ]] || return 0
+  (( 10#$x < 10#$y ))
+}
+
 previous="$(running)"
+# Set when this Deploy goes back from a running release that says "No way
+# back." and the databases from before it are kept.
+going_back=0
+if [[ -n $previous && -f $LAB_BUILDS/$previous/deploy/no-way-back && -d $BEFORE_DEPLOY/$previous ]] && older "$tag" "$previous"; then
+  going_back=1
+fi
 if [[ $previous == "$tag" ]]; then
   if verify; then
     say "$tag is already the running build, and labd answers"
@@ -354,6 +387,9 @@ if (( DRY )); then
   if [[ -f $new/deploy/no-way-back ]]; then
     say "$tag says \"No way back.\": going back from it would put the databases back as they were before it"
   fi
+  if (( going_back )); then
+    say "$previous says \"No way back.\": would put the databases back as they were before $previous, after the copy; what arrived since would be lost"
+  fi
   exit 0
 fi
 
@@ -375,12 +411,20 @@ fi
 switching=1
 stop_labd
 snapshot
+lost=""
+if (( going_back )); then
+  went_back=1
+  say "$previous says \"No way back.\": the databases go back as they were before it"
+  restore_snapshot "$previous"
+  lost=" $previous says \"No way back.\": the databases are as they were before $previous, and what arrived since is lost."
+fi
 switch_to "$tag"
 if verify; then
   switching=0
+  went_back=0
   DRAINING=0
   prune
-  tell "Deployed $tag on the mini: labd answers $where; the Builder and the Out-of-band controller are as labd expects.${previous:+ $previous is kept as the way back.}"
+  tell "Deployed $tag on the mini: labd answers $where; the Builder and the Out-of-band controller are as labd expects.${previous:+ $previous is kept as the way back.}$lost"
   exit 0
 fi
 
