@@ -351,7 +351,7 @@ func (l *Linux) install(ctx context.Context, job, sha string, fetch Fetcher, boo
 		return "", err
 	}
 	defer os.Remove(art)
-	if out, err := exec.CommandContext(ctx, "tar", "-xf", art, "-C", x).CombinedOutput(); err != nil {
+	if out, err := combinedGroup(exec.CommandContext(ctx, "tar", "-xf", art, "-C", x)); err != nil {
 		return "", fmt.Errorf("extract: %v: %s", err, out)
 	}
 
@@ -405,7 +405,8 @@ func (l *Linux) install(ctx context.Context, job, sha string, fetch Fetcher, boo
 		os.RemoveAll(dst)
 	}
 	if err := os.Rename(src, dst); err != nil {
-		if out, err := exec.Command("cp", "-a", src, dst).CombinedOutput(); err != nil {
+		if out, err := combinedGroup(exec.CommandContext(ctx, "cp", "-a", src, dst)); err != nil {
+			os.RemoveAll(dst) // a copy cut part way; dst was not there before
 			return "", fmt.Errorf("install modules: %v: %s", err, out)
 		}
 	}
@@ -413,7 +414,7 @@ func (l *Linux) install(ctx context.Context, job, sha string, fetch Fetcher, boo
 	if image == filepath.Join(src, filepath.Base(image)) {
 		image = filepath.Join(dst, filepath.Base(image))
 	}
-	if out, err := exec.CommandContext(ctx, "depmod", "-a", krel).CombinedOutput(); err != nil {
+	if out, err := combinedGroup(exec.CommandContext(ctx, "depmod", "-a", krel)); err != nil {
 		return "", fmt.Errorf("depmod: %v: %s", err, out)
 	}
 	if err := boot(krel, image); err != nil {
@@ -424,7 +425,7 @@ func (l *Linux) install(ctx context.Context, job, sha string, fetch Fetcher, boo
 
 // grubBootFiles copies the kernel next to its entry and builds its initramfs.
 func grubBootFiles(ctx context.Context, krel, image, bootDir string) error {
-	if out, err := exec.Command("cp", image, filepath.Join(bootDir, "vmlinuz")).CombinedOutput(); err != nil {
+	if out, err := combinedGroup(exec.CommandContext(ctx, "cp", image, filepath.Join(bootDir, "vmlinuz"))); err != nil {
 		return fmt.Errorf("copy image: %v: %s", err, out)
 	}
 	ictx, cancel := context.WithTimeout(ctx, 10*time.Minute)

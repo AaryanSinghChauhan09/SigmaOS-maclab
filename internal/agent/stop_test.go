@@ -226,3 +226,33 @@ func TestAKernelImageThatIsNotARegularFileIsRefused(t *testing.T) {
 		t.Error("a FIFO vmlinuz was handed to the boot files")
 	}
 }
+
+// The programs that stage a kernel run in the command's context and group:
+// a copy that blocks (here on a FIFO, which the install refuses first) ends
+// when the command is stopped.
+func TestStagingABootFileEndsWhenItsCommandStops(t *testing.T) {
+	dir := t.TempDir()
+	image := filepath.Join(dir, "vmlinuz")
+	if err := syscall.Mkfifo(image, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// Lets a copy still blocked on the FIFO read its end.
+		if f, err := os.OpenFile(image, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			f.Close()
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- grubBootFiles(ctx, "6.99.0-labtest", image, t.TempDir()) }()
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a stopped copy of the kernel image succeeded")
+		}
+	case <-time.After(stopGrace + 3*time.Second):
+		t.Fatal("copying the kernel image did not end when its command stopped")
+	}
+}
