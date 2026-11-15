@@ -1116,3 +1116,21 @@ func TestAStaleOrFailedConfirmedRecordDoesNotPassStep28(t *testing.T) {
 	d.record("2026-11-23-confirmed.md", "# The Confirmed checklist\n\nResult: pass, what a script can check\n\nConfirmed: 2026-11-23, the owner\n")
 	d.stops(3, "", []string{"--done", "28"}, "step 28 is done", "step 29 is yours")
 }
+
+// A line of the day's record with no time, or with less than its three
+// fields, is not a step done: a hand-made 25a does not skip the opening.
+func TestALineWithoutItsTimeIsNoStepDone(t *testing.T) {
+	m := newMini(t, oldlabtest.OnOmarchyGPU)
+	d := newDay(t, m)
+	d.o.set(func() { d.o.app = existingApp })
+	d.days(strings.Fields("18 19 20 21 22a 22 23 24 24a")...)
+	was := read(t, d.state)
+	for _, line := range []string{"25a\n", "25a\t\t\n", "25a\tsoon\tthe lab opened\n", "25a\t2026-11-20 10:00\n"} {
+		write(t, d.state, was+line, 0o644)
+		os.Remove(d.sshLog)
+		out, code := d.run("", "--go")
+		if code != 1 || !strings.Contains(read(t, d.sshLog), "lab-cutover/open --m-team 14") || d.o.purges != 0 || len(d.o.writes) != 0 {
+			t.Errorf("with the line %q: exit %d, %d purges\n%s", line, code, d.o.purges, out)
+		}
+	}
+}

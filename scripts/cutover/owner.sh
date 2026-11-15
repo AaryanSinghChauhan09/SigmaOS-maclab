@@ -92,8 +92,9 @@ old_site_answers() { [[ "$(status_of "$OLD/")" == 200 ]]; }
 # sign_in_app: the client id the lab's Sign in link sends a browser to GitHub with.
 sign_in_app() { header_of "$ADDRESS/sign-in" Location | sed -n 's/.*[?&]client_id=\([^&]*\).*/\1/p'; }
 
-# The day's record: a line for each step done, "STEP<TAB>TIME<TAB>NOTE".
-done_at() { [[ -f $STATE ]] && awk -F '\t' -v s="$1" '$1 == s { print $2; found = 1; exit } END { exit !found }' "$STATE"; }
+# The day's record: a line for each step done, "STEP<TAB>TIME<TAB>NOTE". A
+# line with less, or with no time, is no step done.
+done_at() { [[ -f $STATE ]] && awk -F '\t' -v s="$1" 'NF == 3 && $1 == s && $2 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]$/ { print $2; found = 1; exit } END { exit !found }' "$STATE"; }
 note_of() { [[ -f $STATE ]] && awk -F '\t' -v s="$1" '$1 == s { print $3; exit }' "$STATE"; }
 is_done() { done_at "$1" >/dev/null 2>&1; }
 # record STEP [NOTE [TIME]]: TIME is now unless it is given.
