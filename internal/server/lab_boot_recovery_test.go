@@ -416,3 +416,46 @@ func TestAfterLabdStartsAgainItRunsRecoveryOnWhateverDidNotReturn(t *testing.T) 
 		t.Fatalf("the result was written %d times", n)
 	}
 }
+
+// A check-in whose save waits on a busy disk is not the Mac's silence: labd
+// holds the Mac's lock until it has written the record, and a look at the
+// Mac's silence after that, taken before its next check-in, must not count
+// labd's own wait as quietGrace gone by.
+func TestACheckInLabdIsSlowToSaveIsNotSilence(t *testing.T) {
+	l, clock := lostContactLab(t, labConfig{})
+	v := l.s.dev(l.name)
+	l.sim.Sleep() // the only check-in now is the test's
+	for deadline := time.Now().Add(30 * time.Second); l.s.since(v.snapshot().LastSeen) < time.Second; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the Mac kept checking in asleep")
+		}
+	}
+	d := v.snapshot()
+	ci := api.Checkin{BootID: d.BootID, Kernel: d.Kernel, Cmdline: d.Cmdline, Health: d.Health, SnapshotEligible: d.SnapshotEligible, Facts: &d.Facts}
+	tx, err := l.s.store.db.Begin() // the disk is busy: labd's writer is taken
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { v.heartbeat(ci); close(done) }()
+	// The check-in holds the Mac's lock while it waits for the writer.
+	for held := 0; held < 20; time.Sleep(time.Millisecond) {
+		if v.mu.TryLock() {
+			v.mu.Unlock()
+			held = 0
+			continue
+		}
+		held++
+	}
+	clock.Advance(2 * quietGrace)
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	v.mu.Lock()
+	lost := v.lostLocked(l.s.now())
+	v.mu.Unlock()
+	if lost {
+		t.Fatal("labd counted the Mac silent for the time it spent saving the Mac's own check-in")
+	}
+}

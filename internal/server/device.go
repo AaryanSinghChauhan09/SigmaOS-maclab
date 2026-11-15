@@ -409,6 +409,10 @@ func (v *dev) heartbeat(ci api.Checkin) {
 	}
 	if persist {
 		v.saveLocked()
+		// The write can take seconds on a busy disk, with mu held. The Mac is
+		// heard as of its end: a look at its silence taken next must not count
+		// labd's own wait.
+		v.d.LastSeen = v.s.now()
 	}
 	v.bump()
 	v.publishLocked()
