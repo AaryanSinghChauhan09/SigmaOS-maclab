@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -290,13 +291,19 @@ func (l *Linux) Crash(mode string) error {
 	if mode != "panic" {
 		return fmt.Errorf("unknown crash mode %q", mode)
 	}
-	syncDisks() // a crash test checks recovery, not FAT's tolerance of the lab's unflushed writes
-	os.WriteFile("/proc/sys/kernel/sysrq", []byte("1"), 0)
-	return os.WriteFile("/proc/sysrq-trigger", []byte("c"), 0)
+	// A crash test checks recovery, not FAT's tolerance of the lab's
+	// unflushed writes.
+	if err := syncDisks(); err != nil {
+		return fmt.Errorf("no panic: %w", err)
+	}
+	os.WriteFile(sysrqEnable, []byte("1"), 0)
+	return os.WriteFile(sysrqTrigger, []byte("c"), 0)
 }
 
-func (l *Linux) CancelBootOnce() error {
-	defer syncDisks()
+var sysrqEnable, sysrqTrigger = "/proc/sys/kernel/sysrq", "/proc/sysrq-trigger"
+
+func (l *Linux) CancelBootOnce() (err error) {
+	defer flushed(&err)
 	b, err := detectBootloader()
 	if err != nil {
 		return err
@@ -304,8 +311,8 @@ func (l *Linux) CancelBootOnce() error {
 	return b.disarm()
 }
 
-func (l *Linux) BootOnce(entry string) error {
-	defer syncDisks()
+func (l *Linux) BootOnce(entry string) (err error) {
+	defer flushed(&err)
 	b, err := detectBootloader()
 	if err != nil {
 		return err
@@ -440,8 +447,9 @@ func dirSize(dir string) uint64 {
 //
 // sync(2) cannot be cut, and a sync program inside it cannot be reaped, so
 // the bound is on lab-agent's wait: after toolTimeout it goes on without
-// the flush. A flush still under way is waited on, not started again.
-func syncDisks() {
+// the flush and says so. A flush still under way is waited on, not started
+// again.
+func syncDisks() error {
 	syncMu.Lock()
 	if syncing == nil {
 		done := make(chan struct{})
@@ -458,10 +466,16 @@ func syncDisks() {
 	syncMu.Unlock()
 	select {
 	case <-done:
+		return nil
 	case <-time.After(toolTimeout):
 		log.Printf("sync did not end within %s; going on without it", toolTimeout)
+		return fmt.Errorf("the flush to disk did not end within %s", toolTimeout)
 	}
 }
+
+// flushed adds to *err a flush that did not end: a result labd reboots or
+// resets on goes out only once the change is on disk.
+func flushed(err *error) { *err = errors.Join(*err, syncDisks()) }
 
 var (
 	syncFS  = func() { unix.Sync() }

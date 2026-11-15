@@ -380,6 +380,62 @@ func TestAHungSyncHoldsLabAgentNoLongerThanTheBound(t *testing.T) {
 	}
 }
 
+// hangSync makes every flush hang until the test ends, with a 1 s bound.
+func hangSync(t *testing.T) {
+	was, wasFS := toolTimeout, syncFS
+	toolTimeout = time.Second
+	hung := make(chan struct{})
+	syncFS = func() { <-hung }
+	t.Cleanup(func() { close(hung); toolTimeout, syncFS = was, wasFS })
+}
+
+// A flush that did not end refuses the panic: SysRq c with the lab's writes
+// still unflushed can leave the ESP's FAT corrupt, which a crash test is not
+// there to check.
+func TestAHungSyncRefusesThePanic(t *testing.T) {
+	hangSync(t)
+	dir := t.TempDir()
+	wasEnable, wasTrigger := sysrqEnable, sysrqTrigger
+	sysrqEnable, sysrqTrigger = filepath.Join(dir, "sysrq"), filepath.Join(dir, "sysrq-trigger")
+	t.Cleanup(func() { sysrqEnable, sysrqTrigger = wasEnable, wasTrigger })
+	err := (&Linux{}).Crash("panic")
+	if err == nil || !strings.Contains(err.Error(), "flush") {
+		t.Errorf("the crash: %v", err)
+	}
+	for _, f := range []string{sysrqEnable, sysrqTrigger} {
+		if _, err := os.Stat(f); err == nil {
+			t.Errorf("%s was written after a flush that did not end", filepath.Base(f))
+		}
+	}
+}
+
+// A stage, install, clean-up or one-shot whose flush did not end fails its
+// result: labd reboots or resets on it, and the change may not be on disk.
+func TestAHungSyncFailsTheResultsThatWaitOnIt(t *testing.T) {
+	hangSync(t)
+	l := &Linux{WorkDir: t.TempDir()}
+	ctx := context.Background()
+	steps := map[string]func() error{
+		"stage": func() error {
+			_, err := l.Stage(ctx, "bad/job", api.StageArgs{}, nil)
+			return err
+		},
+		"install": func() error { return l.Install(ctx, "bad/job", api.InstallArgs{}, nil) },
+	}
+	// The rest write the bootloader when they find one: run them only where
+	// there is none to write.
+	if _, err := detectBootloader(); err != nil {
+		steps["clean-up"] = func() error { return l.Cleanup("", false) }
+		steps["boot once"] = func() error { return l.BootOnce("lab-x") }
+		steps["cancel boot once"] = l.CancelBootOnce
+	}
+	for name, step := range steps {
+		if err := step(); err == nil || !strings.Contains(err.Error(), "flush") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 // A stopped lab exec's leader has the whole grace between SIGTERM and
 // SIGKILL: one that takes four seconds to clean up gets to finish.
 func TestAStoppedExecsLeaderHasTheWholeGrace(t *testing.T) {

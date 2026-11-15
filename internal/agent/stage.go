@@ -26,9 +26,8 @@ import (
 
 func (l *Linux) jobDir(job string) string { return filepath.Join(l.WorkDir, "jobs", job) }
 
-func (l *Linux) Stage(ctx context.Context, job string, a api.StageArgs, fetch Fetcher) (api.StageResult, error) {
-	defer syncDisks()
-	var res api.StageResult
+func (l *Linux) Stage(ctx context.Context, job string, a api.StageArgs, fetch Fetcher) (res api.StageResult, err error) {
+	defer flushed(&err)
 	if strings.ContainsAny(job, "/. ") || job == "" {
 		return res, fmt.Errorf("bad job id %q", job)
 	}
@@ -467,8 +466,8 @@ func (l *Linux) removeJob(job string) error {
 	return nil
 }
 
-func (l *Linux) Cleanup(job string, all bool) error {
-	defer syncDisks()
+func (l *Linux) Cleanup(job string, all bool) (err error) {
+	defer flushed(&err)
 	return cleanupAfterMesa(l.cleanupMesa(job, all), func() error { return l.cleanupKernel(job, all) })
 }
 

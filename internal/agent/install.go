@@ -49,8 +49,8 @@ func checkInstall(a api.InstallArgs) error {
 	return nil
 }
 
-func (l *Linux) Install(ctx context.Context, job string, a api.InstallArgs, fetch Fetcher) error {
-	defer syncDisks()
+func (l *Linux) Install(ctx context.Context, job string, a api.InstallArgs, fetch Fetcher) (err error) {
+	defer flushed(&err)
 	if strings.ContainsAny(job, "/. ") || job == "" {
 		return fmt.Errorf("bad job id %q", job)
 	}
