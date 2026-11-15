@@ -301,7 +301,12 @@ func (d *day) script(typed, name string, args ...string) (string, int) {
 	cmd.Env = d.env
 	cmd.Dir = d.m.base
 	cmd.Stdin = strings.NewReader(typed)
+	// The stand-ins answer on their own goroutines: taking their lock before
+	// and after the script orders the test's plain reads and writes of their
+	// fields with the script's requests.
+	d.o.set(func() {})
 	out, err := cmd.CombinedOutput()
+	d.o.set(func() {})
 	said := strings.ReplaceAll(string(out), d.m.base, "")
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {

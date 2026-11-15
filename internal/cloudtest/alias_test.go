@@ -356,12 +356,18 @@ func (p *porkbun) sent() []call {
 // calls Cloudflare for nothing.
 func (p *porkbun) run(args ...string) (string, int) {
 	p.t.Helper()
+	// The stand-in answers on its own goroutines: taking its lock before and
+	// after the script orders the test's plain use of p.records with it.
+	p.mu.Lock()
+	p.mu.Unlock()
 	out, code := script(p.t, nil, []string{"LAB_PORKBUN_API=" + p.srv.URL + "/api/json/v3", "PORKBUN_API_KEY=" + porkbunKey, "PORKBUN_SECRET_KEY=" + porkbunSecret}, recordScript, args...)
 	for _, secret := range []string{porkbunKey, porkbunSecret} {
 		if strings.Contains(out, secret) {
 			p.t.Errorf("%s printed a key", recordScript)
 		}
 	}
+	p.mu.Lock()
+	p.mu.Unlock()
 	return out, code
 }
 

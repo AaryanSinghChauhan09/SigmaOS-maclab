@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -478,8 +479,11 @@ func TestTheOwnersCopyIsAMirrorOfTheRepositoryAndOfEveryReleasesFiles(t *testing
 	if got := h.git("--git-dir", mirror+"/omarchy-maclab.git", "rev-parse", "main"); got != h.git("-C", h.repo, "rev-parse", "HEAD") {
 		t.Errorf("the mirror's main is %s after a new commit", got)
 	}
-	if !exists(mirror+"/releases/v0.2.0/lab-server-darwin-arm64.tar.gz") || h.fetched["/download/v0.2.0-rc.1/lab-server-darwin-arm64.tar.gz"] != 1 {
-		t.Errorf("the second night fetched %v", h.fetched)
+	h.mu.Lock()
+	fetched := maps.Clone(h.fetched)
+	h.mu.Unlock()
+	if !exists(mirror+"/releases/v0.2.0/lab-server-darwin-arm64.tar.gz") || fetched["/download/v0.2.0-rc.1/lab-server-darwin-arm64.tar.gz"] != 1 {
+		t.Errorf("the second night fetched %v", fetched)
 	}
 
 	// A file whose name would leave the mirror's folder stops the run.
@@ -495,7 +499,9 @@ func TestAFailedMirrorWritesItsAlertAndTheMiniSendsIt(t *testing.T) {
 	g.ok("setup")
 	h := newHub(t, g)
 	h.release("v0.2.0", "lab-server-darwin-arm64.tar.gz")
+	h.mu.Lock()
 	h.down = true
+	h.mu.Unlock()
 	out, code := g.run("mirror")
 	line := read(t, g.path("srv/lab-backup/sftp/status/mirror"))
 	if s := strings.Fields(line); code == 0 || len(s) < 4 || s[0] != "failed" || !strings.HasSuffix(strings.TrimSpace(line), " the list of Lab releases") {
