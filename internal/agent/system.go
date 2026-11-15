@@ -131,4 +131,7 @@ type JoinFacts struct {
 	Space      string
 	Snapshot   error // why the system cannot be snapshotted; nil when it can
 	OnBattery  bool
+	// Installed is the number of the lab-agent installed on the Mac, ""
+	// when there is none or it is this very program.
+	Installed string
 }

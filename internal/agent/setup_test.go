@@ -314,6 +314,17 @@ func TestJoinStopsNamingEachThingTheLabNeedsToRestartTheMac(t *testing.T) {
 	}, "Limine config enrollment is on", "missing objcopy", "missing chattr", "less than 300 MB free")
 }
 
+// Every install of an agent refuses an older one: a Join command whose
+// lab-agent is older than the one on the Mac stops before anything changes.
+func TestJoinStopsWhenTheInstalledAgentIsNewer(t *testing.T) {
+	stops(t, func(f *JoinFacts) { f.Installed = "99.1.0" }, "lab-agent 99.1.0 is installed", "older", Version)
+	lab, sim := newJoinLab(t), goodMac(t)
+	sim.SetJoinFacts(func(f *JoinFacts) { f.Installed = Version })
+	if run := lab.join(sim, "yes\n\n", nil); run.err != nil {
+		t.Errorf("the same lab-agent again: %v", run.err)
+	}
+}
+
 // Rows 8 and 9 only warn: the Mac joins.
 func TestJoinWarnsAndGoesOnWhenTheSystemCannotBeSnapshottedOrIsOnBattery(t *testing.T) {
 	for want, edit := range map[string]func(*JoinFacts){

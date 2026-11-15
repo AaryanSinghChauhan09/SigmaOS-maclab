@@ -295,6 +295,9 @@ func precheck(f JoinFacts, server string) prechecked {
 			p.Other = in
 		}
 	}
+	if f.Installed != "" && !api.VersionAtLeast(Version, f.Installed) {
+		stop("lab-agent %s is installed on this Mac, and this one is %s, older: an older lab-agent is never installed over a newer one. Ask the lab's Maintainers to bring the lab's lab-agent up to date", f.Installed, Version)
+	}
 	if tag := jobTag(f.Cmdline); tag != "" {
 		stop("this Mac is running a lab kernel (job %s): restart into your own kernel first", tag)
 	}

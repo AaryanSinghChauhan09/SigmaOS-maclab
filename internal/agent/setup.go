@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/labhttp"
 )
 
@@ -175,7 +176,8 @@ func (l *Linux) Home() (configPath, work string) {
 }
 
 // JoinFacts reads this Mac for the Join command's pre-checks. It changes
-// nothing: files are read, and findmnt and the PATH are asked.
+// nothing: files are read, findmnt and the PATH are asked, and the
+// lab-agent installed, when it is another program, is asked its number.
 func (l *Linux) JoinFacts(token string) JoinFacts {
 	_, work := l.Home()
 	f := JoinFacts{OS: runtime.GOOS, EUID: os.Geteuid(), SudoUID: os.Getenv("SUDO_UID")}
@@ -191,6 +193,7 @@ func (l *Linux) JoinFacts(token string) JoinFacts {
 		f.Enrolled = cfg
 	}
 	f.Resuming = resuming(work, token)
+	f.Installed = installedVersion()
 	_, _, f.Cmdline = l.Identity()
 	if f.OS != "linux" {
 		return f
@@ -628,6 +631,24 @@ func entryInitrd(cfg, image string) string {
 	return ""
 }
 
+// installedVersion is the number of the lab-agent installed at binPath, ""
+// when there is none or it is the program running.
+func installedVersion() string {
+	self, err := os.Executable()
+	if err != nil || self == binPath {
+		return ""
+	}
+	if _, err := os.Stat(binPath); err != nil {
+		return ""
+	}
+	number, _, err := versionOf(context.Background(), binPath)
+	if err != nil {
+		return ""
+	}
+	return number
+}
+
+// installBinary puts this program at binPath, never over a newer lab-agent.
 func installBinary() error {
 	self, err := os.Executable()
 	if err != nil {
@@ -635,6 +656,9 @@ func installBinary() error {
 	}
 	if self == binPath {
 		return nil
+	}
+	if have := installedVersion(); have != "" && !api.VersionAtLeast(Version, have) {
+		return fmt.Errorf("lab-agent %s is installed, and this one is %s, older: an older lab-agent is never installed over a newer one", have, Version)
 	}
 	src, err := os.Open(self)
 	if err != nil {
