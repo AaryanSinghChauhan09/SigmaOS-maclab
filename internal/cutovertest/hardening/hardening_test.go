@@ -383,7 +383,9 @@ case "$*" in
     [ -z "$kind" ] || echo "found=$kind" ;;
   "page "*"marked as M team"*" /people?open=42")
     [ -z "${H08_RECORD_AT:-}" ] || LAB_ADDRESS="$H08_RECORD_AT" exec "$H08_REAL_PROBE" "$@"
-    echo status=200; [ -z "${H08_MARKED_BY-owner}" ] || echo "found=${H08_MARKED_BY-owner}" ;;
+    by="${H08_MARKED_BY-owner}"
+    [ ! -f "$S/cut" ] || by="${H08_MARKED_AFTER_CUT:-$by}"
+    echo status=200; [ -z "$by" ] || echo "found=$by" ;;
   "page "*"--find /me/tokens/"*) [ -z "${H08_ME_FAILS:-}" ] || { echo status=500; exit 0; }; echo status=200; echo found=7 ;;
   "page "*"--find /people/"*"end-all-access"*) echo status=200; echo found=42 ;;
   "page "*"<h1>@"*" /me") echo status=200; echo found=owner ;;
@@ -394,9 +396,37 @@ case "$*" in
     touch "$S/marked"
     [ -z "${H08_MARK_HANGS:-}" ] || { touch "$S/posted"; exec sleep 30; }
     echo "status=${H08_MARK:-303}" ;;
+  "form "*" /people/42/end-all-access sure=yes") touch "$S/cut"; echo status=303 ;;
   "form "*" /people/42/m-team/remove sure=yes") echo status=303 ;;
   *) echo status=500 ;;
 esac`
+
+// At its normal end H 8 looks at the mark again right before it takes it
+// off: one another Maintainer gave in its place while the owner answered a
+// question stays theirs.
+func TestH08sNormalEndTakesOffOnlyItsOwnMark(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		env     []string
+		code    int
+		removed bool
+		want    string
+	}{
+		"its own mark":                        {nil, 0, true, "the owner took the M team mark off someone again"},
+		"a mark replaced while it was asking": {[]string{"H08_MARKED_AFTER_CUT=maint"}, 3, false, "left: @maint marked someone as M team, not this test"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out, code, record, calls := labRun(t, "h08-agents-lines", "", h08Probe, "session\nyes\nyes\nyes\nyes\n", c.env, "--other", "someone")
+			if code != c.code || !strings.Contains(record, c.want) {
+				t.Fatalf("exit %d, want %d and %q\n%s\n%s", code, c.code, c.want, out, record)
+			}
+			if got := strings.Contains(calls, "/people/42/m-team/remove"); got != c.removed {
+				t.Errorf("the mark taken off: %v, want %v:\n%s", got, c.removed, calls)
+			}
+		})
+	}
+}
 
 // A mark whose answer was lost is taken off only when People's record shows
 // it is the owner's, whose browser H 8 is: another Maintainer's mark made
