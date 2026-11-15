@@ -12,6 +12,8 @@
 #           "Omarchy Mac Lab": it shows the link only as a QR code, drawn by
 #           the Deployed labd (labd qr), to scan in Signal on his phone, under
 #           Settings, Linked devices. Lines then come from his own number.
+#           It needs a build after v0.2.0-rc.0 Deployed and a terminal of at
+#           least 24 rows and 45 columns, and refuses before stopping anything.
 # register  or: asks for a number of the sender's own, the captcha link and
 #           the code Signal sends by SMS, and registers it with signal-cli.
 # groups    lists the groups the sender was added to, with their ids. What
@@ -35,7 +37,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/lib.sh
 . "$here/lib.sh"
 
-usage() { sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 while [[ ${1:-} == --dry-run ]]; do
   DRY=1
