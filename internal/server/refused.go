@@ -37,6 +37,8 @@ type refusals struct {
 	swept time.Time
 	// told is whether "Agents" was told the limiter refuses an address.
 	told bool
+	// looking is held by a look from its finding to its line (refusedLook).
+	looking sync.Mutex
 }
 
 // refusedAddress is one address's count over the refusedWindow that began
@@ -110,8 +112,11 @@ func (l *refusals) addresses() int {
 }
 
 // refusedLook tells "Agents" when the limiter refuses nobody any more.
-// labd looks every second (monitor).
+// labd looks every second (monitor). A look waits for one under way: when
+// it returns, whatever that one found is told.
 func (s *Server) refusedLook() {
+	s.refusals.looking.Lock()
+	defer s.refusals.looking.Unlock()
 	if s.refusals.quiet(s.now()) {
 		s.agents.LimiterQuiet()
 	}

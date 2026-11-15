@@ -147,6 +147,33 @@ func TestTheLimiterTellsAgentsOnceAndWhenItRefusesNobody(t *testing.T) {
 	}
 }
 
+// labd's own look every second and another at the same moment tell
+// "Agents" once, and whichever look returns, the line is in by then: one
+// that found the other telling waits for it.
+func TestTwoLooksAtOnceTellAgentsOnceAndBothSeeItDone(t *testing.T) {
+	l := newLimitedLab(t)
+	for i := 0; i < 2000; i++ {
+		l.s.refusals.mu.Lock()
+		l.s.refusals.told = true
+		l.s.refusals.mu.Unlock()
+		l.s.agents.LimiterRefusing()
+		before := len(l.told())
+		other := make(chan struct{})
+		go func() {
+			defer close(other)
+			l.s.refusedLook()
+		}()
+		l.s.refusedLook()
+		if got := l.told(); len(got) != before+1 || got[len(got)-1] != limiterQuiet {
+			t.Fatalf("look %d: when it returned, \"Agents\" had %d lines more, want the one:\n%s", i, len(got)-before, strings.Join(got[before:], "\n"))
+		}
+		<-other
+		if got := l.told(); len(got) != before+1 {
+			t.Fatalf("look %d: \"Agents\" was told %d times", i, len(got)-before)
+		}
+	}
+}
+
 // A labd that starts refuses nobody: what it counted went with the labd
 // before it.
 func TestALabdThatStartsEndsTheLimitersTrouble(t *testing.T) {
