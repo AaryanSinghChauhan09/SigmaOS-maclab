@@ -911,3 +911,27 @@ func TestAFirstDeployThatFailsStopsTheControllerItStarted(t *testing.T) {
 		t.Error("the controller's LaunchDaemon file was removed")
 	}
 }
+
+// A controller that does not stop runs from the build: the build stays, and
+// the way back says it is incomplete.
+func TestAFirstDeployWhoseControllerDoesNotStopKeepsItsBuild(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.installedController()
+	write(t, filepath.Join(filepath.Dir(m.root), "state", "bootout.sticks."+oobdLabel), "", 0o644)
+	write(t, m.bin+"/sleep", "#!/bin/sh\n", 0o755)
+	bad := "v0.2.0-rc.1"
+	bundle(t, k, filepath.Join(r.dir, bad), bad, false)
+
+	out := m.refused("deploy", "--from", r.from(bad), bad)
+
+	if !m.oobdLoaded() || m.loaded() {
+		t.Fatalf("controller loaded %v, labd loaded %v\n%s", m.oobdLoaded(), m.loaded(), out)
+	}
+	if m.current() != bad || !reflect.DeepEqual(m.builds(), []string{bad}) || !exists(m.path("usr/local/lab/current/bin/labd")) {
+		t.Errorf("the controller's build is gone: current %q, builds %v\n%s", m.current(), m.builds(), out)
+	}
+	if !strings.Contains(out, oobdLabel+" did not stop") || !strings.Contains(out, "the way back is incomplete") {
+		t.Errorf("no word of the controller left running:\n%s", out)
+	}
+}

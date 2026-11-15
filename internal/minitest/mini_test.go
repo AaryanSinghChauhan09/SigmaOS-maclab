@@ -105,7 +105,8 @@ type mini struct {
 // "loaded.<label>" for any other. The daemon is what the last argument names.
 // A test may write beside it the state and the count of starts print shows.
 // bootstrap.fails.<label> makes a bootstrap fail: a number is how many times,
-// anything else a text whose LaunchDaemon file is refused.
+// anything else a text whose LaunchDaemon file is refused. bootout.sticks.<label>
+// keeps a daemon loaded through every bootout.
 const launchctlStub = `#!/bin/bash
 echo "launchctl $*" >> "$STUB_LOG"
 label="$(basename "${!#}" .plist)"
@@ -117,7 +118,7 @@ case "$1" in
     echo "state = $(cat "$state.state" 2>/dev/null || echo running)"
     echo "runs = $(cat "$state.runs" 2>/dev/null || echo 1)"
     [[ ! -f $STUB_STATE/pid.$label ]] || echo "	pid = $(<"$STUB_STATE/pid.$label")" ;;
-  bootout) rm -f "$state" ;;
+  bootout) [[ -f $STUB_STATE/bootout.sticks.$label ]] || rm -f "$state" ;;
   bootstrap)
     [[ -f $3 ]] || exit 5
     f="$STUB_STATE/bootstrap.fails.$label"

@@ -280,8 +280,12 @@ way_back() {
     fail "$tag was not Deployed: $previous is back and answers"
   fi
   stop_labd
-  if (( started_oobd )); then
-    stopped "$OOBD_LABEL" || say "$OOBD_LABEL did not stop (20 s)"
+  # The controller runs from the build: while it runs, the build stays.
+  if (( started_oobd )) && ! stopped "$OOBD_LABEL"; then
+    say "$OOBD_LABEL did not stop (20 s)"
+    rm -f "$plist"
+    tell "Deploy of $tag on the mini failed its check. There was no build before it, so labd is stopped; $OOBD_LABEL, which the Deploy started, did not stop, so its build stays at $LAB_BUILDS/$tag: the way back is incomplete.$lost"
+    fail "$tag was not Deployed, and $OOBD_LABEL did not stop: the way back is incomplete. Stop it (sudo launchctl bootout system/$OOBD_LABEL), then remove $LAB_CURRENT and $LAB_BUILDS/$tag"
   fi
   rm -f "$LAB_CURRENT" "$plist"
   rm -rf "${LAB_BUILDS:?}/$tag"
