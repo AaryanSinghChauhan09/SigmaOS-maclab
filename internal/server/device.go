@@ -342,9 +342,15 @@ func (s *Server) firstBaselineEnded(v *dev, job, outcome string) {
 // heartbeat records a check-in. Commands are handed out separately by deliver.
 func (v *dev) heartbeat(ci api.Checkin) {
 	defer v.s.decideTerms(v) // after the unlock below
+	// When the check-in came, not when it got the lock: one from the old
+	// boot queued behind a slow save must not count as heard after a
+	// reboot's grace (recover.go), nor a later one be stamped earlier.
+	now := v.s.now()
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	now := v.s.now()
+	if v.heard.After(now) {
+		now = v.heard
+	}
 	rebooted := v.d.BootID != "" && ci.BootID != v.d.BootID
 	if v.d.BootID == "" {
 		if err := v.s.store.spendTokens(v.d.Name); err != nil {

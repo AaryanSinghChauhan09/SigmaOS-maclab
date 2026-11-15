@@ -539,3 +539,41 @@ func TestOneCheckInOnTheSameBootThenSilenceIsAHangNotLostContact(t *testing.T) {
 		t.Fatalf("the test the Mac hung in is not recorded as gone down with it: %s %s %+v", j.Outcome, j.Summary, j.Result.Tests)
 	}
 }
+
+// The same with the check-in queued on the Mac's lock rather than on the
+// disk, and a test kernel that hangs saying nothing (no stall on the serial
+// log to go by): whatever holds v.mu, a slow save of the Mac's record, the
+// check-in counts as of when it came, and the hang is hung.
+func TestACheckInQueuedOnTheMacsLockAcrossTheGraceIsNoSignTheMacStayedUp(t *testing.T) {
+	l := newLab(t, true)
+	l.baseline()
+	v := l.s.dev(l.name)
+	d := v.snapshot()
+	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-silent behavior=silent")})
+	var armed time.Time
+	l.waitJob(id, func(j *api.Job) bool {
+		for _, e := range j.Events {
+			if strings.HasPrefix(e.Msg, "one-shot armed") {
+				armed = e.Time
+				return true
+			}
+		}
+		return false
+	})
+	if v.snapshot().BootID != d.BootID {
+		t.Skip("the test kernel checked in before the queued check-in could be made")
+	}
+	ci := api.Checkin{BootID: d.BootID, Kernel: d.Kernel, Cmdline: d.Cmdline, Health: d.Health, SnapshotEligible: d.SnapshotEligible, Facts: &d.Facts}
+	v.mu.Lock() // a slow save holds the Mac
+	done := make(chan struct{})
+	go func() { v.heartbeat(ci); close(done) }()
+	// Let go a second before labd's wait for the Lab boot ends, so that a
+	// check-in stamped at the release would still be the Mac's last word.
+	boot := l.s.cfg.BootTimeout
+	wait := boot + max(2*boot, agent.NoContactDeadline(boot)+l.s.cfg.LabClockSkew)
+	time.Sleep(time.Until(armed.Add(wait - time.Second)))
+	v.mu.Unlock()
+	<-done
+	j := l.wait(id, 60*time.Second)
+	l.expect(j, api.OutcomeHung)
+}
