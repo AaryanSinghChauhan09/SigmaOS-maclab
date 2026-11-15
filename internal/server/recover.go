@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -90,6 +91,22 @@ type sentReset struct {
 	at   time.Time
 	prev api.DeviceState
 	boot string
+	// maybe is a reset that may have gone out (see mayHaveGone): a Mac
+	// still up on boot after it did not get it.
+	maybe bool
+}
+
+// mayHaveGone is a Hard reset's failure after it may have gone out: the
+// controller said it was going out and then failed, the connection was
+// lost before any answer, or the wait for its turn ended just as it may
+// have come. It is taken as sent, and the Mac is watched.
+type mayHaveGone struct{ error }
+
+func (e mayHaveGone) Unwrap() error { return e.error }
+
+func resetMayHaveGone(err error) bool {
+	var m mayHaveGone
+	return errors.As(err, &m)
 }
 
 // climb is the ladder. With sent, its first Hard reset is that one. It
@@ -158,15 +175,16 @@ func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duratio
 			}
 			var t0 time.Time
 			var port string
+			maybe := false
 			if i == 1 && sent != nil {
-				t0, port = sent.at, sent.port
+				t0, port, maybe = sent.at, sent.port, sent.maybe
 			} else {
 				t0 = v.s.now()
 				rctx, cancel := context.WithTimeout(ctx, time.Minute)
 				var err error
 				port, err = v.resetOOB(rctx)
 				cancel()
-				if err != nil {
+				if err != nil && !resetMayHaveGone(err) {
 					steps = append(steps, fmt.Sprintf("hard reset %d not sent: %v", i, err))
 					unreset = strings.TrimPrefix(err.Error(), "no Hard reset was sent: ")
 					if v.noHardReset() != "" {
@@ -174,10 +192,27 @@ func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duratio
 					}
 					continue
 				}
+				maybe = err != nil
 			}
 			count++
-			steps = append(steps, fmt.Sprintf("hard reset %d via the %s port", i, port))
-			if v.waitFor(ctx, bootTimeout, backSince(t0)) == nil {
+			if maybe {
+				steps = append(steps, fmt.Sprintf("hard reset %d may have gone out via the %s port", i, port))
+			} else {
+				steps = append(steps, fmt.Sprintf("hard reset %d via the %s port", i, port))
+			}
+			// A Mac a reset may have missed and that still checks in on its
+			// boot after a reboot's grace did not get it.
+			stillUp := func() bool {
+				return maybe && v.d.BootID == stuck && v.aliveLocked() && v.d.LastSeen.After(t0.Add(v.s.cfg.RebootGrace))
+			}
+			back := backSince(t0)
+			if v.waitFor(ctx, bootTimeout, func() bool { return back() || stillUp() }) == nil {
+				v.mu.Lock()
+				missed := !back()
+				v.mu.Unlock()
+				if missed {
+					steps = append(steps, fmt.Sprintf("hard reset %d did not go out: still up on its boot", i))
+				}
 				return done()
 			}
 			if why := stopped(); why != "" {

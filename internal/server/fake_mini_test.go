@@ -60,8 +60,13 @@ type fakeMini struct {
 	// each reset it began.
 	toolTime time.Duration
 	began    []int
-	client   *oob.Client
-	log      *logBuf
+	// onLook runs when the controller looks at a port under its lock,
+	// before it says a reset is going out; rebootFails is what the tool
+	// answers after each reset it sent.
+	onLook      func(rid int)
+	rebootFails error
+	client      *oob.Client
+	log         *logBuf
 }
 
 // holdProbes makes the tool's next nop run until release is called: a tool
@@ -192,6 +197,12 @@ func (m *fakeMini) Read(_ context.Context, rid int) (oob.Port, error) {
 func (m *fakeMini) Look(_ context.Context, rid int) (oob.Port, error) {
 	p := m.look(rid)
 	p.Name = ""
+	m.mu.Lock()
+	on := m.onLook
+	m.mu.Unlock()
+	if on != nil {
+		on(rid)
+	}
 	return p, nil
 }
 
@@ -219,9 +230,13 @@ func (m *fakeMini) Run(_ context.Context, rid int, command string) (string, erro
 	if c := m.cables[rid]; c != nil {
 		sim = c.sim
 	}
+	fails := m.rebootFails
 	m.mu.Unlock()
 	if sim != nil {
 		sim.PowerCycle()
+	}
+	if fails != nil {
+		return "", fails
 	}
 	return "rebooting", nil
 }

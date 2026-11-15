@@ -1553,22 +1553,28 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person) (said string
 		sent.at, sent.boot = s.now(), v.snapshot().BootID
 	}
 	mark.Unlock()
+	sent.maybe = err != nil && resetMayHaveGone(err)
 	v.mu.Lock()
 	v.resetting = false
-	if err == nil {
+	if err == nil || sent.maybe {
 		v.setStateLocked(api.StateRecovering, why)
 	}
 	v.mu.Unlock()
+	if err == nil || sent.maybe {
+		go func() {
+			steps, ok := v.climb(s.ctx, why, s.cfg.BootTimeout, false, &sent)
+			s.log.Printf("%s: %s: ok=%v steps=%v", name, why, ok, steps)
+		}()
+	}
 	if err != nil {
 		if ferr := s.fence(v, p, fenceReset); ferr != nil {
 			return "", ferr
 		}
+		if sent.maybe {
+			return "", fmt.Errorf("%w; the lab watches %s as after a reset", err, name)
+		}
 		return "", err
 	}
-	go func() {
-		steps, ok := v.climb(s.ctx, why, s.cfg.BootTimeout, false, &sent)
-		s.log.Printf("%s: %s: ok=%v steps=%v", name, why, ok, steps)
-	}()
 	if back {
 		said = name + " had left the lab (lab-agent uninstall); the reset puts it back in. "
 	}

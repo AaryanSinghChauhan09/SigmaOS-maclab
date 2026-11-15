@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -844,4 +845,76 @@ func TestAMacThatRestartsWhileItsResetWaitsIsNotTakenAsRecovered(t *testing.T) {
 		t.Fatalf("the ladder ended (%s) with the Mac on the boot it restarted to by itself, before the reset's reboot", said)
 	}
 	l.wantResets("the one reset", portRight)
+}
+
+// A person's Hard reset that may have gone out is taken as sent: the Mac
+// takes no job, and the ladder watches it come back. Here the wait for the
+// controller's turn ends as the controller begins the reset, so labd hears
+// no 102 while the tool resets the Mac.
+func TestAResetCalledOffAsTheControllerBeginsItIsWatchedAsSent(t *testing.T) {
+	l := sightLab(t, labConfig{config: func(c *Config) { c.ResetWait = 300 * time.Millisecond }})
+	l.baseline()
+	l.oob.mu.Lock()
+	l.oob.onLook = func(int) { time.Sleep(800 * time.Millisecond) } // past labd's wait
+	l.oob.mu.Unlock()
+	before := l.bootOf(l.name)
+	r, body := l.resetAs(harnessToken, l.name, "")
+	if r.StatusCode == http.StatusOK {
+		t.Fatalf("a reset whose wait ended first: %s %s", r.Status, body)
+	}
+	if s := l.s.dev(l.name).snapshot().State; s != api.StateRecovering {
+		t.Errorf("the Mac whose reset may have gone out is %s", s)
+	}
+	said := l.ladderSaid()
+	if !strings.Contains(said, "ok=true") || l.bootOf(l.name) == before {
+		t.Fatalf("the ladder after a reset that went out unheard: %s", said)
+	}
+	l.wantResets("the reset the controller began", portRight)
+}
+
+// A reset whose tool fails after the controller said it was going out may
+// have reset the Mac: it is taken as sent, and the ladder watches.
+func TestAResetThatFailsAfterItWentOutIsWatchedAsSent(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	l.oob.mu.Lock()
+	l.oob.rebootFails = errors.New("exit status 1: lost the port's partner")
+	l.oob.mu.Unlock()
+	before := l.bootOf(l.name)
+	r, body := l.resetAs(harnessToken, l.name, "")
+	if r.StatusCode == http.StatusOK || !strings.Contains(body, "may have gone out") {
+		t.Fatalf("a reset whose tool failed after it began: %s %s", r.Status, body)
+	}
+	said := l.ladderSaid()
+	if !strings.Contains(said, "ok=true") || l.bootOf(l.name) == before {
+		t.Fatalf("the ladder after a reset whose tool failed: %s", said)
+	}
+	l.wantResets("the reset the tool sent", portRight)
+}
+
+// A reset that may have gone out and did not leaves the Mac as it was once
+// it is seen still up on its boot: no second reset, and no person asked.
+func TestAResetThatMayHaveGoneOutAndDidNotEndsWithTheMacUp(t *testing.T) {
+	l := sightLab(t, labConfig{config: func(c *Config) { c.ResetWait = 300 * time.Millisecond }})
+	l.baseline()
+	probing, release := l.oob.holdProbes(t)
+	probed := make(chan error, 1)
+	go func() { _, err := l.oob.client.Probe(context.Background(), portLeft); probed <- err }()
+	<-probing
+	r, body := l.resetAs(harnessToken, l.name, "")
+	if r.StatusCode == http.StatusOK || !strings.Contains(body, "no Hard reset was sent") {
+		t.Fatalf("a reset whose turn did not come: %s %s", r.Status, body)
+	}
+	release()
+	if err := <-probed; err != nil {
+		t.Fatal(err)
+	}
+	if said := l.ladderSaid(); !strings.Contains(said, "ok=true") {
+		t.Fatalf("the watch of a reset that did not go out: %s", said)
+	}
+	if s := l.s.dev(l.name).snapshot().State; s != api.StateReady {
+		t.Errorf("after the watch the Mac is %s", s)
+	}
+	time.Sleep(300 * time.Millisecond)
+	l.wantResets("no reset went out")
 }

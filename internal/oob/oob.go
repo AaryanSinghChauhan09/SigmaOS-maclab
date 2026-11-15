@@ -163,7 +163,9 @@ func (c *Client) Probe(ctx context.Context, rid int) (Port, error) {
 //
 // ctx bounds the wait for the controller's turn. Once the controller says
 // the reset is going out (102), its answer is waited for whatever ctx does:
-// a reset that went out is never reported as not sent.
+// a reset that went out is never reported as not sent. A failure after
+// that, or a connection lost after the request reached the controller and
+// before any answer, is *MaybeSent.
 func (c *Client) Reset(ctx context.Context, rid int, seen *Seen) error {
 	var body []byte
 	if seen != nil {
@@ -173,7 +175,7 @@ func (c *Client) Reset(ctx context.Context, rid int, seen *Seen) error {
 	run, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	var mu sync.Mutex
-	sending := false
+	sending, wrote, answered := false, false, false
 	stop := context.AfterFunc(ctx, func() {
 		mu.Lock()
 		defer mu.Unlock()
@@ -182,24 +184,42 @@ func (c *Client) Reset(ctx context.Context, rid int, seen *Seen) error {
 		}
 	})
 	defer stop()
-	run = httptrace.WithClientTrace(run, &httptrace.ClientTrace{Got1xxResponse: func(code int, _ textproto.MIMEHeader) error {
-		if code == http.StatusProcessing {
+	run = httptrace.WithClientTrace(run, &httptrace.ClientTrace{
+		WroteRequest: func(i httptrace.WroteRequestInfo) {
 			mu.Lock()
-			first := !sending
-			sending = true
+			wrote = wrote || i.Err == nil
 			mu.Unlock()
-			if first && onSending != nil {
-				onSending()
+		},
+		GotFirstResponseByte: func() {
+			mu.Lock()
+			answered = true
+			mu.Unlock()
+		},
+		Got1xxResponse: func(code int, _ textproto.MIMEHeader) error {
+			if code == http.StatusProcessing {
+				mu.Lock()
+				first := !sending
+				sending = true
+				mu.Unlock()
+				if first && onSending != nil {
+					onSending()
+				}
 			}
-		}
-		return nil
-	}})
+			return nil
+		}})
 	_, err := c.do(run, "POST", fmt.Sprintf("/v1/ports/%d/reset", rid), body, 2*time.Minute)
 	mu.Lock()
-	sent := sending
+	sent, asked, heard := sending, wrote, answered
 	mu.Unlock()
-	if err != nil && !sent && ctx.Err() != nil {
+	switch {
+	case err == nil:
+		return nil
+	case sent:
+		return &MaybeSent{Err: err}
+	case ctx.Err() != nil:
 		return &NotSent{Err: ctx.Err()}
+	case asked && !heard:
+		return &MaybeSent{Err: err}
 	}
 	return err
 }
@@ -213,8 +233,21 @@ func OnSending(ctx context.Context, f func()) context.Context {
 	return context.WithValue(ctx, sendingKey{}, f)
 }
 
-// NotSent is a reset given up before the controller began it: its caller
-// stopped waiting for its turn.
+// MaybeSent is a reset that may have gone out although no success came
+// back: the controller said it was going out and then failed, or the
+// connection was lost after the request had reached the controller. A
+// caller takes it as sent.
+type MaybeSent struct{ Err error }
+
+func (e *MaybeSent) Error() string { return "it may have gone out: " + e.Err.Error() }
+
+func (e *MaybeSent) Unwrap() error { return e.Err }
+
+// NotSent is a reset given up before the controller said it was going out:
+// its caller stopped waiting for its turn. The controller asks for its
+// caller when the turn comes, so it sends nothing then; only in the moment
+// the turn comes as the caller gives up may it still begin the reset, which
+// is why labd watches the Mac after a NotSent as after a reset.
 type NotSent struct{ Err error }
 
 func (e *NotSent) Error() string {
