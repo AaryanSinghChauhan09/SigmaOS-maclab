@@ -114,6 +114,46 @@ shasum -a 256 "$2" | cut -d' ' -f1
 	}
 }
 
+// A part seen partly received when lab is stopped and finished after the
+// kill, from bytes lab had sent before it, was not cut: FD 4 fails though
+// the resume says it resumed and prints the right SHA-256.
+func TestFD04APartFinishedAfterTheKillDoesNotPass(t *testing.T) {
+	real := bins(t)
+	dir := t.TempDir()
+	for _, tool := range []string{"labd", "lab-agent"} {
+		if err := os.Symlink(filepath.Join(real, tool), filepath.Join(dir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wrapper := `#!/bin/bash
+[[ $1 == upload ]] || exec "` + real + `/lab" "$@"
+sha="$(shasum -a 256 "$2" | cut -d' ' -f1)"
+folder="$(dirname "$HOME")/root/var/lab/data/artifacts/.upload-$sha"
+if [[ ${MACLAB_UPLOAD_PROGRESS:-} == 1 ]]; then
+  mkdir -p "$folder"
+  echo one > "$folder/1"
+  echo two > "$folder/2"
+  head -c 1000 /dev/zero > "$folder/.part-h3"
+  me=$$
+  # What lab had sent of part 3 reaches labd after the kill, which makes
+  # the part whole.
+  ( while kill -0 "$me" 2> /dev/null; do sleep 0.05; done; mv "$folder/.part-h3" "$folder/3" ) > /dev/null 2>&1 &
+  echo "lab: labd holds 2 of 7 parts" >&2
+  sleep 30
+  exit 1
+fi
+echo "lab: resuming: labd holds 3 of 7 parts" >&2
+echo "$sha"
+`
+	if err := os.WriteFile(filepath.Join(dir, "lab"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code := run(t, nil, "", frontDoor(t, "fd04-upload-resume"), "--local", "--bin", dir, "--size", fmt.Sprint(200*mib))
+	if code != 1 || !strings.Contains(out, ": fail") || !strings.Contains(out, "no part was cut mid-way") || strings.Contains(out, "checksum") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
 // A stop while lab is stopped for the cut (here, while labd's folder is
 // read) ends the run: the stopped lab is killed, not waited for.
 func TestFD04StoppedWhileLabIsStoppedEnds(t *testing.T) {
