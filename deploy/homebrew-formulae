@@ -22,5 +22,5 @@ benbjohnson/litestream/litestream   # both databases to the house, a second behi
 restic        # the nightly backup: deploy/org.omarchy-mac.lab.backup.plist
 
 # Not qrencode: its program loads libpng from /opt/homebrew, so the copy would
-# refuse it. scripts/mini/signal link runs Homebrew's own, as the lab account,
-# and without it prints the link alone, to the terminal only.
+# refuse it. scripts/mini/signal link has the Deployed labd draw the QR code
+# (labd qr), and uses no qrencode at all.

@@ -1,6 +1,8 @@
 package minitest
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -315,9 +317,20 @@ esac
 
 const linkURL = "sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=dGVzdC1wdWJsaWMta2V5"
 
-// The owner links the sender to his own number: the link is shown as a QR
-// code to scan in Signal on his phone, or alone on the terminal when there is
-// no qrencode, and it is never traced, an argument of anything nor written down.
+// labdQR plays the Deployed labd's qr: it reads one line and draws, in place
+// of a QR code, the line's SHA-256, so that a test sees which line it drew
+// without the line itself reaching any output.
+const labdQR = `#!/bin/bash
+echo "labd $*" >> "$STUB_LOG"
+[[ $1 == qr ]] || exit 9
+IFS= read -r line
+printf '%s' "$line" | openssl dgst -sha256 -r | sed 's/ .*//; s/^/[QR /; s/$/]/'
+`
+
+// The owner links the sender to his own number: the link is shown only as a
+// QR code, drawn by the Deployed labd from its input, to scan in Signal on his
+// phone. It is never on the terminal as text, traced, an argument of anything
+// nor written down, and with no labd to draw it nothing is stopped.
 func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 	need(t, "openssl")
 	m := newMini(t)
@@ -333,60 +346,48 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 	data := m.path(signalData)
 
 	os.Remove(m.log)
-	if out, code := m.signal("", "--dry-run", "link"); code != 0 || !strings.Contains(out, "would") || exists(m.log) {
+	if out, code := m.signal("", "--dry-run", "link"); code != 0 || !strings.Contains(out, "would") || !strings.Contains(out, "labd") || strings.Contains(out, "qrencode") || exists(m.log) {
 		t.Fatalf("--dry-run link: exit %d\n%s\n%s", code, out, m.callsOrNone())
 	}
 
-	// No qrencode, and none on the PATH either: the link alone, on stdout, with
-	// the note that it is a secret, and the run succeeds.
-	m.env = withoutQrencode(m.env)
+	// No Deployed labd to draw the code: refused before the sender is stopped,
+	// and no link is made. Homebrew's qrencode is no way round it.
+	write(t, m.path("opt/homebrew/bin/qrencode"), "#!/bin/bash\necho \"qrencode $*\" >> \"$STUB_LOG\"\ncat\n", 0o755)
+	if out, code := m.signal("", "link"); code == 0 || !strings.Contains(out, "Deploy") || strings.Contains(out, "sgnl://") || exists(m.log) || !m.senderLoaded() {
+		t.Fatalf("link with no labd: exit %d, sender up %v\n%s\n%s", code, m.senderLoaded(), out, m.callsOrNone())
+	}
+
+	m.deployed("v0.2.0-rc.1", "")
+	labd := m.path("usr/local/lab/current/bin/labd")
+	write(t, labd, labdQR, 0o755)
+	drawn := fmt.Sprintf("[QR %x]", sha256.Sum256([]byte(linkURL)))
+	secret := linkURL[strings.Index(linkURL, "pub_key="):]
+
+	run := func(args ...string) (string, string, error) {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Env = m.env
+		cmd.Dir = filepath.Dir(m.tree)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		return stdout.String(), stderr.String(), err
+	}
 	script := filepath.Join(m.tree, "scripts", "mini", "signal")
-	cmd := exec.Command(script, "link")
-	cmd.Env = m.env
-	cmd.Dir = filepath.Dir(m.tree)
-	var stdout, stderr strings.Builder
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil || !strings.Contains(stdout.String(), linkURL) || !strings.Contains(stdout.String(), "Associated with") || !strings.Contains(stderr.String(), "a secret, good for a few minutes") {
-		t.Fatalf("link with no qrencode: %v\nstdout:\n%s\nstderr:\n%s\n%s", err, stdout.String(), stderr.String(), m.callsOrNone())
+	stdout, stderr, err := run(script, "link")
+	if err != nil || !strings.Contains(stdout+stderr, drawn) || !strings.Contains(stdout, "Associated with") || !strings.Contains(stderr, "Link a new device") {
+		t.Fatalf("link: %v\nstdout:\n%s\nstderr:\n%s\n%s", err, stdout, stderr, m.callsOrNone())
 	}
-	if strings.Contains(stderr.String(), "sgnl://") {
-		t.Errorf("the link went to stderr too:\n%s", stderr.String())
-	}
-	if strings.Contains(m.calls(), "sgnl://") || strings.Contains(m.calls(), "qrencode") {
-		t.Errorf("the link was an argument of a command, or a qrencode ran:\n%s", m.calls())
-	}
-	if !m.senderLoaded() {
-		t.Errorf("link with no qrencode left the sender stopped:\n%s", m.calls())
-	}
-	m.nothingHolds(linkURL)
-
-	// Under bash -x, the trace shows no link.
-	cmd = exec.Command("bash", "-x", script, "link")
-	cmd.Env = m.env
-	traced, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(traced), linkURL) {
-		t.Fatalf("link under bash -x with no qrencode: %v\n%s", err, traced)
-	}
-	for _, line := range strings.Split(string(traced), "\n") {
-		if strings.HasPrefix(line, "+") && strings.Contains(line, "sgnl://") {
-			t.Errorf("the trace shows the link: %s", line)
+	for name, text := range map[string]string{"stdout": stdout, "stderr": stderr} {
+		if strings.Contains(text, "sgnl://") || strings.Contains(text, secret) {
+			t.Errorf("the link is on %s as text:\n%s", name, text)
 		}
-	}
-	m.nothingHolds(linkURL)
-
-	// With qrencode: the link goes to it on its input, as the lab account.
-	os.Remove(m.log)
-	qrencode := m.path("opt/homebrew/bin/qrencode")
-	write(t, qrencode, "#!/bin/bash\necho \"qrencode $*\" >> \"$STUB_LOG\"\necho \"[QR of $(cat)]\"\n", 0o755)
-	out, code := m.signal("", "link")
-	if code != 0 || !strings.Contains(out, "[QR of "+linkURL+"]") || !strings.Contains(out, "Associated with") {
-		t.Fatalf("link with qrencode: exit %d\n%s", code, out)
 	}
 	calls := m.calls()
 	var order []int
 	for _, want := range []string{
 		"launchctl bootout system/" + signalLabel,
 		"as-lab " + m.path(signalCLI) + " --data-dir " + data + " link -n Omarchy Mac Lab",
+		"as-lab " + labd + " qr\n",
 		"launchctl bootstrap system " + m.path(signalPlist),
 	} {
 		i := strings.Index(calls, want)
@@ -395,64 +396,43 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 		}
 		order = append(order, i)
 	}
-	if !slices.IsSorted(order) || !m.senderLoaded() {
+	if !slices.IsSorted(order[:2]) || order[1] > order[3] || order[2] > order[3] || !m.senderLoaded() {
 		t.Errorf("link ran out of order, or left the sender stopped:\n%s", calls)
 	}
 	if strings.Contains(calls, "updateProfile") || strings.Contains(calls, " -a ") {
 		t.Errorf("link changed the owner's profile or named an account:\n%s", calls)
 	}
-
-	if !strings.Contains(m.calls(), "as-lab "+qrencode+" -t ansiutf8") {
-		t.Errorf("qrencode was not run as the lab account:\n%s", m.calls())
+	if strings.Contains(calls, "sgnl://") || strings.Contains(calls, "qrencode") {
+		t.Errorf("the link was an argument of a command, or a qrencode ran:\n%s", calls)
 	}
-	if strings.Contains(m.calls(), "sgnl://") {
-		t.Errorf("the link was an argument of a command:\n%s", m.calls())
-	}
-	filepath.Walk(m.path("var/lab"), func(p string, info os.FileInfo, err error) error {
-		if err == nil && info.Mode().IsRegular() && strings.Contains(read(t, p), "sgnl://") {
-			t.Errorf("%s holds the link", p)
-		}
-		return nil
-	})
-
-	// Run under bash -x, the trace still shows no link.
-	cmd = exec.Command("bash", "-x", script, "link")
-	cmd.Env = m.env
-	traced, err = cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(traced), "[QR of "+linkURL+"]") {
-		t.Fatalf("link under bash -x: %v\n%s", err, traced)
-	}
-	for _, line := range strings.Split(string(traced), "\n") {
-		if strings.HasPrefix(line, "+") && strings.Contains(line, "sgnl://") {
-			t.Errorf("the trace shows the link: %s", line)
-		}
-	}
-
 	m.nothingHolds(linkURL)
 
+	// Run under bash -x, the trace shows no link either.
+	cmd := exec.Command("bash", "-x", script, "link")
+	cmd.Env = m.env
+	traced, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(traced), drawn) {
+		t.Fatalf("link under bash -x: %v\n%s", err, traced)
+	}
+	if strings.Contains(string(traced), secret) {
+		t.Errorf("the trace shows the link:\n%s", traced)
+	}
+	m.nothingHolds(linkURL)
+
+	// labd failing to draw it: the link is still not shown, and the sender is
+	// started again.
+	write(t, labd, "#!/bin/bash\ncat >/dev/null\nexit 1\n", 0o755)
+	stdout, stderr, err = run(script, "link")
+	if !strings.Contains(stderr, "did not draw") || strings.Contains(stdout+stderr, "sgnl://") || !m.senderLoaded() {
+		t.Errorf("labd failing to draw: %v, sender up %v\nstdout:\n%s\nstderr:\n%s", err, m.senderLoaded(), stdout, stderr)
+	}
+
 	// signal-cli failing is a failure, and the sender is started again.
+	write(t, labd, labdQR, 0o755)
 	write(t, m.path(signalCLI), "#!/bin/bash\necho \"signal-cli $*\" >> \"$STUB_LOG\"\necho 'Link request error: Connection closed!' >&2\nexit 3\n", 0o755)
 	if out, code := m.signal("", "link"); code == 0 || !strings.Contains(out, "did not link") || !m.senderLoaded() {
 		t.Errorf("a failed link: exit %d, sender up %v\n%s", code, m.senderLoaded(), out)
 	}
-}
-
-// withoutQrencode is env with no folder on its PATH that holds a qrencode.
-func withoutQrencode(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, e := range env {
-		if dirs, ok := strings.CutPrefix(e, "PATH="); ok {
-			var keep []string
-			for _, d := range filepath.SplitList(dirs) {
-				if _, err := os.Stat(filepath.Join(d, "qrencode")); err != nil {
-					keep = append(keep, d)
-				}
-			}
-			e = "PATH=" + strings.Join(keep, string(filepath.ListSeparator))
-		}
-		out = append(out, e)
-	}
-	return out
 }
 
 // nothingHolds fails the test when any file under the test's folders holds
