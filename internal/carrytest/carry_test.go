@@ -320,7 +320,16 @@ func newMini(t *testing.T, shape oldlabtest.Shape) *mini {
 	if err := os.Symlink("builds/v0.2.0-rc.9", m.path("usr/local/lab/current")); err != nil {
 		t.Fatal(err)
 	}
-	write(t, m.path("Library/LaunchDaemons/"+labdLabel+".plist"), read(t, filepath.Join(repo(t), "deploy", labdLabel+".plist")), 0o644)
+	// Its labd has no ops socket and its file names none, so the scripts
+	// stop it with no drain: a test that wants the socket listens on it
+	// itself, and the drain is internal/minitest's to prove.
+	plist := read(t, filepath.Join(repo(t), "deploy", labdLabel+".plist"))
+	if noOps := strings.Replace(plist, "    <string>--ops-socket</string><string>/var/lab/run/ops.sock</string>\n", "", 1); noOps != plist {
+		plist = noOps
+	} else {
+		t.Fatal("labd's LaunchDaemon file names its ops socket otherwise now")
+	}
+	write(t, m.path("Library/LaunchDaemons/"+labdLabel+".plist"), plist, 0o644)
 	write(t, m.path("Library/LaunchDaemons/"+litestreamLabel+".plist"), read(t, filepath.Join(repo(t), "deploy", litestreamLabel+".plist")), 0o644)
 	write(t, m.path("var/lab/secrets/admins"), "7\n", 0o600)
 	for _, d := range []string{"var/lab", "var/lab/secrets"} {
