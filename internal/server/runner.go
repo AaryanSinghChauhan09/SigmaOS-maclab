@@ -333,7 +333,10 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		if r.serialEnabled() {
 			s.copySerial(v.d.Name, r.serial0, j.ID)
 		}
+		// The job stops counting for a drain in the step that frees the
+		// Mac, as it started counting in the one that gave it the Mac.
 		v.mu.Lock()
+		s.endJob()
 		v.d.ActiveJob, v.siteCut = "", siteCut{}
 		if v.d.State == api.StateBusy || v.d.State == api.StateRecovering {
 			v.setStateLocked(v.idleStateLocked(), "")
@@ -341,7 +344,6 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		v.sendOwedDoneLocked()
 		v.saveLocked()
 		v.mu.Unlock()
-		s.endJob()
 		s.lapse(v) // a Lease extended for this job ends with it
 	}()
 
