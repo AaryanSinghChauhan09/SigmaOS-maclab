@@ -95,7 +95,9 @@ func (s *Server) deviceLoop(v *dev) {
 		case <-tick.C():
 			v.unpark()
 			v.mu.Lock()
-			need := v.dirty && v.aliveLocked() && (v.d.State == api.StateReady || v.d.State == api.StateNew)
+			// A Mac waiting for its Volunteer to accept changed terms takes
+			// nothing from the lab, this clean-up as root included.
+			need := v.dirty && !v.termsWait && v.aliveLocked() && (v.d.State == api.StateReady || v.d.State == api.StateNew)
 			v.mu.Unlock()
 			if need {
 				if err := v.call(s.ctx, api.CmdCleanup, "", api.CleanupArgs{All: true}, 2*time.Minute, nil); err == nil {
