@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -594,5 +595,54 @@ func TestTheDrainIsOnTheOpsSocketOnly(t *testing.T) {
 	}
 	if w := opsOf(b.s, "GET", "/drain"); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET /drain: %d", w.Code)
+	}
+}
+
+// A job a Leave ends while the Mac's loop holds its own copy (waiting for
+// the Mac) stays ended: the cancel that follows marks the loop's copy, read
+// before the Leave, and its save must not write the job back queued. Nor
+// may two changes by id lose one: each reads and saves in one hold.
+func TestAJobEndedByALeaveIsNotWrittenBackByACopyReadBefore(t *testing.T) {
+	l := newLab(t, false)
+	j := &api.Job{ID: "j-left", Spec: api.JobSpec{Device: "nowhere", Baseline: true}, State: api.JobQueued, Created: time.Now()}
+	l.s.store.saveJob(j)
+	ended := func(j *api.Job) {
+		j.State, j.Outcome, j.Summary = api.JobDone, api.OutcomeCanceled, "canceled: it left the lab"
+	}
+	mark := func(j *api.Job) {
+		if j.State != api.JobDone {
+			j.Canceled = true
+		}
+	}
+
+	held, _ := l.s.store.job(j.ID) // the loop's copy, as it waits for the Mac
+	l.s.updateJobByID(j.ID, ended)
+	l.s.updateJob(held, mark)
+	if got, _ := l.s.store.job(j.ID); got.State != api.JobDone || got.Outcome != api.OutcomeCanceled {
+		t.Fatalf("a copy read before the Leave wrote the ended job back: %s %s", got.State, got.Outcome)
+	}
+
+	k := &api.Job{ID: "j-left-2", Spec: api.JobSpec{Device: "nowhere"}, State: api.JobQueued, Created: time.Now()}
+	l.s.store.saveJob(k)
+	other := make(chan struct{})
+	var once sync.Once
+	hook := func(id string) {
+		if id != k.ID {
+			return
+		}
+		once.Do(func() {
+			go func() { l.s.updateJobByID(k.ID, ended); close(other) }()
+			select { // the other change waits for this one's save, or lands in between
+			case <-other:
+			case <-time.After(300 * time.Millisecond):
+			}
+		})
+	}
+	l.s.jobRead.Store(&hook)
+	l.s.updateJobByID(k.ID, mark)
+	<-other
+	l.s.jobRead.Store(nil)
+	if got, _ := l.s.store.job(k.ID); got.State != api.JobDone {
+		t.Fatalf("a change by id between another's read and save was lost: %s canceled=%v", got.State, got.Canceled)
 	}
 }

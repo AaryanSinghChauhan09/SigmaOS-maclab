@@ -166,6 +166,9 @@ type Config struct {
 }
 
 type Server struct {
+	// jobRead, which only a test sets, runs in updateJobByID between its
+	// read of the job and its save.
+	jobRead atomic.Pointer[func(id string)]
 	cfg     Config
 	store   *store
 	reports *reports.Store
@@ -617,9 +620,24 @@ var jobMu sync.Mutex
 // updateJob changes j with f and saves it. Only lab exclude (hExclude)
 // changes a job's GateExclusion, through f; any other caller's copy of j may
 // be older than that, so j takes the stored one first.
+//
+// A job done in the store stays done: a copy read before it ended (a Mac's
+// loop holds one while the job waits for its Mac, and a Leave ends the job
+// meanwhile) takes the stored job and is not saved.
 func (s *Server) updateJob(j *api.Job, f func(*api.Job)) {
 	jobMu.Lock()
 	defer jobMu.Unlock()
+	s.updateJobLocked(j, f)
+}
+
+// updateJobLocked is updateJob under jobMu.
+func (s *Server) updateJobLocked(j *api.Job, f func(*api.Job)) {
+	if j.State != api.JobDone {
+		if stored, err := s.store.job(j.ID); err == nil && stored.State == api.JobDone {
+			*j = *stored
+			return
+		}
+	}
 	j.GateExclusion = s.store.gateExclusion(j.ID)
 	f(j)
 	s.inFlightLocked(j)
@@ -634,12 +652,17 @@ func (s *Server) updateJob(j *api.Job, f func(*api.Job)) {
 	s.hub.publish("job", j.Spec.Device, map[string]any{"id": j.ID, "device": j.Spec.Device, "state": j.State, "outcome": j.Outcome})
 }
 
+// updateJobByID is updateJob of the stored job, read and saved in one hold
+// of jobMu: no change between the two is lost.
 func (s *Server) updateJobByID(id string, f func(*api.Job)) {
 	jobMu.Lock()
+	defer jobMu.Unlock()
 	j, err := s.store.job(id)
-	jobMu.Unlock()
+	if h := s.jobRead.Load(); h != nil {
+		(*h)(id)
+	}
 	if err == nil {
-		s.updateJob(j, f)
+		s.updateJobLocked(j, f)
 	}
 }
 
