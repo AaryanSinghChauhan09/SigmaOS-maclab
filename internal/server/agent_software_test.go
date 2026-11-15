@@ -1169,3 +1169,56 @@ func TestAgentUpdateWaitsForAStartNumberHeardSinceLabdStarted(t *testing.T) {
 		t.Errorf("agent-update of an agent that sends no start number: %q", got)
 	}
 }
+
+// labd's answer to the update's result can come late (the agent waits up to
+// two minutes for it). The new lab-agent starts only within the time labd
+// gave with the update, counted from when the agent sent its result: one
+// started later could cut what labd has given the Mac since it let it go.
+func TestAnUpdateWhoseAnswerComesPastTheHoldRestartsNothing(t *testing.T) {
+	k := sshsigtest.NewKey(t)
+	handed := signedAgent(t, k, "0.11.0")
+	slow := make(chan struct{})
+	var slowOnce sync.Once
+	wrap := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-slow:
+				if r.Method == "POST" && r.URL.Path == "/api/agent/report" {
+					rec := httptest.NewRecorder()
+					h.ServeHTTP(rec, r)
+					time.Sleep(4 * time.Second)
+					for key, vals := range rec.Header() {
+						w.Header()[key] = vals
+					}
+					w.WriteHeader(rec.Code)
+					w.Write(rec.Body.Bytes())
+					return
+				}
+			default:
+			}
+			h.ServeHTTP(w, r)
+		})
+	}
+	sl := newWrappedSoftwareLab(t, k, false, agentUpdateMinAgent, func(c *Config) { c.AgentBinary, c.LabAgent = handed, "0.11.0" }, wrap)
+	sl.baseline()
+	sl.waitAgent(agentUpdateMinAgent)
+	v := sl.s.dev(sl.name)
+	v.mu.Lock()
+	v.updateHold = 3 * time.Second
+	v.mu.Unlock()
+	slowOnce.Do(func() { close(slow) })
+	resp, body := sl.post("/api/devices/"+sl.name+"/agent-update", nil)
+	var res api.AgentUpdate
+	if resp.StatusCode != 200 || json.Unmarshal([]byte(body), &res) != nil || !res.Changed {
+		t.Fatalf("agent-update: %d %s", resp.StatusCode, body)
+	}
+	for end := time.Now().Add(15 * time.Second); !strings.Contains(sl.logs.String(), "starts when lab-agent next restarts"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(end) || sl.restarts != 0 {
+			t.Fatalf("an update whose answer came past labd's hold: restarts %d\n%s", sl.restarts, sl.logs.String())
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+	if sl.restarts != 0 {
+		t.Fatalf("an update whose answer came past labd's hold restarted lab-agent %d times", sl.restarts)
+	}
+}

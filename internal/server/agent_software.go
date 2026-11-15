@@ -131,6 +131,7 @@ func (s *Server) hAgentUpdate(w http.ResponseWriter, r *http.Request) {
 	mark := &agentUpdating{}
 	v.mu.Lock()
 	d := v.d
+	hold := cmp.Or(v.updateHold, agentUpdateWait)
 	why := v.notUpdatableLocked(signed)
 	if why == "" {
 		mark.start = v.agentStart
@@ -142,7 +143,11 @@ func (s *Server) hAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var res api.AgentUpdate
-	if err := v.call(r.Context(), api.CmdAgentUpdate, "", nil, agentUpdateWait, &res); err != nil {
+	// The agent restarts within two thirds of the hold from sending its
+	// result, which is before labd has it: well inside the hold, which
+	// starts once labd's wait has ended.
+	args := agent.UpdateArgs{RestartWithinMS: (hold * 2 / 3).Milliseconds()}
+	if err := v.call(r.Context(), api.CmdAgentUpdate, "", args, agentUpdateWait, &res); err != nil {
 		if errors.Is(err, errAgentRefused) {
 			v.endUpdating(mark) // the agent's own refusal: nothing was installed
 		} else {
