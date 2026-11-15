@@ -71,7 +71,7 @@ while (( $# )); do
   esac
   shift
 done
-! (( after && DRY )) || fail "the second half has no dry run: it is what runs by itself after the restart. Without --after-restart, --dry-run says what the whole run does. nothing was changed"
+! (( after && DRY )) || fail "the second half has no dry run, and nothing was changed: it is what runs by itself after the restart. Without --after-restart, --dry-run says what the whole run does"
 [[ -z $tag || $tag =~ $RELEASE_TAG ]] || fail "\"$tag\" is not a Lab release's tag: vX.Y.Z or vX.Y.Z-rc.N"
 [[ -z $from || -n $tag ]] || fail "--from says where the files of --deploy TAG are: name the version"
 [[ -z $from || $from =~ ^(https://|file:///)[A-Za-z0-9._~/:@%+-]*$ ]] || fail "$from is neither https:// nor file:///"
