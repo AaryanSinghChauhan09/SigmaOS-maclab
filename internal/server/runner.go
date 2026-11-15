@@ -147,7 +147,9 @@ func (c *jobCancel) ask(s *Server, v *dev, id string) {
 		}
 	}
 	if j != nil {
-		s.updateJob(j, mark)
+		// The run's copy was read before: a Leave or another cancel may have
+		// ended the job in the store since, and the copy must not reopen it.
+		s.updateJobUnlessDone(j, mark)
 	} else {
 		s.updateJobByID(id, mark) // hold, which comes after, finds it asked
 	}

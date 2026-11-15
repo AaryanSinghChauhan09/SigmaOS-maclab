@@ -620,24 +620,26 @@ var jobMu sync.Mutex
 // updateJob changes j with f and saves it. Only lab exclude (hExclude)
 // changes a job's GateExclusion, through f; any other caller's copy of j may
 // be older than that, so j takes the stored one first.
-//
-// A job done in the store stays done: a copy read before it ended (a Mac's
-// loop holds one while the job waits for its Mac, and a Leave ends the job
-// meanwhile) takes the stored job and is not saved.
 func (s *Server) updateJob(j *api.Job, f func(*api.Job)) {
 	jobMu.Lock()
 	defer jobMu.Unlock()
 	s.updateJobLocked(j, f)
 }
 
+// updateJobUnlessDone is updateJob, unless the stored job is done: then j,
+// a copy read before it ended, takes the stored one and nothing is saved.
+func (s *Server) updateJobUnlessDone(j *api.Job, f func(*api.Job)) {
+	jobMu.Lock()
+	defer jobMu.Unlock()
+	if stored, err := s.store.job(j.ID); err == nil && stored.State == api.JobDone {
+		*j = *stored
+		return
+	}
+	s.updateJobLocked(j, f)
+}
+
 // updateJobLocked is updateJob under jobMu.
 func (s *Server) updateJobLocked(j *api.Job, f func(*api.Job)) {
-	if j.State != api.JobDone {
-		if stored, err := s.store.job(j.ID); err == nil && stored.State == api.JobDone {
-			*j = *stored
-			return
-		}
-	}
 	j.GateExclusion = s.store.gateExclusion(j.ID)
 	f(j)
 	s.inFlightLocked(j)

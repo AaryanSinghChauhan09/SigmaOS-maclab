@@ -616,8 +616,10 @@ func TestAJobEndedByALeaveIsNotWrittenBackByACopyReadBefore(t *testing.T) {
 	}
 
 	held, _ := l.s.store.job(j.ID) // the loop's copy, as it waits for the Mac
+	c := &jobCancel{}
+	c.hold(held)
 	l.s.updateJobByID(j.ID, ended)
-	l.s.updateJob(held, mark)
+	c.ask(l.s, nil, j.ID)
 	if got, _ := l.s.store.job(j.ID); got.State != api.JobDone || got.Outcome != api.OutcomeCanceled {
 		t.Fatalf("a copy read before the Leave wrote the ended job back: %s %s", got.State, got.Outcome)
 	}
