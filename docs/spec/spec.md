@@ -438,7 +438,7 @@ Recorded in the acceptance run, measured without a script in the page. ("The fro
 
 ## 7. Out-of-band control
 
-- **Ports.** The mini's three rear USB-C ports are three reset lines for Lab-owned Macs (left RID 1, middle RID 0, right RID 2, facing the back). Any Lab-owned Mac goes on any port; no port is written in a Mac's record. Nothing else goes on those ports; a display, if ever needed, uses HDMI. One port is addressed at a time and a Mac on another port is not disturbed; a Hard reset brings a Mac back in about 36 s. ("Out-of-band wiring"; "macvdmtool port selection on the mini")
+- **Ports.** The mini's three rear USB-C ports are three reset lines for Lab-owned Macs (left RID 1, middle RID 0, right RID 2, facing the back). Any Lab-owned Mac goes on any port; no port is written in a Mac's record. A port with a display or power on it instead, connected on CC alone with no product id, is no Mac: the controller and the port check report it so and leave it alone. One port is addressed at a time and a Mac on another port is not disturbed; a Hard reset brings a Mac back in about 36 s. ("Out-of-band wiring"; "macvdmtool port selection on the mini")
 - **Tool.** The lab's own fork, `omacom/macvdmtool`, based on the variant whose `--rid` is required and strictly parsed (`GravityLinux/macvdmtool` `d57c485`). Pinned by commit and checksum, built off the mini, installed by script.
 - **A bad RID is refused twice**: by the tool, and by the controller, which accepts only the RIDs in its own list for this host (0, 1, 2).
 - **One Out-of-band controller**: one root LaunchDaemon for all three ports, loopback only, the port named in every request, one lock so a single tool run happens at a time. Two resets asked together run one after the other.

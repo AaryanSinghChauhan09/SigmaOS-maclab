@@ -152,6 +152,9 @@ func (s *Server) run(ctx context.Context, rid int, command string) (string, erro
 	return out, err
 }
 
+// noConnection is the reset tool's answer on a port with no Mac at its far end.
+const noConnection = "No connection detected"
+
 func lastLine(s string) string {
 	l := strings.Split(strings.TrimSpace(s), "\n")
 	return l[len(l)-1]
@@ -169,6 +172,10 @@ func (s *Server) hStatus(w http.ResponseWriter, r *http.Request, rid int) {
 		out, err := s.run(r.Context(), rid, "nop")
 		s.dropTool()
 		p.Tool, p.ToolFailed = strings.TrimSpace(out), err != nil
+		// On a display or power the tool finds no Mac, which is its answer.
+		if p.NoMac && strings.Contains(out, noConnection) {
+			p.ToolFailed = false
+		}
 		if p.Tool == "" && err != nil {
 			p.Tool = err.Error()
 		}
