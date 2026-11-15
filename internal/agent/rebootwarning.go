@@ -39,8 +39,10 @@ func (a *Agent) warnBeforeReboot(ctx context.Context, c api.Command, args api.Bo
 	if err := appendAudit(a.workDir(), api.AuditEntry{Time: a.clock().Now(), Job: c.JobID, Action: action}); err != nil {
 		return fmt.Errorf("the Audit log can't be written, so lab-agent does not reboot for %s: %w", c.JobID, err)
 	}
+	// The wait ends at the time the notice names, however long the notice
+	// and the Audit log took.
 	select {
-	case <-a.clock().After(wait):
+	case <-a.clock().After(at.Sub(a.clock().Now())):
 		return nil
 	case <-ctx.Done():
 		return context.Cause(ctx)
