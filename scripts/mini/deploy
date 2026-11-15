@@ -82,6 +82,8 @@ started_oobd=0
 # way back.", began to put the databases back: going back from it puts the
 # marked release's own databases back too.
 went_back=0
+# Set when Litestream ran as the Deploy began.
+litestream_ran=0
 # shellcheck disable=SC2317,SC2329
 cleanup() {
   local status=$?
@@ -132,17 +134,30 @@ snapshot() {
   done
 }
 
+# litestream_down [WHY]: Litestream has let go of the databases, or nothing
+# is put back under it; WHY is said then.
+# shellcheck disable=SC2317,SC2329
+litestream_down() {
+  stopped "$LITESTREAM_LABEL" || fail "Litestream did not stop (20 s), so no database was put back${1:+: $1}"
+}
+
+# litestream_up: Litestream runs again if it ran when the Deploy began.
+# shellcheck disable=SC2317,SC2329
+litestream_up() {
+  if (( litestream_ran )) && ! loaded "$LITESTREAM_LABEL"; then
+    launchctl bootstrap system "$LAUNCHD_DIR/$LITESTREAM_LABEL.plist" || say "launchd did not start Litestream again"
+  fi
+}
+
 # restore_snapshot BUILD [WHY]: the databases as they were before the Deploy
-# of BUILD; WHY is said when one cannot be put back. Litestream is stopped meanwhile and starts on the restored files
-# with nothing of its own kept, so that it sends them whole.
+# of BUILD; WHY is said when one cannot be put back. Litestream is stopped
+# meanwhile and starts on the restored files with nothing of its own kept,
+# so that it sends them whole.
 # shellcheck disable=SC2317,SC2329
 restore_snapshot() {
-  local build="$1" dir="$BEFORE_DEPLOY/$1" name litestream=0
+  local build="$1" dir="$BEFORE_DEPLOY/$1" name
   no_link "$BEFORE_DEPLOY" "$dir"
-  if loaded "$LITESTREAM_LABEL"; then
-    stopped "$LITESTREAM_LABEL" || say "Litestream did not stop (20 s)"
-    litestream=1
-  fi
+  litestream_down "${2:-}"
   for name in $LAB_DATABASES; do
     no_link "$LAB_DATA/$name" "$dir/$name"
     if [[ -f $dir/$name ]]; then
@@ -155,9 +170,7 @@ restore_snapshot() {
       say "removed $name: there was none before the Deploy of $build"
     fi
   done
-  if (( litestream )); then
-    launchctl bootstrap system "$LAUNCHD_DIR/$LITESTREAM_LABEL.plist" || say "launchd did not start Litestream again"
-  fi
+  litestream_up
 }
 
 # switch_to TAG: stop labd, point the mini at that build, start labd from it
@@ -361,6 +374,7 @@ else
   mkdir -p "$LAB_BUILDS"
   mkdir "$LAB_ROOT/.deploying" 2>/dev/null || fail "another Deploy is running ($LAB_ROOT/.deploying)"
   lock="$LAB_ROOT/.deploying"
+  if loaded "$LITESTREAM_LABEL"; then litestream_ran=1; fi
   rm -rf "$LAB_BUILDS"/.incoming.*
   stage="$LAB_BUILDS/.incoming.$$"
 fi
@@ -421,8 +435,9 @@ stop_labd
 snapshot
 lost=""
 if (( going_back )); then
-  went_back=1
   say "$previous says \"No way back.\": the databases go back as they were before it"
+  litestream_down
+  went_back=1
   restore_snapshot "$previous"
   lost=" $previous says \"No way back.\": the databases are as they were before $previous, and what arrived since is lost."
 fi

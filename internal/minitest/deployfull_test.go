@@ -1006,3 +1006,18 @@ func TestAnOlderDeployOverAMarkedReleaseWithNoCopyIsRefusedWithLabdRunning(t *te
 		t.Errorf("\"Agents\" was told %q", o.told())
 	}
 }
+
+// A Litestream that does not stop is never pulled from under: the older
+// Deploy changes no database, and the marked release runs again.
+func TestAStuckLitestreamChangesNoDatabase(t *testing.T) {
+	m, _, r, old, mark := marked(t)
+	write(t, filepath.Join(filepath.Dir(m.root), "state", "bootout.sticks."+litestreamLabel), "", 0o644)
+	write(t, m.bin+"/sleep", "#!/bin/sh\n", 0o755)
+
+	out := m.refused("deploy", "--from", r.from(old), old)
+
+	theMarkedReleasesDatabases(t, m, mark, out)
+	if !strings.Contains(out, "Litestream did not stop") || !strings.Contains(out, mark+" is back and answers") {
+		t.Errorf("no word of Litestream:\n%s", out)
+	}
+}
