@@ -37,6 +37,9 @@ type Report struct {
 	AskedAccountID int64
 
 	deletionTokenDigest string
+	// signedInForgotten and askedForgotten mark a person since Forgotten
+	// (forget.go).
+	signedInForgotten, askedForgotten bool
 }
 
 // ByLab reports whether the lab published the report from a job's run; a
@@ -130,6 +133,8 @@ func scanReport(row scanner) (*Report, error) {
 	r.Body, r.CreatedAt, r.Hidden = []byte(body), time.UnixMicro(created).UTC(), hidden.Valid
 	r.MachineID, r.Handle, r.AccountID = machine.String, handle.String, accountID.Int64
 	r.LabJob, r.AskedHandle, r.AskedAccountID = labJob.String, asked.String, askedID.Int64
+	r.signedInForgotten = accountID.Valid && accountID.Int64 < 0
+	r.askedForgotten = askedID.Valid && askedID.Int64 < 0
 	return &r, nil
 }
 
