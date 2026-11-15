@@ -269,6 +269,18 @@ func TestADrainHandsTheBuilderNoBuild(t *testing.T) {
 func TestADrainHoldsASourceJobBeforeItsPreparation(t *testing.T) {
 	l := newLab(t, false)
 	l.baseline()
+	// The baseline stops counting as sent just after its Mac is Ready.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		l.s.drain.mu.Lock()
+		sent := l.s.drain.jobs
+		l.s.drain.mu.Unlock()
+		if sent == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("labd still counts %d jobs sent after the baseline", sent)
+		}
+	}
 	if w := opsOf(l.s, "POST", "/drain"); w.Body.String() != "0 0\n" {
 		t.Fatalf("draining: %q", w.Body)
 	}
