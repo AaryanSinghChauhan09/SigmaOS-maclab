@@ -198,6 +198,7 @@ type Server struct {
 	devs        map[string]*dev // by name
 	cancels     map[string]context.CancelFunc
 	cancelWhy   map[string]string // why a job in cancels was canceled, when whoever did said
+	inFlight    jobsInFlight      // under jobMu; see forgetting.go
 	hub         hub
 	builds      *buildMgr
 	notifyHooks []func(Notification)
@@ -615,6 +616,7 @@ func (s *Server) updateJob(j *api.Job, f func(*api.Job)) {
 	defer jobMu.Unlock()
 	j.GateExclusion = s.store.gateExclusion(j.ID)
 	f(j)
+	s.inFlightLocked(j)
 	if j.Result.OMT != nil {
 		// said when a job is read (withReport), never kept
 		j.Result.OMT.ReportState = ""

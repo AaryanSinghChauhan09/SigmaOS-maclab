@@ -662,6 +662,43 @@ func TestForgettingLeavesAFrozenReleasesPinnedFilesAsTheyWere(t *testing.T) {
 	}
 }
 
+// A job that runs while its person is Forgotten goes on, and what it writes
+// afterwards does not bring them back: the copy the run holds loses them at
+// the forgetting, and so does a copy read before it and saved after.
+func TestAJobRunningThroughAForgettingWritesNoHandleBack(t *testing.T) {
+	l := macLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	l.lrMac("m1", "j293", nil)
+	l.pjJob("j-41", "m1", edithID, "edith", l.clock.Now(), func(j *api.Job) {
+		j.State, j.Outcome, j.Summary = api.JobQueued, "", "waits for @edith's kernel"
+	})
+	running, _ := l.s.store.job("j-41")
+	l.s.updateJob(running, func(j *api.Job) { j.State = api.JobTesting })
+	older, _ := l.s.store.job("j-41")
+
+	ravi.did(personPath(edithID, "forget"), "sure", "yes")
+
+	if running.Maintainer != "" || running.AccountID != 0 || running.Spec.Holder != "" {
+		t.Errorf("the running job's own copy still names her: %q %d %q", running.Maintainer, running.AccountID, running.Spec.Holder)
+	}
+	l.s.updateJob(running, func(j *api.Job) { j.Events = append(j.Events, api.JobEvent{Time: l.clock.Now(), Msg: "test 1 passed"}) })
+	l.s.updateJob(older, func(j *api.Job) { j.Events = append(j.Events, api.JobEvent{Time: l.clock.Now(), Msg: "test 2 passed"}) })
+	l.s.updateJob(running, func(j *api.Job) { j.State, j.Outcome = api.JobDone, api.OutcomePass })
+	j, err := l.s.store.job("j-41")
+	if err != nil || j.State != api.JobDone {
+		t.Fatalf("the job: %+v %v", j, err)
+	}
+	if j.Maintainer != "" || j.AccountID != 0 || j.Spec.Holder != "" || strings.Contains(j.Summary, "edith") {
+		t.Errorf("the job's later events wrote her back: %q %d %q %q", j.Maintainer, j.AccountID, j.Spec.Holder, j.Summary)
+	}
+	var data string
+	l.s.store.db.QueryRow(`SELECT data FROM jobs WHERE id = 'j-41'`).Scan(&data)
+	if strings.Contains(data, "edith") || strings.Contains(data, `"account_id":7`) {
+		t.Errorf("the stored job names her:\n%s", data)
+	}
+}
+
 // Blocked ends the person's Leases, Mac sign-ins and enrollments, along with
 // the rest: their Macs Leave, and the Block says so before it is pressed.
 func TestBlockedEndsLeasesMacSignInsAndEnrollments(t *testing.T) {

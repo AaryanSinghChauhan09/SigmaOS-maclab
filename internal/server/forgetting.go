@@ -326,6 +326,9 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 	s.endLeasesOf(k.Person, endedByMaintainer(by, ""))
 	s.endEnrollmentsOf(k.AccountID, leaving{how: leftForgotten, by: by})
 
+	if err := s.forgetInJobs(f); err != nil {
+		return fmt.Errorf("the jobs: %w", err)
+	}
 	if err := s.reports.Forget(k.AccountID, k.Handle); err != nil {
 		return fmt.Errorf("reports.db: %w", err)
 	}
@@ -361,6 +364,76 @@ func (s *Server) forgetInFleet(f forgetting) {
 			}
 		}
 		v.mu.Unlock()
+	}
+}
+
+// jobsInFlight are the jobs labd holds in memory while they run: the copies
+// saved through updateJob, and the forgettings carried out since each job
+// was stored, which every later save of any copy of it applies again. A job
+// leaves both once it is saved done. Under jobMu.
+type jobsInFlight struct {
+	held   map[string]map[*api.Job]bool
+	forgot map[string][]forgetting
+}
+
+// inFlightLocked is updateJob's, under jobMu, before j is saved.
+func (s *Server) inFlightLocked(j *api.Job) {
+	fl := &s.inFlight
+	for _, f := range fl.forgot[j.ID] {
+		f.job(j)
+	}
+	if j.State == api.JobDone {
+		delete(fl.held, j.ID)
+		delete(fl.forgot, j.ID)
+		return
+	}
+	if fl.held == nil {
+		fl.held = map[string]map[*api.Job]bool{}
+	}
+	if fl.held[j.ID] == nil {
+		fl.held[j.ID] = map[*api.Job]bool{}
+	}
+	fl.held[j.ID][j] = true
+}
+
+// forgetInJobs takes the person off the jobs not done yet: the copies runs
+// hold now, and every copy saved from now on, which would otherwise write
+// them back whole.
+func (s *Server) forgetInJobs(f forgetting) error {
+	jobMu.Lock()
+	defer jobMu.Unlock()
+	jobs, err := s.store.jobs("", -1, true)
+	if err != nil {
+		return err
+	}
+	fl := &s.inFlight
+	if fl.forgot == nil {
+		fl.forgot = map[string][]forgetting{}
+	}
+	for _, j := range jobs {
+		fl.forgot[j.ID] = append(fl.forgot[j.ID], f)
+	}
+	for _, copies := range fl.held {
+		for j := range copies {
+			f.job(j)
+		}
+	}
+	return nil
+}
+
+// job takes the person off j, in place.
+func (f forgetting) job(j *api.Job) {
+	b, err := json.Marshal(j)
+	if err != nil {
+		return
+	}
+	out, changed := f.json(string(b))
+	if !changed {
+		return
+	}
+	var n api.Job
+	if json.Unmarshal([]byte(out), &n) == nil {
+		*j = n
 	}
 }
 
