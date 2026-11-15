@@ -380,6 +380,10 @@ remote() {
       fi
     done
   fi
+  what="$(sshd_match)"
+  if [[ -n $what ]]; then
+    bad "a Match block lets SSH take a password after Unlock ($what), which sshd -T does not show"
+  fi
   admin="${SUDO_USER:-$(id -un)}"
   home="$SYSROOT/Users/$admin"
   keys="$(grep -Ecs '^(ssh-|ecdsa-|sk-)' "$home/.ssh/authorized_keys")"

@@ -72,7 +72,8 @@ esac
 `
 
 // sshd reads the made-up machine's own sshd_config.d as the real one does:
-// in name order, the first value of a key standing. sshd-capitals has -T
+// in name order, the first value of a key standing, and -T leaves out what
+// follows a Match. sshd-capitals has -T
 // print its keywords as macOS 27's sshd does, PasswordAuthentication;
 // sshd-silent has it print nothing.
 const sshdStub = `#!/bin/bash
@@ -87,6 +88,7 @@ case "$1" in
       [[ -f $f ]] || continue
       while read -r key val; do
         case "$key" in
+          [Mm]atch) break ;;
           PasswordAuthentication) (( ps )) || { p="$val"; ps=1; } ;;
           KbdInteractiveAuthentication) (( ks )) || { k="$val"; ks=1; } ;;
         esac
@@ -316,6 +318,31 @@ func TestSetupMakesSSHKeysOnlyOnceTheOwnerHasAKey(t *testing.T) {
 	// The steps after it are done all the same.
 	if m.is("pmset.sleep") != "0" {
 		t.Errorf("the run stopped at sshd and left the rest undone:\n%s", out)
+	}
+}
+
+// sshd -T prints the settings outside every Match block: a Match block that
+// takes a password again is read from the files and fails the set-up.
+func TestAMatchBlockThatTakesAPasswordFailsTheSetUp(t *testing.T) {
+	m := newMini(t)
+	k := newKey(t)
+	m.ownerHasAKey()
+	m.ok("setup", "--release-key", k.signers)
+	match := m.path("etc/ssh/sshd_config.d/900-match.conf")
+	for _, text := range []string{
+		"# a Mac on the LAN\nMatch Address 192.168.0.0/16\n  PasswordAuthentication yes\n",
+		"Match User lab\n\tkbdinteractiveauthentication=yes\n",
+	} {
+		write(t, match, text, 0o644)
+		out := m.refused("setup")
+		if !strings.Contains(out, "a Match block lets SSH take a password after Unlock") || !strings.Contains(out, match) {
+			t.Errorf("a Match block %q was not noticed:\n%s", text, out)
+		}
+	}
+	// One that turns it off, or a setting before any Match, is no Match's doing.
+	write(t, match, "PasswordAuthentication no\nMatch User lab\n  PasswordAuthentication no\n", 0o644)
+	if out := m.ok("setup"); strings.Contains(out, "Match block") {
+		t.Errorf("a Match block that says no:\n%s", out)
 	}
 }
 

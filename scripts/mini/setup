@@ -1216,7 +1216,7 @@ keys_only() {
 NOT_KEYS_ONLY=""
 
 remote_login() {
-  local admin home keys says
+  local admin home keys says match
   admin="${SUDO_USER:-$(id -un)}"
   home="$(dscl_value "/Users/$admin" NFSHomeDirectory)"
   keys="$SYSROOT${home:-/Users/$admin}/.ssh/authorized_keys"
@@ -1234,6 +1234,11 @@ remote_login() {
   if (( ! DRY )) && [[ $says != "$SSHD_WANT" ]]; then
     NOT_KEYS_ONLY="SSH still takes a password after Unlock (sshd -T: ${says:-no answer}), though $SSHD_KEYS_ONLY says otherwise: a file sshd reads before it, in $(dirname "$SSHD_KEYS_ONLY") or sshd_config itself, sets it. Put that right and run the set-up again"
     say "$NOT_KEYS_ONLY"
+  fi
+  match="$(sshd_match)"
+  if (( ! DRY )) && [[ -n $match ]]; then
+    NOT_KEYS_ONLY+="${NOT_KEYS_ONLY:+; }a Match block lets SSH take a password after Unlock ($match), which sshd -T does not show. Take that line out and run the set-up again"
+    say "a Match block lets SSH take a password after Unlock ($match), which sshd -T does not show. Take that line out and run the set-up again"
   fi
 }
 

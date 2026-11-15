@@ -290,6 +290,26 @@ sshd_says() {
     END { if (NR && !n) print "neither passwordauthentication nor kbdinteractiveauthentication" }' | sort | tr '\n' ' ' | sed 's/ $//' || true
 }
 
+# sshd_match: the first line of a Match block, in sshd_config or a file of
+# sshd_config.d, that lets SSH take a password again, as "FILE: line", or
+# nothing. sshd -T prints only what holds outside every Match block. A block
+# ends with its file.
+sshd_match() {
+  local f files=()
+  for f in "$SYSROOT/etc/ssh/sshd_config" "$SYSROOT/etc/ssh/sshd_config.d"/*; do
+    [[ ! -f $f ]] || files+=("$f")
+  done
+  (( ${#files[@]} )) || return 0
+  awk '
+    FNR == 1 { inside = 0 }
+    { line = $0; sub(/^[ \t]+/, "", line); split(line, w, /[ \t]*=[ \t]*|[ \t]+/); k = tolower(w[1]) }
+    k == "" || k ~ /^#/ { next }
+    k == "match" { inside = 1; next }
+    inside && (k == "passwordauthentication" || k == "kbdinteractiveauthentication" || k == "challengeresponseauthentication") && tolower(w[2]) != "no" {
+      print FILENAME ": " line; exit
+    }' "${files[@]}" 2>/dev/null || true
+}
+
 # power_value KEY: one of pmset's settings in use.
 power_value() { sys pmset -g 2>/dev/null | awk -v key="$1" '$1 == key && !seen { print $2; seen = 1 }' || true; }
 
