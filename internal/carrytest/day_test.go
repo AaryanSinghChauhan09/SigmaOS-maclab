@@ -655,9 +655,15 @@ func TestTheDressRunOfTheDay(t *testing.T) {
 // days is a day's record holding these steps.
 func (d *day) days(steps ...string) {
 	d.t.Helper()
+	d.daysOn("2026-11-20", steps...)
+}
+
+// daysOn is the same, each step done on that day.
+func (d *day) daysOn(day string, steps ...string) {
+	d.t.Helper()
 	var b strings.Builder
 	for _, s := range steps {
-		b.WriteString(s + "\t2026-11-20 10:00\t\n")
+		b.WriteString(s + "\t" + day + " 10:00\t\n")
 	}
 	write(d.t, d.state, b.String(), 0o644)
 }
@@ -917,7 +923,7 @@ func TestTheConfirmedChecklistCoversWhatAScriptCan(t *testing.T) {
 		t.Errorf("%d daily summaries recorded for the Lab group, want the one by hand", n)
 	}
 	// The day takes step 28 only with the owner's line.
-	d.days(strings.Fields("18 19 20 21 22a 22 23 24 24a 25a 25b 25c 25 26 27")...)
+	d.daysOn(today, strings.Fields("18 19 20 21 22a 22 23 24 24a 25a 25b 25c 25 26 27")...)
 	d.stops(1, "", []string{"--done", "28"}, "step 28 is not done yet")
 	write(t, record, text+"\nConfirmed: "+today+", the owner\n", 0o644)
 	d.stops(3, "", []string{"--done", "28"}, "step 28 is done", "step 29 is yours")
@@ -1088,4 +1094,25 @@ func TestTheDaysScriptsRefuseTwoModes(t *testing.T) {
 	if d.o.asked != 0 || exists(d.sshLog) || d.done() != "18 19 20 21 22a 22 23 24 24a" {
 		t.Errorf("a refused run asked %d things, went to the mini or wrote the record (%q)", d.o.asked, d.done())
 	}
+}
+
+// Step 28 takes only a Confirmed record that passed, with the owner's line
+// dated on or after the opening.
+func TestAStaleOrFailedConfirmedRecordDoesNotPassStep28(t *testing.T) {
+	m := newMini(t, oldlabtest.OnOmarchyGPU)
+	d := newDay(t, m)
+	d.o.set(func() { d.o.stage, d.o.app = "open", existingApp })
+	d.days(strings.Fields("18 19 20 21 22a 22 23 24 24a 25a 25b 25c 25 26 27")...)
+	for _, c := range []struct{ file, text string }{
+		{"2026-11-19-confirmed.md", "Result: pass, what a script can check\n\nConfirmed: 2026-11-19, the owner\n"},
+		{"2026-11-21-confirmed.md", "Result: fail\n\nConfirmed: 2026-11-21, the owner\n"},
+		{"2026-11-22-confirmed.md", "Result: pass, what a script can check\n\nConfirmed: 2026-11-19, the owner\n"},
+	} {
+		d.record(c.file, "# The Confirmed checklist\n\n"+c.text)
+		if out, code := d.run("", "--done", "28"); code != 1 || !strings.Contains(out, "step 28 is not done yet") {
+			t.Errorf("with %s holding %q: exit %d\n%s", c.file, c.text, code, out)
+		}
+	}
+	d.record("2026-11-23-confirmed.md", "# The Confirmed checklist\n\nResult: pass, what a script can check\n\nConfirmed: 2026-11-23, the owner\n")
+	d.stops(3, "", []string{"--done", "28"}, "step 28 is done", "step 29 is yours")
 }

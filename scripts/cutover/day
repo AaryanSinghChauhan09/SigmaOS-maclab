@@ -400,7 +400,7 @@ EOF
 # seen N: at --done N, what can be checked of the owner's step. WHY says
 # what is not so.
 seen() {
-  local is
+  local is since day
   case "$1" in
     20) ! old_site_answers || { WHY="$OLD_NAME still serves the old site: the service is not stopped"; return 1; } ;;
     22) is_done 22a || { WHY="the import has not run yet: $0 --run starts it"; return 1; } ;;
@@ -415,10 +415,16 @@ seen() {
       ;;
     28)
       is="$(newest_record confirmed)"
-      if [[ -z $is ]] || ! grep -q '^Confirmed: [0-9]\{4\}-[0-9][0-9]-[0-9][0-9]' "$is"; then
+      since="$(done_at 25a 2>/dev/null || done_at 25 2>/dev/null)" || since=""
+      since="${since%% *}"
+      day=""
+      [[ -z $is ]] || day="$(sed -n 's/^Confirmed: \([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]\),.*/\1/p' "$is" | tail -n 1)"
+      if [[ -z $day ]]; then
         WHY="no record DATE-confirmed.md under $ACCEPTANCE has your dated line (\"Confirmed: $(today), <your name>\")"
         return 1
       fi
+      grep -q '^Result: pass' "$is" || { WHY="$is does not say \"Result: pass\": the checklist did not pass. Run it again"; return 1; }
+      [[ ! $day < $since ]] || { WHY="$is is Confirmed on $day, before the lab opened ($since): run the checklist again"; return 1; }
       ;;
   esac
   return 0
