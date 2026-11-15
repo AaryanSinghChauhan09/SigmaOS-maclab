@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -425,7 +426,8 @@ func TestALabdThatShouldHaveAnOpsSocketAndHasNoneFailsDeploy(t *testing.T) {
 		if m.current() != first || !m.loaded() || !reflect.DeepEqual(m.builds(), []string{first}) {
 			t.Fatalf("the mini runs %q (loaded %v), builds %v\n%s", m.current(), m.loaded(), m.builds(), out)
 		}
-		if strings.Contains(m.calls(), "launchctl boot") {
+		// Only the stand-in's own lines: the as-lab lines carry what "Agents" is told.
+		if regexp.MustCompile(`(?m)^launchctl boot`).MatchString(m.calls()) {
 			t.Errorf("a service was touched:\n%s", m.calls())
 		}
 		if !strings.Contains(out, "no ops socket") || !strings.Contains(out, "Nothing was switched") || !strings.Contains(out, "launchctl bootout system/"+labdLabel) {
