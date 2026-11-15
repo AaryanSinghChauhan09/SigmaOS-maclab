@@ -5,7 +5,9 @@
 #   fd04-upload-resume [--dry-run | --local | --lab --mini USER@HOST] [--size BYTES] [--records DIR]
 #
 # lab upload sends a file of random bytes in 32 MiB parts and says each part
-# as labd takes it (MACLAB_UPLOAD_PROGRESS=1). Once lab says labd holds two
+# as labd takes it (MACLAB_UPLOAD_PROGRESS=1), and once labd holds two it
+# stops one part halfway (MACLAB_UPLOAD_HOLD=1), as a fast machine would
+# otherwise send every part between two looks. Once lab says labd holds two
 # or more, and not all, lab is stopped and labd's upload folder is read:
 # labd writes a part into a file of its own there, which becomes the part
 # only when it is whole. lab is killed only while such a file holds some of a
@@ -29,7 +31,7 @@
 set -euo pipefail
 # shellcheck source=scripts/cutover/front-door/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
-usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 fd_options "$@"
 no_rest
@@ -107,7 +109,7 @@ no_part_under_way='n=0; while [ $n -lt 120 ] && ls -a | grep -q "^[.]part-"; do 
 
 # The first run, cut inside a part.
 : > "$err"
-MACLAB_UPLOAD_PROGRESS=1 "$LAB_CMD" upload "$file" > "$out" 2> "$err" &
+MACLAB_UPLOAD_PROGRESS=1 MACLAB_UPLOAD_HOLD=1 "$LAB_CMD" upload "$file" > "$out" 2> "$err" &
 pid=$!
 HALTED_PIDS+=("$pid")
 # Parts may go four at a time and end in waves, so the time between two

@@ -61,8 +61,8 @@ Nothing stays silent through the tunnel.
   asks which parts labd holds and sends the rest. An upload left unfinished is deleted after 24 hours.
 - labd refuses any single body over 90 MB, and no client sends a body without `Content-Length`.
 - How many parts go at once is labd's `--parts-at-once`, 1 or 4, set from a measurement taken outside the house.
-  `MACLAB_PARTS_AT_ONCE` and `MACLAB_UPLOAD_PROGRESS` are `lab upload`'s knobs for that measurement, not settings for
-  daily use.
+  `MACLAB_PARTS_AT_ONCE` and `MACLAB_UPLOAD_PROGRESS` are `lab upload`'s knobs for that measurement, and
+  `MACLAB_UPLOAD_HOLD` for the test of a cut upload; none is a setting for daily use.
 - Downloads come from the mini through the tunnel, resume with range requests, and are checked against the SHA-256 the
   lab recorded. They are never cached at the edge.
 
