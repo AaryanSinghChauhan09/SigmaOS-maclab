@@ -558,11 +558,27 @@ func TestTheSiteOnlyTakesAwayAndUndoesOnlyWhatItTook(t *testing.T) {
 		}
 	}
 	// The same check-in again, and a window passing on schedule, are no event.
-	before := len(macRecordOf(t, l.s, id)) + len(l.labLines())
+	// The day's summary goes to the Lab group as the day passes: it is the
+	// lab's line, not one about the Mac.
+	summaries := func() (n int) {
+		for _, line := range l.labLines() {
+			if strings.HasPrefix(line, "Omarchy Mac Lab, ") {
+				n++
+			}
+		}
+		return n
+	}
+	events := func() int { return len(macRecordOf(t, l.s, id)) + len(l.labLines()) - summaries() }
+	before, summariesBefore := events(), summaries()
 	l.checkin(secret, lowered)
 	l.clock.Advance(26 * time.Hour)
+	for deadline := time.Now().Add(10 * time.Second); summaries() == summariesBefore; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a day passed and the lab posted no summary")
+		}
+	}
 	l.checkin(secret, lowered)
-	if after := len(macRecordOf(t, l.s, id)) + len(l.labLines()); after != before {
+	if after := events(); after != before {
 		t.Errorf("a check-in that changed nothing, and a day of the schedule, made %d lines", after-before)
 	}
 }
