@@ -482,11 +482,13 @@ func (r *jobRun) park() bool {
 		return false
 	}
 	msg := why + "; waiting for the lease to end"
+	saved := false // f runs only on a job that is not done
 	r.s.updateJobUnlessDone(r.j, func(j *api.Job) {
+		saved = true
 		j.State = api.JobQueued
 		j.Events = append(j.Events, api.JobEvent{Time: r.s.now(), Msg: msg})
 	})
-	if r.j.State == api.JobDone {
+	if !saved {
 		return true
 	}
 	r.s.log.Printf("job %s (%s): %s", r.j.ID, r.j.Spec.Device, msg)
