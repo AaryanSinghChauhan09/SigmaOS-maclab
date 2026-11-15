@@ -459,3 +459,42 @@ func TestACheckInLabdIsSlowToSaveIsNotSilence(t *testing.T) {
 		t.Fatal("labd counted the Mac silent for the time it spent saving the Mac's own check-in")
 	}
 }
+
+// A check-in on the old boot received within the reboot's grace is no sign
+// the Mac stayed up, however long labd then takes to save it: boot evidence
+// goes by when the check-in came, not by when its save ended. A test
+// kernel that hangs after it is hung, not a reboot that never happened.
+func TestACheckInSavedSlowlyAcrossTheGraceIsNoSignTheMacStayedUp(t *testing.T) {
+	l := newLab(t, true)
+	l.baseline()
+	v := l.s.dev(l.name)
+	d := v.snapshot()
+	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-hang behavior=hang")})
+	var armed time.Time
+	l.waitJob(id, func(j *api.Job) bool {
+		for _, e := range j.Events {
+			if strings.HasPrefix(e.Msg, "one-shot armed") {
+				armed = e.Time
+				return true
+			}
+		}
+		return false
+	})
+	if v.snapshot().BootID != d.BootID {
+		t.Skip("the test kernel checked in before the slow check-in could be made")
+	}
+	ci := api.Checkin{BootID: d.BootID, Kernel: d.Kernel, Cmdline: d.Cmdline, Health: d.Health, SnapshotEligible: d.SnapshotEligible, Facts: &d.Facts}
+	tx, err := l.s.store.db.Begin() // the disk is busy: labd's writer is taken
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { v.heartbeat(ci); close(done) }()
+	time.Sleep(time.Until(armed.Add(l.s.cfg.RebootGrace + 500*time.Millisecond)))
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	j := l.wait(id, 60*time.Second)
+	l.expect(j, api.OutcomeHung)
+}

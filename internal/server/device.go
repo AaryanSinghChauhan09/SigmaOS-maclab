@@ -166,6 +166,13 @@ func (v *dev) leaving() string {
 	return fmt.Sprintf("%s left the lab (%s)", v.d.Name, orStr(v.leftBy, "lab-agent uninstall"))
 }
 
+// heardAt is when labd last heard the Mac itself (see heard).
+func (v *dev) heardAt() time.Time {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.heard
+}
+
 func (v *dev) aliveLocked() bool {
 	return !v.d.LastSeen.IsZero() && v.s.since(v.d.LastSeen) < v.s.aliveWindow()
 }

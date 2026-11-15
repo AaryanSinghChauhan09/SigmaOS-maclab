@@ -1309,7 +1309,7 @@ func (r *jobRun) lostDuringTest(ctx context.Context, test string) (string, strin
 	// A hang has already had quietGrace of silence to show itself.
 	timeout := max(r.boot-r.s.quietGrace(), time.Minute)
 	// Heard again on the same boot after the silence it was lost to: back.
-	lastHeard := r.v.snapshot().LastSeen
+	lastHeard := r.v.heardAt()
 	steps, ok, neverLeft, err := r.v.waitBack(ctx, r.bootID, r.bootedAt, lastHeard, timeout, r.watchdogRecovery(timeout))
 	r.addRecovery(steps)
 	// Only this boot's events: an earlier boot's are not the test kernel's.

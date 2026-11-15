@@ -22,7 +22,9 @@ var panicGrace = 60 * time.Second
 // still up on oldBoot: it never went down by itself, whatever the ladder did
 // after. A check-in on oldBoot after upAfter says it is still up: what labd
 // heard over the whole wait, not whether a check-in fell in the last
-// aliveWindow at its end, which a slow check-in can miss.
+// aliveWindow at its end, which a slow check-in can miss. It goes by when
+// the check-in came (heard), not by LastSeen, which is when labd had saved
+// it: a check-in from before the Mac went down, saved slowly, says nothing.
 func (v *dev) waitBack(ctx context.Context, oldBoot string, since, upAfter time.Time, timeout, selfRecovery time.Duration) (steps []string, ok, neverLeft bool, err error) {
 	var reason string
 	err = v.waitFor(ctx, timeout+selfRecovery, func() bool {
@@ -47,7 +49,7 @@ func (v *dev) waitBack(ctx context.Context, oldBoot string, since, upAfter time.
 	}
 	v.mu.Lock()
 	back := v.d.BootID != oldBoot && v.d.LastSeen.After(since)
-	stillUp := v.d.BootID == oldBoot && v.d.LastSeen.After(upAfter)
+	stillUp := v.d.BootID == oldBoot && v.heard.After(upAfter)
 	v.mu.Unlock()
 	if back {
 		return nil, true, false, nil
