@@ -336,6 +336,7 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 	m := newMini(t)
 	k := newKey(t)
 	m.withSender()
+	m.terminal("24 80")
 
 	if out, code := m.signal("", "link"); code == 0 || !strings.Contains(out, "scripts/mini/setup") {
 		t.Fatalf("before the set-up: exit %d\n%s", code, out)
@@ -463,7 +464,19 @@ func linkReady(t *testing.T, version string) (*mini, string) {
 	write(t, m.path("usr/local/lab/current/VERSION"), version+"\n", 0o644)
 	labd := m.path("usr/local/lab/current/bin/labd")
 	write(t, labd, labdQR, 0o755)
+	m.terminal("24 80")
 	return m, labd
+}
+
+// terminal plays stty for the owner's terminal: its size as rows and
+// columns, or "" for no terminal at all.
+func (m *mini) terminal(size string) {
+	m.t.Helper()
+	answer := "exit 1"
+	if size != "" {
+		answer = "echo " + size
+	}
+	write(m.t, m.bin+"/stty", "#!/bin/bash\n[[ \"$*\" == '-f /dev/tty size' ]] || exit 1\n"+answer+"\n", 0o755)
 }
 
 // A Deployed labd from before labd qr (v0.2.0-rc.0 and older) starts a lab
@@ -484,5 +497,24 @@ func TestLinkRefusesALabdThatCannotDraw(t *testing.T) {
 		if code == 0 || !strings.Contains(out, "e61152eb") || !strings.Contains(out, "Nothing was changed") || exists(m.log) || !m.senderLoaded() {
 			t.Errorf("link over %q: exit %d, sender up %v\n%s\n%s", v, code, m.senderLoaded(), out, m.callsOrNone())
 		}
+	}
+}
+
+// A device link's code is 23 lines of 45 columns: in a terminal with fewer
+// than 24 rows (the line above it too) or 45 columns, or with no terminal,
+// link refuses before the sender is stopped and says what to do.
+func TestLinkRefusesATerminalTheCodeDoesNotFit(t *testing.T) {
+	m, _ := linkReady(t, "v0.2.0-rc.1")
+	for size, want := range map[string]string{"23 80": "taller", "40 44": "wider", "": "terminal"} {
+		m.terminal(size)
+		os.Remove(m.log)
+		out, code := m.signal("", "link")
+		if code == 0 || !strings.Contains(out, want) || !strings.Contains(out, "Nothing was changed") || exists(m.log) || !m.senderLoaded() {
+			t.Errorf("link in a terminal of %q: exit %d, sender up %v\n%s\n%s", size, code, m.senderLoaded(), out, m.callsOrNone())
+		}
+	}
+	m.terminal("24 45")
+	if out, code := m.signal("", "link"); code != 0 {
+		t.Errorf("link in 24 rows of 45 columns: exit %d\n%s", code, out)
 	}
 }
