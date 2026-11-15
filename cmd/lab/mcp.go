@@ -170,11 +170,15 @@ func newMCP(c *client.Client) *mcp.Server {
 		func(ctx context.Context, _ *mcp.CallToolRequest, a runArg) (*mcp.CallToolResult, any, error) {
 			spec := api.JobSpec{Device: a.Device, Kernel: a.KernelSHA256, Source: a.Source, Cmdline: a.Cmdline, BootTimeoutSec: a.BootTimeoutSec, Holder: who, Publish: a.Publish, OMTAllow: a.OMTAllow,
 				CmdlineBase: a.CmdlineBase, CmdlineStrip: a.CmdlineStrip, VerboseBoot: a.VerboseBoot, InstalledManifest: a.InstalledManifest, Mesa: a.Mesa}
+			// Its uploads are for the Mac, as lab run's are: an M team member
+			// uploads only for a job on a Mac they lease.
+			up := *c
+			up.UploadFor = a.Device
 			if spec.Mesa != nil && spec.Mesa.Mode == "" {
 				spec.Mesa.Mode = api.MesaStaged
 			}
 			if a.KernelPath != "" {
-				sha, err := c.Upload(ctx, a.KernelPath)
+				sha, err := up.Upload(ctx, a.KernelPath)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -198,14 +202,14 @@ func newMCP(c *client.Client) *mcp.Server {
 			}
 			for i, list := range [][]string{a.Scripts, a.GUIScripts} {
 				for _, p := range list {
-					sha, err := c.Upload(ctx, p)
+					sha, err := up.Upload(ctx, p)
 					if err != nil {
 						return nil, nil, err
 					}
 					spec.Tests = append(spec.Tests, api.TestSpec{Name: strings.TrimSuffix(filepath.Base(p), filepath.Ext(p)), Script: sha, GUI: i == 1, TimeoutSec: min(a.ScriptTimeoutSec, 14400)})
 				}
 			}
-			files, err := payloadFiles(ctx, c, a.Payload)
+			files, err := payloadFiles(ctx, &up, a.Payload)
 			if err != nil {
 				return nil, nil, err
 			}
