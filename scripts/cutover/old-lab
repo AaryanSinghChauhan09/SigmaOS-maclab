@@ -186,18 +186,24 @@ switching=0
 
 # shellcheck disable=SC2317,SC2329
 put_back() {
+  local f
   switching=0
   say "the switch stopped part-way: putting the lab's directory back"
   stopped "$LABD_LABEL" || true
   stopped "$LITESTREAM_LABEL" || true
   if [[ -d $kept ]]; then
-    if [[ -d $LAB_DATA ]]; then
-      # What moved over goes back first.
-      for f in reports.db reports.db-wal reports.db-shm callers; do
-        [[ ! -e $LAB_DATA/$f ]] || as_lab mv "$LAB_DATA/$f" "$kept/$f"
-      done
-      as_lab mv "$LAB_DATA" "$new"
-    fi
+    # What moved over goes back first, from where it is now: in the lab's
+    # directory once the upgraded one took its place, or still in the
+    # upgraded one.
+    for f in reports.db reports.db-wal reports.db-shm callers; do
+      [[ ! -e $kept/$f ]] || continue
+      if [[ -e $LAB_DATA/$f ]]; then
+        as_lab mv "$LAB_DATA/$f" "$kept/$f"
+      elif [[ -e $new/$f ]]; then
+        as_lab mv "$new/$f" "$kept/$f"
+      fi
+    done
+    [[ ! -d $LAB_DATA ]] || as_lab mv "$LAB_DATA" "$new"
     as_lab mv "$kept" "$LAB_DATA"
   fi
   if start_lab; then
@@ -247,6 +253,9 @@ upgrade() {
   fi
 
   if [[ -e $new ]]; then
+    # The old lab's data has no reports.db: one there is the lab's own.
+    ! as_lab test -e "$new/reports.db" ||
+      fail "$new holds a reports.db, which only the lab's own directory has: a switch stopped part-way left it there. It is not removed: see that $LAB_DATA has its reports, then remove $new yourself and run this again. Nothing was changed"
     say "removing what an earlier run left in $new"
     as_lab rm -rf "$new"
   fi

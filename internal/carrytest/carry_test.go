@@ -725,6 +725,42 @@ func TestTheLabsDirectoryIsPutBackWhenLabdDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// A switch that stops after the lab's reports moved into the upgraded
+// directory and before that became the lab's puts each file back from where
+// it is: the lab's directory is whole again, reports and caller log with it.
+func TestASwitchThatStopsPartWayPutsEachFileBackFromWhereItIs(t *testing.T) {
+	m := newMini(t, oldlabtest.OnOmarchyGPU)
+	m.ok("old-lab", "stop")
+	m.ok("old-lab", "copy", "--stage", m.stage)
+	mine := everyFile(t, m.path("var/lab/data"))
+	asLab := filepath.Join(m.base, "stubs", "as-lab")
+	plain := read(t, asLab)
+	write(t, asLab, "#!/bin/bash\necho \"as-lab $*\" >> \"$STUB_LOG\"\n[[ \"$1 ${2##*/} ${3##*/}\" != \"mv data.old-lab data\" ]] || exit 1\nexec \"$@\"\n", 0o755)
+
+	out := m.refused("old-lab", "upgrade", "--stage", m.stage, "--account-id", "7", "owner")
+
+	if got := everyFile(t, m.path("var/lab/data")); !reflect.DeepEqual(got, mine) {
+		t.Errorf("the lab's directory is not back as it was: %v\n%s", changed(mine, got), out)
+	}
+	if exists(m.path("var/lab/data.before-old-lab")) || exists(m.path("var/lab/data.old-lab/reports.db")) {
+		t.Error("data.before-old-lab is left, or the lab's reports stayed in the upgraded copy")
+	}
+	if !m.loaded(labdLabel) {
+		t.Error("labd was not started again")
+	}
+
+	// A data.old-lab that holds a reports.db holds the lab's own reports:
+	// it is never removed to make room.
+	write(t, asLab, plain, 0o755)
+	write(t, m.path("var/lab/data.old-lab/reports.db"), "the lab's reports\n", 0o600)
+	if out := m.refused("old-lab", "upgrade", "--stage", m.stage, "--account-id", "7", "owner"); !strings.Contains(out, "reports.db") {
+		t.Errorf("a data.old-lab with reports in it: %s", out)
+	}
+	if got := read(t, m.path("var/lab/data.old-lab/reports.db")); got != "the lab's reports\n" {
+		t.Errorf("the reports in data.old-lab: %q", got)
+	}
+}
+
 // A copy of scripts/cutover alone, as the owner puts it on the mini, takes
 // the mini's own library from the Deployed build.
 func TestACopyOfTheScriptsUsesTheDeployedBuildsLibrary(t *testing.T) {
