@@ -356,6 +356,84 @@ func TestAHungLoginctlInTheLockWaitIsEnded(t *testing.T) {
 	}
 }
 
+// lockWaitSystem is a simulated Mac whose tests wait for the lab-boot lock as
+// a Mac's do, on a lock note that never says "locked".
+type lockWaitSystem struct {
+	*Sim
+	locked string
+}
+
+func (s lockWaitSystem) RunTest(ctx context.Context, job string, t api.TestSpec, fetch Fetcher, quiet Quieter, outDir string) api.TestResult {
+	res := api.TestResult{Name: t.Name}
+	if err := (&Linux{GUIUser: "volunteer"}).awaitLock(ctx, s.locked, 0); err != nil {
+		res.Error, res.ExitCode = err.Error(), -1
+	}
+	return res
+}
+
+// A running lab-agent asked to stop while its lock wait's loginctl hangs
+// stops within the tool's bound, and the hung loginctl goes with it.
+func TestAHungLoginctlLetsARunningAgentStop(t *testing.T) {
+	bin, pids := t.TempDir(), filepath.Join(t.TempDir(), "pids")
+	fake := "#!/bin/sh\necho $$ >> " + pids + "\nsleep 600 &\necho $! >> " + pids + "\nwait\n"
+	if err := os.WriteFile(filepath.Join(bin, "loginctl"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	was := toolTimeout
+	toolTimeout = time.Second
+	t.Cleanup(func() { toolTimeout = was })
+	t.Cleanup(func() {
+		for _, pid := range readPids(t, pids) {
+			syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	args, _ := json.Marshal(api.TestSpec{Name: "t1", Script: "true"})
+	var sent atomic.Bool
+	labd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/checkin" {
+			io.WriteString(w, "ok")
+			return
+		}
+		var resp api.CheckinResponse
+		if !sent.Swap(true) {
+			resp.Commands = []api.Command{{ID: "c1", JobID: "j1", Kind: api.CmdRunTest, Args: args}}
+		} else {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer labd.Close()
+
+	var out logBuf
+	sys := lockWaitSystem{NewSim(t.TempDir()), filepath.Join(t.TempDir(), "locked")}
+	a := New(&Config{Server: labd.URL, Secret: "test", WorkDir: t.TempDir()}, sys, log.New(&out, "", 0))
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	ran := make(chan error, 1)
+	go func() { ran <- a.Run(ctx) }()
+	for deadline := time.Now().Add(30 * time.Second); len(readPids(t, pids)) < 2; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the lock wait never ran loginctl:\n%s", out.String())
+		}
+	}
+
+	stop()
+	select {
+	case <-ran:
+	case <-time.After(toolTimeout + stopGrace + 3*time.Second):
+		t.Fatalf("a hung loginctl held lab-agent's stop:\n%s", out.String())
+	}
+	for _, pid := range readPids(t, pids) {
+		if !ended(pid) {
+			t.Errorf("process %d of the hung loginctl still runs", pid)
+		}
+	}
+}
+
 // sync(2) cannot be cut: a flush that hangs holds lab-agent no longer than
 // a system tool's bound, and a second flush meanwhile waits on the first
 // rather than starting another.
