@@ -99,10 +99,15 @@ func TestAMacHeardOnItsOldBootAfterTheGraceNeverLeftThoughSilentAtTheDeadline(t 
 		}
 		return false
 	})
-	l.waitDevice(func(d api.Device) bool {
-		return d.BootID == old && d.LastSeen.After(armed.Add(l.s.cfg.RebootGrace))
+	// What waitBack reads: a check-in heard after the grace (LastSeen also
+	// moves when a long poll is answered, or after a slow save), then the
+	// Mac's word that it sleeps.
+	v := l.s.dev(l.name)
+	l.waitLocked(v, "a check-in on the old boot after the grace", func() bool {
+		return v.d.BootID == old && v.heard.After(armed.Add(l.s.cfg.RebootGrace))
 	})
 	l.sim.Sleep()
+	l.waitLocked(v, "the Mac's word that it sleeps", func() bool { return !v.asleep.IsZero() })
 	l.waitDevice(ladderBegun)
 	l.sim.Wake()
 	j := l.wait(id, 60*time.Second)
@@ -112,6 +117,22 @@ func TestAMacHeardOnItsOldBootAfterTheGraceNeverLeftThoughSilentAtTheDeadline(t 
 	}
 	if ids := boots(); len(ids) != 2 {
 		t.Fatalf("the Mac went through %d boots, want the one it was on and the ladder's soft reboot: %v", len(ids), ids)
+	}
+}
+
+// waitLocked waits until cond holds under v.mu.
+func (l *lab) waitLocked(v *dev, what string, cond func() bool) {
+	l.t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		v.mu.Lock()
+		ok := cond()
+		v.mu.Unlock()
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			l.t.Fatalf("labd never had %s", what)
+		}
 	}
 }
 
