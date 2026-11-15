@@ -617,6 +617,11 @@ func (s *Server) baselinePath(name string) string {
 
 var jobMu sync.Mutex
 
+// jobEnded, under jobMu, holds for a run's copy of a job the stored job a
+// cancel found done (updateJobUnlessDone). The run's own next save takes it:
+// only the run's goroutine writes the copy it reads without a lock.
+var jobEnded = map[*api.Job]*api.Job{}
+
 // updateJob changes j with f and saves it. Only lab exclude (hExclude)
 // changes a job's GateExclusion, through f; any other caller's copy of j may
 // be older than that, so j takes the stored one first.
@@ -626,13 +631,14 @@ func (s *Server) updateJob(j *api.Job, f func(*api.Job)) {
 	s.updateJobLocked(j, f)
 }
 
-// updateJobUnlessDone is updateJob, unless the stored job is done: then j,
-// a copy read before it ended, takes the stored one and nothing is saved.
+// updateJobUnlessDone is updateJob, unless the stored job is done: then
+// nothing is saved, and j, a run's copy read before the job ended, takes the
+// stored one at the run's next save (jobEnded).
 func (s *Server) updateJobUnlessDone(j *api.Job, f func(*api.Job)) {
 	jobMu.Lock()
 	defer jobMu.Unlock()
 	if stored, err := s.store.job(j.ID); err == nil && stored.State == api.JobDone {
-		*j = *stored
+		jobEnded[j] = stored
 		return
 	}
 	s.updateJobLocked(j, f)
@@ -640,6 +646,11 @@ func (s *Server) updateJobUnlessDone(j *api.Job, f func(*api.Job)) {
 
 // updateJobLocked is updateJob under jobMu.
 func (s *Server) updateJobLocked(j *api.Job, f func(*api.Job)) {
+	if stored, ok := jobEnded[j]; ok {
+		delete(jobEnded, j)
+		*j = *stored
+		return
+	}
 	j.GateExclusion = s.store.gateExclusion(j.ID)
 	f(j)
 	s.inFlightLocked(j)

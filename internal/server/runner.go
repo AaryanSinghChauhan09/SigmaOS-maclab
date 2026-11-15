@@ -91,6 +91,9 @@ func (s *Server) deviceLoop(v *dev) {
 			if j, err = s.store.job(id); err == nil && j.State != api.JobDone {
 				c.hold(j)
 				s.runJobAsked(ctx, v, j, c)
+				jobMu.Lock()
+				delete(jobEnded, j)
+				jobMu.Unlock()
 			}
 			cancel()
 			s.mu.Lock()
