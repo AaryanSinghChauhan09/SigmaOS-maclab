@@ -795,6 +795,34 @@ func TestAWayBackThatCannotMoveTheReportsLeavesLabdStopped(t *testing.T) {
 	}
 }
 
+// A way back that cannot stop labd moves nothing: a labd still running is
+// never left on a directory pulled from under it. Both folders stay, and it
+// says which did not stop.
+func TestAWayBackWhoseStopFailsMovesNothing(t *testing.T) {
+	m := newMini(t, oldlabtest.OnOmarchyGPU)
+	m.ok("old-lab", "stop")
+	m.ok("old-lab", "copy", "--stage", m.stage)
+	stubs := filepath.Join(m.base, "stubs")
+	// labd stops for the switch, and not once it runs on the old lab's data.
+	write(t, stubs+"/launchctl", strings.Replace(launchctlStub, `bootout) rm -f "$state" ;;`, `bootout) [[ $label == `+labdLabel+` && -f $STUB_STATE/sticks ]] || rm -f "$state" ;;`, 1), 0o755)
+	write(t, stubs+"/sleep", "#!/bin/sh\nexit 0\n", 0o755)
+	asLab := filepath.Join(stubs, "as-lab")
+	write(t, asLab, "#!/bin/bash\necho \"as-lab $*\" >> \"$STUB_LOG\"\n[[ \"$1 ${2##*/} ${3##*/}\" != \"mv data.old-lab data\" ]] || touch \"$STUB_STATE/sticks\"\nexec \"$@\"\n", 0o755)
+	m.healthy.Store(false)
+
+	out := m.refused("old-lab", "upgrade", "--stage", m.stage, "--account-id", "7", "owner")
+
+	if !exists(m.path("var/lab/data.before-old-lab/labd.db")) || !exists(m.path("var/lab/data/reports.db")) || exists(m.path("var/lab/data.old-lab")) {
+		t.Errorf("the way back moved something after labd did not stop\n%s", out)
+	}
+	if got := ids(t, m.path("var/lab/data"), "retired_macs"); len(got) != 2 {
+		t.Errorf("the lab's directory is no longer the upgraded one\n%s", out)
+	}
+	if !strings.Contains(out, "could not stop labd") || !strings.Contains(out, "moved nothing") {
+		t.Errorf("no word of the stop that failed:\n%s", out)
+	}
+}
+
 // Litestream that does not stop leaves labd stopped part-way: the way back
 // is armed before the stop, and labd runs again on the directory it had.
 func TestAStopThatFailsPartWayStartsLabdAgain(t *testing.T) {
