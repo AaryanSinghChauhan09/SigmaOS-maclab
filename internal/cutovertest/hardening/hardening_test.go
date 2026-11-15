@@ -552,6 +552,46 @@ func TestH09ReadsTheMacsCardAsAnAdmin(t *testing.T) {
 	}
 }
 
+// secrets-seen fails where it would read nothing: a ps that shows no
+// process, and a secret file replaced by a link, which it would skip.
+func TestSecretsSeenFailsWhereItWouldReadNothing(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		fault func(root, stubs string)
+		says  string
+	}{
+		"no process": {func(root, stubs string) {
+			os.WriteFile(filepath.Join(stubs, "ps"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+		}, "ps showed no process"},
+		"": {func(string, string) {}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root, stubs := t.TempDir(), t.TempDir()
+			for _, d := range []string{"usr/local/lab/secrets", "var/lab/secrets", "Library/LaunchDaemons", "usr/local/lab/current/deploy"} {
+				if err := os.MkdirAll(filepath.Join(root, d), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			os.WriteFile(filepath.Join(root, "usr/local/lab/secrets/oobd.token"), []byte("0123456789abcdef0123456789abcdef\n"), 0o600)
+			os.WriteFile(filepath.Join(root, "Library/LaunchDaemons/org.omarchy-mac.lab.labd.plist"), []byte("<plist></plist>\n"), 0o644)
+			c.fault(root, stubs)
+			cmd := exec.Command(filepath.Join(repo(t), "scripts", "mini", "secrets-seen"))
+			cmd.Env = []string{"PATH=" + stubs + ":" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "LAB_SYSROOT=" + root, "LAB_PROCESSES=^nothing-of-the-lab/"}
+			b, err := cmd.CombinedOutput()
+			if c.says == "" {
+				if err != nil || !regexp.MustCompile(`(?m)^processes=[1-9]`).Match(b) {
+					t.Fatalf("%v\n%s", err, b)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(string(b), c.says) {
+				t.Errorf("want a failure that says %q: %v\n%s", c.says, err, b)
+			}
+		})
+	}
+}
+
 // Through the Lab address a step that needs the owner waits for them: with
 // nobody there the test ends as stopped, exit 3, and asked for nothing.
 func TestAStepForTheOwnerWithNobodyThereStopsTheTest(t *testing.T) {
