@@ -10,9 +10,15 @@ package server
 // There is no serial console here.
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -329,7 +335,7 @@ func (s *Server) macRecords(data *macPageData, v *dev, d DeviceView, p Person, a
 // auditShown is the newest n lines of the lab's copy of a Mac's Audit log,
 // newest first, for whoever may read it: Maintainers and the Mac's Volunteer.
 func (s *Server) auditShown(name string, n int) []recordShownLine {
-	entries, err := s.readAuditCopy(name)
+	entries, err := s.auditTailed(name, n)
 	if err != nil {
 		s.log.Printf("%s's Audit log: %v", name, err)
 	}
@@ -386,4 +392,54 @@ func (s *Server) pMacHardReset(w http.ResponseWriter, r *http.Request) {
 	p := leaser(r)
 	_, err := s.hardResetBy(r.Context(), v, p)
 	s.backToMacs(w, r, err)
+}
+
+// auditTailMax is the most of labd's copy of an Audit log a page reads:
+// root on the Mac can make the log long, and a page shows its newest lines.
+const auditTailMax = 1 << 20
+
+// auditTailed is the newest n entries of labd's copy of a Mac's Audit log,
+// oldest first, read from its end.
+func (s *Server) auditTailed(name string, n int) ([]api.AuditEntry, error) {
+	f, err := os.Open(s.auditPath(name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return auditTail(f, st.Size(), n)
+}
+
+// auditTail is the newest n entries in the last bytes of f, oldest first. It
+// reads more of f's end until it has n or has read auditTailMax; a line cut
+// by where it starts is left out.
+func auditTail(f io.ReaderAt, size int64, n int) ([]api.AuditEntry, error) {
+	for chunk := int64(64 << 10); ; chunk *= 4 {
+		chunk = min(chunk, auditTailMax, size)
+		buf := make([]byte, chunk)
+		if _, err := f.ReadAt(buf, size-chunk); err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		lines := bytes.Split(buf, []byte("\n"))
+		if chunk < size {
+			lines = lines[1:]
+		}
+		var out []api.AuditEntry
+		for i := len(lines) - 1; i >= 0 && len(out) < n; i-- {
+			var e api.AuditEntry
+			if json.Unmarshal(lines[i], &e) == nil {
+				out = append(out, e)
+			}
+		}
+		if len(out) == n || chunk == size || chunk == auditTailMax {
+			slices.Reverse(out)
+			return out, nil
+		}
+	}
 }

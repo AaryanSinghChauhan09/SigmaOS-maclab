@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -695,5 +698,53 @@ func TestPauseAndLimitAskTwice(t *testing.T) {
 	linus.did("/my-macs/vol-air/limit", "sure", "yes")
 	if d := v.snapshot(); d.SitePause == nil || d.SitePause.Until.IsZero() || !d.Limited {
 		t.Errorf("the second click: pause %+v, limited %v", d.SitePause, d.Limited)
+	}
+}
+
+// countedReaderAt counts the bytes read from it.
+type countedReaderAt struct {
+	r    *bytes.Reader
+	read int64
+}
+
+func (c *countedReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.r.ReadAt(p, off)
+	c.read += int64(n)
+	return n, err
+}
+
+// A card shows a few lines of the Mac's Audit log, which root on the Mac can
+// make long: they come from a bounded tail of labd's copy, not the whole.
+func TestACardReadsABoundedTailOfTheAuditCopy(t *testing.T) {
+	var long bytes.Buffer
+	for i := 0; long.Len() < 16<<20; i++ {
+		b, _ := json.Marshal(api.AuditEntry{Time: time.Unix(int64(i), 0), Action: fmt.Sprintf("boot %d", i), End: int64(i)})
+		long.Write(append(b, '\n'))
+	}
+	r := &countedReaderAt{r: bytes.NewReader(long.Bytes())}
+	es, err := auditTail(r, int64(long.Len()), 5)
+	if err != nil || len(es) != 5 || es[4].Action != fmt.Sprintf("boot %d", es[4].End) || es[0].End != es[4].End-4 {
+		t.Fatalf("the tail: %v %+v", err, es)
+	}
+	if r.read > auditTailMax {
+		t.Errorf("read %d bytes for five lines of a %d byte copy", r.read, long.Len())
+	}
+
+	// A copy that starts with a line longer than any read still shows its
+	// newest lines.
+	l := myMacsLab(t)
+	l.lentMac("vol-air", linusID, api.AccessFull, l.s.now().Add(6*time.Hour))
+	path := l.s.auditPath("vol-air")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	last, _ := json.Marshal(api.AuditEntry{Time: l.s.now(), Maintainer: "ravi", Action: "the newest line", End: 1})
+	junk := append(bytes.Repeat([]byte("x"), 2<<20), '\n')
+	if err := os.WriteFile(path, append(junk, append(last, '\n')...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	card := l.signedIn(linusID).myMacs().sole(t, "#mac-vol-air")
+	if !card.says(t, "#audit-vol-air li", "@ravi · the newest line") {
+		t.Errorf("the card's Audit log: %q", card.sole(t, "#audit-vol-air").words())
 	}
 }
