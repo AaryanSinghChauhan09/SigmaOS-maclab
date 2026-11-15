@@ -755,7 +755,7 @@ sender() {
     change "start $SIGNAL_LABEL, from $SIGNAL_CLI" start_sender
   fi
   if [[ -r $SIGNAL_DATA && -z "$(ls -A "$SIGNAL_DATA")" ]]; then
-    say "the Signal sender has no number yet: scripts/mini/signal register"
+    say "the Signal sender has no account yet: scripts/mini/signal link (to your own number), or register (a number of its own)"
   fi
 }
 

@@ -144,7 +144,7 @@ func TestSetupStartsTheSenderFromTheCopy(t *testing.T) {
 	if !m.senderLoaded() || !strings.Contains(m.calls(), "launchctl bootstrap system "+m.path(signalPlist)) {
 		t.Fatalf("the sender was not started:\n%s\n%s", out, m.calls())
 	}
-	if !strings.Contains(out, "scripts/mini/signal register") {
+	if !strings.Contains(out, "scripts/mini/signal link") {
 		t.Errorf("the set-up doesn't say the sender has no number yet:\n%s", out)
 	}
 	if strings.Contains(m.calls(), "brew services") || m.loaded() {
@@ -298,5 +298,93 @@ func TestTheOwnerRegistersTheSenderAndGivesLabdItsGroups(t *testing.T) {
 	}
 	if want := "labd --signal-socket " + m.path("var/lab/run/signal-cli.sock") + " --signal " + m.path("var/lab/secrets") + " --signal-test"; !strings.Contains(m.calls(), want) {
 		t.Errorf("labd was not asked for the test line as %q:\n%s", want, m.calls())
+	}
+}
+
+// linkStub plays signal-cli link: the link for the phone to scan, then, once
+// scanned, the number it was linked to.
+const linkStub = `#!/bin/bash
+echo "signal-cli $*" >> "$STUB_LOG"
+case " $* " in
+  *" link "*)
+    echo "sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=dGVzdC1wdWJsaWMta2V5"
+    echo "Associated with: +61491570156" ;;
+esac
+`
+
+const linkURL = "sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=dGVzdC1wdWJsaWMta2V5"
+
+// The owner links the sender to his own number: the link is shown as a QR
+// code to scan in Signal on his phone, or alone when there is no qrencode,
+// and it is never an argument of anything nor written down.
+func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
+	need(t, "openssl")
+	m := newMini(t)
+	k := newKey(t)
+	m.withSender()
+
+	if out, code := m.signal("", "link"); code == 0 || !strings.Contains(out, "scripts/mini/setup") {
+		t.Fatalf("before the set-up: exit %d\n%s", code, out)
+	}
+	m.ok("setup", "--release-key", k.signers)
+	os.Chmod(filepath.Dir(m.path(signalCLI)), 0o755)
+	write(t, m.path(signalCLI), linkStub, 0o755)
+	data := m.path(signalData)
+
+	os.Remove(m.log)
+	if out, code := m.signal("", "--dry-run", "link"); code != 0 || !strings.Contains(out, "would") || exists(m.log) {
+		t.Fatalf("--dry-run link: exit %d\n%s\n%s", code, out, m.callsOrNone())
+	}
+
+	// No qrencode: the link alone, for the owner to make a QR code of.
+	out, code := m.signal("", "link")
+	if code != 0 || !strings.Contains(out, linkURL) || !strings.Contains(out, "Associated with") {
+		t.Fatalf("link with no qrencode: exit %d\n%s", code, out)
+	}
+	calls := m.calls()
+	var order []int
+	for _, want := range []string{
+		"launchctl bootout system/" + signalLabel,
+		"as-lab " + m.path(signalCLI) + " --data-dir " + data + " link -n Omarchy Mac Lab",
+		"launchctl bootstrap system " + m.path(signalPlist),
+	} {
+		i := strings.Index(calls, want)
+		if i < 0 {
+			t.Fatalf("link did not run %q:\n%s", want, calls)
+		}
+		order = append(order, i)
+	}
+	if !slices.IsSorted(order) || !m.senderLoaded() {
+		t.Errorf("link ran out of order, or left the sender stopped:\n%s", calls)
+	}
+	if strings.Contains(calls, "updateProfile") || strings.Contains(calls, " -a ") {
+		t.Errorf("link changed the owner's profile or named an account:\n%s", calls)
+	}
+
+	// With qrencode: the link goes to it on its input, as the lab account.
+	qrencode := m.path("opt/homebrew/bin/qrencode")
+	write(t, qrencode, "#!/bin/bash\necho \"qrencode $*\" >> \"$STUB_LOG\"\necho \"[QR of $(cat)]\"\n", 0o755)
+	os.Remove(m.log)
+	out, code = m.signal("", "link")
+	if code != 0 || !strings.Contains(out, "[QR of "+linkURL+"]") {
+		t.Fatalf("link with qrencode: exit %d\n%s", code, out)
+	}
+	if !strings.Contains(m.calls(), "as-lab "+qrencode+" -t ansiutf8") {
+		t.Errorf("qrencode was not run as the lab account:\n%s", m.calls())
+	}
+	if strings.Contains(m.calls(), "sgnl://") {
+		t.Errorf("the link was an argument of a command:\n%s", m.calls())
+	}
+	filepath.Walk(m.path("var/lab"), func(p string, info os.FileInfo, err error) error {
+		if err == nil && info.Mode().IsRegular() && strings.Contains(read(t, p), "sgnl://") {
+			t.Errorf("%s holds the link", p)
+		}
+		return nil
+	})
+
+	// signal-cli failing is a failure, and the sender is started again.
+	write(t, m.path(signalCLI), "#!/bin/bash\necho \"signal-cli $*\" >> \"$STUB_LOG\"\necho 'Link request error: Connection closed!' >&2\nexit 3\n", 0o755)
+	if out, code := m.signal("", "link"); code == 0 || !strings.Contains(out, "did not link") || !m.senderLoaded() {
+		t.Errorf("a failed link: exit %d, sender up %v\n%s", code, m.senderLoaded(), out)
 	}
 }
