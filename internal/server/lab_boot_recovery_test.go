@@ -66,20 +66,25 @@ func (l *lab) journalOf(j *api.Job, boot string) string {
 	return ""
 }
 
-// bootIDs records every boot ID the Mac goes through until stop.
+// bootIDs records every boot ID the Mac goes through until stop. stop looks
+// once more itself: the boot the Mac is on when stop is called is the last,
+// however late the last look before it came.
 func (l *lab) bootIDs() (stop func() []string) {
 	var mu sync.Mutex
 	var ids []string
+	look := func() {
+		id, _, _ := l.sim.Identity()
+		mu.Lock()
+		if len(ids) == 0 || ids[len(ids)-1] != id {
+			ids = append(ids, id)
+		}
+		mu.Unlock()
+	}
 	quit, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
 		for {
-			id, _, _ := l.sim.Identity()
-			mu.Lock()
-			if len(ids) == 0 || ids[len(ids)-1] != id {
-				ids = append(ids, id)
-			}
-			mu.Unlock()
+			look()
 			select {
 			case <-quit:
 				return
@@ -87,7 +92,7 @@ func (l *lab) bootIDs() (stop func() []string) {
 			}
 		}
 	}()
-	return func() []string { close(quit); <-done; mu.Lock(); defer mu.Unlock(); return ids }
+	return func() []string { close(quit); <-done; look(); mu.Lock(); defer mu.Unlock(); return ids }
 }
 
 // lostContactLab is a lab on a fake clock that runs at wall speed; tests jump
