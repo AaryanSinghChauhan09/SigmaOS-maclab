@@ -77,12 +77,8 @@ func (s *Server) deviceLoop(v *dev) {
 			if err != nil || j.State == api.JobDone {
 				continue
 			}
-			if !s.startJob(v) {
-				return
-			}
 			// Its cancel is set before it is read again: cancelJob either
-			// finds the cancel or has marked the job done by that read. It
-			// waited for a drain to be lifted, too: it may have been canceled.
+			// finds the cancel or has marked the job done by that read.
 			ctx, cancel := context.WithCancel(s.ctx)
 			s.mu.Lock()
 			s.cancels[id] = cancel
@@ -91,7 +87,6 @@ func (s *Server) deviceLoop(v *dev) {
 				s.runJob(ctx, v, j)
 			}
 			cancel()
-			s.endJob()
 			s.mu.Lock()
 			delete(s.cancels, id)
 			delete(s.cancelWhy, id)
@@ -175,7 +170,7 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 	// Queued jobs wait for the Mac, including for a human to power cycle it,
 	// and on a Volunteer's Mac for its Availability window, but not for one
 	// that left the lab. A lease someone else takes meanwhile sets the job
-	// aside instead (see park).
+	// aside instead (see park). While jobs are drained none is sent.
 	length := r.expectedLength()
 	needs := needsFull(j.Spec)
 	holdLocked := func() string {
@@ -192,64 +187,83 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			// lab-agent, which knows nothing of the site, would run it.
 			return fmt.Sprintf("%s is limited to Access level Qualification by its Volunteer, which allows no %s, until they remove the limit", v.d.Name, needs)
 		}
-		return v.windowHoldLocked(length)
+		if why := v.windowHoldLocked(length); why != "" {
+			return why
+		}
+		if s.drained() {
+			return jobsDrained
+		}
+		return ""
 	}
-	for {
-		if r.park() {
-			return
+	// wait returns true once nothing holds the job back, or false once it has ended.
+	wait := func() bool {
+		for {
+			if r.park() {
+				return false
+			}
+			v.mu.Lock()
+			why := holdLocked()
+			v.mu.Unlock()
+			if why == "" {
+				break
+			}
+			r.state(api.JobQueued) // a job built from source waits as queued, too
+			r.ev("%s", why)
+			err := v.waitFor(ctx, 0, func() bool { return holdLocked() != why })
+			if v.leaving() != "" {
+				break
+			}
+			if err != nil {
+				r.finish(api.OutcomeCanceled, "canceled while waiting for the device")
+				return false
+			}
 		}
-		v.mu.Lock()
-		why := holdLocked()
-		v.mu.Unlock()
-		if why == "" {
-			break
+		if why := v.leaving(); why != "" {
+			r.finish(api.OutcomeCanceled, "canceled: "+why)
+			return false
 		}
-		r.state(api.JobQueued) // a job built from source waits as queued, too
-		r.ev("%s", why)
-		err := v.waitFor(ctx, 0, func() bool { return holdLocked() != why })
-		if v.leaving() != "" {
-			break
-		}
-		if err != nil {
-			r.finish(api.OutcomeCanceled, "canceled while waiting for the device")
-			return
-		}
-	}
-	if why := v.leaving(); why != "" {
-		r.finish(api.OutcomeCanceled, "canceled: "+why)
-		return
-	}
 
-	if _, err := s.validatePayload(j.Spec, v.snapshot()); err != nil {
-		r.finish(api.OutcomeInfra, "payload admission failed before device commands: "+err.Error())
-		return
-	}
-	if err := validateRequiredWatchdog(j.Spec.Tests, v.snapshot()); err != nil {
-		r.finish(api.OutcomeInfra, "job refused before device commands: "+err.Error())
-		return
-	}
-	if j.Spec.Mesa != nil {
-		if _, err := s.validateMesa(j.Spec, v.snapshot()); err != nil {
-			r.finish(api.OutcomeInfra, "Mesa admission changed before device commands: "+err.Error())
-			return
+		if _, err := s.validatePayload(j.Spec, v.snapshot()); err != nil {
+			r.finish(api.OutcomeInfra, "payload admission failed before device commands: "+err.Error())
+			return false
 		}
-	}
-	if why := r.withoutItsLease(); why != "" {
-		r.finish(api.OutcomeCanceled, "not run: "+why)
-		return
+		if err := validateRequiredWatchdog(j.Spec.Tests, v.snapshot()); err != nil {
+			r.finish(api.OutcomeInfra, "job refused before device commands: "+err.Error())
+			return false
+		}
+		if j.Spec.Mesa != nil {
+			if _, err := s.validateMesa(j.Spec, v.snapshot()); err != nil {
+				r.finish(api.OutcomeInfra, "Mesa admission changed before device commands: "+err.Error())
+				return false
+			}
+		}
+		if why := r.withoutItsLease(); why != "" {
+			r.finish(api.OutcomeCanceled, "not run: "+why)
+			return false
+		}
+		return true
 	}
 	// A job that starts under its person's own Lease runs under it: the
 	// Lease lasts until the job ends, and labd never queues the job again.
-	v.mu.Lock()
 	under := false
-	if l := v.liveLeaseLocked(); l != nil && leaseCovers(l, ownerOf(j)) {
-		held := *l
-		held.Job = j.ID
-		v.d.Lease, under = &held, true
+	for sent := false; !sent; {
+		if !wait() {
+			return
+		}
+		v.mu.Lock()
+		// Counted in the step that gives it the Mac: a drain that began
+		// since the wait sends it back to waiting.
+		if sent = s.sendJob(); sent {
+			if l := v.liveLeaseLocked(); l != nil && leaseCovers(l, ownerOf(j)) {
+				held := *l
+				held.Job = j.ID
+				v.d.Lease, under = &held, true
+			}
+			v.d.ActiveJob = j.ID
+			v.setStateLocked(api.StateBusy, "job "+j.ID)
+		}
+		v.mu.Unlock()
 	}
-	v.d.ActiveJob = j.ID
-	v.setStateLocked(api.StateBusy, "job "+j.ID)
-	v.mu.Unlock()
 	if under {
 		s.updateJob(j, func(j *api.Job) { j.UnderLease = true })
 	}
@@ -270,6 +284,7 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		v.sendOwedDoneLocked()
 		v.saveLocked()
 		v.mu.Unlock()
+		s.endJob()
 		s.lapse(v) // a Lease extended for this job ends with it
 	}()
 
@@ -373,6 +388,9 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		r.retry()
 	}
 }
+
+// jobsDrained is why a job is not sent while jobs are drained.
+const jobsDrained = "jobs are drained for a Deploy or a Maintenance run: it is sent once that is over"
 
 // windowCut is the outcome of a job the Mac's Availability window closing
 // (its end, or the Volunteer's Pause) cut short, what: incomplete, not failed.

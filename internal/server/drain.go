@@ -1,15 +1,17 @@
 package server
 
 // A Deploy and a Maintenance run restart labd, and no job outlives labd. So
-// each first drains: labd starts no further job, and the script waits until
-// those that run have ended. A job that waits stays queued, in the store,
-// and starts after the restart; should the script give up instead, it lifts
-// the drain and the job starts then. The drain is not stored: a labd that
-// starts is never draining.
+// each first drains: labd sends no further job to a Mac, and the script
+// waits until those sent have ended. A job counts from the moment it is
+// sent: one waiting for its Mac to be ready or for an Availability window
+// is not on any Mac, and a restart loses nothing of it. A job that waits
+// stays queued, in the store, and is sent after the restart; should the
+// script give up instead, it lifts the drain and the job is sent then. The
+// drain is not stored: a labd that starts is never draining.
 //
-// A running job may wait for a build, so builds are handed out while any
-// job runs. Once none does the Builder gets no further build, and the drain
-// is over when the builds that run have ended as well.
+// A job's build comes before the job is sent, so while jobs are drained
+// the Builder gets no further build, and the drain is over when the builds
+// that run have ended as well.
 
 import (
 	"context"
@@ -24,32 +26,23 @@ import (
 
 type drain struct {
 	mu sync.Mutex
-	// lifted is nil while labd is not draining; closed when a drain is lifted.
-	lifted chan struct{}
-	// jobs counts the jobs inside runJob.
+	// on: jobs are drained.
+	on bool
+	// jobs counts the jobs sent to a Mac that have not ended.
 	jobs int
 }
 
-// startJob is called before a queued job is run. While jobs are drained it
-// waits; it reports false when the device's loop should end instead.
-func (s *Server) startJob(v *dev) bool {
-	for {
-		s.drain.mu.Lock()
-		lifted := s.drain.lifted
-		if lifted == nil {
-			s.drain.jobs++
-			s.drain.mu.Unlock()
-			return true
-		}
-		s.drain.mu.Unlock()
-		select {
-		case <-lifted:
-		case <-s.ctx.Done():
-			return false
-		case <-v.stop:
-			return false
-		}
+// sendJob counts a job as sent to its Mac, unless jobs are drained: then it
+// reports false, and the job waits. The caller holds the Mac's mu, so the
+// job is counted in the same step that gives it the Mac.
+func (s *Server) sendJob() bool {
+	s.drain.mu.Lock()
+	defer s.drain.mu.Unlock()
+	if s.drain.on {
+		return false
 	}
+	s.drain.jobs++
+	return true
 }
 
 func (s *Server) endJob() {
@@ -58,13 +51,16 @@ func (s *Server) endJob() {
 	s.drain.mu.Unlock()
 }
 
-// buildsHeld reports whether the Builder gets no build now: jobs are
-// drained and none runs that could wait for one.
-func (s *Server) buildsHeld() bool {
+// drained is whether jobs are drained now.
+func (s *Server) drained() bool {
 	s.drain.mu.Lock()
 	defer s.drain.mu.Unlock()
-	return s.drain.lifted != nil && s.drain.jobs == 0
+	return s.drain.on
 }
+
+// buildsHeld reports whether the Builder gets no build now: jobs are
+// drained.
+func (s *Server) buildsHeld() bool { return s.drained() }
 
 // drainJobs starts a drain, or goes on with the one there is, and says how
 // many jobs and builds still run.
@@ -77,8 +73,8 @@ func (s *Server) drainJobs() (jobs, builds int, err error) {
 	}
 	s.drain.mu.Lock()
 	defer s.drain.mu.Unlock()
-	if s.drain.lifted == nil {
-		s.drain.lifted = make(chan struct{})
+	if !s.drain.on {
+		s.drain.on = true
 		s.log.Printf("jobs are drained: %d jobs and %d builds still run", s.drain.jobs, len(running))
 	}
 	return s.drain.jobs, len(running), nil
@@ -86,11 +82,26 @@ func (s *Server) drainJobs() (jobs, builds int, err error) {
 
 func (s *Server) liftDrain() {
 	s.drain.mu.Lock()
-	defer s.drain.mu.Unlock()
-	if s.drain.lifted != nil {
-		close(s.drain.lifted)
-		s.drain.lifted = nil
+	lifted := s.drain.on
+	if lifted {
+		s.drain.on = false
 		s.log.Printf("the drain of jobs is lifted")
+	}
+	s.drain.mu.Unlock()
+	if !lifted {
+		return
+	}
+	// The jobs that waited for it are sent now.
+	s.mu.Lock()
+	devs := make([]*dev, 0, len(s.devs))
+	for _, v := range s.devs {
+		devs = append(devs, v)
+	}
+	s.mu.Unlock()
+	for _, v := range devs {
+		v.mu.Lock()
+		v.bump()
+		v.mu.Unlock()
 	}
 }
 

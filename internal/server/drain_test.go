@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
+	"github.com/omacom/omarchy-maclab/internal/window"
 )
 
 // opsOf asks labd as one of the mini's own scripts does.
@@ -66,6 +67,62 @@ func TestADrainLetsTheRunningJobFinishAndStartsNoOther(t *testing.T) {
 	}
 	if j := l.waitJob(second, func(j *api.Job) bool { return j.State == api.JobDone }); j.Outcome != api.OutcomePass {
 		t.Errorf("the job that waited ended %s: %s", j.Outcome, j.Summary)
+	}
+}
+
+// jobSaid waits until job id has an event containing what, and fails the
+// test when none comes.
+func jobSaid(t *testing.T, s *Server, id, what string) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		j, err := s.store.job(id)
+		if err == nil {
+			for _, e := range j.Events {
+				if strings.Contains(e.Msg, what) {
+					return
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job %s never said %q: %+v", id, what, j.Events)
+		}
+	}
+}
+
+// heldWithin is whether the Mac holds job id at some moment within d.
+func heldWithin(v *dev, id string, d time.Duration) bool {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if v.snapshot().ActiveJob == id {
+			return true
+		}
+	}
+	return false
+}
+
+// A Volunteer's job waiting for its Mac's Availability window is not on the
+// Mac: a drain does not wait for it, the window opening during the drain
+// does not send it, and it is sent once the drain is lifted.
+func TestAJobWaitingForAWindowDoesNotHoldADrain(t *testing.T) {
+	l, _ := lendLab(t)
+	l.signedIn(maintainerID).did("/people/mark", "handle", "grace", "as", "invite")
+	v, secret := l.signedIn(graceID).lent("shelf-mac")
+	first := v.snapshot().FirstBaseline.Job
+	l.checkin(secret, api.Checkin{AccessLevel: api.AccessQualification})
+	jobSaid(t, l.s, first, "no Availability window")
+
+	if w := opsOf(l.s, "POST", "/drain"); w.Code != 200 || w.Body.String() != "0 0\n" {
+		t.Fatalf("with a job waiting for its window: %d %q", w.Code, w.Body)
+	}
+	l.checkin(secret, api.Checkin{AccessLevel: api.AccessQualification, Window: &window.Settings{OpenUntil: l.clock.Now().Add(6 * time.Hour)}})
+	if heldWithin(v, first, 1500*time.Millisecond) {
+		t.Fatal("a job was sent to the Mac while jobs are drained")
+	}
+	if w := opsOf(l.s, "POST", "/drain"); w.Body.String() != "0 0\n" {
+		t.Fatalf("with the window open during the drain: %q", w.Body)
+	}
+	opsOf(l.s, "DELETE", "/drain")
+	if !heldWithin(v, first, 10*time.Second) {
+		t.Fatalf("the job was not sent once the drain was lifted: %s", v.snapshot().StateReason)
 	}
 }
 
