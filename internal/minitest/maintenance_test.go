@@ -759,6 +759,32 @@ func TestARerunThatUpgradesAnotherToolStillSwitchesBackToTheRightVersion(t *test
 	}
 }
 
+// A run started again that upgrades the same tool once more keeps the
+// version the first one started from: a failed 3.0 goes back to 1.0, which
+// passed, never to the 2.0 nobody checked, and the copy of 1.0 is kept.
+func TestARerunThatUpgradesTheSameToolAgainSwitchesBackToTheFirstVersion(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.newer("cloudflared", "2.0", "#!/bin/sh\n# bad\necho cloudflared 2.0\n")
+	write(t, filepath.Join(filepath.Dir(r.root), "state", "bootstrap.fails."+cloudflaredLabel), "1", 0o644)
+	r.stopped()
+	r.newer("cloudflared", "3.0", "#!/bin/sh\n# bad\necho cloudflared 3.0\n")
+
+	r.went()
+
+	if got := read(t, r.path("usr/local/lab/maintenance/upgraded")); got != "cloudflared 1.0 3.0\n" {
+		t.Fatalf("what was upgraded: %q", got)
+	}
+	r.ops.set(func(o *ops) { o.lines = nil })
+	out := r.stopped("--after-restart")
+	if got := read(t, r.path("usr/local/lab/tools/current/cloudflared/bin/cloudflared")); !strings.Contains(got, "cloudflared 1.0") || r.version("cloudflared") != "1.0" {
+		t.Fatalf("switched back to %q, VERSIONS says %s\n%s", got, r.version("cloudflared"), out)
+	}
+	if !strings.Contains(out, "it was switched back to 1.0 from the previous copy, and 1.0 passes") {
+		t.Errorf("the report:\n%s", out)
+	}
+}
+
 // A switch back takes only the version its record names: a previous copy
 // that holds another is not copied.
 func TestASwitchBackFindsNoCopyOfTheVersionAndChangesNothing(t *testing.T) {

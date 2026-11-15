@@ -157,7 +157,9 @@ kegs() {
 # "name old new", in $MAINTENANCE/upgraded. Written before the set-up as
 # well, which selects the new copy before it starts the daemons. A record
 # left by a run that stopped stays for each tool still at its new version:
-# a run started again finds that version in use already.
+# a run started again finds that version in use already. One that upgrades
+# that tool again keeps the version the record began from, the last one
+# checked, and its copy is kept with it.
 record_upgraded() {
   local file="$MAINTENANCE/upgraded"
   { cat "$file" 2>/dev/null || true; } | BEFORE="$1" AFTER="$2" awk '
@@ -169,7 +171,13 @@ record_upgraded() {
       for (i = 1; i <= n; i++) {
         split(a[i], f, " "); name = f[1]; now = f[2]
         if (name == "") continue
-        if ((name in was) && was[name] != now) { print name, was[name], now; continue }
+        if ((name in was) && was[name] != now) {
+          # An open record of the same tool keeps the version it began from.
+          old = was[name]
+          if (name in earlier) { split(earlier[name], e, " "); if (e[2] == old || e[2] == now) old = e[1] }
+          if (old != now) print name, old, now
+          continue
+        }
         if (name in earlier) { split(earlier[name], e, " "); if (e[2] == now && e[1] != now) print name, e[1], now }
       }
     }' > "$file.new"
