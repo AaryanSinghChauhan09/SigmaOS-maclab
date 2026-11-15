@@ -126,6 +126,25 @@ func TestAJobWaitingForAWindowDoesNotHoldADrain(t *testing.T) {
 	}
 }
 
+// While a person's Hard reset waits for the controller the Mac takes no
+// job, which the reset would cut short; the job is sent once it has gone.
+func TestAJobWaitsWhileAHardResetIsOnItsWay(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	v := l.s.dev(l.name)
+	v.mu.Lock()
+	v.resetting = true
+	v.mu.Unlock()
+	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-resetting behavior=ok")})
+	jobSaid(t, l.s, id, "a Hard reset of "+l.name+" is on its way")
+	l.staysQueued(id, 1500*time.Millisecond, "a Hard reset is on its way")
+	v.mu.Lock()
+	v.resetting = false
+	v.bump()
+	v.mu.Unlock()
+	l.expect(l.jobAPI(id, 60*time.Second), api.OutcomePass)
+}
+
 // With no job running the Builder is handed no build either: the restart
 // that follows a drain would end it. A build that runs is counted.
 func TestADrainHandsTheBuilderNoBuild(t *testing.T) {

@@ -171,7 +171,8 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 	// Queued jobs wait for the Mac, including for a human to power cycle it,
 	// and on a Volunteer's Mac for its Availability window, but not for one
 	// that left the lab. A lease someone else takes meanwhile sets the job
-	// aside instead (see park). While jobs are drained none is sent.
+	// aside instead (see park). While jobs are drained, or a Hard reset is
+	// on its way, none is sent.
 	length := r.expectedLength()
 	needs := needsFull(j.Spec)
 	holdLocked := func() string {
@@ -183,6 +184,10 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		}
 		if !v.aliveLocked() || (v.d.State != api.StateReady && v.d.State != api.StateNew) {
 			return fmt.Sprintf("waiting for %s to be ready (%s)", j.Spec.Device, v.d.State)
+		}
+		if v.resetting {
+			// it would cut the job's power
+			return fmt.Sprintf("waiting: a Hard reset of %s is on its way", v.d.Name)
 		}
 		if needs != "" && v.d.Limited && v.d.AccessLevel == api.AccessFull {
 			// lab-agent, which knows nothing of the site, would run it.
