@@ -92,9 +92,17 @@ type sentReset struct {
 	boot string
 }
 
-// climb is the ladder. With sent, its first Hard reset is that one.
+// climb is the ladder. With sent, its first Hard reset is that one. It
+// stops once the Mac's enrollment has ended: a retired Mac is not one that
+// did not come back.
 func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duration, trySoft bool, sent *sentReset) ([]string, bool) {
-	if why := v.leaving(); why != "" {
+	stopped := func() string {
+		if why := v.goneReason(); why != "" {
+			return why
+		}
+		return v.leaving()
+	}
+	if why := stopped(); why != "" {
 		return []string{"not recovered: " + why}, false
 	}
 	v.mu.Lock()
@@ -126,6 +134,9 @@ func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duratio
 		if v.waitFor(ctx, bootTimeout, backSince(t0)) == nil {
 			return done()
 		}
+		if why := stopped(); why != "" {
+			return append(steps, "stopped: "+why), false
+		}
 		steps = append(steps, "soft reboot did not bring it back")
 	}
 	// unreset is why no Hard reset brought it back, for the person asked.
@@ -142,7 +153,7 @@ func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duratio
 			if ctx.Err() != nil {
 				return steps, false
 			}
-			if why := v.leaving(); why != "" {
+			if why := stopped(); why != "" {
 				return append(steps, "stopped: "+why), false
 			}
 			var t0 time.Time
@@ -169,6 +180,9 @@ func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duratio
 			if v.waitFor(ctx, bootTimeout, backSince(t0)) == nil {
 				return done()
 			}
+			if why := stopped(); why != "" {
+				return append(steps, "stopped: "+why), false
+			}
 			steps = append(steps, fmt.Sprintf("no check-in %s after hard reset %d", bootTimeout, i))
 		}
 		switch {
@@ -183,7 +197,7 @@ func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duratio
 	if ctx.Err() != nil {
 		return steps, false
 	}
-	if why := v.leaving(); why != "" {
+	if why := stopped(); why != "" {
 		return append(steps, "stopped: "+why), false
 	}
 	v.mu.Lock()

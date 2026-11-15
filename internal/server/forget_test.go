@@ -246,3 +246,67 @@ func TestAForgottenMacsLoopEnds(t *testing.T) {
 		t.Fatal("the forgotten Mac's loop still runs")
 	}
 }
+
+// A Hard reset waiting its turn at the controller is on its way to the
+// Mac: forgetting the Mac meanwhile is refused, as with a job, since the
+// reset would go to a retired Mac.
+func TestForgettingAMacWhileItsHardResetWaitsIsRefused(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	probing, release := l.oob.holdProbes(t)
+	probed := make(chan error, 1)
+	go func() { _, err := l.oob.client.Probe(context.Background(), portLeft); probed <- err }()
+	<-probing
+	answer := make(chan string, 1)
+	go func() { r, body := l.resetAs(harnessToken, l.name, ""); answer <- r.Status + " " + body }()
+	v := l.s.dev(l.name)
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		waiting := v.oobCallCancel != nil
+		v.mu.Unlock()
+		if waiting {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("the Hard reset never reached the controller")
+		}
+	}
+	if code := l.adminDo("DELETE", "/api/devices/"+l.name+"?force=1"); code != http.StatusConflict {
+		t.Fatalf("forgetting a Mac whose Hard reset waits: %d", code)
+	}
+	release()
+	if err := <-probed; err != nil {
+		t.Fatal(err)
+	}
+	if got := <-answer; !strings.Contains(got, "Hard reset sent to "+l.name) {
+		t.Fatalf("the reset that waited: %s", got)
+	}
+}
+
+// The recovery ladder stops when the Mac's enrollment ends: a retired Mac
+// is never taken as one that did not come back, and reset again.
+func TestTheLadderStopsWhenTheMacIsRetired(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	v := l.s.dev(l.name)
+	done := make(chan []string, 1)
+	go func() {
+		steps, _ := v.climb(l.ctx, "Hard reset by "+harnessMaintainer, l.s.cfg.BootTimeout, false,
+			&sentReset{port: "right", at: time.Now(), prev: api.StateReady, boot: l.bootOf(l.name)})
+		done <- steps
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if err := l.s.endEnrollment(v, leaving{how: leftByMaintainer, by: Person{Handle: harnessMaintainer}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case steps := <-done:
+		if last := steps[len(steps)-1]; !strings.HasPrefix(last, "stopped: ") {
+			t.Errorf("the ladder of a retired Mac ended with %q: %q", last, steps)
+		}
+	case <-time.After(3 * l.s.cfg.BootTimeout):
+		t.Fatal("the ladder of a retired Mac did not stop")
+	}
+	time.Sleep(300 * time.Millisecond)
+	l.wantResets("the Mac was retired while the ladder waited")
+}

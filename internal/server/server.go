@@ -1443,6 +1443,10 @@ func (s *Server) mayForget(v *dev, holder string, force bool) (int, error) {
 	if v.d.State == api.StateBusy || v.d.State == api.StateRecovering || len(v.queue) > 0 || len(open) > 0 {
 		return 409, fmt.Errorf("%s has a job running or queued; cancel it first", name)
 	}
+	if v.resetting {
+		// it would go to a retired Mac
+		return 409, fmt.Errorf("a Hard reset of %s is on its way: forget the Mac once it has gone out and the Mac is back", name)
+	}
 	if !force && leased && l.Holder != holder {
 		return 409, fmt.Errorf("%s is leased by %s until %s: release the lease first (`lab release %s`, or `lab release %s --force` if it is another Maintainer's), or pass --force",
 			name, l.Who(), l.Expires.Format(time.DateTime), name, name)
@@ -1524,6 +1528,9 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person) (said string
 	case v.resetting:
 		v.mu.Unlock()
 		return "", refuse(http.StatusConflict, "a Hard reset of %s is on its way already", name)
+	case v.goneWhy != "":
+		v.mu.Unlock()
+		return "", refuse(http.StatusNotFound, "no Hard reset was sent: %s", v.goneWhy)
 	}
 	v.resetting = true
 	v.mu.Unlock()
