@@ -583,6 +583,20 @@ func (s *Server) endLeaseOfLeaving(v *dev, how string) {
 // canceled as `lab cancel` does. Released or run out, the job finishes.
 func (e leaseEnding) over() bool { return e.event == api.LeaseEnded }
 
+// logged is an ending over the holder in a few words for labd's log, which
+// names people by account only.
+func (e leaseEnding) logged() string {
+	switch e.cause {
+	case leftTeam:
+		return "ended: its holder left the M team"
+	case blocked:
+		return "ended: its holder was Blocked"
+	case macWentAway:
+		return "ended: the Mac left the lab"
+	}
+	return "ended by " + accountOr(e.by.AccountID, "labd")
+}
+
 // said is the ending in a few words, for a job it cancels.
 func (e leaseEnding) said(l *api.Lease) string {
 	switch {
@@ -645,7 +659,9 @@ func (s *Server) endLease(v *dev, l *api.Lease, e leaseEnding) bool {
 	}
 	if e.over() {
 		msg := fmt.Sprintf("%s's lease by %s, until %s, %s", name, l.Who(), l.Expires.Format(time.DateTime), orStr(e.note, e.said(l)))
-		s.log.Printf("%s", msg)
+		// By account: labd's log is beyond a forgetting's reach, and the
+		// holder's text and a Maintainer's why may name people.
+		s.log.Printf("%s: the Lease of %s, until %s, %s", name, accountOr(l.AccountID, "no account"), l.Expires.Format(time.DateTime), e.logged())
 		for _, id := range aside {
 			s.updateJobByID(id, func(j *api.Job) { j.Events = append(j.Events, api.JobEvent{Time: s.now(), Msg: msg}) })
 		}
