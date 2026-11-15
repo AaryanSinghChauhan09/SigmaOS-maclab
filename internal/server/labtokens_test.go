@@ -795,23 +795,86 @@ func (b *browser) heldPost(target, contentType, body string) (send func() *httpt
 		r.Header.Set(name, value)
 	}
 	r.AddCookie(b.session())
+	return b.l.holding(r, h)
+}
+
+// heldAsToken is heldPost for a request with a Lab token, as lab sends it.
+func (l *signInLab) heldAsToken(token, target, body string) (send func() *httptest.ResponseRecorder) {
+	l.t.Helper()
+	h := &held{body: strings.NewReader(body), asked: make(chan struct{}), send: make(chan struct{})}
+	r := httptest.NewRequest("POST", "http://"+labHost+target, h)
+	r = r.WithContext(onTunnel(r.Context()))
+	r.RemoteAddr = "@"
+	for name, value := range map[string]string{"X-Forwarded-Proto": "https", "CF-Connecting-IP": "198.51.100.7", "User-Agent": "lab/0.2.0",
+		"Authorization": "Bearer " + token, "Content-Type": "application/json"} {
+		r.Header.Set(name, value)
+	}
+	return l.holding(r, h)
+}
+
+// holding starts r, whose body is h, and waits until labd reads for it.
+func (l *signInLab) holding(r *http.Request, h *held) (send func() *httptest.ResponseRecorder) {
+	l.t.Helper()
 	w := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		b.l.h.ServeHTTP(w, r)
+		l.h.ServeHTTP(w, r)
 	}()
 	select {
 	case <-h.asked:
 	case <-done:
-		b.l.t.Fatalf("labd answered %s before its body came: %d %s", target, w.Code, w.Body)
+		l.t.Fatalf("labd answered %s before its body came: %d %s", r.URL.Path, w.Code, w.Body)
 	case <-time.After(10 * time.Second):
-		b.l.t.Fatalf("labd never read for the body of %s", target)
+		l.t.Fatalf("labd never read for the body of %s", r.URL.Path)
 	}
 	return func() *httptest.ResponseRecorder {
 		close(h.send)
 		<-done
 		return w
+	}
+}
+
+// A Lab token's body is bound to the token as a browser's is to its session:
+// whoever holds a stolen token and keeps `lab enroll` open, its body unsent,
+// makes no Join command by sending the body after the token's person was
+// cut off or lost the role the request takes.
+func TestALabTokenBodyHeldOpenAcrossACutChangesNothing(t *testing.T) {
+	for name, cut := range map[string]func(owner *browser){
+		"End all access": func(owner *browser) {
+			owner.did(personPath(maintainerID, "end-all-access"), "sure", "yes")
+		},
+		"Blocked": func(owner *browser) {
+			owner.did(personPath(maintainerID, "block"), "sure", "yes")
+		},
+		"no longer a Maintainer": func(owner *browser) {
+			owner.did(personPath(maintainerID, "maintainer/remove"), "sure", "yes")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, _ := lendLab(t)
+			l.t = t
+			owner := l.signedIn(ownerID)
+			token := l.signedIn(maintainerID).makeToken("stolen", "90")
+			send := l.heldAsToken(token, "/api/enroll-tokens", `{"name":"held-mini","model":"desktop"}`)
+			cut(owner)
+			if w := send(); w.Code == http.StatusOK || strings.Contains(w.Body.String(), "enr_") {
+				t.Errorf("a token's body sent after the cut was taken: %d %s", w.Code, w.Body)
+			}
+			if n := l.count(`SELECT count(*) FROM tokens WHERE name = 'held-mini'`); n != 0 {
+				t.Errorf("a token's body sent after the cut made %d Join commands", n)
+			}
+		})
+	}
+}
+
+// A slow body of a Lab token that is still good is taken.
+func TestAHeldBodyOfALiveLabTokenIsTaken(t *testing.T) {
+	l, _ := lendLab(t)
+	token := l.signedIn(maintainerID).makeToken("slow", "90")
+	w := l.heldAsToken(token, "/api/enroll-tokens", `{"name":"slow-mini","model":"desktop"}`)()
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "enr_") {
+		t.Errorf("a slow body of a live Lab token: %d %s", w.Code, w.Body)
 	}
 }
 

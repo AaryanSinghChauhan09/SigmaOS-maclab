@@ -288,25 +288,27 @@ func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin s
 			r.Body = liveBody{r.Body, func() bool {
 				now := s.sessionOf(c.Value)
 				return now != nil && now.AccountID == si.AccountID && now.Role() == si.Role()
-			}}
+			}, errSessionEnded}
 		}
 	}
 	return r.WithContext(withPerson(r.Context(), si)), true
 }
 
-// liveBody is the body of a signed-in browser's request that changes
-// something and is no form. A read answers only while the session is there
-// and its person has the role they had when the request was let in: what
-// comes after a cut is not read, so the request does nothing with it.
+// liveBody is the body of a request that changes something and is no
+// browser's form, sent by a signed-in browser or with a Lab token. A read
+// answers only while live says the credential is there and its person has
+// the role they had when the request was let in; otherwise it answers ended.
+// What comes after a cut is not read, so the request does nothing with it.
 type liveBody struct {
 	io.ReadCloser
-	live func() bool
+	live  func() bool
+	ended error
 }
 
 func (b liveBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if !b.live() {
-		return 0, errSessionEnded
+		return 0, b.ended
 	}
 	return n, err
 }

@@ -104,12 +104,18 @@ func tokenConnKey(id int64) string      { return "token:" + strconv.FormatInt(id
 // on (see tokenUseOf). A use is written down with its time and address, and
 // pushes the token's date out; an expired token is passed on as expired and
 // is not a use, and neither is the token of a Blocked person.
+//
+// The body of a request that can change something is read through liveBody,
+// held to the token as it is when each part comes: still there, unexpired,
+// its person not Blocked and in the role they had when it was let in. A body
+// held back across a cut does nothing after it.
 func (s *Server) labTokenRequest(r *http.Request) *http.Request {
 	secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || !strings.HasPrefix(secret, labTokenPrefix) {
 		return r
 	}
-	p, t, err := s.store.labTokenByHash(hashSecret(secret))
+	hash := hashSecret(secret)
+	p, t, err := s.store.labTokenByHash(hash)
 	if err != nil {
 		return r
 	}
@@ -125,9 +131,32 @@ func (s *Server) labTokenRequest(r *http.Request) *http.Request {
 		if !t.told {
 			s.tellOfServerMintedToken(p, t, now)
 		}
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+		default:
+			if r.Body != nil && r.Body != http.NoBody {
+				r.Body = liveBody{r.Body, func() bool { return s.tokenStillActs(hash, t.ID, p) }, errTokenCut}
+			}
+		}
 	}
 	return r.WithContext(context.WithValue(r.Context(), tokenUseKey{}, u))
 }
+
+// tokenStillActs reports whether the token with this hash is still the one
+// let in as id, unexpired, and its person neither Blocked nor in another role
+// than was's.
+func (s *Server) tokenStillActs(hash string, id int64, was Person) bool {
+	p, t, err := s.store.labTokenByHash(hash)
+	if err != nil || t.ID != id || t.expired(s.now()) || p.Blocked {
+		return false
+	}
+	s.fillIn(&p)
+	return p.Role() == was.Role()
+}
+
+// errTokenCut is a body sent with a Lab token that was cut while its request
+// was on the way.
+var errTokenCut = errors.New("the Lab token that asked was cut")
 
 // tellOfServerMintedToken writes what a token made on a page has from the
 // start: its line of the People record and its line for "Agents". The
