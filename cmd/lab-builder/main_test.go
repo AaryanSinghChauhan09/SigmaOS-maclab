@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -713,6 +714,54 @@ func TestDockerBuildFailureRemovesTheContainer(t *testing.T) {
 	for _, c := range got {
 		if strings.HasPrefix(c, "cp maclab-b2:") {
 			t.Fatalf("copied the outputs of a failed build: %q", c)
+		}
+	}
+}
+
+// The build account may swap an output for a FIFO between root's look at it
+// and root's open: the open must not wait for a writer that never comes.
+func TestAnOutputSwappedForAFIFODoesNotHangTheBuilder(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "kernel.tar.zst"), []byte("kernel"), 0o644)
+	os.Mkdir(filepath.Join(dir, "out"), 0o755)
+	o, err := openOutputs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	beforeOpen = func(name string) {
+		p := filepath.Join(dir, name)
+		if err := os.RemoveAll(p); err != nil {
+			t.Error(err)
+		}
+		if err := syscall.Mkfifo(p, 0o644); err != nil {
+			t.Error(err)
+		}
+	}
+	defer func() { beforeOpen = nil }()
+
+	for _, c := range []struct {
+		name string
+		open func() error
+	}{
+		{"kernel.tar.zst", func() error {
+			f, _, err := o.regular("kernel.tar.zst")
+			if err == nil {
+				f.Close()
+			}
+			return err
+		}},
+		{"out", func() error { _, err := o.list("out"); return err }},
+	} {
+		done := make(chan error, 1)
+		go func() { done <- c.open() }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("%s: a FIFO was read as an output", c.name)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s: the open of a FIFO swapped in blocked", c.name)
 		}
 	}
 }
