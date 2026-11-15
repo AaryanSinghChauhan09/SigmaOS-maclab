@@ -459,6 +459,7 @@ new_copy() {
     rm -rf "$new/${KEG_NAMES[i]}"/{.brew,INSTALL_RECEIPT.json,sbom.spdx.json} "$new/${KEG_NAMES[i]}"/{homebrew.*,sh.brew.*,*.plist,*.service,*.timer}
   done
   rewrite_kegs "$new"
+  repoint "$new" "$new" || not_whole "$new" "a script of the copy could not be pointed at it"
   whole "$new"
   printf '%s' "$1" > "$new/VERSIONS"
   [[ -z $KEGS_HELD ]] || printf '%s' "$KEGS_HELD" > "$new/HELD"

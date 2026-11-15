@@ -779,6 +779,51 @@ func TestASwitchBackFindsNoCopyOfTheVersionAndChangesNothing(t *testing.T) {
 	}
 }
 
+// signal-cli on Java, switched back and then carried into a new copy, runs
+// from the copy it is in: its wrapper names no copy that is pruned.
+func TestSignalCLIOnJavaStartsAfterASwitchBackAndANewCopy(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.signalCLIOnJava()
+	r.ok("setup")
+	tools := r.path("usr/local/lab/tools")
+	// labd's test line goes through the sender: here it runs signal-cli.
+	write(t, r.path("usr/local/lab/current/bin/labd"), "#!/bin/sh\nexec \"$LAB_SYSROOT/usr/local/lab/tools/current/signal-cli/bin/signal-cli\" >/dev/null\n", 0o755)
+	write(t, r.path("var/lab/secrets/signal-agents-group"), groupID+"\n", 0o600)
+	r.newer("signal-cli", "0.13.25", "#!/bin/sh\nexit 1\n")
+	r.went()
+	r.ops.set(func(o *ops) { o.lines = nil })
+
+	out := r.stopped("--after-restart")
+
+	if r.version("signal-cli") != "0.13.24" || !strings.Contains(out, "it was switched back to 0.13.24 from the previous copy, and 0.13.24 passes") {
+		t.Fatalf("signal-cli was not switched back:\n%s", out)
+	}
+	r.newer("restic", "0.20.0", listingRestic)
+	brew := exec.Command(r.path("opt/homebrew/bin/brew"), "upgrade", "restic")
+	brew.Env = r.env
+	if out, err := brew.CombinedOutput(); err != nil {
+		t.Fatalf("brew: %v\n%s", err, out)
+	}
+	if out := r.ok("setup"); r.version("signal-cli") != "0.13.24" || r.version("restic") != "0.20.0" || len(r.copies()) != 2 {
+		t.Fatalf("the next copy: %v\n%s", r.copies(), out)
+	}
+	current, _ := os.Readlink(tools + "/current")
+	if text := read(t, tools+"/current/signal-cli/bin/signal-cli"); strings.Count(text, tools+"/"+current+"/") != 2 {
+		t.Errorf("the wrapper does not run its own copy (%s):\n%s", current, text)
+	}
+	prefix := r.path("opt/homebrew")
+	if err := os.Rename(prefix, prefix+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Rename(prefix+".gone", prefix)
+	run := exec.Command(tools + "/current/signal-cli/bin/signal-cli")
+	run.Env = []string{"PATH=/usr/bin:/bin"}
+	if out, err := run.CombinedOutput(); err != nil || string(out) != "openjdk 23.0.2\n" {
+		t.Errorf("signal-cli from the copy: %v\n%s", err, out)
+	}
+}
+
 // A first half that ends before the restart, here at a restart refused,
 // lifts the drain and tells "Agents": jobs do not wait for a restart that is
 // not coming.

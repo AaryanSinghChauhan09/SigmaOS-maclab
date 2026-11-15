@@ -400,7 +400,8 @@ switch_back() {
   # VERSIONS and HELD are written in full the tool's own folder is kept, and
   # anything that fails puts it back as it was, with its daemon started.
   held="$(grep -v "^$name " "$cur/HELD" 2>/dev/null || true)"
-  if ! cp -R "$prev/$name" "$cur/$name" || ! chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$cur/$name" || ! chmod -R ug-s,go-w "$cur/$name" ||
+  if ! cp -R "$prev/$name" "$cur/$name" || ! repoint "$cur/$name" "$LAB_TOOLS/$(basename "$cur")" ||
+    ! chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$cur/$name" || ! chmod -R ug-s,go-w "$cur/$name" ||
     ! awk -v n="$name" -v v="$2" '$1 == n { print n, v; next } { print }' "$cur/VERSIONS" > "$cur/VERSIONS.new" ||
     ! printf '%s%s %s\n' "${held:+$held$'\n'}" "$name" "$3" > "$cur/HELD.new" ||
     ! mv -f "$cur/VERSIONS.new" "$cur/VERSIONS"; then

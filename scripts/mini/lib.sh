@@ -255,6 +255,31 @@ leans() {
   done < <(grep -rlF --null /opt/homebrew "$new" 2>/dev/null || true)
 }
 
+# repoint DIR COPY: a script below DIR that runs a file of another copy of
+# the tools by its path ($LAB_TOOLS/<copy>/...) runs that file of COPY
+# instead. A wrapper the set-up pointed at its copy (rewrite_kegs) moves
+# with a tool into another copy, as a held tool does at the next copy and a
+# switch back does into the copy in use, and the copy it named is pruned.
+repoint() {
+  local dir="$1" to="$2" file d text changed from rep mode
+  while IFS= read -r -d '' file; do
+    [[ -f $file && ! -L $file && "$(head -c 2 "$file")" == '#!' ]] || continue
+    text="$(cat "$file"; printf x)"
+    text="${text%x}"
+    changed="$text"
+    for d in "$LAB_TOOLS"/*; do
+      [[ -d $d && ! -L $d ]] || continue
+      from="$LAB_TOOLS/$(basename "$d")/" rep="$to/"
+      [[ $from != "$rep" ]] || continue
+      # Unquoted: bash 3.2 would keep the quotes of a quoted replacement.
+      changed="${changed//"$from"/$rep}"
+    done
+    [[ $changed != "$text" ]] || continue
+    if [[ -x $file ]]; then mode=0555; else mode=0444; fi
+    { chmod u+w "$file" && printf '%s' "$changed" > "$file" && chmod "$mode" "$file"; } || return 1
+  done < <(grep -rlF --null "$LAB_TOOLS/" "$dir" 2>/dev/null || true)
+}
+
 # formulae: the Homebrew formulae of deploy/homebrew-formulae, one a line.
 # The script that sources this names the folder in $deploy.
 # shellcheck disable=SC2154
