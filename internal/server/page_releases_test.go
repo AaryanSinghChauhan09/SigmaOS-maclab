@@ -610,6 +610,12 @@ func TestPromoteOnTheReleasesPageAsksTwiceThenPromotesFromThePassedRun(t *testin
 	l.s.mu.Lock()
 	l.s.devs["sim-mac"] = gone
 	l.s.mu.Unlock()
+	// A check-in while the Mac was out of the fleet got 401, and lab-agent
+	// tries again only 5s later, past these tests' quietGrace (3s): the
+	// Promotion's call to the Mac would count it lost. The Mac is back once
+	// it has checked in again.
+	back := l.s.now()
+	l.waitDevice(func(d api.Device) bool { return d.LastSeen.After(back) })
 
 	w := l.pageAs(ada, (*Server).pPromote, "/releases/9.9/macs/sim-mac/promote", at)
 	if w.Code != http.StatusOK {
