@@ -199,8 +199,7 @@ func TestEveryDryRunSaysItsStepsAndSendsNothing(t *testing.T) {
 }
 
 // Each of the fourteen against a labd on loopback: the lab's rules do what
-// the test expects of them. Test 9's rule is slice 40's: until it lands the
-// run says it waits for it.
+// the test expects of them.
 func TestTheFourteenRunLocally(t *testing.T) {
 	t.Parallel()
 	bins(t)
@@ -235,15 +234,12 @@ func TestTheFourteenRunLocally(t *testing.T) {
 			"Reports, for a Maintainer, says it arrived by the Mac's own tool", "a report carrying a lab_job key: 422", "the 31st of the hour: 429"},
 		"h14-volunteers-mac": {"lab run loaner --installed: refused", "lab installed promote loaner: refused", "Promote on the Release's page: refused",
 			"the site's boot form has no field for an Installed run", "POST /api/jobs, an Installed run: refused", "POST /api/installed/0.0.0-hardening-14/promote: refused", "no job was made on loaner"},
-		"h09-notice-topic": {"WAITS for slice 40: labd connected 1 time(s) to the Volunteer's topic at a private address"},
+		"h09-notice-topic": {"reports its own topic, https://127.0.0.1:PORT/h09", "nothing connected to the topic's port: the Notice was dropped"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			out, code, record, results := local(t, nil, name)
 			want, word := 0, "pass"
-			if name == "h09-notice-topic" {
-				want, word = 4, "waits"
-			}
 			if code != want {
 				t.Fatalf("exit %d, want %d\n%s", code, want, out)
 			}
