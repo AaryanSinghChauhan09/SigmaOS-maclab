@@ -133,16 +133,14 @@ type jobCancel struct {
 	j     *api.Job // the run's copy, once it has one
 }
 
-// ask records the cancel. A job already sent to its Mac is not marked: no
-// stop keeps it, and its outcome says what the cancel did.
+// ask records the cancel, whatever the job's state: one already given its
+// Mac may still be queued in the store, and a labd that ends before its next
+// save must not run it again.
 func (c *jobCancel) ask(s *Server, v *dev, id string) {
 	c.mu.Lock()
 	c.asked = true
 	j := c.j
 	c.mu.Unlock()
-	if v.snapshot().ActiveJob == id {
-		return
-	}
 	mark := func(j *api.Job) {
 		if j.State != api.JobDone {
 			j.Canceled = true
@@ -407,9 +405,9 @@ func (s *Server) runJobAsked(ctx context.Context, v *dev, j *api.Job, c *jobCanc
 			return
 		}
 	}
-	if under {
-		s.updateJob(j, func(j *api.Job) { j.UnderLease = true })
-	}
+	// Staging in the store before the Mac's first command: a labd that ends
+	// from here on does not queue the job again.
+	s.updateJob(j, func(j *api.Job) { j.State, j.UnderLease = api.JobStaging, j.UnderLease || under })
 	r.started = s.now()
 	r.tellVolunteerJobStarting()
 	if r.serialEnabled() {

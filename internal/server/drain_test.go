@@ -337,6 +337,64 @@ func TestACancelAnsweredBeforeAStopIsNeverUndone(t *testing.T) {
 	}
 }
 
+// A job given its Mac is staging in the store before the Mac gets its first
+// command, the clean-up; a cancel then is stored too. labd ending there (no
+// Deploy's drain: a crash) does not have the next labd run the job.
+func TestACancelThenACrashDuringTheFirstCleanUpNeverRunsTheJob(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	v := l.s.dev(l.name)
+	v.mu.Lock()
+	v.beforeSend = func() {
+		v.mu.Lock()
+		v.beforeSend = nil
+		v.mu.Unlock()
+		l.sim.Sleep() // the clean-up stays on its way
+	}
+	v.mu.Unlock()
+	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-crashed behavior=ok")})
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		v.mu.Lock()
+		given := v.d.ActiveJob == id
+		for _, c := range v.sent {
+			given = given && c.Kind == api.CmdCleanup || given && len(v.pending) > 0
+		}
+		v.mu.Unlock()
+		if given && (pendingOf(v, api.CmdCleanup) > 0 || func() bool { v.mu.Lock(); defer v.mu.Unlock(); return len(v.sent) > 0 }()) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the job never sent its Mac the first clean-up")
+		}
+	}
+	if j, _ := l.s.store.job(id); j.State == api.JobQueued {
+		t.Fatal("the job is still queued in the store while its Mac has its first command: a labd ending now would run it again")
+	}
+	if r, body := l.get("POST", "/api/jobs/"+id+"/cancel"); r.StatusCode != 200 {
+		t.Fatalf("cancel: %s %s", r.Status, body)
+	}
+	if j, _ := l.s.store.job(id); !j.Canceled && j.State != api.JobDone {
+		t.Errorf("the cancel was answered and the store does not have it: %s", j.State)
+	}
+	l.cancel()
+	idleAfterStop(t, l.s)
+	l.sim.Wake()
+
+	again := restartLabd(t, l.s)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		j, _ := again.store.job(id)
+		if j.State == api.JobDone {
+			if j.Outcome == api.OutcomePass || j.Result.Booted {
+				t.Fatalf("the canceled job ran after the restart: %s (booted %v): %s", j.Outcome, j.Result.Booted, j.Summary)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the restart the canceled job is %s: %v", j.State, j.Events)
+		}
+	}
+}
+
 // A job whose cancel is in the store, still queued when labd stopped, is
 // ended as canceled by the next labd, not run.
 func TestAStoredCancelIsHonouredAtTheStart(t *testing.T) {
