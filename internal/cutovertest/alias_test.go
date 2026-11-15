@@ -501,6 +501,29 @@ func TestTheRehearsalMakesNothingWhenItCannotRun(t *testing.T) {
 	}
 }
 
+// A 0600 Porkbun keys file whose ACL lets another account read it stops
+// the rehearsal before anything is made, as a mode others read does.
+func TestTheRehearsalRefusesPorkbunKeysWithAnACL(t *testing.T) {
+	p := newPlayed(t, bins(t))
+	keys := filepath.Join(p.state, "porkbun.keys")
+	if exec.Command("chmod", "+a", "everyone allow read", keys).Run() != nil && exec.Command("setfacl", "-m", "u:nobody:r", keys).Run() != nil {
+		t.Skip("no access control lists here")
+	}
+	if st, err := os.Stat(keys); err != nil || st.Mode().Perm() != 0o600 {
+		t.Skip("the ACL changed the keys file's mode: the mode check covers it")
+	}
+	out, code, record := p.rehearse("--agents-line", "seen")
+	if code == 0 || !strings.Contains(out, "ACL") || record != "" {
+		t.Errorf("keys with an ACL: exit %d\n%s", code, out)
+	}
+	if calls, _ := os.ReadFile(filepath.Join(p.state, "calls")); strings.Contains(string(calls), "--apply") || strings.Contains(string(calls), "ssh ") {
+		t.Errorf("something was made or the mini was asked:\n%s", calls)
+	}
+	if left := p.left(); len(left) != 0 {
+		t.Errorf("these were made: %v", left)
+	}
+}
+
 // Before the owner has entered payment details Cloudflare takes no call
 // about custom hostnames: the run says what Cloudflare said, makes nothing
 // at Porkbun and leaves the mini alone. The write it sent counts as made,

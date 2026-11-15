@@ -276,11 +276,18 @@ fi
 [[ -n $token_file ]] || fail "--lab needs --token-file FILE: the run calls Cloudflare several times, and a token is typed once into a file only you can read (scripts/cloud/owner-setup.sh makes it)"
 [[ -f $token_file ]] || fail "no token file $token_file"
 [[ -f $porkbun_keys ]] || fail "no Porkbun keys file $porkbun_keys: its API key on the first line, its secret key on the second, chmod 600; or give --porkbun-keys FILE. Nothing was made"
+# Mode 600 or 400 and no ACL: macOS marks any extended attribute with @ and
+# then shows no + for an ACL, which ls -e lists.
 # shellcheck disable=SC2012
-case "$(ls -lnL "$porkbun_keys" | cut -c1-10)" in
-  -r-------- | -rw-------) ;;
+case "$(ls -lnLd "$porkbun_keys" | awk '{ print $1; exit }')" in
+  -r-------- | -rw------- | -r--------[@.] | -rw-------[@.]) ;;
+  *+) fail "$porkbun_keys has an ACL, which may let others read it: take it off (chmod -N $porkbun_keys). Nothing was made" ;;
   *) fail "$porkbun_keys can be read by others: chmod 600 it. Nothing was made" ;;
 esac
+# shellcheck disable=SC2012
+if listed="$(ls -lnLde "$porkbun_keys" 2>/dev/null)" && [[ $listed == *$'\n'* ]]; then
+  fail "$porkbun_keys has an ACL, which may let others read it: take it off (chmod -N $porkbun_keys). Nothing was made"
+fi
 for tool in dig curl "$LAB_CMD"; do
   command -v "$tool" >/dev/null 2>&1 || fail "no $tool on this machine"
 done

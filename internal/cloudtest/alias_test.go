@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -502,5 +503,48 @@ func TestPorkbunsKeysComeFromAFileOnlyItsOwnerReads(t *testing.T) {
 	}
 	if strings.Contains(source(t, "lib.sh"), "security find-generic-password") {
 		t.Error("lib.sh still reads the Keychain")
+	}
+}
+
+// withACL gives file an access control list that lets another account read
+// it, with the file's mode left as it is.
+func withACL(t testing.TB, file string) {
+	t.Helper()
+	if exec.Command("chmod", "+a", "everyone allow read", file).Run() == nil {
+		return
+	}
+	if exec.Command("setfacl", "-m", "u:nobody:r", file).Run() == nil {
+		return
+	}
+	t.Skip("no access control lists here")
+}
+
+// A 0600 credential file whose ACL lets another account read it is
+// refused before anything is sent: the Porkbun keys and the Cloudflare
+// token alike. On macOS the mode column shows @ for any extended
+// attribute, and then no + for the ACL.
+func TestACredentialFileWithAnACLIsRefused(t *testing.T) {
+	p := newPorkbun(t)
+	keys := porkbunKeys(t, 0o600)
+	withACL(t, keys)
+	out, code := script(t, nil, []string{"LAB_PORKBUN_API=" + p.srv.URL + "/api/json/v3"}, recordScript, "--check", "--name", rehearsal, "--porkbun-keys", keys)
+	if n := len(p.sent()); code == 0 || n != 0 || !strings.Contains(out, "ACL") {
+		t.Errorf("Porkbun keys with an ACL: exit %d, %d calls to Porkbun\n%s", code, n, out)
+	}
+
+	f := asSpec(t)
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte(f.token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withACL(t, token)
+	for _, name := range []string{zoneScript, tunnelScript} {
+		out, code := script(t, f, nil, name, "--check", "--token-file", token)
+		if code == 0 || !strings.Contains(out, "ACL") {
+			t.Errorf("%s took a token file with an ACL: exit %d\n%s", name, code, out)
+		}
+	}
+	if n := len(f.sent()); n != 0 {
+		t.Errorf("%d calls were made with a token others may read", n)
 	}
 }

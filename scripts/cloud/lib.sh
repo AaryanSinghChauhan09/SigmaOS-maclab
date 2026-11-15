@@ -102,13 +102,21 @@ usage() {
 
 TOKEN=""
 
-# own_only FILE: dies unless only its owner may read FILE.
+# own_only FILE: dies unless only its owner may read FILE: mode 600 or 400,
+# and no ACL. GNU ls marks an ACL with +; macOS marks any extended attribute
+# with @ and then shows no +, and lists the ACL itself under ls -e.
 own_only() {
+  local listed
   # shellcheck disable=SC2012
-  case "$(ls -lnL "$1" | cut -c1-10)" in
-    -r-------- | -rw-------) ;;
+  case "$(ls -lnLd "$1" | awk '{ print $1; exit }')" in
+    -r-------- | -rw------- | -r--------[@.] | -rw-------[@.]) ;;
+    *+) die "$1 has an ACL, which may let others read it: take it off (chmod -N $1, or setfacl -b $1)" ;;
     *) die "$1 can be read by others: chmod 600 it" ;;
   esac
+  # shellcheck disable=SC2012
+  if listed="$(ls -lnLde "$1" 2>/dev/null)" && [[ $listed == *$'\n'* ]]; then
+    die "$1 has an ACL, which may let others read it: take it off (chmod -N $1)"
+  fi
 }
 
 # load_token: the Cloudflare token from --token-file, or asked for at the
