@@ -78,6 +78,10 @@ STREAM=""
 # The build asked for and not ended yet: a run that ends first cancels it.
 BUILD_ID=""
 PROBE=""
+POLLER=""
+# lab upload says each part as labd takes it: the transfer's window opens at
+# the first.
+export MACLAB_UPLOAD_PROGRESS=1
 
 today() { TZ=Australia/Brisbane date +%Y-%m-%d; }
 
@@ -186,6 +190,11 @@ gate_done() {
 
 give_up() { rec "FAILED: $1"; gate_done fail 1; }
 
+stop_poller() {
+  [[ -z $POLLER ]] || { kill "$POLLER" 2> /dev/null; wait "$POLLER" 2> /dev/null; } || true
+  POLLER=""
+}
+
 stop_watch() {
   [[ -z $WATCH_PID ]] || kill "$WATCH_PID" 2>/dev/null || true
   WATCH_PID=""
@@ -193,6 +202,7 @@ stop_watch() {
 
 ended() {
   local status=$?
+  stop_poller
   stop_watch
   if [[ -n $RECORD && $FINISHED == 0 ]]; then
     FINISHED=1
@@ -321,9 +331,15 @@ build() {
       tries=$((tries + 1))
       file="$WORK/transfer.bin"
       random_file "$file" "$SIZE"
-      from="$(date +%s)"
+      # In flight from the first part labd holds: before it, lab only hashes
+      # the file, and nothing is sent.
+      rm -f "$WORK/upload.err" "$WORK/first-part"
+      ( until grep -q 'labd holds ' "$WORK/upload.err" 2> /dev/null; do sleep 0.2; done; date +%s > "$WORK/first-part" ) &
+      POLLER=$!
       upload_timed "$file"
       to="$(date +%s)"
+      stop_poller
+      from="$(cat "$WORK/first-part" 2> /dev/null || echo "$to")"
       rm -f "$file"
       up="$UP_MBIT"
       read -r readings unread worst slow failed <<<"$(pages "$k" "$from" "$to")"

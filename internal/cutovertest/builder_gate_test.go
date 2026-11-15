@@ -72,6 +72,9 @@ case "$1" in
     echo "build $id: o/linux-aurora @ 0123456789ab (queued)" ;;
   upload)
     [[ ! -f $GATE/upload.fails ]] || { echo "lab: the lab answered 502" >&2; exit 1; }
+    # The whole file is hashed before the first part goes.
+    sleep "${GATE_HASH_SECONDS:-0}"
+    [[ ${MACLAB_UPLOAD_PROGRESS:-} != 1 ]] || echo "lab: labd holds 1 of 2 parts" >&2
     sleep "${GATE_UPLOAD_SECONDS:-4}"
     shasum -a 256 "$2" | cut -d' ' -f1
     echo up >> "$GATE/uploads" ;;
@@ -558,6 +561,19 @@ func TestAGateThatEndsFirstLeavesNoBuild(t *testing.T) {
 			t.Errorf("the build was left:\n%s\n%s", g.calls("calls"), g.record())
 		}
 	})
+}
+
+// The transfer is in flight from its first part on, not while lab hashes the
+// file before it: readings taken while it hashed prove nothing.
+func TestTheTransferWindowStartsAtTheFirstPart(t *testing.T) {
+	t.Parallel()
+	g := newGate(t)
+	g.env = append(g.env, "GATE_HASH_SECONDS=4", "GATE_UPLOAD_SECONDS=0")
+	out, code := g.run()
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	wants(t, "the record", g.record(), "FAILED: labd's page times were not read with a transfer in flight during the cold kernel build")
 }
 
 // A build that reaches nothing past the mini, as container's VMs once did:
