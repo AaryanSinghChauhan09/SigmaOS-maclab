@@ -349,7 +349,7 @@ func labRun(t *testing.T, name, lab, probe, stdin string, env []string, args ...
 // a person M team. A "no" at a question leaves the lab as it was.
 const h08Probe = `case "$*" in
   "page "*'data-label="Kind"'*) echo status=200; [ -z "${H08_KIND:-}" ] || echo "found=$H08_KIND" ;;
-  "page "*"--find /me/tokens/"*) echo status=200; echo found=7 ;;
+  "page "*"--find /me/tokens/"*) [ -z "${H08_ME_FAILS:-}" ] || { echo status=500; exit 0; }; echo status=200; echo found=7 ;;
   "page "*"--find /people/"*"end-all-access"*) echo status=200; echo found=42 ;;
   "page "*" /me") echo status=200 ;;
   "form "*" /me/tokens name="*) echo lab_0123456789012345678901234567890123456789 > "$out"; echo status=200 ;;
@@ -409,6 +409,19 @@ func TestH08LeavesAnExistingMemberMarked(t *testing.T) {
 				t.Errorf("the run changed the lab before it refused:\n%s", calls)
 			}
 		})
+	}
+}
+
+// The token's undo says it is done only once it has read the owner's page:
+// a /me that does not open says nothing of the token, which may be live.
+func TestATokenUndoThatCannotReadMeSaysNotUndone(t *testing.T) {
+	t.Parallel()
+	out, code, record, _ := labRun(t, "h08-agents-lines", "", h08Probe, "session\nno\n", []string{"H08_ME_FAILS=1"}, "--other", "someone")
+	if code != 1 || !strings.Contains(record, "Result: fail") {
+		t.Fatalf("exit %d\n%s\n%s", code, out, record)
+	}
+	if strings.Contains(record, "undone: no Lab token") || !strings.Contains(record, "NOT UNDONE: the Lab token h08-") || !strings.Contains(record, "(500)") {
+		t.Errorf("the record does not say the token may still be live:\n%s", record)
 	}
 }
 
