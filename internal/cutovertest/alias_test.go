@@ -490,7 +490,8 @@ func TestTheRehearsalMakesNothingWhenItCannotRun(t *testing.T) {
 
 // Before the owner has entered payment details Cloudflare takes no call
 // about custom hostnames: the run says what Cloudflare said, makes nothing
-// at Porkbun, leaves the mini alone and claims no deletion.
+// at Porkbun and leaves the mini alone. The write it sent counts as made,
+// so it is asked to be deleted, and the record does not claim it was.
 func TestTheRehearsalStopsWhenCloudflareTakesNoCustomHostname(t *testing.T) {
 	p := newPlayed(t, bins(t))
 	p.write(filepath.Join(p.cloud, "alias.sh"), "#!/bin/bash\necho \"alias.sh $*\" >> \"$STATE/calls\"\necho 'alias.sh: GET /zones/{zone}/custom_hostnames: status 403, [1404] not enabled, ray 8f00ba4dfeed1234-BNE'\necho 'alias.sh: Cloudflare did not take a call about custom hostnames. They need payment details'\nexit 1\n")
@@ -498,12 +499,31 @@ func TestTheRehearsalStopsWhenCloudflareTakesNoCustomHostname(t *testing.T) {
 	if code != 1 || !strings.Contains(record, "- made: FAIL. Cloudflare did not take the custom hostname "+rehearsal) || !strings.Contains(out, "status 403") || !strings.Contains(out, "payment details") {
 		t.Errorf("exit %d\n%s\n%s", code, out, record)
 	}
-	if !strings.Contains(record, "- deleted: nothing was made") || strings.Contains(record, "still there") || !strings.Contains(record, "Result: fail") {
+	if !strings.Contains(record, "- deleted: FAIL. not seen gone, though the first write failed and may have made nothing") || strings.Contains(record, "deleted: pass") || !strings.Contains(record, "Result: fail") {
 		t.Errorf("the record:\n%s", record)
 	}
 	calls := p.calls()
-	if strings.Contains(calls, "rehearsal-record.sh") || strings.Contains(calls, "ssh ") || strings.Contains(calls, "--remove") || len(p.left()) != 0 {
-		t.Errorf("after Cloudflare's refusal the run went on:\n%s", calls)
+	if strings.Contains(calls, "rehearsal-record.sh --apply --name") || strings.Contains(calls, "ssh ") || !strings.Contains(calls, "alias.sh --apply --remove --name "+rehearsal) || len(p.left()) != 0 {
+		t.Errorf("after Cloudflare's refusal the run went on, or did not ask for the deletion:\n%s", calls)
+	}
+}
+
+// Cloudflare can take the hostname and the call still fail after it (a GET
+// in alias.sh): the run counts it as made before it writes, and deletes it.
+func TestAHostnameTakenByAFailedWriteIsDeletedAllTheSame(t *testing.T) {
+	p := newPlayed(t, bins(t))
+	p.write(filepath.Join(p.cloud, "alias.sh"), "#!/bin/bash\necho \"alias.sh $*\" >> \"$STATE/calls\"\nname=\"\"; want=present\nwhile (( $# )); do case \"$1\" in --name) name=\"$2\"; shift ;; --remove) want=absent ;; esac; shift; done\nif [[ $want == absent ]]; then rm -f \"$STATE/hostname.$name\"; exit 0; fi\necho pending > \"$STATE/hostname.$name\"\necho 'alias.sh: GET /zones/{zone}/custom_hostnames: status 502, ray 8f00ba4dfeed1234-BNE'\nexit 1\n")
+
+	out, code, record := p.rehearse("--agents-line", "seen")
+
+	if code != 1 || !strings.Contains(record, "- made: FAIL. Cloudflare did not take the custom hostname "+rehearsal) {
+		t.Errorf("exit %d\n%s\n%s", code, out, record)
+	}
+	if left := p.left(); len(left) != 0 {
+		t.Errorf("after the run these are still there: %v\n%s", left, p.calls())
+	}
+	if strings.Contains(p.calls(), "ssh ") {
+		t.Errorf("the mini was asked:\n%s", p.calls())
 	}
 }
 

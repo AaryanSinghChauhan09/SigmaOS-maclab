@@ -279,6 +279,7 @@ done
 
 workspace
 made=0
+took=0
 switched=0
 torn=0
 
@@ -350,14 +351,17 @@ else
   rec "payment details: the owner entered them on Cloudflare before this run. What was charged is not said here (--charged): he adds it to this line"
 fi
 
-# 1. The two hostnames and their records.
+# 1. The two hostnames and their records. A write that fails may have been
+# taken all the same (a call after it failed): it counts as made before it
+# is sent, and the way out deletes whatever is there.
 for n in "$NAME" "$THIRD"; do
+  made=1
   if ! cloud alias.sh --apply --name "$n"; then
     step fail "made" "Cloudflare did not take the custom hostname $n:"
     said
     break
   fi
-  made=1
+  took=1
   if ! cloud rehearsal-record.sh --apply --name "$n"; then
     step fail "made" "Porkbun did not take the record of $n:"
     said
@@ -495,6 +499,8 @@ if (( ! made )); then
   rec "deleted: nothing was made, so there is nothing to delete"
 elif [[ -z $left && -z $TORN_BAD ]]; then
   step pass "deleted" "both throwaway hostnames are gone from the zone and both records from Porkbun"
+elif (( ! took )); then
+  step fail "deleted" "not seen gone, though the first write failed and may have made nothing: ${left:-nothing}${TORN_BAD:+. $TORN_BAD}"
 else
   step fail "deleted" "still there: ${left:-nothing}${TORN_BAD:+. $TORN_BAD}"
 fi
