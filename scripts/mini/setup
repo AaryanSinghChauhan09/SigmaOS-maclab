@@ -413,6 +413,37 @@ not_whole() {
   fail "$2: a daemon run from the copy would still run files the admin account can write. Nothing was changed"
 }
 
+# rewrite_kegs NEW: a script in the copy that runs another copied keg by
+# its Homebrew path is pointed at that keg's copy, in this folder. That is
+# how a wrapper on a Java tree runs from the copy: Homebrew's signal-cli on
+# Java is a script that runs the keg's own script on openjdk, which brew
+# names among its needs and the copy takes whole. Anything else that names
+# Homebrew is left, and whole refuses it.
+rewrite_kegs() {
+  local new="$1" file i from to end text changed mode pat rep
+  while IFS= read -r -d '' file; do
+    [[ -f $file && ! -L $file && "$(head -c 2 "$file")" == '#!' ]] || continue
+    text="$(cat "$file"; printf x)"
+    text="${text%x}"
+    changed="$text"
+    for (( i = 0; i < ${#KEG_NAMES[@]}; i++ )); do
+      to="$new/${KEG_NAMES[i]}"
+      for from in "${KEG_PATHS[i]}" "$BREW_PREFIX/Cellar/${KEG_NAMES[i]}/$(basename "${KEG_PATHS[i]}")" "$BREW_PREFIX/opt/${KEG_NAMES[i]}"; do
+        for end in / '"' "'" ' ' $'\n'; do
+          # Unquoted: bash 3.2 would keep the quotes of a quoted replacement.
+          pat="$from$end" rep="$to$end"
+          changed="${changed//"$pat"/$rep}"
+        done
+      done
+    done
+    [[ $changed != "$text" ]] || continue
+    if [[ -x $file ]]; then mode=0555; else mode=0444; fi
+    chmod u+w "$file"
+    printf '%s' "$changed" > "$file"
+    chmod "$mode" "$file"
+  done < <(grep -rlF --null "$BREW_PREFIX" "$new" 2>/dev/null || true)
+}
+
 # The daemons run the Homebrew tools from a copy only root can write, never
 # from the prefix, which the admin account can write. The copy this one
 # replaces is kept as the way back after a bad upgrade.
@@ -424,6 +455,7 @@ new_copy() {
     # Homebrew's own notes about a keg name its prefix, and no tool reads them.
     rm -rf "$new/${KEG_NAMES[i]}"/{.brew,INSTALL_RECEIPT.json,sbom.spdx.json} "$new/${KEG_NAMES[i]}"/homebrew.*
   done
+  rewrite_kegs "$new"
   whole "$new"
   printf '%s' "$1" > "$new/VERSIONS"
   [[ -z $KEGS_HELD ]] || printf '%s' "$KEGS_HELD" > "$new/HELD"

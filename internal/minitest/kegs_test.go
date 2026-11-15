@@ -212,6 +212,64 @@ func TestTheCopyTakesAJavaWithItsLinks(t *testing.T) {
 	sealed(t, m.path("usr/local/lab/tools"))
 }
 
+// signal-cli as Homebrew ships it on Java, a wrapper script that runs the
+// keg's own script on Homebrew's Java: the copy takes the whole Java tree
+// beside it and points the wrapper at the two copies, so that nothing it
+// runs is under Homebrew. Which of the two ways signal-cli comes is the
+// owner's `brew info signal-cli` on the mini; this is the Java one.
+func TestTheCopyTakesSignalCLIOnJavaWithItsWholeJavaAndRewritesTheWrapper(t *testing.T) {
+	m := newMini(t)
+	k := newKey(t)
+	m.theLabsKegs()
+	m.signalCLIOnJava()
+	tools := m.path("usr/local/lab/tools")
+	m.ok("setup", "--release-key", k.signers)
+
+	if got := read(t, tools+"/current/VERSIONS"); !strings.Contains(got, "openjdk 23.0.2\n") || !strings.Contains(got, "signal-cli 0.13.24\n") {
+		t.Errorf("VERSIONS: %q", got)
+	}
+	for _, file := range []string{"openjdk/libexec/openjdk.jdk/Contents/Home/lib/server/libjvm.dylib", "openjdk/libexec/openjdk.jdk/Contents/Home/lib/modules",
+		"openjdk/libexec/openjdk.jdk/Contents/Home/conf/security/java.policy", "signal-cli/libexec/lib/signal-cli-0.13.24.jar"} {
+		if !exists(tools + "/current/" + file) {
+			t.Errorf("the copy lacks %s", file)
+		}
+	}
+	current, _ := os.Readlink(tools + "/current")
+	copied := tools + "/" + current
+	wrapper := tools + "/current/signal-cli/bin/signal-cli"
+	text := read(t, wrapper)
+	for _, want := range []string{copied + "/openjdk/libexec/openjdk.jdk/Contents/Home", copied + "/signal-cli/libexec/bin/signal-cli"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the wrapper does not run %s:\n%s", want, text)
+		}
+	}
+	if mode(t, wrapper)&0o111 == 0 {
+		t.Errorf("the wrapper cannot be run: %v", mode(t, wrapper))
+	}
+	filepath.Walk(tools, func(p string, info os.FileInfo, err error) error {
+		if err != nil || !info.Mode().IsRegular() {
+			return err
+		}
+		if b, _ := os.ReadFile(p); strings.Contains(string(b), "/opt/homebrew") {
+			t.Errorf("%s in the copy names Homebrew", strings.TrimPrefix(p, tools))
+		}
+		return nil
+	})
+	sealed(t, tools)
+
+	// It runs from the copy with Homebrew gone.
+	prefix := m.path("opt/homebrew")
+	if err := os.Rename(prefix, prefix+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Rename(prefix+".gone", prefix)
+	run := exec.Command(wrapper)
+	run.Env = []string{"PATH=/usr/bin:/bin"}
+	if out, err := run.CombinedOutput(); err != nil || string(out) != "openjdk 23.0.2\n" {
+		t.Errorf("signal-cli from the copy: %v\n%s", err, out)
+	}
+}
+
 // refusedCopy runs the set-up over a mini whose tools were copied once and
 // whose kegs then changed, and wants the new copy refused for this reason
 // with the copy in use left as it was.
@@ -282,8 +340,11 @@ func TestTheCopyRefusesAToolThatStillLeansOnHomebrew(t *testing.T) {
 			},
 			"restic/bin/restic names Homebrew's folder, and otool could not say what it loads",
 		},
-		"signal-cli as a script on Homebrew's Java": {
-			(*mini).signalCLIOnJava,
+		"signal-cli as a script on a Java the copy does not hold": {
+			func(m *mini) {
+				m.signalCLIOnJava()
+				os.Remove(prefix(m) + "/deps/signal-cli")
+			},
 			"signal-cli/bin/signal-cli names Homebrew's folder (/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home)",
 		},
 	} {

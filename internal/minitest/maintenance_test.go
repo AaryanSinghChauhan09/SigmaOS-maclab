@@ -491,10 +491,11 @@ func TestTheMaintenanceRunStopsWhenHomebrewOrTheSetUpFails(t *testing.T) {
 		t.Errorf("\"Agents\" was told %q", got)
 	}
 
-	// A new version that still leads back into Homebrew: the set-up refuses
-	// the copy, and the run stops with the tools as they were.
+	// A new version that still leads back into Homebrew, to a keg the copy
+	// does not hold: the set-up refuses the copy, and the run stops with the
+	// tools as they were.
 	os.Remove(r.path("opt/homebrew/upgrade.fails"))
-	r.newer("cloudflared", "2.0", "#!/bin/sh\nexec "+r.path("opt/homebrew")+"/opt/cloudflared/libexec/cloudflared \"$@\"\n")
+	r.newer("cloudflared", "2.0", "#!/bin/sh\nexec "+r.path("opt/homebrew")+"/opt/other/libexec/cloudflared \"$@\"\n")
 	os.Remove(r.log)
 	out = r.stopped()
 	if !strings.Contains(out, "the set-up failed") || r.version("cloudflared") != "1.0" || len(r.copies()) != 1 || strings.Contains(r.calls(), "fdesetup authrestart") {
