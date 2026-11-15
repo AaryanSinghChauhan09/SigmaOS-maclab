@@ -670,3 +670,45 @@ func TestAResetThatGetsItsTurnLateIsSentAndTheLadderRuns(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	l.wantResets("each Mac once", portLeft, portRight)
 }
+
+// The Lease is asked again when the reset's turn comes: a reset whose
+// holder released the Lease while it waited for the controller is never
+// sent.
+func TestAResetWhoseLeaseEndsWhileItWaitsIsNotSent(t *testing.T) {
+	l := newEndsLab(t)
+	l.leaseAs(l.grace, 0)
+	// Another port's tool run holds the controller's one lock.
+	probing, release := l.oob.holdProbes(t)
+	probed := make(chan error, 1)
+	go func() { _, err := l.oob.client.Probe(context.Background(), portLeft); probed <- err }()
+	<-probing
+	answer := make(chan string, 1)
+	go func() { r, body := l.resetAs(l.grace.Token, l.name, ""); answer <- r.Status + " " + body }()
+	v := l.s.dev(l.name)
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		waiting := v.oobCallCancel != nil
+		v.mu.Unlock()
+		if waiting {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("the Hard reset never reached the controller")
+		}
+	}
+	time.Sleep(200 * time.Millisecond) // past labd's own look, at the controller's lock
+	if r, body := l.as(l.grace.Token, "DELETE", "/api/devices/"+l.name+"/lease", nil); r.StatusCode != 200 {
+		t.Fatalf("releasing the Lease: %s %s", r.Status, body)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	release()
+	if err := <-probed; err != nil {
+		t.Fatal(err)
+	}
+	got := <-answer
+	if !strings.Contains(got, "403") || !strings.Contains(got, "needs their own Lease") {
+		t.Fatalf("a reset whose Lease was released while it waited: %s", got)
+	}
+	time.Sleep(300 * time.Millisecond)
+	l.wantResets("the Lease ended before the reset's turn")
+}

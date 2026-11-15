@@ -1520,6 +1520,7 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person, by string) (
 	v.resetting = true
 	v.mu.Unlock()
 	rctx, cancel := context.WithTimeout(ctx, s.cfg.ResetWait)
+	go s.fenceWhileWaiting(rctx, cancel, v, p)
 	sent := sentReset{at: s.now(), prev: prev}
 	sent.port, err = v.resetOOB(rctx)
 	cancel()
@@ -1530,6 +1531,9 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person, by string) (
 	}
 	v.mu.Unlock()
 	if err != nil {
+		if ferr := s.fence(v, p, fenceReset); ferr != nil {
+			return "", ferr
+		}
 		return "", err
 	}
 	go func() {
@@ -1540,6 +1544,29 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person, by string) (
 		said = name + " had left the lab (lab-agent uninstall); the reset puts it back in. "
 	}
 	return said + "Hard reset sent to " + name + " through the " + sent.port + " port; watch `lab status " + name + "`", nil
+}
+
+// fenceWhileWaiting calls off p's reset of v, through cancel, as soon as the
+// Lease would refuse it, for as long as it waits its turn at the controller
+// (ctx). Once the controller is sending it, cancel stops nothing.
+func (s *Server) fenceWhileWaiting(ctx context.Context, cancel context.CancelFunc, v *dev, p Person) {
+	tick := s.clock().NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if s.fence(v, p, fenceReset) != nil {
+			cancel()
+			return
+		}
+		v.mu.Lock()
+		ch := v.changed
+		v.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+		case <-tick.C():
+		}
+	}
 }
 
 // hProve is a Proving reset, which is aimed at a port and not at a Mac:
