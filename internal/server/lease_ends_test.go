@@ -615,3 +615,17 @@ func TestAJobStartsOnlyUnderItsPersonsOwnLeaseOnceTheyAreNoMaintainer(t *testing
 		t.Fatalf("the job ran: %+v", j.Result)
 	}
 }
+
+// `lab forget --force` under a Lease ends the enrollment as ending it does:
+// "ended" in the Lease record, one line for the Lab group, and the Mac's
+// old secret answered with the ending.
+func TestForgettingAMacUnderALeaseEndsItsLease(t *testing.T) {
+	l := newEndsLab(t)
+	l.leaseAs(l.grace, 0)
+	id := l.s.dev(l.name).snapshot().ID
+	if r, body := l.get("DELETE", "/api/devices/"+l.name+"?force=true"); r.StatusCode != 200 {
+		t.Fatalf("forgetting a leased Mac with --force: %s %s", r.Status, body)
+	}
+	l.leavingRequireGone(l.name)
+	wantLeaseEndedWithItsMac(t, l.s, l.sig, l.name, id, "grace", "ended its enrollment")
+}

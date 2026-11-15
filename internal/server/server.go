@@ -1379,13 +1379,6 @@ func (s *Server) hForgetDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"forgot": r.PathValue("name")})
 }
 
-// forget takes v out of the fleet and drops it from devs, ending its device
-// loop and out-of-band stream; its record is Retired, as by a Maintainer
-// ending its enrollment (by). It holds v.mu throughout, as every save of v
-// does, and marks v forgotten before letting go: nothing still holding v
-// can then write the row back, and Submit queues nothing more on it. A
-// lease held by holder doesn't count; force skips the lease and live-agent
-// checks, never the job check.
 // dropNamedState clears what labd keeps under a forgotten Mac's name, since
 // the name can be taken again by another Mac, or another person's: its
 // screens, serial log and baselines go; its Audit log is kept, renamed after
@@ -1403,7 +1396,26 @@ func (s *Server) dropNamedState(name, id string) {
 	}
 }
 
+// forget takes v out of the fleet as a Maintainer (by) ending its
+// enrollment does (endEnrollment): its Lease ends with its line, its device
+// loop stops, its record is Retired and its old secret learns who ended it.
+// A lease held by holder doesn't count; force skips the lease and
+// live-agent checks, never the job check. A job queued between the checks
+// and the ending is canceled by the ending.
 func (s *Server) forget(v *dev, by Person, holder string, force bool) (int, error) {
+	code, err := s.mayForget(v, holder, force)
+	if err != nil {
+		return code, err
+	}
+	if !s.endEnrollment(v, leaving{how: leftByMaintainer, by: by}) {
+		return 404, fmt.Errorf("no device %q", v.snapshot().Name)
+	}
+	close(v.gone)
+	return 200, nil
+}
+
+// mayForget is why v may not be forgotten now, with its status, or nil.
+func (s *Server) mayForget(v *dev, holder string, force bool) (int, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	name := v.d.Name
@@ -1436,15 +1448,6 @@ func (s *Server) forget(v *dev, by Person, holder string, force bool) (int, erro
 		return 409, fmt.Errorf("%s's lab-agent checked in %s ago, so it is still set up: run `sudo lab-agent uninstall` on the Mac first, or pass --force",
 			name, s.since(seen).Round(time.Second))
 	}
-	d := v.d
-	v.forgotten = true
-	s.mu.Lock()
-	if s.devs[name] == v {
-		delete(s.devs, name)
-	}
-	s.mu.Unlock()
-	close(v.gone)
-	s.retired(&d, leaving{how: leftByMaintainer, by: by})
 	return 200, nil
 }
 
