@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // The Builder's gate test (scripts/cutover/builder-gate) with everything
@@ -170,6 +172,18 @@ fi
 printf 'probe_pages=13\nprobe_requests=260\nprobe_p95_ms=%s\nprobe_max_ms=%s\nday_requests=9000\nday_p95_ms=20\n' "$p95" "$((p95 + 31))"
 `
 
+// hardening-probe: under the saved login it cancels a build as labd does.
+const gateProbeStub = `#!/bin/bash
+echo "probe $*" >> "$GATE/calls"
+case "$*" in
+  "ask POST /api/builds/"*"/cancel")
+    id="${3#/api/builds/}"; id="${id%/cancel}"
+    echo "$id  canceled  src" > "$GATE/row.$id"
+    echo status=200 ;;
+  *) echo status=500 ;;
+esac
+`
+
 const gateDuStub = `#!/bin/bash
 case "$1" in
   -k) echo "$(cat "$GATE/used.$(basename "$2")")	$2" ;;
@@ -184,6 +198,7 @@ type gate struct {
 	deploy  string
 	records string
 	recipe  string
+	bin     string
 	env     []string
 }
 
@@ -225,7 +240,7 @@ func (g *gate) results() string {
 func (g *gate) run(args ...string) (string, int) {
 	g.t.Helper()
 	all := append([]string{"--lab", "--mini", "owner@mini", "--kernel", "https://github.com/o/linux-aurora/tree/aurora", "--recipe", g.recipe,
-		"--size", "65536", "--deploy", g.deploy, "--records", g.records}, args...)
+		"--size", "65536", "--deploy", g.deploy, "--records", g.records, "--bin", g.bin}, args...)
 	return run(g.t, g.env, "", cutover(g.t, "builder-gate"), all...)
 }
 
@@ -248,10 +263,12 @@ func newGate(t *testing.T) *gate {
 	mini := filepath.Join(root, "mini")
 	scripts := filepath.Join(mini, "usr/local/lab/current/scripts/mini")
 	stubs := filepath.Join(root, "stubs")
+	g.bin = stubs
 	files := map[string]string{
 		filepath.Join(stubs, "lab"):                                                    gateLabStub,
 		filepath.Join(stubs, "ssh"):                                                    gateSSHStub,
 		filepath.Join(stubs, "du"):                                                     gateDuStub,
+		filepath.Join(stubs, "hardening-probe"):                                        gateProbeStub,
 		filepath.Join(stubs, "launchctl"):                                              "#!/bin/bash\nexit 0\n",
 		filepath.Join(g.state, "machine/ps"):                                           gatePsStub,
 		filepath.Join(g.state, "machine/vm_stat"):                                      gateVMStatStub,
@@ -495,6 +512,52 @@ func TestAFailingPageFailsTheGate(t *testing.T) {
 	}
 	wants(t, "the record", g.record(), "labd did not answer its pages. That misses the target",
 		"missed at 10 (failed: see the record). It runs again at 8 cores a build.", "At 8 cores a build:", "Result: pass")
+}
+
+// A gate that ends while its build is queued or running cancels it: a
+// failure, or the owner stopping it.
+func TestAGateThatEndsFirstLeavesNoBuild(t *testing.T) {
+	t.Parallel()
+	t.Run("a failure", func(t *testing.T) {
+		t.Parallel()
+		g := newGate(t)
+		g.set("watch.dies", "")
+		out, code := g.run()
+		if code != 1 {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		if !strings.Contains(g.calls("calls"), "probe ask POST /api/builds/b1115-000001-abcd/cancel\n") {
+			t.Errorf("the build was left:\n%s", g.calls("calls"))
+		}
+		record := g.record()
+		if i := strings.Index(record, "build b1115-000001-abcd was canceled"); i < 0 || i > strings.Index(record, "Result: fail") {
+			t.Errorf("the record does not say the build was canceled before its result:\n%s", record)
+		}
+	})
+	t.Run("stopped by the owner", func(t *testing.T) {
+		t.Parallel()
+		g := newGate(t)
+		g.env = append(g.env, "GATE_UPLOAD_SECONDS=20")
+		cmd := exec.Command(cutover(t, "builder-gate"), "--lab", "--mini", "owner@mini", "--kernel", "https://github.com/o/linux-aurora/tree/aurora", "--recipe", g.recipe,
+			"--size", "65536", "--deploy", g.deploy, "--records", g.records, "--bin", g.bin)
+		cmd.Env = append(os.Environ(), g.env...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for end := time.Now().Add(30 * time.Second); !strings.Contains(g.calls("calls"), "lab upload "); time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(end) {
+				cmd.Process.Kill()
+				t.Fatalf("no build began:\n%s", g.calls("calls"))
+			}
+		}
+		// Ctrl-C at the owner's terminal: the whole group gets it.
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+		cmd.Wait()
+		if !strings.Contains(g.calls("calls"), "probe ask POST /api/builds/b1115-000001-abcd/cancel\n") || !strings.Contains(g.record(), "build b1115-000001-abcd was canceled") {
+			t.Errorf("the build was left:\n%s\n%s", g.calls("calls"), g.record())
+		}
+	})
 }
 
 // A build that reaches nothing past the mini, as container's VMs once did:

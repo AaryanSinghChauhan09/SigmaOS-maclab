@@ -53,12 +53,14 @@
 # CORES". The Ready list reads that file: --results is green (status 0)
 # when it says pass.
 #
-# It holds no token (lab reads the saved login), types no password and
-# prints no error page.
+# A run that ends before its build does, failed or stopped, cancels the
+# build (with tools/hardening-probe, from --bin or built here, under the same
+# saved login). It holds no token (lab and the probe read the saved login),
+# types no password and prints no error page.
 set -euo pipefail
 # shellcheck source=scripts/cutover/front-door/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/front-door/lib.sh"
-usage() { sed -n '2,57p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,59p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 RESULTS_NAME=builder-gate.results
 # How often labd is asked for a build's state, how long the mini may take
@@ -73,6 +75,9 @@ FINISHED=0
 PASSED="-"
 WATCH_PID=""
 STREAM=""
+# The build asked for and not ended yet: a run that ends first cancels it.
+BUILD_ID=""
+PROBE=""
 
 today() { TZ=Australia/Brisbane date +%Y-%m-%d; }
 
@@ -152,9 +157,24 @@ fail() {
   exit 1
 }
 
+# cancel_build: the build the run asked for and did not see end, canceled
+# under the saved login.
+cancel_build() {
+  local id="$BUILD_ID"
+  [[ -n $id ]] || return 0
+  BUILD_ID=""
+  "$PROBE" ask POST "/api/builds/$id/cancel" > "$WORK/cancel.out" 2>&1 || true
+  if grep -qxE 'status=(200|204)' "$WORK/cancel.out"; then
+    rec "build $id was canceled: the run ended before it did"
+  else
+    rec "NOT CANCELED: build $id may still be queued or running: cancel it on $ADDRESS/builds/$id ($(sed -n 's/^said=//p' "$WORK/cancel.out" | head -n 1))"
+  fi
+}
+
 # gate_done WORD STATUS: pass, fail or stopped.
 gate_done() {
   local results
+  cancel_build
   { echo; echo "Result: $1"; } >> "$RECORD"
   results="$(dirname "$RECORD")/$RESULTS_NAME"
   echo "builder-gate $1 $(today) $(basename "$RECORD") $PASSED" > "$results.new"
@@ -176,7 +196,9 @@ ended() {
   stop_watch
   if [[ -n $RECORD && $FINISHED == 0 ]]; then
     FINISHED=1
-    { echo "- the run ended before it was done"; echo; echo "Result: fail"; } >> "$RECORD"
+    echo "- the run ended before it was done" >> "$RECORD"
+    cancel_build
+    { echo; echo "Result: fail"; } >> "$RECORD"
     echo "builder-gate fail $(today) $(basename "$RECORD") -" > "$(dirname "$RECORD")/$RESULTS_NAME"
   fi
   cleanup
@@ -284,6 +306,7 @@ build() {
     || give_up "$title could not be asked for: $(plain "$WORK/ask.$k.err")"
   id="$(sed -n 's/^build \(b[0-9a-z-]*\)[: ].*/\1/p' "$WORK/ask.$k" | head -n 1)"
   [[ -n $id ]] || give_up "lab did not name the build it asked for ($title)"
+  BUILD_ID="$id"
   say "$title: build $id asked for"
   while :; do
     state="$(build_state "$id")"
@@ -293,7 +316,7 @@ build() {
       *) silent=0 ;;
     esac
     (( $(date +%s) - t0 < BUILD_WAIT )) || give_up "$title (build $id) did not end in $BUILD_WAIT s"
-    kill -0 "$WATCH_PID" 2> /dev/null || give_up "the watch on the mini ended while $title ran (build $id, which labd goes on with): what it said is above"
+    kill -0 "$WATCH_PID" 2> /dev/null || give_up "the watch on the mini ended while $title ran (build $id): what it said is above"
     if [[ $transfer == yes ]] && (( ! proved && tries < TRANSFERS )) && grep -qE "^[0-9]+ build $k begin id=$id " "$STREAM"; then
       tries=$((tries + 1))
       file="$WORK/transfer.bin"
@@ -309,6 +332,7 @@ build() {
     fi
     sleep "$POLL"
   done
+  BUILD_ID=""
   seconds=$(( $(date +%s) - t0 ))
 
   if [[ $state != "done" ]]; then
@@ -417,6 +441,15 @@ logged_in
 "$LAB_CMD" builds > "$WORK/builds" 2> "$WORK/builds.err" || fail "lab builds: $(plain "$WORK/builds.err")"
 if grep -qE '^b[0-9a-z-]+ +(queued|running)' "$WORK/builds"; then
   fail "a build is queued or running on the lab: the test needs the Builder to itself. Nothing was asked of the mini."
+fi
+# What cancels the run's build if the run ends first: lab has no command
+# for it, the probe asks labd under the same saved login.
+if [[ -x $BIN/hardening-probe ]]; then
+  PROBE="$BIN/hardening-probe"
+else
+  command -v go > /dev/null 2>&1 || fail "no hardening-probe in $BIN (make all builds it) and no go to build it with: the run could not cancel its build if it ended first. Nothing was asked of the mini."
+  PROBE="$WORK/hardening-probe"
+  (cd "$REPO" && go build -o "$PROBE" ./tools/hardening-probe) || fail "hardening-probe did not build. Nothing was asked of the mini."
 fi
 
 RECORD="${RECORDS:-$REPO/docs/acceptance}"
