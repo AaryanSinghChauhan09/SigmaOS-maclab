@@ -95,12 +95,12 @@ day="$(as_lab cat "$mark" 2>/dev/null | head -n 1)" || day=""
 [[ -n $day ]] || fail "the day's import has not run: there is no $mark. Step 22 first (rehearsal-import run). Nothing was changed"
 [[ $day == "$want_day" ]] || fail "the last import that passed its checks ran on $day, not $want_day: the lab would open with a copy from before the Freeze. Run the day's import first, or name that day with --imported $day if it is the day's. Nothing was changed"
 
-out="$(mktemp "${TMPDIR:-/tmp}/lab-open.XXXXXX")"
-# shellcheck disable=SC2064
-trap "rm -f '$out'" EXIT
-status="$(as_lab curl -sS --max-time 30 -o "$out" -w '%{http_code}' --unix-socket "$OPS_SOCKET" -X POST "http://labd/open?m-team=$m_team" 2>/dev/null)" ||
+# The answer comes back on curl's output: curl runs as lab, which cannot
+# write a file root made.
+said="$(as_lab curl -sS --max-time 30 -w '\n%{http_code}' --unix-socket "$OPS_SOCKET" -X POST "http://labd/open?m-team=$m_team" 2>/dev/null)" ||
   fail "labd did not answer on $OPS_SOCKET. Ask where the lab is before anything else: sudo $0 stage"
-answer="$(head -n 1 "$out" | tr -d '\r')"
+status="${said##*$'\n'}"
+answer="$(printf '%s\n' "${said%$'\n'*}" | head -n 1 | tr -d '\r')"
 case "$status" in
   200) ;;
   409 | 400) fail "labd did not open the lab: $answer. Nothing was changed" ;;

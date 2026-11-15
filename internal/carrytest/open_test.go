@@ -246,3 +246,45 @@ func TestTheDaysDumpAndImportAreTwoStepsAndAPassLeavesItsDay(t *testing.T) {
 		t.Errorf("the mark's file: %v", err)
 	}
 }
+
+// splitAsLab plays sudo -u lab where lab is not root: lab cannot write a
+// file root made outside /var/lab, so curl sends its request and then
+// fails to keep the answer, as the real one does.
+const splitAsLab = `#!/bin/bash
+echo "as-lab $*" >> "$STUB_LOG"
+if [[ $1 == curl ]]; then
+  args=() refused=0 prev=""
+  for a in "$@"; do
+    if [[ $prev == -o && $a != /dev/null && -e $a && $a != "$LAB_SYSROOT"/var/lab/* ]]; then
+      refused=1
+      a=/dev/null
+    fi
+    args+=("$a")
+    prev="$a"
+  done
+  if (( refused )); then
+    "${args[@]}" > /dev/null
+    echo "curl: (23) Failure writing output to destination" >&2
+    exit 23
+  fi
+fi
+exec "$@"
+`
+
+// On the mini root runs the opening and the lab account asks labd: the
+// answer reaches the script though root and lab are two accounts.
+func TestTheOpeningReadsLabdsAnswerWhenRootAndTheLabAccountDiffer(t *testing.T) {
+	m, s := opening(t, 14)
+	split := filepath.Join(m.base, "split-as-lab")
+	write(t, split, splitAsLab, 0o755)
+	for i, e := range m.env {
+		if strings.HasPrefix(e, "LAB_AS_LAB=") {
+			m.env[i] = "LAB_AS_LAB=" + split
+		}
+	}
+	out, code := m.run("", "open", "--m-team", "14")
+	live := asked(t, s)
+	if code != 0 || !strings.HasPrefix(live, "live 20") || !strings.Contains(out, "the lab is open: "+live) {
+		t.Fatalf("the opening: exit %d, labd says %q; the script said %s", code, live, out)
+	}
+}
