@@ -1266,9 +1266,10 @@ On a Mac with a desktop user, every job also runs
 [omarchy-m-test](docs/omarchy-m-test.md) in the desktop
 session: about 70 checks of the boot chain, drivers, GPU, video decode, display,
 audio, Wi-Fi, power and CPU, and short benchmarks. Before each run the agent installs
-the latest tool from the lab's own install line (`<Lab address>/install`): it runs
-that script only if it pins lab-agent's own release key, and the script checks the
-release's signature. It runs with
+the latest tool from the release the lab's own install line (`<Lab address>/install`)
+names: it reads that line for where the release is and never runs it, and installs
+the release only once its signature verifies against the release key lab-agent
+pins, the check `lab-agent update` makes. It runs with
 `--unattended`: it answers the disclaimer and gets no more input, every check meant
 for a person is skipped, and the speaker tone, brightness steps, camera window and
 disruptive sections (lid, Wi-Fi reload) don't happen. The run takes 1 to 3 minutes.
