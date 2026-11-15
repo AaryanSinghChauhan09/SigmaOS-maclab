@@ -152,7 +152,7 @@ func stubs(t *testing.T, text map[string]string) (dir, calls string) {
 func TestEveryDryRunSaysItsStepsAndSendsNothing(t *testing.T) {
 	dir, calls := stubs(t, nil)
 	env := []string{"PATH=" + dir + ":" + os.Getenv("PATH")}
-	byHand := map[string]int{"h07-cuts": 1, "h09-notice-topic": 3, "h10-browser": 1}
+	byHand := map[string]int{"h07-cuts": 1, "h09-notice-topic": 4, "h10-browser": 1}
 	for _, name := range tests {
 		for _, option := range [][]string{nil, {"--dry-run"}} {
 			out, code := run(t, env, script(t, name), option...)
@@ -586,7 +586,7 @@ const h09Probe = `S="$(dirname "$0")"
 card() {
   echo '<section class="card mac-card" id="mac-other"><span class="flash">Your own topic is refused: it answers with a redirect, which labd does not follow.</span></section>'
   echo '<section class="card mac-card" id="mac-m2-max">'
-  echo "<dt>Notices</dt><dd>$1</dd>"
+  echo "<dt>Notices</dt><dd><code>$1</code> <span class=\"nowrap\">job Notices $2</span>$3</dd>"
   echo '</section>'
 }
 case "$*" in
@@ -594,12 +594,18 @@ case "$*" in
   "page "*" /my-macs") echo status=303; echo "location=/macs?show=mine" ;;
   "page "*" /macs?show=mine")
     echo status=200
-    if [ -f "$S/job" ] && [ -z "${H09_NO_REDIRECT:-}" ]; then
-      card '<span class="flash">Your own topic is refused: it answers with a redirect, which labd does not follow.</span>' > "$out"
+    if [ ! -f "$S/before-read" ]; then
+      touch "$S/before-read"
+      card https://ntfy.example/mine-h09 off '' > "$out"
+    elif [ -f "$S/canceled" ]; then
+      # Put back at the Mac: labd keeps a topic the Mac no longer reports.
+      if [ -n "${H09_TOPIC_STAYS:-}" ]; then card https://redirect.example/h09 off '' > "$out"; else card https://ntfy.example/mine-h09 off '' > "$out"; fi
+    elif [ -f "$S/job" ] && [ -z "${H09_NO_REDIRECT:-}" ]; then
+      card https://redirect.example/h09 on '<span class="flash">Your own topic is refused: it answers with a redirect, which labd does not follow.</span>' > "$out"
     elif [ -f "$S/reported" ]; then
-      card 'job Notices on' > "$out"
+      card https://redirect.example/h09 on '' > "$out"
     else
-      card '<span class="flash">Your own topic is refused: its host 192.168.0.1 is at 192.168.0.1, not a public address.</span>' > "$out"
+      card https://192.168.0.1/h09 off '<span class="flash">Your own topic is refused: its host 192.168.0.1 is at 192.168.0.1, not a public address.</span>' > "$out"
     fi ;;
   *) echo status=500 ;;
 esac`
@@ -607,12 +613,13 @@ esac`
 func TestH09ReadsTheMacsCardAsAnAdmin(t *testing.T) {
 	t.Parallel()
 	args := []string{"--volunteers-mac", "m2-max", "--redirect", "https://redirect.example/h09"}
-	out, code, record, calls := labRun(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\nyes\nyes\n\n", []string{"H09_WAIT=10"}, args...)
+	out, code, record, calls := labRun(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\n\nyes\nyes\n\n", []string{"H09_WAIT=10"}, args...)
 	if code != 0 {
 		t.Fatalf("exit %d\n%s\n%s", code, out, record)
 	}
 	for _, want := range []string{"the topic at a private address: m2-max's card says: Your own topic is refused: its host 192.168.0.1",
-		"job j-1 on m2-max made a Notice to the topic behind a redirect, and was canceled", "the topic behind a redirect: m2-max's card says: Your own topic is refused: it answers with a redirect"} {
+		"job j-1 on m2-max made a Notice to the topic behind a redirect, and was canceled", "the topic behind a redirect: m2-max's card says: Your own topic is refused: it answers with a redirect",
+		"undone: m2-max's topic and job Notices are as they were before the test, as its card shows"} {
 		if !strings.Contains(record, want) {
 			t.Errorf("the record lacks %q:\n%s", want, record)
 		}
@@ -620,23 +627,58 @@ func TestH09ReadsTheMacsCardAsAnAdmin(t *testing.T) {
 	if !strings.Contains(calls, "lab run m2-max --no-wait") || !strings.Contains(calls, "lab cancel j-1") {
 		t.Errorf("no job made the Notice, or it was not canceled:\n%s", calls)
 	}
+	// The Mac's own topic is its only secret: it is read, and never written.
+	if strings.Contains(out, "ntfy.example/mine-h09") || strings.Contains(record, "ntfy.example/mine-h09") {
+		t.Errorf("the Mac's topic was shown:\n%s\n%s", out, record)
+	}
+}
 
-	// The redirect never refused: the job is canceled, the owner told how to
-	// put the topic back.
-	out, code, record, calls = labRun(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\nyes\n", []string{"H09_WAIT=4", "H09_NO_REDIRECT=1"}, args...)
-	if code != 1 || !strings.Contains(record, "FAILED: m2-max's card does not show the topic behind a redirect refused") {
-		t.Fatalf("exit %d\n%s\n%s", code, out, record)
-	}
-	if !strings.Contains(calls, "lab cancel j-1") || !strings.Contains(record, "BY HAND: at m2-max, put its topic back") {
-		t.Errorf("the job was left, or the topic not named:\n%s\n%s", calls, record)
-	}
+// H 9 copies the Mac's Notice settings aside before it changes them, and
+// sees them back on the card at its end; what it cannot see back, or did not
+// put back, the record names NOT UNDONE.
+func TestH09PutsTheMacsNoticeSettingsBack(t *testing.T) {
+	t.Parallel()
+	args := []string{"--volunteers-mac", "m2-max", "--redirect", "https://redirect.example/h09"}
+	t.Run("the topic stays the test's", func(t *testing.T) {
+		t.Parallel()
+		out, code, record, _ := labRun(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\n\nyes\nyes\n\n", []string{"H09_WAIT=4", "H09_TOPIC_STAYS=1"}, args...)
+		if code != 0 {
+			t.Fatalf("exit %d\n%s\n%s", code, out, record)
+		}
+		if !strings.Contains(record, "NOT UNDONE: m2-max's Notices still go to another topic than before the test") || strings.Contains(record, "undone: m2-max's topic") {
+			t.Errorf("a topic not back was not named:\n%s", record)
+		}
+		if strings.Contains(record, "job Notices are") {
+			t.Errorf("job Notices that came back were named:\n%s", record)
+		}
+	})
+	t.Run("the run ends first", func(t *testing.T) {
+		t.Parallel()
+		out, code, record, calls := labRun(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\n\nyes\n", []string{"H09_WAIT=4", "H09_NO_REDIRECT=1"}, args...)
+		if code != 1 || !strings.Contains(record, "FAILED: m2-max's card does not show the topic behind a redirect refused") {
+			t.Fatalf("exit %d\n%s\n%s", code, out, record)
+		}
+		if !strings.Contains(calls, "lab cancel j-1") {
+			t.Errorf("the job was left:\n%s", calls)
+		}
+		if !strings.Contains(record, "NOT UNDONE: m2-max's topic and job Notices are still the test's: at m2-max, put them back: sudo sh -c 'cd /var/lib/maclab-h09") {
+			t.Errorf("the record does not say how to put the settings back:\n%s", record)
+		}
+	})
+	t.Run("nobody there to copy them aside", func(t *testing.T) {
+		t.Parallel()
+		out, code, record, _ := labRun(t, "h09-notice-topic", h09Lab, h09Probe, "session\n", []string{"H09_WAIT=4"}, args...)
+		if code != 3 || !strings.Contains(out, "sudo sh -c 'mkdir -m 700 /var/lib/maclab-h09") || strings.Contains(record, "UNDONE") {
+			t.Errorf("exit %d\n%s\n%s", code, out, record)
+		}
+	})
 }
 
 // H 9's job is armed by the holder it is asked under before it is asked
 // for: a Ctrl-C while lab run is still out cancels it, and nobody else's.
 func TestACtrlCRightAfterH09sPostCancelsTheJob(t *testing.T) {
 	t.Parallel()
-	l := labCommand(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\nyes\n", []string{"H09_WAIT=10", "H09_RUN_HANGS=1"},
+	l := labCommand(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\n\nyes\n", []string{"H09_WAIT=10", "H09_RUN_HANGS=1"},
 		"--volunteers-mac", "m2-max", "--redirect", "https://redirect.example/h09")
 	l.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := l.cmd.Start(); err != nil {
