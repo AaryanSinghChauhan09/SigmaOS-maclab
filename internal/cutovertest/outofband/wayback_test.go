@@ -133,15 +133,7 @@ func TestOOB08LeavesTheControllerStartedWhateverTheAnswer(t *testing.T) {
 	records := t.TempDir()
 	cmd := exec.Command(script(t, "oob08-refusals"), "--lab", "--mini", "owner@mini", "--records", records)
 	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example", "STUBS="+dir)
-	out, code := playOwner(t, cmd, []struct {
-		prompt string
-		do     func()
-		answer string
-	}{
-		{"STOP, by hand: Pull the cable", func() { os.WriteFile(unplugged, nil, 0o644) }, ""},
-		{"STOP, by hand: Put the cable", func() { os.Remove(unplugged) }, ""},
-		{"Type yes or no: ", nil, "no"},
-	})
+	out, code := playOwner(t, cmd, ownerAtTest8(unplugged, "no"))
 
 	if code != 1 {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -163,6 +155,73 @@ func TestOOB08LeavesTheControllerStartedWhateverTheAnswer(t *testing.T) {
 	result := strings.Index(record, "Result: fail")
 	if failed < 0 || again < failed || result < again {
 		t.Errorf("the record does not say the controller was started again before its result:\n%s", record)
+	}
+}
+
+// Test 8's own start of the controller, after its question, can fail: the
+// way back is still armed then, and the controller is started again before
+// the record is closed.
+func TestOOB08StartsTheControllerAgainWhenItsOwnStartFails(t *testing.T) {
+	mini := map[string]string{}
+	for k, v := range madeUpMini {
+		mini[k] = v
+	}
+	mini["ssh"] = strings.Replace(madeUpMini["ssh"], `bootstrap) touch "$STUBS/oobd.loaded" ;;`,
+		`bootstrap) if [ -f "$STUBS/bootstrap.fails" ]; then rm -f "$STUBS/bootstrap.fails"; exit 5; fi; touch "$STUBS/oobd.loaded" ;;`, 1)
+	dir, calls := stubs(t, mini)
+	for name, text := range map[string]string{"sleep": "#!/bin/sh\nexit 0\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loadedFile := filepath.Join(dir, "oobd.loaded")
+	unplugged := filepath.Join(dir, "unplugged")
+	for _, f := range []string{loadedFile, filepath.Join(dir, "bootstrap.fails")} {
+		if err := os.WriteFile(f, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records := t.TempDir()
+	cmd := exec.Command(script(t, "oob08-refusals"), "--lab", "--mini", "owner@mini", "--records", records)
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example", "STUBS="+dir)
+	out, code := playOwner(t, cmd, ownerAtTest8(unplugged, "yes"))
+
+	if code != 1 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if strings.Count(read(t, calls), "launchctl bootstrap system") != 2 {
+		t.Errorf("the controller was not started twice:\n%s", read(t, calls))
+	}
+	if _, err := os.Stat(loadedFile); err != nil {
+		t.Errorf("the run ended with the controller stopped:\n%s\n%s", out, read(t, calls))
+	}
+	files, _ := filepath.Glob(filepath.Join(records, "*-out-of-band-08.md"))
+	if len(files) != 1 {
+		t.Fatalf("records: %v\n%s", files, out)
+	}
+	record := read(t, files[0])
+	failed := strings.Index(record, "FAILED: the controller was not started again")
+	again := strings.Index(record, "the controller was started again on the mini")
+	if failed < 0 || again < failed {
+		t.Errorf("the record does not say the controller was started again after its own start failed:\n%s", record)
+	}
+}
+
+// ownerAtTest8 is the person at the machines through test 8, who answers
+// its question with answer.
+func ownerAtTest8(unplugged, answer string) []struct {
+	prompt string
+	do     func()
+	answer string
+} {
+	return []struct {
+		prompt string
+		do     func()
+		answer string
+	}{
+		{"STOP, by hand: Pull the cable", func() { os.WriteFile(unplugged, nil, 0o644) }, ""},
+		{"STOP, by hand: Put the cable", func() { os.Remove(unplugged) }, ""},
+		{"Type yes or no: ", nil, answer},
 	}
 }
 

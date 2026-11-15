@@ -149,8 +149,10 @@ else
 fi
 rec "\"Agents\" was told: $TROUBLE"
 
+# The way back stays armed until this start worked: a failed one is tried
+# again on the way out.
+mini_controller start || give_up "the controller was not started again on the mini"
 AT_END=""
-mini_controller start || give_up "the controller was not started again on the mini: sudo launchctl bootstrap system $OOBD_PLIST"
 wait_until 90 status_says "Out-of-band controller" "answering" || give_up "started again, /status still says of the controller: $(status_part "Out-of-band controller")"
 wait_until 60 eval "\"$LAB_CMD\" oob \"$M2\" 2>/dev/null | grep '^  controller:  *healthy' >/dev/null" || give_up "started again, the lab does not say the controller is healthy"
 rec "the controller started again: /status says $(status_part "Out-of-band controller"), lab oob says healthy"
