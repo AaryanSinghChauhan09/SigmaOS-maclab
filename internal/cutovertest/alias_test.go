@@ -423,7 +423,7 @@ func TestTheRehearsalFailsOnWhatItDoesNotSeeAndStillDeletesEverything(t *testing
 		says   string
 	}{
 		"labd does not forward the name":  {bin: func() string { return labdWithout(t, "--alias") }, args: []string{"--agents-line", "seen"}, says: "the forward: FAIL. / answered 421"},
-		"an answer carries a cookie":      {before: func(p *played) { p.cookie = true }, args: []string{"--agents-line", "seen"}, says: "cookies: FAIL. / set __cf_bm"},
+		"an answer carries a cookie":      {before: func(p *played) { p.mu.Lock(); p.cookie = true; p.mu.Unlock() }, args: []string{"--agents-line", "seen"}, says: "cookies: FAIL. / set __cf_bm"},
 		"the tunnel routes a third name":  {before: func(p *played) { p.write(filepath.Join(p.state, "routes-every-name"), "") }, args: []string{"--agents-line", "seen"}, says: "a third name: FAIL. / answered 421"},
 		"the Front door's test 13 is red": {before: func(p *played) { p.write(filepath.Join(p.state, "fd13-fails"), "") }, args: []string{"--agents-line", "seen"}, says: "the Front door's test 13: FAIL. it failed on the Lab address"},
 		"the hostname never lapses":       {before: func(p *played) { p.write(filepath.Join(p.state, "never-lapses"), "") }, args: []string{"--agents-line", "seen"}, says: "the lapse: FAIL. not seen within 1 minutes: Cloudflare still shows the hostname as active"},
