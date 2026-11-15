@@ -485,9 +485,15 @@ func (s *Server) block(r *http.Request, k knownPerson, reason string) error {
 	s.endLendingOf(k.Person, *by)
 	s.endLeasesOf(k.Person, wasBlocked(*by))
 	s.endMacSignInsOf(k.AccountID)
-	s.endEnrollmentsOf(k.AccountID, leaving{how: leftBlocked, by: *by})
+	ended := s.endEnrollmentsOf(k.AccountID, leaving{how: leftBlocked, by: *by})
 	s.agents.Blocked(by.Handle, k.Handle)
-	return s.recordNoted(r, "blocked", &k.Person, reason)
+	if err := s.recordNoted(r, "blocked", &k.Person, reason); err != nil {
+		return err
+	}
+	if ended != nil {
+		return refuse(http.StatusInternalServerError, "Blocked, but a Mac they lend could not leave the lab and its secret still works (%v): end its enrollment beside it.", ended)
+	}
+	return nil
 }
 
 // unblock gives sign-in back, and nothing else: no role, no leave to lend,

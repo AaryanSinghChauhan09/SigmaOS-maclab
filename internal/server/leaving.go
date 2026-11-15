@@ -218,12 +218,18 @@ func (s *Server) leftOnPeopleRecord(d *api.Device, l leaving) {
 }
 
 // endEnrollmentsOf has every Mac the person lends leave the lab, as l says.
-func (s *Server) endEnrollmentsOf(accountID int64, l leaving) {
+// A Mac that could not is in the error, and still enrolled: its secret
+// still works.
+func (s *Server) endEnrollmentsOf(accountID int64, l leaving) error {
+	var errs []error
 	for _, name := range s.macsLentBy(accountID) {
 		if v := s.dev(name); v != nil {
-			s.endEnrollment(v, l)
+			if err := s.endEnrollment(v, l); err != nil && !errors.Is(err, errMacGone) {
+				errs = append(errs, err)
+			}
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // leaveMac is the Mac's Volunteer leaving the lab from the site. The Mac

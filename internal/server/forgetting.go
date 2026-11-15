@@ -349,7 +349,9 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 	s.changed(k.AccountID)
 	s.endLendingOf(k.Person, by)
 	s.endLeasesOf(k.Person, endedByMaintainer(by, ""))
-	s.endEnrollmentsOf(k.AccountID, leaving{how: leftForgotten, by: by})
+	if err := s.endEnrollmentsOf(k.AccountID, leaving{how: leftForgotten, by: by}); err != nil {
+		return refuse(http.StatusInternalServerError, "Nothing is forgotten yet: a Mac they lend could not leave the lab (%v). Forget again.", err)
+	}
 
 	if err := s.forgetInJobs(f); err != nil {
 		return fmt.Errorf("the jobs: %w", err)

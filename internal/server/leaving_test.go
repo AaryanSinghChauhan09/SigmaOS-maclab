@@ -970,3 +970,38 @@ func TestAnEndingWhoseRecordCannotBeWrittenLeavesTheMacEnrolled(t *testing.T) {
 		t.Errorf("the ended Mac's next check-in: %d, by %q", w.Code, w.Header().Get(api.EndedHeader))
 	}
 }
+
+// A Block or a Forget whose Mac cannot leave says so instead of done: the
+// Mac's secret would still work. A Forget changes nothing then, and can be
+// done again.
+func TestABlockOrAForgetWhoseMacCannotLeaveFails(t *testing.T) {
+	l, _ := lendLab(t)
+	ravi := l.signedIn(maintainerID)
+	ravi.did("/people/mark", "handle", "grace", "as", "invite")
+	grace := l.signedIn(graceID)
+	v, _ := grace.lent("shelf-mac")
+	if _, err := l.s.store.db.Exec(`CREATE TRIGGER full_disk BEFORE INSERT ON retired_macs BEGIN SELECT RAISE(FAIL, 'database or disk is full'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := ravi.post(personPath(graceID, "block"), "reason", "spam", "sure", "yes"); w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "could not leave the lab") {
+		t.Errorf("a Block whose Mac could not leave: %d\n%s", w.Code, refusalIn(w.Body.String()))
+	}
+	if l.s.dev("shelf-mac") != v || !l.who(graceID).Blocked {
+		t.Fatalf("after the Block: the Mac %v, Blocked %v", l.s.dev("shelf-mac") != nil, l.who(graceID).Blocked)
+	}
+	if w := ravi.post(personPath(graceID, "forget"), "sure", "yes"); w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "Nothing is forgotten yet") {
+		t.Errorf("a Forget whose Mac could not leave: %d\n%s", w.Code, refusalIn(w.Body.String()))
+	}
+	if l.who(graceID).Handle != "grace" {
+		t.Fatal("the person is forgotten though her Mac is still enrolled")
+	}
+
+	if _, err := l.s.store.db.Exec(`DROP TRIGGER full_disk`); err != nil {
+		t.Fatal(err)
+	}
+	ravi.did(personPath(graceID, "forget"), "sure", "yes")
+	if l.s.dev("shelf-mac") != nil || !l.who(graceID).Blocked {
+		t.Errorf("forgetting again: the Mac %v, Blocked %v", l.s.dev("shelf-mac") != nil, l.who(graceID).Blocked)
+	}
+}
