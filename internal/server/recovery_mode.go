@@ -63,11 +63,11 @@ func (s *Server) beginJobRecoveryMode(ctx context.Context, v *dev, j *api.Job) e
 		return e
 	}
 	mode := v.snapshot().EffectiveRecoveryMode
-	// As updateJob saves the run's copy: a forgetting may be scrubbing it.
+	// As updateJob saves the run's copy: without the people forgotten since.
 	jobMu.Lock()
 	defer jobMu.Unlock()
 	j.EffectiveRecoveryMode = mode
-	s.inFlightLocked(j)
+	s.forgottenLocked(j)
 	if err := s.store.saveJob(j); err != nil {
 		return fmt.Errorf("persist effective job recovery mode: %w", err)
 	}

@@ -456,17 +456,17 @@ func (s *Server) forgetInFleet(f forgetting) {
 	}
 }
 
-// jobsInFlight are the jobs labd holds in memory while they run: the copies
-// saved through updateJob, which a job leaves once it is saved done; and the
-// forgettings carried out since each job was stored, which every later save
-// of any copy of it applies again. Those stay for as long as labd runs, on a
-// finished job too: a copy read before the forgetting, a cancel's or a
-// publishing's, can be saved at any time after it, and a restart leaves no
-// such copy. under are the forgettings under way: every whole job saved
-// meanwhile, done or not, loses their person too, as one read before the
-// forgetting swept the jobs table would bring them back. Under jobMu.
+// jobsInFlight are the forgettings carried out since each job was stored,
+// which every later save of any copy of it applies again: a run's own copy
+// too, which only the run's goroutine writes, at its next save (a forgetting
+// that rewrote it in place would race the run's reads). Those stay for as
+// long as labd runs, on a finished job too: a copy read before the
+// forgetting, a cancel's or a publishing's, can be saved at any time after
+// it, and a restart leaves no such copy. under are the forgettings under
+// way: every whole job saved meanwhile, done or not, loses their person too,
+// as one read before the forgetting swept the jobs table would bring them
+// back. Under jobMu.
 type jobsInFlight struct {
-	held   map[string]map[*api.Job]bool
 	forgot map[string][]forgetting
 	under  []*forgetting
 }
@@ -484,23 +484,6 @@ func (s *Server) forgottenLocked(j *api.Job) {
 	}
 }
 
-// inFlightLocked is updateJob's, under jobMu, before j is saved.
-func (s *Server) inFlightLocked(j *api.Job) {
-	s.forgottenLocked(j)
-	fl := &s.inFlight
-	if j.State == api.JobDone {
-		delete(fl.held, j.ID)
-		return
-	}
-	if fl.held == nil {
-		fl.held = map[string]map[*api.Job]bool{}
-	}
-	if fl.held[j.ID] == nil {
-		fl.held[j.ID] = map[*api.Job]bool{}
-	}
-	fl.held[j.ID][j] = true
-}
-
 // saveJobLocked saves a whole job read outside a run, say to set it aside
 // in lab gate, without the people forgotten since it was read. Under jobMu.
 func (s *Server) saveJobLocked(j *api.Job) error {
@@ -509,8 +492,8 @@ func (s *Server) saveJobLocked(j *api.Job) error {
 }
 
 // forgetInJobs takes the person off the jobs not done yet and the finished
-// jobs that name them: the copies runs hold now, and every copy saved from
-// now on, which would otherwise write them back whole; and off every job
+// jobs that name them: every copy saved from now on, runs' own included,
+// which would otherwise write them back whole; and off every job
 // saved until end is called, once the forgetting is done with the jobs table
 // and the files.
 func (s *Server) forgetInJobs(f forgetting) (end func(), err error) {
@@ -527,11 +510,6 @@ func (s *Server) forgetInJobs(f forgetting) (end func(), err error) {
 	for _, j := range jobs {
 		if j.State != api.JobDone || f.names(j) {
 			fl.forgot[j.ID] = append(fl.forgot[j.ID], f)
-		}
-	}
-	for _, copies := range fl.held {
-		for j := range copies {
-			f.job(j)
 		}
 	}
 	under := &f

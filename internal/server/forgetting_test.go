@@ -668,7 +668,9 @@ func TestForgettingLeavesAFrozenReleasesPinnedFilesAsTheyWere(t *testing.T) {
 
 // A job that runs while its person is Forgotten goes on, and what it writes
 // afterwards does not bring them back: the copy the run holds loses them at
-// the forgetting, and so does a copy read before it and saved after.
+// its next save, which only the run makes (a scrub from the forgetting's
+// goroutine would race the run's reads), and so does a copy read before it
+// and saved after.
 func TestAJobRunningThroughAForgettingWritesNoHandleBack(t *testing.T) {
 	l := macLab(t, nil)
 	ravi := l.signedIn(maintainerID)
@@ -683,10 +685,10 @@ func TestAJobRunningThroughAForgettingWritesNoHandleBack(t *testing.T) {
 
 	ravi.did(personPath(edithID, "forget"), "sure", "yes")
 
+	l.s.updateJob(running, func(j *api.Job) { j.Events = append(j.Events, api.JobEvent{Time: l.clock.Now(), Msg: "test 1 passed"}) })
 	if running.Maintainer != "" || running.AccountID != 0 || running.Spec.Holder != "" {
 		t.Errorf("the running job's own copy still names her: %q %d %q", running.Maintainer, running.AccountID, running.Spec.Holder)
 	}
-	l.s.updateJob(running, func(j *api.Job) { j.Events = append(j.Events, api.JobEvent{Time: l.clock.Now(), Msg: "test 1 passed"}) })
 	l.s.updateJob(older, func(j *api.Job) { j.Events = append(j.Events, api.JobEvent{Time: l.clock.Now(), Msg: "test 2 passed"}) })
 	l.s.updateJob(running, func(j *api.Job) { j.State, j.Outcome = api.JobDone, api.OutcomePass })
 	j, err := l.s.store.job("j-41")
@@ -948,8 +950,8 @@ func TestForgettingSomeoneWhoRanAnInstalledRunLeavesNoHandleInFrozen(t *testing.
 }
 
 // A forgetting during an Installed run reads nothing the run writes as it
-// goes: the run's result names nobody, and the scrub leaves it alone, the
-// run's own pointer and all.
+// goes: the run's result names nobody, and the scrub at the run's next save
+// leaves it alone, the run's own pointer and all.
 func TestAForgettingDuringAnInstalledRunReadsNothingTheRunWrites(t *testing.T) {
 	l := macLab(t, nil)
 	l.signedIn(edithID)
@@ -980,6 +982,7 @@ func TestAForgettingDuringAnInstalledRunReadsNothingTheRunWrites(t *testing.T) {
 	}
 	close(stop)
 	<-done
+	l.s.updateJob(running, func(*api.Job) {})
 	if running.Maintainer != "" || running.AccountID != 0 {
 		t.Errorf("the run's copy still names her: %q %d", running.Maintainer, running.AccountID)
 	}

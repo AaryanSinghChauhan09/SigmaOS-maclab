@@ -653,11 +653,12 @@ func (s *Server) updateJobLocked(j *api.Job, f func(*api.Job)) {
 	if stored, ok := jobEnded[j]; ok {
 		delete(jobEnded, j)
 		*j = *stored
+		s.forgottenLocked(j)
 		return
 	}
 	j.GateExclusion = s.store.gateExclusion(j.ID)
 	f(j)
-	s.inFlightLocked(j)
+	s.forgottenLocked(j)
 	if j.Result.OMT != nil {
 		// said when a job is read (withReport), never kept
 		j.Result.OMT.ReportState = ""
