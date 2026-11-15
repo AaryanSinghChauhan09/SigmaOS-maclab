@@ -30,6 +30,8 @@ type ops struct {
 	// drainStatus, when set, is the status POST /drain answers with. Parts
 	// of "500" are a GET /parts that answers that status.
 	drainStatus int
+	// onLift, when set, runs before DELETE /drain is answered.
+	onLift func()
 }
 
 func (o *ops) told() []string {
@@ -87,6 +89,9 @@ func (m *mini) ops() *ops {
 			}
 			cutShort(w, answer+"\n")
 		case "DELETE /drain":
+			if o.onLift != nil {
+				o.onLift()
+			}
 			io.WriteString(w, "lifted\n")
 		case "GET /parts":
 			if o.old {

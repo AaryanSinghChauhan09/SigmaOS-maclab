@@ -800,6 +800,72 @@ func TestASwitchBackThatCannotCopyLeavesTheToolAsItWas(t *testing.T) {
 	}
 }
 
+// A stop while a tool is switched back, its daemon stopped, waits until the
+// switch back is done and the daemon started again: the run then ends.
+func TestAStopDuringASwitchBackLeavesTheDaemonStarted(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.newer("cloudflared", "2.0", "#!/bin/sh\n# bad\necho cloudflared 2.0\n")
+	r.went()
+	r.ops.set(func(o *ops) { o.lines = nil })
+	if err := os.Rename(r.bin+"/launchctl", r.bin+"/launchctl.stub"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, r.bin+"/launchctl", "#!/bin/bash\n[[ \"$1 $2\" != \"bootout system/"+cloudflaredLabel+"\" ]] || kill -TERM $PPID\nexec \"$(dirname \"$0\")/launchctl.stub\" \"$@\"\n", 0o755)
+	os.Remove(r.log)
+
+	out, code := r.maintenance("--after-restart")
+
+	if code == 0 || !strings.Contains(r.calls(), "launchctl bootout system/"+cloudflaredLabel) {
+		t.Fatalf("exit %d\n%s\n%s", code, out, r.calls())
+	}
+	if !r.tunnelLoaded() {
+		t.Errorf("the tunnel was left stopped:\n%s\n%s", out, r.calls())
+	}
+	if r.version("cloudflared") != "1.0" || !strings.Contains(read(t, r.path("usr/local/lab/tools/current/cloudflared/bin/cloudflared")), "cloudflared 1.0") {
+		t.Errorf("the switch back was cut short:\n%s", read(t, r.path("usr/local/lab/tools/current/VERSIONS")))
+	}
+	if strings.Contains(r.calls(), "ports ") {
+		t.Errorf("the run went on after the stop:\n%s", r.calls())
+	}
+}
+
+// A second stop while the first half's way out lifts the drain does not cut
+// it short: jobs start again and "Agents" is told.
+func TestASecondStopDuringTheWayOutStillLiftsTheDrain(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.ops.set(func(o *ops) { o.drain = []string{"1 0"} })
+	r.env = append(r.env, "LAB_DRAIN_STEP=1")
+	cmd := exec.Command(r.path("usr/local/lab/current/scripts/mini/maintenance"), "--wait", "5")
+	cmd.Env = r.env
+	cmd.Dir = filepath.Dir(r.tree)
+	r.ops.set(func(o *ops) {
+		o.onLift = func() {
+			cmd.Process.Signal(syscall.SIGTERM)
+			time.Sleep(300 * time.Millisecond)
+		}
+	})
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(20 * time.Second); !strings.Contains(r.callsOrNone(), "ops POST /drain"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			cmd.Process.Kill()
+			t.Fatalf("the run never drained:\n%s", r.callsOrNone())
+		}
+	}
+	cmd.Process.Signal(syscall.SIGTERM)
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("a stopped run ended as done")
+	}
+
+	order(t, r.calls(), "ops POST /drain", "ops DELETE /drain")
+	if got := r.ops.told(); len(got) == 0 || !strings.Contains(got[len(got)-1], "jobs start again") {
+		t.Errorf("\"Agents\" was told %q", got)
+	}
+}
+
 // A switch back that cannot write HELD (a full disk) keeps the tool's
 // folder as it was until then, and starts its daemon again.
 func TestASwitchBackThatCannotWriteHeldLeavesTheDaemonStarted(t *testing.T) {
