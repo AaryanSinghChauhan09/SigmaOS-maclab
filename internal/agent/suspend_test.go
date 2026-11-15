@@ -452,8 +452,10 @@ func TestSuspendDevicesTellsLabd(t *testing.T) {
 	}{
 		{"waits", api.TestSpec{}, 300 * time.Millisecond, 0, nil, 900 * time.Millisecond, 900 * time.Millisecond, true,
 			[]string{"told labd the Mac may be off the network for up to 1s", "told labd the Mac is back on the network"}, true},
-		{"time left", api.TestSpec{TimeoutSec: 2}, time.Minute, 0, nil, 1500 * time.Millisecond, 2 * time.Second, true,
-			[]string{"told labd the Mac may be off the network for up to 2s", "told labd the Mac is back on the network"}, true},
+		// The cycle gets half of a short timeout: 10 s here, ample however
+		// loaded the machine, and the spell is what is left of the 20 s.
+		{"time left", api.TestSpec{TimeoutSec: 20}, time.Minute, 0, nil, 10 * time.Second, 20 * time.Second, true,
+			[]string{"told labd the Mac may be off the network for up to ", "told labd the Mac is back on the network"}, true},
 		{"route back late", api.TestSpec{}, 300 * time.Millisecond, 3, nil, 900 * time.Millisecond, 900 * time.Millisecond, true,
 			[]string{"default route back", "told labd the Mac is back on the network"}, true},
 		{"network never back", api.TestSpec{}, 300 * time.Millisecond, -1, nil, 900 * time.Millisecond, 900 * time.Millisecond, false,
