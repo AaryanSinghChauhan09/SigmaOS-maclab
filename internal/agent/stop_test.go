@@ -315,3 +315,26 @@ func TestASystemToolThatHangsIsEnded(t *testing.T) {
 		}
 	}
 }
+
+// A stopped lab exec's leader has the whole grace between SIGTERM and
+// SIGKILL: one that takes four seconds to clean up gets to finish.
+func TestAStoppedExecsLeaderHasTheWholeGrace(t *testing.T) {
+	cleaned := filepath.Join(t.TempDir(), "cleaned")
+	ready := filepath.Join(t.TempDir(), "ready")
+	script := "trap 'sleep 4; touch " + cleaned + "; exit 0' TERM; touch " + ready + "; while :; do sleep 0.1; done"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for {
+			if _, err := os.Stat(ready); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+	}()
+	(&Linux{}).Exec(ctx, api.ExecArgs{Command: script, TimeoutSec: 60})
+	if _, err := os.Stat(cleaned); err != nil {
+		t.Errorf("the exec's leader was killed within %v of SIGTERM, before its four seconds of clean-up", stopGrace)
+	}
+}

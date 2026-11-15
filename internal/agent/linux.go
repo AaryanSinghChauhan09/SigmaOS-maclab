@@ -711,7 +711,6 @@ func (l *Linux) Exec(ctx context.Context, a api.ExecArgs) api.ExecResult {
 	cmd := exec.CommandContext(cctx, "bash", "-c", a.Command)
 	var out, errb capped
 	cmd.Stdout, cmd.Stderr = &out, &errb
-	cmd.WaitDelay = 3 * time.Second
 	t0 := time.Now()
 	err := runGroup(cmd)
 	res := api.ExecResult{Stdout: out.String(), Stderr: errb.String(), Seconds: time.Since(t0).Seconds(), Via: "agent"}
