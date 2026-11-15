@@ -279,10 +279,15 @@ wired_address() {
 }
 
 # sshd_says: whether sshd takes a password after Unlock, as sshd itself
-# reads its configuration; SSHD_WANT is keys only. Empty without root.
+# reads its configuration; SSHD_WANT is keys only. Keywords are any case
+# (macOS 27's sshd -T prints PasswordAuthentication), and are said in
+# lowercase. Empty only when sshd -T printed nothing, as without root.
 SSHD_WANT="kbdinteractiveauthentication no passwordauthentication no"
 sshd_says() {
-  sys sshd -T 2>/dev/null | awk '$1 == "passwordauthentication" || $1 == "kbdinteractiveauthentication" { print $1, $2 }' | sort | tr '\n' ' ' | sed 's/ $//' || true
+  sys sshd -T 2>/dev/null | awk '
+    { k = tolower($1) }
+    k == "passwordauthentication" || k == "kbdinteractiveauthentication" { print k, $2; n++ }
+    END { if (NR && !n) print "neither passwordauthentication nor kbdinteractiveauthentication" }' | sort | tr '\n' ' ' | sed 's/ $//' || true
 }
 
 # power_value KEY: one of pmset's settings in use.

@@ -359,6 +359,8 @@ func TestTheCheckNamesWhatIsNotAsTheSetUpLeavesIt(t *testing.T) {
 	w.running()
 	w.upgrade("restic", "2.0")
 	w.ok("setup")
+	// sshd -T as macOS 27's prints it, keywords capitalised.
+	w.set("sshd-capitals", "")
 	if out, code := w.run("check"); code != 0 {
 		t.Fatalf("the check fails before anything is broken:\n%s", out)
 	}
@@ -500,6 +502,8 @@ func TestTheCheckNamesWhatIsNotAsTheSetUpLeavesIt(t *testing.T) {
 		}, "FAIL  the mini is not on the tailnet (NeedsLogin)"},
 		{"sshd takes a password", 0, func() func() { return gone(w.path(sshdKeysOnly)) },
 			"FAIL  sshd -T does not say passwordauthentication no"},
+		{"sshd -T prints nothing", 2, func() func() { return fact("sshd-silent", "") },
+			"FAIL  sshd does not say what it takes (sshd -T gave nothing)"},
 		{"the owner has no key", 0, func() func() { return gone(w.path("Users/" + account(t) + "/.ssh/authorized_keys")) },
 			"has no key in /Users/"},
 		{"Remote Login is off", 0, func() func() { return gone(filepath.Join(state, "loaded.com.openssh.sshd")) },

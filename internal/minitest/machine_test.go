@@ -72,13 +72,16 @@ esac
 `
 
 // sshd reads the made-up machine's own sshd_config.d as the real one does:
-// in name order, the first value of a key standing.
+// in name order, the first value of a key standing. sshd-capitals has -T
+// print its keywords as macOS 27's sshd does, PasswordAuthentication;
+// sshd-silent has it print nothing.
 const sshdStub = `#!/bin/bash
 echo "sshd $*" >> "$STUB_LOG"
 s="$STUB_STATE/machine"
 case "$1" in
   -t) [[ ! -f $s/sshd-broken ]] || { echo "bad configuration" >&2; exit 255; } ;;
   -T)
+    [[ ! -f $s/sshd-silent ]] || exit 0
     p=yes k=yes ps=0 ks=0
     for f in "$LAB_SYSROOT"/etc/ssh/sshd_config.d/*.conf; do
       [[ -f $f ]] || continue
@@ -90,8 +93,13 @@ case "$1" in
       done < "$f"
     done
     echo "port 22"
-    echo "passwordauthentication $p"
-    echo "kbdinteractiveauthentication $k"
+    if [[ -f $s/sshd-capitals ]]; then
+      echo "PasswordAuthentication $p"
+      echo "KbdInteractiveAuthentication $k"
+    else
+      echo "passwordauthentication $p"
+      echo "kbdinteractiveauthentication $k"
+    fi
     echo "pubkeyauthentication yes" ;;
   *) exit 64 ;;
 esac
@@ -308,6 +316,36 @@ func TestSetupMakesSSHKeysOnlyOnceTheOwnerHasAKey(t *testing.T) {
 	// The steps after it are done all the same.
 	if m.is("pmset.sleep") != "0" {
 		t.Errorf("the run stopped at sshd and left the rest undone:\n%s", out)
+	}
+}
+
+// sshd's keywords are any case: macOS 27's sshd -T prints them capitalised.
+// "no answer" is said only when sshd -T printed nothing.
+func TestSetupReadsSshdInAnyCaseAndSaysNoAnswerOnlyForNothing(t *testing.T) {
+	m := newMini(t)
+	k := newKey(t)
+	m.ownerHasAKey()
+	m.set("sshd-capitals", "")
+
+	out := m.ok("setup", "--release-key", k.signers)
+	if strings.Contains(out, "still takes a password") || !exists(m.path(sshdKeysOnly)) {
+		t.Fatalf("capitalised keywords were not read:\n%s", out)
+	}
+	if out := m.ok("setup"); !strings.Contains(out, "nothing to change") {
+		t.Errorf("a second run with capitalised keywords:\n%s", out)
+	}
+
+	// Capitals that say otherwise are seen, and not as no answer.
+	write(t, m.path("etc/ssh/sshd_config.d/000-earlier.conf"), "PasswordAuthentication yes\n", 0o644)
+	out = m.refused("setup")
+	if !strings.Contains(out, "still takes a password") || !strings.Contains(out, "passwordauthentication yes") || strings.Contains(out, "no answer") {
+		t.Errorf("a capitalised yes:\n%s", out)
+	}
+	os.Remove(m.path("etc/ssh/sshd_config.d/000-earlier.conf"))
+
+	m.set("sshd-silent", "")
+	if out := m.refused("setup"); !strings.Contains(out, "(sshd -T: no answer)") {
+		t.Errorf("an sshd -T that printed nothing:\n%s", out)
 	}
 }
 
