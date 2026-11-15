@@ -229,6 +229,9 @@ type Server struct {
 	// forgetting is held by a forgetting's sweep, and read by an Installed
 	// run's seal (installed.go).
 	forgetting sync.RWMutex
+	// retiredAudit is where labd's copy of each Mac retired since it started
+	// keeps its Audit log, under mu (access.go).
+	retiredAudit map[*dev]string
 	// cables are the Sightings: which Lab-owned Mac is on which of the
 	// Out-of-band controller's ports (see sighting.go).
 	cables *cables
@@ -1390,17 +1393,13 @@ func (s *Server) hForgetDevice(w http.ResponseWriter, r *http.Request) {
 // dropNamedState clears what labd keeps under a forgotten Mac's name, since
 // the name can be taken again by another Mac, or another person's: its
 // screens, serial log and baselines go; its Audit log is kept, renamed after
-// the enrollment (id), for Maintainers. Its jobs stay, for Maintainers only
-// (seesJob).
-func (s *Server) dropNamedState(name, id string) {
+// the enrollment as it leaves the fleet (retireAudit), for Maintainers. Its
+// jobs stay, for Maintainers only (seesJob).
+func (s *Server) dropNamedState(name string) {
 	for _, p := range []string{s.screenDir(name), s.serialPath(name), s.baselinePath(name), s.omtBaselinePath(name)} {
 		if err := os.RemoveAll(p); err != nil {
 			s.log.Printf("forget %s: %v", name, err)
 		}
-	}
-	a := s.auditPath(name)
-	if err := os.Rename(a, strings.TrimSuffix(a, ".jsonl")+"."+id+".jsonl"); err != nil && !os.IsNotExist(err) {
-		s.log.Printf("forget %s: audit log: %v", name, err)
 	}
 }
 

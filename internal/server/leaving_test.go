@@ -1058,3 +1058,120 @@ func TestAForgetWhoseMacIsStillLeavingFails(t *testing.T) {
 		t.Fatal("the person is forgotten though her Mac is still enrolled")
 	}
 }
+
+// retiredAudit is labd's copy of a retired Mac's Audit log, renamed after
+// its enrollment.
+func retiredAudit(t *testing.T, s *Server, v *dev) []api.AuditEntry {
+	t.Helper()
+	d := v.snapshot()
+	b, err := os.ReadFile(strings.TrimSuffix(s.auditPath(d.Name), ".jsonl") + "." + d.ID + ".jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []api.AuditEntry
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var e api.AuditEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("%q: %v", line, err)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// A report copying a Mac's Audit entries while the Mac is retired keeps
+// them: the retirement renames labd's copy once the entries are in, and an
+// entry that reaches the retired Mac's copy afterwards goes to the renamed
+// one, not to a new file under the name the next Mac may take.
+func TestAnAuditEntryInFlightAtRetirementIsKept(t *testing.T) {
+	l := rolesLab(t, nil)
+	mini := l.addMac("ravi-mini", maintainerID)
+	mini.copyAudit([]api.AuditEntry{{Time: l.clock.Now(), Action: "screenshot", End: 40}})
+	by := Person{AccountID: maintainerID, Handle: "ravi", Maintainer: true}
+
+	// The Mac's report is being copied when the Maintainer ends it.
+	mini.auditMu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- l.s.endEnrollment(mini, leaving{how: leftByMaintainer, by: by}) }()
+	select {
+	case err := <-done:
+		done <- err
+	case <-time.After(time.Second):
+	}
+	line, _ := json.Marshal(api.AuditEntry{Time: l.clock.Now(), Action: "reboot", End: 80})
+	f, err := os.OpenFile(l.s.auditPath("ravi-mini"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write(append(line, '\n'))
+	f.Close()
+	mini.auditHave = 80
+	mini.auditMu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	// One more report the retired Mac's check-in carried.
+	mini.copyAudit([]api.AuditEntry{{Time: l.clock.Now(), Action: "kernel errors baseline", End: 120}})
+
+	var actions []string
+	for _, e := range retiredAudit(t, l.s, mini) {
+		actions = append(actions, e.Action)
+	}
+	if want := []string{"screenshot", "reboot", "kernel errors baseline"}; !slices.Equal(actions, want) {
+		t.Errorf("the retired Mac's Audit log copy: %q, want %q", actions, want)
+	}
+	if _, err := os.Stat(l.s.auditPath("ravi-mini")); !os.IsNotExist(err) {
+		t.Errorf("a copy is left under the Mac's name, free for the next Mac: %v", err)
+	}
+}
+
+// A forgetting while a retired Mac's last report copies its Audit entries
+// waits for the copy, as it does for an enrolled Mac's: the entry is kept,
+// without the handle.
+func TestAForgettingWaitsForARetiredMacsAuditCopy(t *testing.T) {
+	l := rolesLab(t, nil)
+	l.signedIn(edithID)
+	mini := l.addMac("ravi-mini", maintainerID)
+	mini.copyAudit([]api.AuditEntry{{Time: l.clock.Now(), Maintainer: "edith", Action: "screenshot", End: 40}})
+	if err := l.s.endEnrollment(mini, leaving{how: leftByMaintainer, by: Person{AccountID: maintainerID, Handle: "ravi", Maintainer: true}}); err != nil {
+		t.Fatal(err)
+	}
+	k, err := l.s.store.knownPerson(edithID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mini.auditMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- l.s.forgetHeld(Person{AccountID: maintainerID, Handle: "ravi", Maintainer: true}, k, newForgetting(edithID, k.Handle))
+	}()
+	select {
+	case err := <-done:
+		done <- err
+	case <-time.After(time.Second):
+	}
+	d := mini.snapshot()
+	line, _ := json.Marshal(api.AuditEntry{Time: l.clock.Now(), Maintainer: "edith", AccountID: edithID, Action: "reboot", End: 80})
+	f, err := os.OpenFile(strings.TrimSuffix(l.s.auditPath(d.Name), ".jsonl")+"."+d.ID+".jsonl", os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write(append(line, '\n'))
+	f.Close()
+	mini.auditHave = 80
+	mini.auditMu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	es := retiredAudit(t, l.s, mini)
+	if len(es) != 2 || es[1].Action != "reboot" {
+		t.Fatalf("the retired Mac's Audit log copy: %+v", es)
+	}
+	for _, e := range es {
+		if e.Maintainer != "" || e.AccountID != 0 {
+			t.Errorf("an entry still names her: %+v", e)
+		}
+	}
+}

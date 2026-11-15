@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -111,9 +112,7 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 		return fmt.Errorf("%s's enrollment could not be ended: %w", name, err)
 	}
 	s.endLeaseOfLeaving(v, reason)
-	s.mu.Lock()
-	delete(s.devs, name)
-	s.mu.Unlock()
+	s.retireAudit(v, name, d.ID)
 	s.afterRetiring(&d, l)
 
 	v.mu.Lock()
@@ -169,17 +168,27 @@ func statusOr500(err error) int {
 	return http.StatusInternalServerError
 }
 
-// retired does what leaving the lab does to a Mac's record, d as it stood:
-// the record is Retired, then the three lines (the Mac's record, the People
-// record, the Lab group) are written and what labd kept under the Mac's
-// name goes. When the record cannot be Retired, nothing else is done.
-func (s *Server) retired(d *api.Device, l leaving) error {
-	if err := s.store.retire(d, l.how, s.now(), nil); err != nil {
-		s.log.Printf("retire %s: %v", d.Name, err)
-		return err
+// retireAudit takes v out of the fleet, and renames labd's copy of its Audit
+// log after the enrollment (id), while no report adds to it: an entry
+// copied as the Mac leaves is in the renamed copy, and a report for it still
+// on its way adds to the renamed copy too, never to a new one under the name
+// the next Mac may take. A forgetting's sweep of the copies waits for those
+// reports as it does for an enrolled Mac's (auditDevs).
+func (s *Server) retireAudit(v *dev, name, id string) {
+	v.auditMu.Lock()
+	defer v.auditMu.Unlock()
+	a := s.auditPath(name)
+	renamed := strings.TrimSuffix(a, ".jsonl") + "." + id + ".jsonl"
+	if err := os.Rename(a, renamed); err != nil && !os.IsNotExist(err) {
+		s.log.Printf("forget %s: audit log: %v", name, err)
 	}
-	s.afterRetiring(d, l)
-	return nil
+	s.mu.Lock()
+	delete(s.devs, name)
+	if s.retiredAudit == nil {
+		s.retiredAudit = map[*dev]string{}
+	}
+	s.retiredAudit[v] = renamed
+	s.mu.Unlock()
 }
 
 // afterRetiring is what follows a Mac's record being Retired.
@@ -203,7 +212,7 @@ func (s *Server) afterRetiring(d *api.Device, l leaving) {
 	if _, err := s.store.dropTokens(d.Name); err != nil {
 		s.log.Printf("retire %s: its enrollment tokens: %v", d.Name, err)
 	}
-	s.dropNamedState(d.Name, d.ID)
+	s.dropNamedState(d.Name)
 }
 
 // leftOnPeopleRecord writes a Mac's leaving in the People record, which is

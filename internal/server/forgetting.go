@@ -15,6 +15,7 @@ package server
 
 import (
 	"bytes"
+	"cmp"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -401,12 +402,16 @@ func (s *Server) forgetInFilesOf(f forgetting) error {
 }
 
 // forgetInAudit takes the person off labd's copies of Audit logs while no
-// Mac's entries are being added: an entry added between the sweep's read
-// and its write would be lost, and one matched to the person before the
-// forgetting and added after it would keep their handle.
+// Mac's entries are being added, a retired Mac's included: an entry added
+// between the sweep's read and its write would be lost, and one matched to
+// the person before the forgetting and added after it would keep their
+// handle.
 func (s *Server) forgetInAudit(f forgetting) error {
-	devs := s.allDevs()
-	slices.SortFunc(devs, func(a, b *dev) int { return strings.Compare(a.snapshot().Name, b.snapshot().Name) })
+	devs := s.auditDevs()
+	slices.SortFunc(devs, func(a, b *dev) int {
+		x, y := a.snapshot(), b.snapshot()
+		return cmp.Or(strings.Compare(x.Name, y.Name), strings.Compare(x.ID, y.ID))
+	})
 	for _, v := range devs {
 		v.auditMu.Lock()
 		defer v.auditMu.Unlock()
