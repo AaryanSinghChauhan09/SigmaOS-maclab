@@ -116,15 +116,15 @@ func TestVolunteerJobNoticesAreOffUntilTheVolunteerAsks(t *testing.T) {
 	n.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
 }
 
-func TestVolunteerJobNoticesNeverGoToTheLabWideTopicOrNotifyCmd(t *testing.T) {
+func TestVolunteerJobNoticesGoToTheMacsTopicAloneNeverNotifyCmd(t *testing.T) {
 	n := newJobNoticeLab(t, true)
 	topic := n.macTopic()
 	id := n.submitJob(api.JobSpec{Kernel: n.artifact("krel=7.2-ok behavior=ok")})
 	n.expect(n.jobAPI(id, 60*time.Second), api.OutcomePass)
 	n.waitPosts(topic, 5*time.Second, anyPost(func(p ntfyPost) bool { return p.jobDone(id) }))
-	for _, p := range n.ntfy.at(labWideTopic) {
-		if strings.Contains(p.text(), "do not reboot") || strings.Contains(p.text(), "you can reboot") {
-			t.Fatalf("a Volunteer's notice reached the lab-wide topic: %+v", p)
+	for _, p := range n.ntfy.all() {
+		if p.path != topic {
+			t.Fatalf("a Volunteer's notice reached another topic: %+v", p)
 		}
 	}
 	for _, line := range n.cmdLines() {

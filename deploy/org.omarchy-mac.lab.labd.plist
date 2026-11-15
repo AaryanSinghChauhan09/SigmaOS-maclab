@@ -32,6 +32,7 @@
     <string>--ops-socket</string><string>/var/lab/run/ops.sock</string>
     <string>--ops-marks</string><string>/var/lab/log</string>
     <string>--ops-scripts</string><string>/usr/local/lab/current/scripts/mini</string>
+    <string>--ntfy</string><string>https://ntfy.sh</string>
   </array>
   <key>WorkingDirectory</key><string>/var/lab</string>
   <key>Umask</key><integer>63</integer>

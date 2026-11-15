@@ -1,8 +1,12 @@
 package server
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,7 +21,7 @@ import (
 
 // ntfyPost is one POST that reached a fake ntfy server.
 type ntfyPost struct {
-	path, title, body, priority string
+	path, title, body, priority, click string
 }
 
 // ntfyCatcher is a fake ntfy server recording every post to it.
@@ -25,11 +29,19 @@ type ntfyCatcher struct {
 	*httptest.Server
 	mu    sync.Mutex
 	posts []ntfyPost
+	// answer, when set, is what the server answers each post with.
+	answer func(w http.ResponseWriter, r *http.Request)
 }
 
-func newNtfyCatcher(t *testing.T) *ntfyCatcher {
+func newNtfyCatcher(t *testing.T) *ntfyCatcher { return newCatcher(t, false) }
+
+// newNtfyCatcherTLS is a fake notice server on https, for a Volunteer's
+// own topic.
+func newNtfyCatcherTLS(t *testing.T) *ntfyCatcher { return newCatcher(t, true) }
+
+func newCatcher(t *testing.T, tls bool) *ntfyCatcher {
 	c := &ntfyCatcher{}
-	c.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b := new(strings.Builder)
 		buf := make([]byte, 4096)
 		for {
@@ -40,11 +52,47 @@ func newNtfyCatcher(t *testing.T) *ntfyCatcher {
 			}
 		}
 		c.mu.Lock()
-		c.posts = append(c.posts, ntfyPost{r.URL.Path, r.Header.Get("Title"), b.String(), r.Header.Get("Priority")})
+		c.posts = append(c.posts, ntfyPost{r.URL.Path, r.Header.Get("Title"), b.String(), r.Header.Get("Priority"), r.Header.Get("Click")})
+		answer := c.answer
 		c.mu.Unlock()
-	}))
+		if answer != nil {
+			answer(w, r)
+		}
+	})
+	if tls {
+		c.Server = httptest.NewTLSServer(h)
+	} else {
+		c.Server = httptest.NewServer(h)
+	}
 	t.Cleanup(c.Close)
 	return c
+}
+
+func (c *ntfyCatcher) answering(f func(w http.ResponseWriter, r *http.Request)) {
+	c.mu.Lock()
+	c.answer = f
+	c.mu.Unlock()
+}
+
+// addr is where the fake listens.
+func (c *ntfyCatcher) addr() netip.AddrPort {
+	return netip.MustParseAddrPort(c.Listener.Addr().String())
+}
+
+// trusting has labd trust these fake https notice servers as if they were
+// on the public internet: their certificates, and their exact addresses
+// (nothing else on loopback).
+func trusting(cs ...*ntfyCatcher) func(*Config) {
+	return func(cfg *Config) {
+		pool := x509.NewCertPool()
+		allowed := map[netip.AddrPort]bool{}
+		for _, c := range cs {
+			pool.AddCert(c.Certificate())
+			allowed[c.addr()] = true
+		}
+		cfg.noticeTLS = &tls.Config{RootCAs: pool}
+		cfg.noticeAllow = func(ap netip.AddrPort) bool { return allowed[netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())] }
+	}
 }
 
 func (c *ntfyCatcher) all() []ntfyPost {
@@ -67,8 +115,6 @@ func (c *ntfyCatcher) at(path string) []ntfyPost {
 // text is a post's title and body, lower-cased, for matching on.
 func (p ntfyPost) text() string { return strings.ToLower(p.title + "\n" + p.body) }
 
-const labWideTopic = "/lab-wide"
-
 // asksForHands is whether a post is a needs-hands notice: it names the power
 // button steps.
 func (p ntfyPost) asksForHands() bool {
@@ -89,7 +135,7 @@ func (p ntfyPost) endedEnrollment() bool {
 }
 
 // noticeLab is a Volunteer lab on a fake clock (running at wall speed unless a
-// test jumps it) whose labd posts to a fake lab-wide ntfy topic.
+// test jumps it) whose labd has a fake notice server.
 type noticeLab struct {
 	*lab
 	clock *agent.FakeClock
@@ -107,7 +153,7 @@ func newNoticeLab(t *testing.T, c labConfig) *noticeLab {
 		if prev != nil {
 			prev(cfg)
 		}
-		cfg.NtfyURL = n.ntfy.URL + labWideTopic
+		cfg.NtfyURL = n.ntfy.URL
 		cfg.NotifyCmd = `printf '%s | %s | %s\n' "$MACLAB_DEVICE" "$MACLAB_TITLE" "$(printf %s "$MACLAB_BODY" | tr '\n' ' ')" >> ` + n.cmds
 	}
 	n.lab = newLabWith(t, c)
@@ -172,11 +218,7 @@ func (n *noticeLab) macTopic() string {
 	if m == nil || !strings.HasPrefix(m[1], n.ntfy.URL+"/") {
 		n.t.Fatalf("status does not show the Mac's topic on the lab's ntfy server %s:\n%s", n.ntfy.URL, out)
 	}
-	path := strings.TrimPrefix(m[1], n.ntfy.URL)
-	if path == labWideTopic {
-		n.t.Fatalf("the Mac's topic is the lab-wide topic %s", path)
-	}
-	return path
+	return strings.TrimPrefix(m[1], n.ntfy.URL)
 }
 
 // hang submits a job whose Lab boot hangs for good: nothing on the Mac can
@@ -325,7 +367,7 @@ func TestNeedsHandsNoticeGivesExactStepsHoldPowerTenSecondsThenPowerOn(t *testin
 	n.finish()
 }
 
-func TestNeedsHandsOnAVolunteerMacGoesToItsOwnTopicNotTheLabWideOne(t *testing.T) {
+func TestNeedsHandsOnAVolunteerMacGoesToItsOwnTopicAlone(t *testing.T) {
 	n := newNoticeLab(t, labConfig{volunteer: true})
 	topic := n.macTopic()
 	n.needsHandsAfter(topic)
@@ -334,14 +376,9 @@ func TestNeedsHandsOnAVolunteerMacGoesToItsOwnTopicNotTheLabWideOne(t *testing.T
 	if got := len(n.ntfy.at(topic)); got != 1 {
 		t.Fatalf("%d posts to the Mac's topic, want exactly the one needs-hands: %+v", got, n.ntfy.at(topic))
 	}
-	for _, p := range n.ntfy.at(labWideTopic) {
-		if p.asksForHands() {
-			t.Fatalf("a Volunteer's needs hands reached the lab-wide topic: %+v", p)
-		}
-	}
 	for _, p := range n.ntfy.all() {
-		if p.path != topic && p.path != labWideTopic {
-			t.Fatalf("a post to a topic that is neither the Mac's nor the lab-wide one: %+v", p)
+		if p.path != topic {
+			t.Fatalf("a post to a topic that is not the Mac's: %+v", p)
 		}
 	}
 }
@@ -362,16 +399,16 @@ func TestMacTopicCarriesOnlyNeedsHandsNotJobResultsOrBackOrAsleepNotices(t *test
 	if len(posts) != 1 || !posts[0].asksForHands() {
 		t.Fatalf("the Mac's topic got %+v, want only the one needs-hands", posts)
 	}
-	// and Maintainers still get the job results on the lab-wide topic
-	if !n.waitPosts(labWideTopic, 5*time.Second, anyPost(func(p ntfyPost) bool { return strings.Contains(p.title, "job ") })) {
-		t.Fatalf("no job result reached the lab-wide topic: %+v", n.ntfy.all())
+	// and Maintainers still get the job results, on the mini alone
+	if !n.waitCmd(5*time.Second, func(l string) bool { return strings.Contains(l, "job ") }) {
+		t.Fatalf("no job result reached --notify-cmd: %q", n.cmdLines())
 	}
 }
 
 func TestNotifyTopicSendsNeedsHandsToTheVolunteersOwnTopic(t *testing.T) {
-	n := newNoticeLab(t, labConfig{volunteer: true})
+	own := newNtfyCatcherTLS(t)
+	n := newNoticeLab(t, labConfig{volunteer: true, config: trusting(own)})
 	generated := n.macTopic()
-	own := newNtfyCatcher(t)
 	if out, err := n.volunteer("notify", "--topic", own.URL+"/my-own-topic"); err != nil {
 		t.Fatalf("notify --topic: %v\n%s", err, out)
 	}
@@ -385,11 +422,6 @@ func TestNotifyTopicSendsNeedsHandsToTheVolunteersOwnTopic(t *testing.T) {
 	}
 	if got := n.ntfy.at(generated); len(got) != 0 {
 		t.Fatalf("the lab's generated topic still got %+v after notify --topic", got)
-	}
-	for _, p := range n.ntfy.at(labWideTopic) {
-		if p.asksForHands() {
-			t.Fatalf("needs hands reached the lab-wide topic: %+v", p)
-		}
 	}
 }
 
@@ -445,43 +477,39 @@ func TestNotifyCmdIsRunForMaintainersNoticesOnAVolunteerMacButNotNeedsHands(t *t
 	}
 }
 
-func TestLabWideTopicStillGetsMaintainersNoticesAboutAVolunteerMac(t *testing.T) {
+func TestMaintainersNoticesAboutAVolunteerMacStayOnTheMiniAndNeverReachTheNoticeServer(t *testing.T) {
 	n := newNoticeLab(t, labConfig{volunteer: true})
+	topic := n.macTopic()
 	id := n.submitJob(api.JobSpec{Kernel: n.artifact("krel=7.2-nn behavior=no-network")})
 	n.lostBoot("7.2-nn")
 	n.clock.Advance(2 * 4 * time.Second)
 	n.expect(n.jobAPI(id, 60*time.Second), api.OutcomeLostContact)
-	if !n.waitPosts(labWideTopic, 5*time.Second, anyPost(func(p ntfyPost) bool {
-		return strings.Contains(p.title, id) && strings.Contains(p.title, api.OutcomeLostContact)
-	})) {
-		t.Fatalf("no failed-job notice for %s on the lab-wide topic: %+v", id, n.ntfy.all())
+	if !n.waitCmd(5*time.Second, func(l string) bool { return strings.Contains(l, id) && strings.Contains(l, api.OutcomeLostContact) }) {
+		t.Fatalf("no failed-job notice for %s on --notify-cmd: %q", id, n.cmdLines())
+	}
+	for _, p := range n.ntfy.all() {
+		if p.path != topic || strings.Contains(p.text(), api.OutcomeLostContact) {
+			t.Fatalf("a Maintainers' notice reached the notice server: %+v", p)
+		}
 	}
 }
 
-func TestLabOwnedMacNeedsHandsStillGoesToTheLabWideTopicAndNotifyCmd(t *testing.T) {
+func TestLabOwnedMacNeedsHandsGoesToNotifyCmdAndNothingToTheNoticeServer(t *testing.T) {
 	n := newNoticeLab(t, labConfig{})
 	start := n.clock.Now()
 	n.hang()
 	// The ladder runs on the lab's clock: moved by the test, not left to the
 	// harness's wall-speed pump, which load slows.
 	n.step(start, 2*time.Second, time.Hour, func() bool { return n.state() == api.StateNeedsHands })
-	if !n.waitPosts(labWideTopic, 10*time.Second, anyPost(ntfyPost.asksForHands)) {
-		t.Fatalf("a Lab-owned Mac's needs hands did not reach the lab-wide topic: %+v", n.ntfy.all())
-	}
-	var ran bool
-	for deadline := time.Now().Add(10 * time.Second); !ran && time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		for _, l := range n.cmdLines() {
-			low := strings.ToLower(l)
-			ran = ran || strings.Contains(low, "hold") && strings.Contains(low, "10 s")
-		}
-	}
-	if !ran {
+	if !n.waitCmd(10*time.Second, func(l string) bool {
+		low := strings.ToLower(l)
+		return strings.Contains(low, "hold") && strings.Contains(low, "10 s")
+	}) {
 		t.Fatalf("--notify-cmd not run for a Lab-owned Mac's needs hands: %q", n.cmdLines())
 	}
-	for _, p := range n.ntfy.all() {
-		if p.path != labWideTopic {
-			t.Fatalf("a Lab-owned Mac posted to a per-Mac topic: %+v", p)
-		}
+	time.Sleep(300 * time.Millisecond)
+	if p := n.ntfy.all(); len(p) != 0 {
+		t.Fatalf("a Lab-owned Mac posted to the notice server: %+v", p)
 	}
 	n.sim.PowerCycle()
 }
@@ -490,9 +518,328 @@ func TestLabOwnedMacIsAskedForHandsAfterTheBootTimeoutNotTheCeiling(t *testing.T
 	n := newNoticeLab(t, labConfig{})
 	start := n.clock.Now()
 	n.hang()
-	asked := n.step(start, 2*time.Second, time.Hour, func() bool { return anyPost(ntfyPost.asksForHands)(n.ntfy.at(labWideTopic)) })
+	asked := n.step(start, 2*time.Second, time.Hour, func() bool { return n.lab.notified(func(m Notification) bool { return m.Action() }) })
 	if asked >= earliestCeiling {
 		t.Fatalf("a Lab-owned Mac waited %s for hands: its ladder is unchanged and does not wait for the ceiling", asked)
 	}
 	n.sim.PowerCycle()
+}
+
+// waitCmd waits up to wall time d for a line --notify-cmd was run with.
+func (n *noticeLab) waitCmd(d time.Duration, cond func(string) bool) bool {
+	for deadline := time.Now().Add(d); ; time.Sleep(50 * time.Millisecond) {
+		for _, l := range n.cmdLines() {
+			if cond(l) {
+				return true
+			}
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
+}
+
+// notified is whether a notification labd made so far is one cond holds of.
+func (l *lab) notified(cond func(Notification) bool) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, m := range l.notes {
+		if cond(m) {
+			return true
+		}
+	}
+	return false
+}
+
+// Action is whether a notification asks for hands.
+func (m Notification) Action() bool {
+	low := strings.ToLower(m.Body)
+	return strings.Contains(low, "hold") && strings.Contains(low, "10 s")
+}
+
+// ---- the five wordings, and what a Notice never carries ----
+
+// noticeWordings are the only bodies a Notice may have, after the Mac's
+// name: the five fixed wordings (spec 13), the restart one in its laptop
+// and desktop steps, the job one starting and done.
+var noticeWordings = []*regexp.Regexp{
+	regexp.MustCompile(`^It needs a restart: hold its power button \(the Touch ID key, top right of the keyboard\) for 10 seconds, until the screen stays black, then wait 5 seconds and press it once to turn it back on\. Open My Macs\.$`),
+	regexp.MustCompile(`^It needs a restart: unplug its power cable for 10 seconds, then plug it back in; if it does not start, press the power button on the back once\. Open My Macs\.$`),
+	regexp.MustCompile(`^This Mac's enrollment in Omarchy Mac Lab was ended\. Open My Macs\.$`),
+	regexp.MustCompile(`^Job [a-z0-9-]+ is starting\. The Mac will reboot for it, and the job takes at most about \d+ min\. Please do not reboot or shut it down until the done Notice\. Open My Macs\.$`),
+	regexp.MustCompile(`^Job [a-z0-9-]+ is done \([a-z_-]+\)\. The lab is finished with this Mac for now: you can reboot it or use it\. Open My Macs\.$`),
+	regexp.MustCompile(`^The lab's terms changed\. This Mac is waiting for you: open My Macs\.$`),
+	regexp.MustCompile(`^An update is waiting for this Mac\. Open My Macs\.$`),
+}
+
+// asksForAPasswordOrACommand are words a Notice never says (spec 14,
+// decision 8): it never asks for a password or for a command to be run.
+var asksForAPasswordOrACommand = []string{"password", "passphrase", "sudo", "lab-agent", "command", "terminal", "`", "$ ", " run ", "type ", "enter "}
+
+// checkNotice holds one post to the rules: the title, the Mac's name, one
+// of the fixed wordings, the link to the Mac on My Macs, and none of what
+// must never be in it.
+func checkNotice(t *testing.T, p ntfyPost, mac string, never ...string) {
+	t.Helper()
+	if p.title != noticeTitle {
+		t.Errorf("a Notice titled %q", p.title)
+	}
+	first, link, _ := strings.Cut(p.body, "\n")
+	said, ok := strings.CutPrefix(first, mac+": ")
+	if !ok {
+		t.Errorf("a Notice that does not start with the Mac's name: %q", p.body)
+	}
+	known := false
+	for _, w := range noticeWordings {
+		known = known || w.MatchString(said)
+	}
+	if !known {
+		t.Errorf("a Notice in no fixed wording: %q", said)
+	}
+	if !strings.HasSuffix(link, "/my-macs/"+mac) || strings.Contains(link, "\n") {
+		t.Errorf("a Notice whose link is %q, not the Mac on My Macs", link)
+	}
+	low := strings.ToLower(p.title + "\n" + p.body)
+	for _, w := range append(asksForAPasswordOrACommand, never...) {
+		if w != "" && strings.Contains(low, strings.ToLower(w)) {
+			t.Errorf("a Notice says %q: %q", w, p.body)
+		}
+	}
+}
+
+func TestOnlyTheFiveWordingsExistAndNoneAsksForAPasswordOrACommand(t *testing.T) {
+	if len(noticeKinds) != 5 {
+		t.Fatalf("%d kinds of Notice, want the five", len(noticeKinds))
+	}
+	pub, _ := ParsePublicURL("https://lab.example.org")
+	s := &Server{cfg: Config{PublicURL: pub}}
+	seen := map[string]bool{}
+	for _, model := range []string{api.ModelLaptop, api.ModelDesktop} {
+		d := api.Device{Name: "vol-air", Label: "Ada's MacBook Air, the shelf", Model: model, VolunteerName: "Ada Lovelace", Contact: "ada@example.org",
+			Kernel: "7.2.0-rc1-asahi", LinkedLogin: "ada"}
+		d.Kind = api.KindVolunteer
+		for _, k := range noticeKinds {
+			for _, job := range []jobWording{{id: "j-7f3a", minutes: 37}, {id: "j-7f3a", outcome: api.OutcomePass}} {
+				n := s.notice(d, k, job)
+				if !n.Volunteer || n.Link != "https://lab.example.org/my-macs/vol-air" {
+					t.Errorf("kind %d: %+v", k, n)
+				}
+				checkNotice(t, ntfyPost{title: n.Title, body: n.Body + "\n" + n.Link}, "vol-air", "Ada", "shelf", "asahi", "7.2", "ada@", "linus", "@")
+				seen[strings.TrimPrefix(n.Body, "vol-air: ")] = true
+			}
+		}
+	}
+	// two restarts, one ending, a job starting and done, terms, an update
+	if len(seen) != 7 {
+		t.Errorf("%d bodies, want 7: %v", len(seen), seen)
+	}
+}
+
+// No Notice is made but by s.notice: nothing else in labd marks a message
+// for a Volunteer's phone.
+func TestOnlyTheNoticeMakerMakesANotice(t *testing.T) {
+	files, _ := filepath.Glob("*.go")
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") || f == "notify.go" {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if regexp.MustCompile(`Notification\{[^}]*(Volunteer|MacTopic)|\.MacTopic\s*=|n\.Volunteer\s*=`).Match(b) {
+			t.Errorf("%s makes a Notice of its own: use s.notice", f)
+		}
+	}
+}
+
+// Every Notice a Volunteer's Mac gets over a job, a restart and its ending
+// carries the Mac's name, a fixed wording and the link, and never a handle,
+// the Mac's label, a log line, a kernel or a source.
+func TestANoticeCarriesNeverAHandleALabelALogLineAKernelOrASource(t *testing.T) {
+	n, grace := leavingLab(t, labConfig{})
+	topic := n.macTopic()
+	label := "Ada's MacBook on the shelf"
+	v := n.s.dev(n.name)
+	v.mu.Lock()
+	v.d.Label = label
+	v.saveLocked()
+	v.mu.Unlock()
+	if out, err := n.volunteer("notify", "--jobs", "on"); err != nil {
+		t.Fatalf("notify --jobs on: %v\n%s", err, out)
+	}
+	n.waitDevice(func(d api.Device) bool { return d.JobNotices })
+	src := "https://github.com/labtest/linux-aurora"
+	id := n.submitJob(api.JobSpec{Kernel: n.artifact("krel=7.2-ok behavior=ok")})
+	n.expect(n.jobAPI(id, 60*time.Second), api.OutcomePass)
+	n.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
+	n.needsHandsAfter(topic)
+	lastLog := n.waitDevice(func(d api.Device) bool { return d.State == api.StateNeedsHands }).Action.LastLog
+	n.finish()
+	n.leavingMustEnd(grace, n.name)
+	if !n.waitPosts(topic, 10*time.Second, anyPost(ntfyPost.endedEnrollment)) {
+		t.Fatalf("no ending Notice: %+v", n.ntfy.at(topic))
+	}
+	posts := n.ntfy.all()
+	if len(posts) < 4 {
+		t.Fatalf("%d Notices, want a job starting and done, a restart and an ending: %+v", len(posts), posts)
+	}
+	never := []string{harnessMaintainer + " ", "@" + harnessMaintainer, leavingMaintainer, label, "shelf", "Ada", "7.2-ok", "7.2-hang", "krel", src, "github"}
+	if lastLog != "" {
+		never = append(never, lastLog)
+	}
+	for _, p := range posts {
+		if p.path != topic {
+			t.Errorf("a post to %s, not the Mac's topic", p.path)
+		}
+		checkNotice(t, p, n.name, never...)
+	}
+}
+
+// ---- a Volunteer's own topic ----
+
+// ownTopicLab is a Volunteer lab with fake https notice servers labd trusts
+// as public, the first of which the Volunteer names.
+func ownTopicLab(t *testing.T, more ...*ntfyCatcher) (*noticeLab, *ntfyCatcher) {
+	t.Helper()
+	own := newNtfyCatcherTLS(t)
+	n := newNoticeLab(t, labConfig{volunteer: true, config: trusting(append([]*ntfyCatcher{own}, more...)...)})
+	return n, own
+}
+
+// chooseTopic is the Volunteer's `notify --topic`, once labd has it.
+func (n *noticeLab) chooseTopic(topic string) {
+	n.t.Helper()
+	if out, err := n.volunteer("notify", "--topic", topic); err != nil {
+		n.t.Fatalf("notify --topic %s: %v\n%s", topic, err, out)
+	}
+	n.waitDevice(func(d api.Device) bool { return d.NtfyOwnURL == topic })
+}
+
+// refusedTopic waits for labd to refuse the Volunteer's own topic, saying why.
+func (n *noticeLab) refusedTopic(why string) {
+	n.t.Helper()
+	d := n.waitDevice(func(d api.Device) bool { return d.NoticeTopicRefused != "" })
+	if !strings.Contains(d.NoticeTopicRefused, why) {
+		n.t.Fatalf("the topic is refused for %q, want %q", d.NoticeTopicRefused, why)
+	}
+}
+
+// tell sends the Mac a Notice now.
+func (n *noticeLab) tell() {
+	n.s.notify(n.s.notice(n.s.dev(n.name).snapshot(), noticeTerms, jobWording{}))
+	time.Sleep(300 * time.Millisecond)
+}
+
+func TestAVolunteersOwnTopicMustBeHTTPSAtAPublicAddressWithNoRedirect(t *testing.T) {
+	target := newNtfyCatcherTLS(t)
+	n, own := ownTopicLab(t, target)
+	generated := n.macTopic()
+
+	// Plain http is refused when the Mac reports it, and at the send.
+	plain := newNtfyCatcher(t)
+	n.chooseTopic(plain.URL + "/mine")
+	n.refusedTopic("not an https address")
+	n.tell()
+	if len(plain.all()) != 0 || len(n.ntfy.at(generated)) != 0 {
+		t.Fatalf("a Notice went to a refused topic or fell back to the lab's: %+v %+v", plain.all(), n.ntfy.all())
+	}
+
+	// https at a public address (as the fake stands in for) passes, and the
+	// Notice goes.
+	n.chooseTopic(own.URL + "/mine")
+	n.waitDevice(func(d api.Device) bool { return d.NoticeTopicRefused == "" })
+	n.tell()
+	if p := own.at("/mine"); len(p) != 1 {
+		t.Fatalf("the Volunteer's own topic got %+v", p)
+	}
+
+	// A private address: loopback that is not one of the trusted fakes.
+	private := newNtfyCatcherTLS(t)
+	n.chooseTopic(private.URL + "/mine")
+	n.refusedTopic("not a public address")
+	n.tell()
+	if len(private.all()) != 0 {
+		t.Fatalf("a Notice went to a private address: %+v", private.all())
+	}
+
+	// A redirect is not followed, even to a public address, and refuses the
+	// topic at the send.
+	own.answering(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/elsewhere", http.StatusTemporaryRedirect)
+	})
+	n.chooseTopic(own.URL + "/moved")
+	n.waitDevice(func(d api.Device) bool { return d.NoticeTopicRefused == "" })
+	n.tell()
+	n.refusedTopic("redirect")
+	if len(target.all()) != 0 {
+		t.Fatalf("labd followed a redirect: %+v", target.all())
+	}
+
+	// The Mac's own status says so too.
+	out, err := n.volunteer("status")
+	if err != nil || !strings.Contains(out, "refused by the lab") {
+		t.Errorf("status: %v\n%s", err, out)
+	}
+}
+
+// The address labd judges is the one it connects to: a client for a
+// Volunteer's own topic will not connect to a private address, whatever a
+// check before it said.
+func TestTheNoticeClientConnectsToNoPrivateAddress(t *testing.T) {
+	private := newNtfyCatcherTLS(t)
+	s := &Server{}
+	trusting()(&s.cfg)
+	s.cfg.noticeTLS.RootCAs.AddCert(private.Certificate())
+	_, err := s.noticeClient(true).Post(private.URL+"/t", "text/plain", strings.NewReader("x"))
+	var refused *topicRefusal
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "not a public address") || len(private.all()) != 0 {
+		t.Fatalf("the client reached a private address: %v, %+v", err, private.all())
+	}
+}
+
+func TestPublicAddresses(t *testing.T) {
+	for addr, public := range map[string]bool{
+		"8.8.8.8": true, "1.1.1.1": true, "2606:4700::1111": true,
+		"10.0.0.1": false, "172.16.0.1": false, "192.168.1.20": false, "127.0.0.1": false, "169.254.1.1": false,
+		"100.100.1.2": false, "0.0.0.0": false, "224.0.0.1": false, "255.255.255.255": false, "198.18.0.1": false,
+		"::1": false, "fe80::1": false, "fd7a:115c:a1e0::1": false, "::ffff:192.168.0.1": false, "::ffff:8.8.8.8": true,
+		"64:ff9b::a00:1": false, "2002:c0a8:1::1": false, "::": false,
+	} {
+		if got := isPublic(netip.MustParseAddr(addr)); got != public {
+			t.Errorf("%s public: %v, want %v", addr, got, public)
+		}
+	}
+}
+
+// ntfy.sh's limit: a Notice the notice server refuses is logged and dropped,
+// with no cap, queue or retry.
+func TestANoticeTheNoticeServerRefusesIsLoggedAndDropped(t *testing.T) {
+	n := newNoticeLab(t, labConfig{volunteer: true})
+	topic := n.macTopic()
+	n.ntfy.answering(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "daily quota reached", http.StatusTooManyRequests)
+	})
+	n.tell()
+	time.Sleep(time.Second)
+	if got := n.ntfy.at(topic); len(got) != 1 {
+		t.Fatalf("%d posts of one refused Notice, want 1 and no retry", len(got))
+	}
+	if !strings.Contains(n.logs.String(), "notice for "+n.name+" dropped: the notice server answered 429") {
+		t.Errorf("the refusal is not in labd's log:\n%s", n.logs.String())
+	}
+	n.ntfy.answering(nil)
+	n.tell()
+	if got := n.ntfy.at(topic); len(got) != 2 {
+		t.Fatalf("the next Notice after a refused one: %d posts", len(got))
+	}
+}
+
+func TestTheNoticeServerIsAnAddressWithNoTopic(t *testing.T) {
+	for raw, ok := range map[string]bool{"https://ntfy.sh": true, "https://ntfy.sh/": true, "http://127.0.0.1:8080": true,
+		"https://ntfy.sh/secret-topic": false, "ntfy.sh": false, "https://u:p@ntfy.sh": false, "https://ntfy.sh?x=1": false} {
+		if err := CheckNoticeServer(raw); (err == nil) != ok {
+			t.Errorf("--ntfy %s: %v", raw, err)
+		}
+	}
 }

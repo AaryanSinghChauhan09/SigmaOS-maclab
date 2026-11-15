@@ -126,11 +126,7 @@ func (s *Server) notice(d api.Device, k noticeKind, job jobWording) Notification
 // myMacsLink is the address of the Mac called name on My Macs: at the Lab
 // address, or the path alone when labd was given none.
 func (s *Server) myMacsLink(name string) string {
-	path := "/my-macs/" + url.PathEscape(name)
-	if a := s.pageAddress(path); a != "" {
-		return a
-	}
-	return path
+	return s.myMacLink(strings.TrimSuffix(s.labAddress(), "/"), name)
 }
 
 // CheckNoticeServer checks labd's --ntfy: the notice server's address

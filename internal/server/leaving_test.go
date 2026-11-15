@@ -292,14 +292,19 @@ func TestMaintainerEndingAnEnrollmentOfAMacThatNeverChecksInAgainRevokesItsSecre
 	n.leavingRequireGone("lost-mbp")
 }
 
-func TestVolunteerIsToldOnTheirMacsTopicWhichMaintainerEndedTheEnrollment(t *testing.T) {
+// The Notice names nobody: who ended it is on My Macs and on the Mac's
+// desktop.
+func TestVolunteerIsToldOnTheirMacsTopicThatTheEnrollmentEndedWithNoHandle(t *testing.T) {
 	n, grace := leavingLab(t, labConfig{})
 	topic := n.macTopic()
 	n.leavingMustEnd(grace, n.name)
-	if !n.waitPosts(topic, 10*time.Second, anyPost(func(p ntfyPost) bool {
-		return p.endedEnrollment() && strings.Contains(p.text(), leavingMaintainer)
-	})) {
-		t.Fatalf("no 'enrollment ended' notice naming %s on the Mac's topic: %+v", leavingMaintainer, n.ntfy.at(topic))
+	if !n.waitPosts(topic, 10*time.Second, anyPost(ntfyPost.endedEnrollment)) {
+		t.Fatalf("no 'enrollment ended' notice on the Mac's topic: %+v", n.ntfy.at(topic))
+	}
+	for _, p := range n.ntfy.at(topic) {
+		if strings.Contains(p.text(), leavingMaintainer) || p.body != n.name+": "+endedNotice+"\n/my-macs/"+n.name {
+			t.Fatalf("the Notice: %q", p.body)
+		}
 	}
 }
 
@@ -334,9 +339,9 @@ func TestEnrollmentEndedNoticeIsOnlyForTheVolunteersMacTopicNotTheLabWideOne(t *
 	n.leavingMustEnd(grace, n.name)
 	n.waitPosts(topic, 10*time.Second, anyPost(ntfyPost.endedEnrollment))
 	time.Sleep(500 * time.Millisecond)
-	for _, p := range n.ntfy.at(labWideTopic) {
-		if p.endedEnrollment() && strings.Contains(p.text(), "volunteer") {
-			t.Fatalf("a Volunteer's enrollment-ended notice reached the lab-wide topic: %+v", p)
+	for _, p := range n.ntfy.all() {
+		if p.path != topic {
+			t.Fatalf("a Volunteer's enrollment-ended notice reached another topic: %+v", p)
 		}
 	}
 	if got := n.leavingEndedNotices(topic); len(got) != 1 {
@@ -478,7 +483,7 @@ func TestMaintainerEndingALabOwnedMacSendsNoVolunteerNotice(t *testing.T) {
 	n.leavingRequireGone(n.name)
 	time.Sleep(500 * time.Millisecond)
 	for _, p := range n.ntfy.all() {
-		if p.endedEnrollment() && p.path != labWideTopic {
+		if p.endedEnrollment() {
 			t.Fatalf("a Lab-owned Mac has no Volunteer, yet %+v was posted", p)
 		}
 	}

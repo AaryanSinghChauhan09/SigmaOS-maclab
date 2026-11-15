@@ -15,26 +15,6 @@ func init() {
 	addPage("POST /my-macs/accept-terms", web.SignedIn, (*Server).pAcceptTerms)
 }
 
-// termsBanner is what the banner of changed terms shows above the cards,
-// with the form's token.
-type termsBanner struct {
-	Date, SHA256, CSRF string
-}
-
-// termsBannerFor is the banner of changed terms for the person signed in on
-// r, nil when none of their Macs waits for them.
-func (s *Server) termsBannerFor(r *http.Request) *termsBanner {
-	p := PersonOf(r)
-	if p == nil {
-		return nil
-	}
-	date := s.termsWaiting(*p)
-	if date == "" {
-		return nil
-	}
-	return &termsBanner{Date: date, SHA256: s.termsText().SHA256, CSRF: CSRFToken(r)}
-}
-
 func (s *Server) pAcceptTerms(w http.ResponseWriter, r *http.Request) {
 	p := PersonOf(r)
 	if p == nil {
@@ -43,7 +23,7 @@ func (s *Server) pAcceptTerms(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err := s.acceptTerms(*p)
 	if err == nil {
-		http.Redirect(w, r, s.basePath()+"/my-macs", http.StatusSeeOther)
+		http.Redirect(w, r, s.basePath()+myMacsPath(*p), http.StatusSeeOther)
 		return
 	}
 	code, said := http.StatusInternalServerError, "The lab couldn't do that."

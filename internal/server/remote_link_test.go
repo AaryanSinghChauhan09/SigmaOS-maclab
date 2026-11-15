@@ -508,7 +508,7 @@ func TestNtfyPriorityAndTagsFollowTheNotification(t *testing.T) {
 		{"low", "low", "information_source"},
 	}
 	for _, c := range cases {
-		l.s.notify(Notification{Device: l.name, Title: "ntfy-test", Body: c.priority, Priority: c.priority})
+		l.s.notify(Notification{Device: l.name, Title: "ntfy-test", Body: c.priority, Priority: c.priority, Volunteer: true, MacTopic: ntfy.URL + "/t"})
 		select {
 		case s := <-got:
 			if c.wantPriority == "" && s.priority == "default" {

@@ -1,10 +1,3 @@
-{{define "terms-accept"}}<form class="inline" method="post" action="{{href "/my-macs/accept-terms"}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="button" type="submit">Accept</button></form> <span class="dim">Accepting is for all your Macs at once. <a href="{{href "/terms"}}">Read the terms</a> (sha256 {{.SHA256}}).</span>{{end}}
+{{define "terms-accept"}}<form class="inline" method="post" action="{{href "/my-macs/accept-terms"}}"><input type="hidden" name="csrf_token" value="{{.Viewer.CSRF}}"><button class="button" type="submit">Accept</button></form> <span class="dim">Accepting is for all your Macs at once. <a href="{{href "/terms"}}">Read the terms</a> (sha256 {{.Data.SHA256}}).</span>{{end}}
 
-{{define "terms-changed"}}{{with .}}<section class="card attention" id="terms-changed">
-<h2 class="card-title">the lab's terms changed</h2>
-<p>The terms are now those of {{.Date}}. Your Macs take nothing from the lab until you accept them: no job, no Lease. There is no deadline, and the lab never makes a Mac Leave for it.</p>
-<p>{{template "terms-accept" .}}</p>
-</section>
-{{end}}{{end}}
-
-{{define "topic-refused"}}{{with .}}<span class="flash flash-alert" role="alert">Refused: {{.}}. Its Notices are dropped until the Mac reports a topic at a public https address.</span>{{end}}{{end}}
+{{define "topic-refused"}}{{with .}}<br><span class="flash flash-alert" role="alert">Your own topic is refused: {{.}}. Its Notices are dropped until the Mac reports a topic at a public https address.</span>{{end}}{{end}}

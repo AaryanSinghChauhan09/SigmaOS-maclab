@@ -54,12 +54,17 @@ type myMacs struct {
 }
 
 // changedTerms is the terms a Volunteer has not accepted yet.
-type changedTerms struct{ Date string }
+type changedTerms struct{ Date, SHA256 string }
 
-// changedTermsFor is the banner My Macs shows a Volunteer when the lab's
-// terms are no longer the ones they accepted. Nothing changes the terms of
-// an enrolled Mac yet, so there is none.
-func (s *Server) changedTermsFor(Person) *changedTerms { return nil }
+// changedTermsFor is the banner My Macs shows a Volunteer whose Macs wait
+// for the lab's changed terms, with Accept (terms.go); nil when none does.
+func (s *Server) changedTermsFor(p Person) *changedTerms {
+	date := s.termsWaiting(p)
+	if date == "" {
+		return nil
+	}
+	return &changedTerms{Date: date, SHA256: s.termsText().SHA256}
+}
 
 type macCard struct {
 	Name, Page    string
@@ -77,7 +82,9 @@ type macCard struct {
 	Publishing          bool
 	Eligible            bool
 	Topic               string
-	JobNotices          bool
+	// TopicRefused is why labd refuses the Volunteer's own topic.
+	TopicRefused string
+	JobNotices   bool
 	// Holder is who holds its Lease, HolderKind their kind, Until its end.
 	Holder, HolderKind, HolderClass, Until string
 	// Agent is the Mac's lab-agent; LabAgent the lab's when the Mac's is
@@ -225,7 +232,7 @@ func (s *Server) macCard(v *dev, p Person) macCard {
 	d := s.view(v)
 	row := s.macRow(v, d, p, s.holdsLease(v, p))
 	c := macCard{Name: d.Name, Page: "/macs/" + url.PathEscape(d.Name), Configuration: row.Configuration, State: row.State, Reason: d.StateReason,
-		Limited: d.Limited, Publishing: d.Publish, Eligible: d.SnapshotEligible, Topic: s.macTopicURL(d.Enrollment), JobNotices: d.JobNotices,
+		Limited: d.Limited, Publishing: d.Publish, Eligible: d.SnapshotEligible, Topic: s.macTopicURL(d.Enrollment), TopicRefused: d.NoticeTopicRefused, JobNotices: d.JobNotices,
 		Holder: row.Holder, HolderKind: row.HolderKind, HolderClass: row.HolderClass, Until: row.Until,
 		Agent: d.Facts.AgentVersion, LabAgent: d.LabAgent, UpdateLine: agentUpdateLine(d), Commands: onlyAtTheMac, LeaveSentence: leaveSentence(d.Name)}
 	// Until its first baseline has passed, the stage says what the Mac
