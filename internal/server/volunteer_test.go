@@ -427,7 +427,7 @@ func TestTheSiteOnlyTakesAwayAndUndoesOnlyWhatItTook(t *testing.T) {
 	}
 
 	// Pause until Resume closes the Mac, an open window or not.
-	grace.did(at("pause"))
+	grace.did(at("pause"), "sure", "yes")
 	if open() || !v.paused() {
 		t.Error("Paused from the site, the Mac is still open to the lab")
 	}
@@ -455,9 +455,9 @@ func TestTheSiteOnlyTakesAwayAndUndoesOnlyWhatItTook(t *testing.T) {
 
 	// Pause until a time ends by itself, and is refused for a time gone by.
 	until := l.clock.Now().Add(2 * time.Hour)
-	grace.refused("a time still to come", at("pause"), "until", l.clock.Now().Add(-time.Minute).Format(time.RFC3339))
+	grace.refused("a time still to come", at("pause"), "until", l.clock.Now().Add(-time.Minute).Format(time.RFC3339), "sure", "yes")
 	grace.refused("Pause until a date and a time", at("pause"), "until", "tomorrow")
-	grace.did(at("pause"), "until", until.Format(time.RFC3339))
+	grace.did(at("pause"), "until", until.Format(time.RFC3339), "sure", "yes")
 	if open() {
 		t.Error("Paused until a time, the Mac is still open")
 	}
@@ -488,14 +488,14 @@ func TestTheSiteOnlyTakesAwayAndUndoesOnlyWhatItTook(t *testing.T) {
 	// Limit to Qualification holds the Mac at Qualification for the lab,
 	// whatever the Mac says, until "Remove limit", which gives back only
 	// what the Mac has.
-	grace.did(at("limit"))
+	grace.did(at("limit"), "sure", "yes")
 	if d := v.snapshot(); d.AllowsAnything() || d.AccessLevel != api.AccessFull || !d.Limited {
 		t.Errorf("Limited from the site: allows anything %v, the Mac's own level %q", d.AllowsAnything(), d.AccessLevel)
 	}
 	if err := refuseBelowFull(&api.Device{Name: "shelf-mac", Enrollment: api.Enrollment{Kind: api.KindVolunteer}, AccessLevel: api.AccessFull, Limited: true}, actMesa); err == nil || !strings.Contains(err.Error(), "limited to Access level Qualification") {
 		t.Errorf("what Full allows, on a limited Mac: %v", err)
 	}
-	grace.refused("limited to Qualification already", at("limit"))
+	grace.refused("limited to Qualification already", at("limit"), "sure", "yes")
 	l.checkin(secret, mac) // the Mac still says Full
 	if allows(v) {
 		t.Error("the Mac's check-in lifted the site's Limit")
@@ -509,7 +509,7 @@ func TestTheSiteOnlyTakesAwayAndUndoesOnlyWhatItTook(t *testing.T) {
 	lowered := mac
 	lowered.AccessLevel = api.AccessQualification
 	l.checkin(secret, lowered)
-	grace.did(at("limit"))
+	grace.did(at("limit"), "sure", "yes")
 	grace.did(at("remove-limit"))
 	if d := v.snapshot(); d.AllowsAnything() || d.AccessLevel != api.AccessQualification {
 		t.Errorf("Remove limit raised a Mac its Volunteer keeps at Qualification: %q", d.AccessLevel)

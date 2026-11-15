@@ -276,8 +276,8 @@ func TestACardShowsEverythingItsVolunteerMaySeeAndDo(t *testing.T) {
 	}
 
 	// Pause and Limit, taken: the card says so and offers only their undoing.
-	linus.did("/my-macs/vol-air/pause")
-	linus.did("/my-macs/vol-air/limit")
+	linus.did("/my-macs/vol-air/pause", "sure", "yes")
+	linus.did("/my-macs/vol-air/limit", "sure", "yes")
 	card = linus.myMacs().sole(t, "#mac-vol-air")
 	facts = factsOf(t, card)
 	for _, want := range []string{"State Paused", "Paused here until you Resume", "Access level Qualification here, by your Limit; Full on the Mac", "Lease none"} {
@@ -290,7 +290,7 @@ func TestACardShowsEverythingItsVolunteerMaySeeAndDo(t *testing.T) {
 	}
 	until := l.s.now().Add(26 * time.Hour).Truncate(time.Minute)
 	linus.did("/my-macs/vol-air/resume")
-	linus.did("/my-macs/vol-air/pause", "until", until.In(brisbane).Format("2006-01-02T15:04"))
+	linus.did("/my-macs/vol-air/pause", "until", until.In(brisbane).Format("2006-01-02T15:04"), "sure", "yes")
 	if facts := factsOf(t, linus.myMacs().sole(t, "#mac-vol-air")); !strings.Contains(facts, "Paused here until "+until.In(brisbane).Format("Mon 2 Jan 15:04 MST")) {
 		t.Errorf("Paused until a time, the facts: %s", facts)
 	}
@@ -545,7 +545,7 @@ func TestMineOnMacsHasTheSameCardsAndAnExternalVolunteerSeesOnlyTheirOwn(t *test
 			t.Errorf("%s's card lacks their Mac's topic: %s", who, facts)
 		}
 		// A button pressed there comes back there.
-		if w := c.b.post("/my-macs/" + c.mac + "/pause"); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/macs?show=mine#mac-"+c.mac {
+		if w := c.b.post("/my-macs/"+c.mac+"/pause", "sure", "yes"); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/macs?show=mine#mac-"+c.mac {
 			t.Errorf("%s's Pause: %d to %q", who, w.Code, w.Header().Get("Location"))
 		}
 		w := c.b.post("/my-macs/" + c.mac + "/remove-limit")
@@ -664,5 +664,36 @@ func TestMyMacsSaysWhoEndedAnEnrollment(t *testing.T) {
 	page = grace.myMacs()
 	if page.count(t, "section#mac-shelf-mac") != 1 || page.count(t, "#left-the-lab li") != 2 || page.count(t, "li#mac-shelf-mac") != 0 {
 		t.Errorf("enrolled again under its name: %q", ids(page.all(t, "[id]")))
+	}
+}
+
+// Pause and Limit take something away (a running job, a Lease), so they ask
+// twice in place: the first click turns the button into what it does, and a
+// post without the second changes nothing.
+func TestPauseAndLimitAskTwice(t *testing.T) {
+	l := myMacsLab(t)
+	v := l.lentMac("vol-air", linusID, api.AccessFull, l.s.now().Add(6*time.Hour))
+	linus := l.signedIn(linusID)
+	controls := linus.myMacs().sole(t, "#controls-vol-air")
+	for path, want := range map[string]string{"pause": pauseSentence("vol-air"), "limit": limitSentence("vol-air")} {
+		if got := controls.sole(t, `form[action="/my-macs/vol-air/`+path+`"] button`).attr("data-sentence"); got != want {
+			t.Errorf("%s turns into %q, want %q", path, got, want)
+		}
+	}
+	until := l.s.now().Add(26 * time.Hour).In(brisbane).Format("2006-01-02T15:04")
+	w := linus.post("/my-macs/vol-air/pause", "until", until)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), pauseSentence("vol-air")) || !strings.Contains(w.Body.String(), `value="`+until+`"`) {
+		t.Errorf("one click on Pause: %d\n%s", w.Code, w.Body)
+	}
+	if w := linus.post("/my-macs/vol-air/limit"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), limitSentence("vol-air")) {
+		t.Errorf("one click on Limit: %d", w.Code)
+	}
+	if d := v.snapshot(); d.SitePause != nil || d.Limited {
+		t.Fatalf("one click changed the Mac: pause %+v, limited %v", d.SitePause, d.Limited)
+	}
+	linus.did("/my-macs/vol-air/pause", "until", until, "sure", "yes")
+	linus.did("/my-macs/vol-air/limit", "sure", "yes")
+	if d := v.snapshot(); d.SitePause == nil || d.SitePause.Until.IsZero() || !d.Limited {
+		t.Errorf("the second click: pause %+v, limited %v", d.SitePause, d.Limited)
 	}
 }

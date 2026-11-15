@@ -45,9 +45,9 @@
 </dl>
 <div class="controls" id="controls-{{.Name}}">
 {{if .PausedHere}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/resume")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Resume</button></form>
-{{else}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/pause")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><label class="dim">until <input type="datetime-local" name="until" title="The Mac's own time{{if .Zone}}, {{.Zone}}{{end}}. Empty: until you Resume."></label> <button class="button button-small button-plain" type="submit">Pause</button></form>
+{{else}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/pause")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><label class="dim">until <input type="datetime-local" name="until" title="The Mac's own time{{if .Zone}}, {{.Zone}}{{end}}. Empty: until you Resume."></label> <button class="button button-small button-plain" type="submit" data-sentence="{{.PauseSentence}}">Pause</button></form>
 {{end}}{{if .Limited}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/remove-limit")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Remove limit</button></form>
-{{else}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/limit")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small button-plain" type="submit">Limit to Qualification</button></form>
+{{else}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/limit")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small button-plain" type="submit" data-sentence="{{.LimitSentence}}">Limit to Qualification</button></form>
 {{end}}{{template "take" ($.Take (print "/my-macs/" .Name "/leave") "Leave" .LeaveSentence)}}
 <p class="dim">The site only takes away, and gives back only what it took. Pause and Limit stop a job that is running and end a Lease. A time is the Mac's own{{if .Zone}} ({{.Zone}}){{end}}; with none, Pause holds until you Resume.</p>
 </div>

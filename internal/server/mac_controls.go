@@ -5,7 +5,8 @@ package server
 // publishing on are `sudo lab-agent …` at the Mac). The site only takes
 // away, and undoes only what it took: Pause until a time or Resume, Limit
 // to Qualification until "Remove limit", and Leave. They are the buttons of
-// a Mac's card on My Macs, and work for the Mac's own Volunteer only.
+// a Mac's card on My Macs, and work for the Mac's own Volunteer only. Pause,
+// Limit and Leave take something away, so they ask twice.
 
 import (
 	"errors"
@@ -18,7 +19,7 @@ import (
 func init() {
 	addPage("POST /my-macs/{name}/pause", web.SignedIn, (*Server).pPauseMac)
 	addPage("POST /my-macs/{name}/resume", web.SignedIn, controlOf((*Server).resumeMac))
-	addPage("POST /my-macs/{name}/limit", web.SignedIn, controlOf((*Server).limitMac))
+	addPage("POST /my-macs/{name}/limit", web.SignedIn, (*Server).pLimitMac)
 	addPage("POST /my-macs/{name}/remove-limit", web.SignedIn, controlOf((*Server).unlimitMac))
 	addPage("POST /my-macs/{name}/leave", web.SignedIn, (*Server).pLeaveMac)
 	addPage("POST /people/{id}/enrollments/{mac}/end", web.Maintainers, (*Server).pEndEnrollment)
@@ -63,6 +64,20 @@ func leaveSentence(name string) string {
 	return "Leave: " + name + " leaves the lab now, any job on it stops, and the lab is removed from it when it next reaches the lab"
 }
 
+// pauseSentence and limitSentence are what Pause and Limit turn into: they
+// take a running job and a Lease away, so they ask twice.
+func pauseSentence(name string) string {
+	return "Pause: " + name + " takes nothing from the lab, any job on it stops, and its Lease ends"
+}
+
+func limitSentence(name string) string {
+	return "Limit to Qualification: any job on " + name + " stops, and its Lease ends"
+}
+
+// PauseSentence and LimitSentence are the card's, for its buttons.
+func (c macCard) PauseSentence() string { return pauseSentence(c.Name) }
+func (c macCard) LimitSentence() string { return limitSentence(c.Name) }
+
 func controlOf(control func(*Server, *dev, Person) error) func(*Server, http.ResponseWriter, *http.Request) {
 	return func(s *Server, w http.ResponseWriter, r *http.Request) {
 		if v := s.myMac(w, r); v != nil {
@@ -92,7 +107,22 @@ func (s *Server) pPauseMac(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if !s.sure(w, r, pauseSentence(v.snapshot().Name), myMacsPath(leaser(r))) {
+		return
+	}
 	s.controlDone(w, r, v, s.pauseMac(v, *PersonOf(r), until))
+}
+
+// pLimitMac is Limit to Qualification, which asks twice.
+func (s *Server) pLimitMac(w http.ResponseWriter, r *http.Request) {
+	v := s.myMac(w, r)
+	if v == nil {
+		return
+	}
+	if !s.sure(w, r, limitSentence(v.snapshot().Name), myMacsPath(leaser(r))) {
+		return
+	}
+	s.controlDone(w, r, v, s.limitMac(v, *PersonOf(r)))
 }
 
 // pLeaveMac is Leave, which asks twice.
