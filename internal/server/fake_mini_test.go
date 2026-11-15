@@ -49,6 +49,9 @@ type fakeMini struct {
 	resets int   // resets the tool sent
 	sent   []int // the RID of each, in order
 	down   bool  // the controller does not answer
+	// resetsAsked counts the reset requests that reached the controller,
+	// resetsEnded those it has answered or let go.
+	resetsAsked, resetsEnded int
 	// afterRead runs after the controller read a port for labd, with no lock
 	// held: a test changes the port between labd's look and the controller's.
 	afterRead func(rid int)
@@ -97,6 +100,16 @@ func newFakeMini(t *testing.T) *fakeMini {
 		if down {
 			http.Error(w, "stopped", http.StatusServiceUnavailable)
 			return
+		}
+		if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/reset") {
+			m.mu.Lock()
+			m.resetsAsked++
+			m.mu.Unlock()
+			defer func() {
+				m.mu.Lock()
+				m.resetsEnded++
+				m.mu.Unlock()
+			}()
 		}
 		ctl.Handler().ServeHTTP(w, r)
 	}))
@@ -167,6 +180,26 @@ func (m *fakeMini) resetsBegun() []int {
 }
 
 // resetsSent is how many resets the tool sent, and to which RIDs.
+// waitResetCalls waits up to five seconds for the reset requests that
+// reached the controller, asked, and those it has done with, ended, to be
+// as ok wants.
+func (m *fakeMini) waitResetCalls(t *testing.T, why string, ok func(asked, ended int) bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		asked, ended := m.resetsAsked, m.resetsEnded
+		m.mu.Unlock()
+		if ok(asked, ended) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: after 5s, %d reset requests reached the controller and %d ended", why, asked, ended)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func (m *fakeMini) resetsSent() (int, []int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
