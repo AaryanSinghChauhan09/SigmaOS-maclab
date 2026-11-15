@@ -444,17 +444,20 @@ tell() {
 # ops METHOD PATH: labd's answer on its ops socket.
 ops() { as_lab curl -fsS --max-time 20 --unix-socket "$OPS_SOCKET" -X "$1" "http://labd$2" 2>/dev/null; }
 
-# ops_status METHOD PATH: labd's answer in OPS_ANSWER and its HTTP status in
-# OPS_STATUS: 000 when the socket did not answer at all.
+# ops_status METHOD PATH: labd's answer in OPS_ANSWER, with no newline at
+# its end, and its HTTP status in OPS_STATUS: 000 when the socket did not
+# answer at all or the answer did not arrive whole (curl failed).
 OPS_ANSWER=""
 OPS_STATUS=""
 ops_status() {
-  local out
-  out="$(as_lab curl -sS --max-time 20 --unix-socket "$OPS_SOCKET" -X "$1" -w '\n%{http_code}' "http://labd$2" 2>/dev/null)" || true
+  local out code=0
+  out="$(as_lab curl -sS --max-time 20 --unix-socket "$OPS_SOCKET" -X "$1" -w '\n%{http_code}' "http://labd$2" 2>/dev/null)" || code=$?
   OPS_STATUS="${out##*$'\n'}"
   OPS_ANSWER="${out%$'\n'*}"
+  OPS_ANSWER="${OPS_ANSWER%$'\n'}"
   [[ $out == *$'\n'* ]] || OPS_ANSWER=""
   [[ $OPS_STATUS =~ ^[0-9]{3}$ ]] || OPS_STATUS=000
+  (( code == 0 )) || OPS_STATUS=000
 }
 
 DRAINING=0
@@ -494,7 +497,12 @@ drain_jobs() {
       lift_drain
       return 1
     fi
-    read -r jobs builds <<<"$OPS_ANSWER"
+    # The whole answer is the two counts, and nothing else.
+    if [[ $OPS_ANSWER =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
+      jobs="${BASH_REMATCH[1]}" builds="${BASH_REMATCH[2]}"
+    else
+      jobs="" builds=""
+    fi
     if [[ ! ${jobs:-} =~ ^[0-9]+$ || ! ${builds:-} =~ ^[0-9]+$ ]]; then
       NOT_DRAINED="labd's answer to the drain of jobs was not understood, so running jobs could not be kept whole"
       lift_drain
@@ -528,7 +536,7 @@ lift_drain() {
 # is not asked. No ops socket where the file names one, or an answer that
 # fails or does not read as the two parts, is wrong.
 parts_bad() {
-  local builder controller
+  local builder="" controller=""
   if ops_socket_missing; then
     echo "labd has no ops socket at $OPS_SOCKET, though its LaunchDaemon file names one"
     return 0
@@ -536,8 +544,11 @@ parts_bad() {
   [[ -S $OPS_SOCKET ]] || return 0
   ops_status GET /parts
   [[ $OPS_STATUS != 404 ]] || return 0
-  builder="$(awk '$1 == "builder" && NF == 2 { print $2 }' <<<"$OPS_ANSWER")"
-  controller="$(awk '$1 == "controller" && NF == 2 { print $2 }' <<<"$OPS_ANSWER")"
+  # The whole answer is one line for each part, and nothing else.
+  if [[ "$(awk 'END { print NR }' <<<"$OPS_ANSWER")" == 2 ]]; then
+    builder="$(awk '$1 == "builder" && NF == 2 { print $2 }' <<<"$OPS_ANSWER")"
+    controller="$(awk '$1 == "controller" && NF == 2 { print $2 }' <<<"$OPS_ANSWER")"
+  fi
   if [[ $OPS_STATUS != 200 || ! $builder =~ ^(ok|silent|none)$ || ! $controller =~ ^(ok|bad|none)$ ]]; then
     echo "labd did not say how the Builder and the Out-of-band controller are (status $OPS_STATUS on its ops socket)"
     return 0

@@ -85,7 +85,7 @@ func (m *mini) ops() *ops {
 					o.drain = o.drain[1:]
 				}
 			}
-			io.WriteString(w, answer+"\n")
+			cutShort(w, answer+"\n")
 		case "DELETE /drain":
 			io.WriteString(w, "lifted\n")
 		case "GET /parts":
@@ -97,7 +97,7 @@ func (m *mini) ops() *ops {
 				http.Error(w, "parts broke", http.StatusInternalServerError)
 				return
 			}
-			io.WriteString(w, o.parts)
+			cutShort(w, o.parts)
 		default:
 			http.NotFound(w, r)
 		}
@@ -106,6 +106,17 @@ func (m *mini) ops() *ops {
 	m.t.Cleanup(srv.Close)
 	m.env = append(m.env, "LAB_DRAIN_STEP=0", "LAB_PARTS_TRIES=2")
 	return o
+}
+
+// cutShort writes an answer; one that starts "cut:" is the rest of it, cut
+// off before the length it said it had.
+func cutShort(w http.ResponseWriter, answer string) {
+	if rest, ok := strings.CutPrefix(answer, "cut:"); ok {
+		w.Header().Set("Content-Length", fmt.Sprint(len(rest)+100))
+		io.WriteString(w, rest)
+		return
+	}
+	io.WriteString(w, answer)
 }
 
 // load marks a daemon as one the set-up has started.
@@ -316,6 +327,8 @@ func TestDeployStopsWhenTheDrainFails(t *testing.T) {
 	}{
 		{"a 500", http.StatusInternalServerError, ""},
 		{"an answer it does not understand", 0, "draining, sort of"},
+		{"counts with more after them", 0, "0 0\nand more"},
+		{"counts cut short", 0, "cut:0 0"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			m, k, r := deployed(t)
@@ -397,6 +410,8 @@ func TestDeployGoesBackWhenTheBuilderOrTheControllerIsNotWell(t *testing.T) {
 		{"500", "labd did not say how the Builder and the Out-of-band controller are"},
 		{"all is well\n", "labd did not say how the Builder and the Out-of-band controller are"},
 		{"builder ok\n", "labd did not say how the Builder and the Out-of-band controller are"},
+		{"builder ok\ncontroller ok\nbuilder silent\n", "labd did not say how the Builder and the Out-of-band controller are"},
+		{"cut:builder ok\ncontroller ok\n", "labd did not say how the Builder and the Out-of-band controller are"},
 	} {
 		t.Run(c.word, func(t *testing.T) {
 			m, k, r := deployed(t)
