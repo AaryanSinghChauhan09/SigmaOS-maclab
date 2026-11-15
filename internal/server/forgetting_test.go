@@ -765,3 +765,36 @@ func TestForgettingSweepsAFileWithALongLineWhole(t *testing.T) {
 		t.Errorf("swept: changed %v, %d lines, the long one %d bytes, last %q", changed, len(lines), len(lines[1]), lines[len(lines)-1])
 	}
 }
+
+// The files are swept before the record goes, and a file that cannot be
+// swept fails the forgetting: the person is still there to forget again,
+// and the second time takes them off the file too.
+func TestAFileTheForgettingCannotSweepFailsItAndItCanBeDoneAgain(t *testing.T) {
+	l := rolesLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	mini := l.addMac("ravi-mini", maintainerID)
+	mini.copyAudit([]api.AuditEntry{{Time: l.clock.Now(), Maintainer: "edith", Action: "screenshot", End: 40}})
+	audit := filepath.Join(l.dir, "audit")
+	if err := os.Chmod(audit, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(audit, 0o755) })
+
+	if w := ravi.post(personPath(edithID, "forget"), "sure", "yes"); w.Code == http.StatusSeeOther {
+		t.Errorf("a forgetting that could not sweep a file said done")
+	}
+	if !l.known(edithID) {
+		t.Fatal("the person is gone though a file still names her")
+	}
+	if err := os.Chmod(audit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ravi.did(personPath(edithID, "forget"), "sure", "yes")
+	if l.known(edithID) {
+		t.Error("forgetting again left the person")
+	}
+	if es, err := l.s.readAuditCopy("ravi-mini"); err != nil || len(es) != 1 || es[0].Maintainer != "" {
+		t.Errorf("labd's copy of the Audit log: %+v %v", es, err)
+	}
+}

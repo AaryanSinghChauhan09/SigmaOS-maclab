@@ -328,6 +328,11 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 	if err := s.forgetInJobs(f); err != nil {
 		return fmt.Errorf("the jobs: %w", err)
 	}
+	// The files before the record: one that cannot be swept fails the
+	// forgetting while the person is still there to forget again.
+	if err := s.forgetInFilesOf(f); err != nil {
+		return err
+	}
 	if err := s.reports.Forget(k.AccountID, k.Handle); err != nil {
 		return fmt.Errorf("reports.db: %w", err)
 	}
@@ -335,14 +340,25 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 		return fmt.Errorf("labd.db: %w", err)
 	}
 	s.forgetInFleet(f)
+	// Once more, for what was written to them while the databases were.
+	if err := s.forgetInFilesOf(f); err != nil {
+		s.log.Printf("a forgetting, once more: %v", err)
+	}
+	return nil
+}
+
+// forgetInFilesOf takes the person off the files labd keeps beside its
+// databases: its copies of Audit logs, the frozen Releases' notes and the
+// caller log.
+func (s *Server) forgetInFilesOf(f forgetting) error {
 	if err := forgetInFiles(filepath.Join(s.cfg.DataDir, "audit"), f); err != nil {
-		s.log.Printf("a forgetting, the Audit log copies: %v", err)
+		return fmt.Errorf("the Audit log copies: %w", err)
 	}
 	if err := forgetInFrozen(filepath.Join(s.cfg.DataDir, "frozen"), f); err != nil {
-		s.log.Printf("a forgetting, the frozen Releases: %v", err)
+		return fmt.Errorf("the frozen Releases: %w", err)
 	}
 	if err := s.callers.forget(f); err != nil {
-		s.log.Printf("a forgetting, the caller log: %v", err)
+		return fmt.Errorf("the caller log: %w", err)
 	}
 	return nil
 }
