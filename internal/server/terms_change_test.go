@@ -200,7 +200,6 @@ func TestTheMacsOwnEnrollmentSaysChangedTermsAreWaiting(t *testing.T) {
 	}
 }
 
-
 // storedDevice is the Mac's row as labd saved it.
 func storedDevice(t *testing.T, s *Server, name string) api.Device {
 	t.Helper()
