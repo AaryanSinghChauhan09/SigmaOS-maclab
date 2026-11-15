@@ -220,6 +220,9 @@ func (s *Server) hReset(w http.ResponseWriter, r *http.Request, rid int) {
 			return
 		}
 	}
+	// 102 tells labd the reset is going out: from here it waits for the
+	// answer however long it was willing to wait for its turn.
+	w.WriteHeader(http.StatusProcessing)
 	if out, err := s.run(r.Context(), rid, "reboot"); err != nil {
 		http.Error(w, fmt.Sprintf("the reset tool failed on RID %d: %v: %s", rid, err, lastLine(out)), http.StatusBadGateway)
 		return

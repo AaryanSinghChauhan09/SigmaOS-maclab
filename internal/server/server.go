@@ -43,6 +43,9 @@ type Config struct {
 	Interval     time.Duration // agent heartbeat interval
 	BootTimeout  time.Duration // default time for a Mac to come back after a reboot
 	OfflineAfter time.Duration
+	// ResetWait is how long a person's Hard reset may wait its turn at the
+	// Out-of-band controller; zero is resetWait.
+	ResetWait time.Duration
 	// AliveWindow and QuietGrace are timeouts that assume a LAN, as
 	// StageTimeout below does; a Mac far from labd needs them longer. Zero
 	// keeps the LAN default; labd's flags default to remote-sized values.
@@ -276,6 +279,9 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	}
 	if cfg.BootTimeout == 0 {
 		cfg.BootTimeout = 4 * time.Minute
+	}
+	if cfg.ResetWait == 0 {
+		cfg.ResetWait = resetWait
 	}
 	if cfg.StageTimeout == 0 {
 		cfg.StageTimeout = 20 * time.Minute
@@ -1513,7 +1519,7 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person, by string) (
 	}
 	v.resetting = true
 	v.mu.Unlock()
-	rctx, cancel := context.WithTimeout(ctx, resetWait)
+	rctx, cancel := context.WithTimeout(ctx, s.cfg.ResetWait)
 	sent := sentReset{at: s.now(), prev: prev}
 	sent.port, err = v.resetOOB(rctx)
 	cancel()

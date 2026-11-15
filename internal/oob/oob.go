@@ -11,8 +11,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/textproto"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -157,11 +160,54 @@ func (c *Client) Probe(ctx context.Context, rid int) (Port, error) {
 // Reset sends a Hard reset to a port. With seen, the controller sends it only
 // while the port still shows that state, and answers *Changed otherwise.
 // With nil the port alone is named: a Proving reset.
+//
+// ctx bounds the wait for the controller's turn. Once the controller says
+// the reset is going out (102), its answer is waited for whatever ctx does:
+// a reset that went out is never reported as not sent.
 func (c *Client) Reset(ctx context.Context, rid int, seen *Seen) error {
 	var body []byte
 	if seen != nil {
 		body, _ = json.Marshal(seen)
 	}
-	_, err := c.do(ctx, "POST", fmt.Sprintf("/v1/ports/%d/reset", rid), body, 2*time.Minute)
+	run, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	var mu sync.Mutex
+	sending := false
+	stop := context.AfterFunc(ctx, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !sending {
+			cancel()
+		}
+	})
+	defer stop()
+	run = httptrace.WithClientTrace(run, &httptrace.ClientTrace{Got1xxResponse: func(code int, _ textproto.MIMEHeader) error {
+		if code == http.StatusProcessing {
+			mu.Lock()
+			sending = true
+			mu.Unlock()
+		}
+		return nil
+	}})
+	_, err := c.do(run, "POST", fmt.Sprintf("/v1/ports/%d/reset", rid), body, 2*time.Minute)
+	mu.Lock()
+	sent := sending
+	mu.Unlock()
+	if err != nil && !sent && ctx.Err() != nil {
+		return &NotSent{Err: ctx.Err()}
+	}
 	return err
 }
+
+// NotSent is a reset given up before the controller began it: its caller
+// stopped waiting for its turn.
+type NotSent struct{ Err error }
+
+func (e *NotSent) Error() string {
+	if errors.Is(e.Err, context.DeadlineExceeded) {
+		return "its turn at the Out-of-band controller did not come in time"
+	}
+	return "it was called off while it waited for the Out-of-band controller"
+}
+
+func (e *NotSent) Unwrap() error { return e.Err }

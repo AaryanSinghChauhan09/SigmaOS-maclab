@@ -632,3 +632,41 @@ func TestAControllerNamedInAMacsRecordIsNeverAsked(t *testing.T) {
 		t.Fatalf("a record given a controller of its own: %s %s", r.Status, body)
 	}
 }
+
+// A person's Hard reset waits its turn at the controller for ResetWait at
+// most, and no longer once the controller is sending it: a second reset
+// that gets its turn late in its wait is answered sent, the ladder runs and
+// the Mac is reset once.
+func TestAResetThatGetsItsTurnLateIsSentAndTheLadderRuns(t *testing.T) {
+	l := sightLab(t, labConfig{config: func(c *Config) { c.ResetWait = time.Second }})
+	l.baseline()
+	other := l.addMac("m2-max")
+	l.oob.plug(portLeft, other, "m2-max", productM2Max)
+	l.sight()
+	l.wantCable("m2-max", api.CableSighted)
+	l.oob.slow(800 * time.Millisecond)
+
+	first := make(chan string, 1)
+	go func() { r, body := l.resetAs(harnessToken, "m2-max", ""); first <- r.Status + " " + body }()
+	for end := time.Now().Add(5 * time.Second); len(l.oob.resetsBegun()) == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the first reset never reached the tool")
+		}
+	}
+	boot := l.bootOf(l.name)
+	r, body := l.resetAs(harnessToken, l.name, "")
+	if r.StatusCode != http.StatusOK || !strings.Contains(body, "Hard reset sent to "+l.name+" through the right port") {
+		t.Fatalf("a Hard reset that got its turn 0.8 s into a 1 s wait: %s %s", r.Status, body)
+	}
+	if got := <-first; !strings.Contains(got, "Hard reset sent to m2-max") {
+		t.Fatalf("the first reset: %s", got)
+	}
+	l.waitDevice(func(d api.Device) bool { return d.BootID != boot && d.State == api.StateReady })
+	for end := time.Now().Add(5 * time.Second); !strings.Contains(l.logs.String(), l.name+": Hard reset by "+harnessMaintainer+": ok=true"); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatalf("the ladder did not see %s back:\n%s", l.name, l.logs.String())
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	l.wantResets("each Mac once", portLeft, portRight)
+}

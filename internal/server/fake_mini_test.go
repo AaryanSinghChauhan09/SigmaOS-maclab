@@ -56,8 +56,12 @@ type fakeMini struct {
 	// probing is closed when the first nop held began.
 	hold    chan struct{}
 	probing chan struct{}
-	client  *oob.Client
-	log     *logBuf
+	// toolTime is how long each reset takes the tool, and began the RID of
+	// each reset it began.
+	toolTime time.Duration
+	began    []int
+	client   *oob.Client
+	log      *logBuf
 }
 
 // holdProbes makes the tool's next nop run until release is called: a tool
@@ -143,6 +147,20 @@ func (m *fakeMini) stop(down bool) {
 	m.down = down
 }
 
+// slow has each reset take the tool d.
+func (m *fakeMini) slow(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.toolTime = d
+}
+
+// resetsBegun is the RIDs of the resets the tool began, in order.
+func (m *fakeMini) resetsBegun() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]int(nil), m.began...)
+}
+
 // resetsSent is how many resets the tool sent, and to which RIDs.
 func (m *fakeMini) resetsSent() (int, []int) {
 	m.mu.Lock()
@@ -189,6 +207,11 @@ func (m *fakeMini) Run(_ context.Context, rid int, command string) (string, erro
 		}
 		return "nop", nil
 	}
+	m.mu.Lock()
+	m.began = append(m.began, rid)
+	took := m.toolTime
+	m.mu.Unlock()
+	time.Sleep(took)
 	m.mu.Lock()
 	m.resets++
 	m.sent = append(m.sent, rid)

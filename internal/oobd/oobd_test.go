@@ -517,3 +517,46 @@ func TestAResetReachesTheProgramWithItsValidatedRID(t *testing.T) {
 		t.Fatalf("the program was run with:\n%s", got)
 	}
 }
+
+// labd's wait bounds its turn at the controller, not the tool run: a reset
+// the controller began is answered as sent after its caller's deadline, and
+// one still waiting at that deadline is never sent.
+func TestAResetIsWaitedForOnceTheControllerBeganIt(t *testing.T) {
+	r := newRig(t)
+	r.holdTool()
+	file := filepath.Join(t.TempDir(), "oobd.token")
+	if err := os.WriteFile(file, []byte(testToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := oob.NewClient(r.srv.URL, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		sent <- c.Reset(ctx, 2, nil)
+	}()
+	<-r.tool.started
+	waited := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		waited <- c.Reset(ctx, 0, nil)
+	}()
+	time.Sleep(600 * time.Millisecond)
+	r.tool.hold <- struct{}{}
+	if err := <-sent; err != nil {
+		t.Fatalf("a reset the tool ran, its caller's deadline past: %v", err)
+	}
+	var unsent *oob.NotSent
+	if err := <-waited; !errors.As(err, &unsent) || !strings.Contains(err.Error(), "did not come in time") {
+		t.Fatalf("a reset whose turn came after its caller's deadline: %v", err)
+	}
+	select {
+	case run := <-r.tool.started:
+		t.Fatalf("%v was sent after its caller stopped waiting", run)
+	case <-time.After(300 * time.Millisecond):
+	}
+}

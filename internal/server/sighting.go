@@ -450,7 +450,10 @@ func (s *Server) hardReset(ctx context.Context, v *dev) (port string, err error)
 	}
 	err = s.cfg.OOB.Reset(ctx, sg.rid, &sg.seen)
 	var moved *oob.Changed
+	var unsent *oob.NotSent
 	switch {
+	case errors.As(err, &unsent):
+		return port, refuse(http.StatusServiceUnavailable, "no Hard reset was sent: %v", unsent)
 	case errors.As(err, &moved):
 		s.cables.drop(name, moved.Reason, s.now())
 		s.log.Printf("sighting: %s is no longer sighted: %s", name, moved.Reason)
