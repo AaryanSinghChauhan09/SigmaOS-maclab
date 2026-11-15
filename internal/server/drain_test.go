@@ -287,6 +287,90 @@ func TestAStopWhileASourceJobPreparesKeepsItQueued(t *testing.T) {
 	again.cancelJob(j.ID, "")
 }
 
+// A person cancels a job that waits on its Mac, and labd stops before its
+// runner has seen the cancel: the cancel was answered, so it is in the store
+// already, and the job never runs, in this labd or the next.
+func TestACancelAnsweredBeforeAStopIsNeverUndone(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	v := l.s.dev(l.name)
+	reached, release := make(chan struct{}), make(chan struct{})
+	v.mu.Lock()
+	v.beforeSend = func() {
+		v.mu.Lock()
+		v.beforeSend = nil
+		v.mu.Unlock()
+		close(reached)
+		<-release
+	}
+	v.mu.Unlock()
+	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-canceled behavior=ok")})
+	select {
+	case <-reached:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the job never got as far as its send")
+	}
+	if r, body := l.get("POST", "/api/jobs/"+id+"/cancel"); r.StatusCode != 200 {
+		t.Fatalf("cancel: %s %s", r.Status, body)
+	}
+	if j, _ := l.s.store.job(id); !j.Canceled && j.State != api.JobDone {
+		t.Errorf("the cancel was answered and the store does not have it: %s", j.State)
+	}
+	opsOf(l.s, "POST", "/drain") // a Deploy drains, then stops labd
+	l.cancel()
+	close(release)
+	idleAfterStop(t, l.s)
+
+	again := restartLabd(t, l.s)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		j, _ := again.store.job(id)
+		if j.State == api.JobDone {
+			if j.Outcome != api.OutcomeCanceled || j.Result.Booted {
+				t.Fatalf("the canceled job ended %s (booted %v): %s", j.Outcome, j.Result.Booted, j.Summary)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the restart the canceled job is %s: %v", j.State, j.Events)
+		}
+	}
+}
+
+// A job whose cancel is in the store, still queued when labd stopped, is
+// ended as canceled by the next labd, not run.
+func TestAStoredCancelIsHonouredAtTheStart(t *testing.T) {
+	dir := t.TempDir()
+	st, err := openStore(filepath.Join(dir, "labd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := api.Device{ID: "1", Name: "canceled-on", State: api.StateReady, KnownGood: "7.2", Kernel: "7.2", LastSeen: time.Now()}
+	st.saveDevice(&d, "h1")
+	st.saveJob(&api.Job{ID: "j-asked", DeviceID: "1", Spec: api.JobSpec{Device: d.Name, Kernel: strings.Repeat("c", 64)},
+		State: api.JobQueued, Canceled: true, Created: time.Now()})
+	st.db.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := newWith(harnessMaintainer, "lab_mtok", ctx, Config{DataDir: dir, AliveWindow: time.Hour}, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		j, _ := s.store.job("j-asked")
+		if j.State == api.JobDone {
+			if j.Outcome != api.OutcomeCanceled {
+				t.Fatalf("the job canceled before the stop ended %s: %s", j.Outcome, j.Summary)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the job canceled before the stop is %s: %v", j.State, j.Events)
+		}
+	}
+	cancel()
+	idleAfterStop(t, s)
+}
+
 // While a person's Hard reset waits for the controller the Mac takes no
 // job, which the reset would cut short; the job is sent once it has gone.
 func TestAJobWaitsWhileAHardResetIsOnItsWay(t *testing.T) {

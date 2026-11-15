@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/agent"
@@ -49,6 +50,8 @@ type jobRun struct {
 	noAppleWDT bool // the test kernel was built without apple_wdt
 
 	volunteerTold bool // a Volunteer was told this job is starting, so they are told when it is done
+
+	cancel *jobCancel // a person's cancel, nil for a run no Mac's loop started
 }
 
 func (r *jobRun) ev(format string, args ...any) {
@@ -81,11 +84,13 @@ func (s *Server) deviceLoop(v *dev) {
 			// Its cancel is set before it is read again: cancelJob either
 			// finds the cancel or has marked the job done by that read.
 			ctx, cancel := context.WithCancel(s.ctx)
+			c := &jobCancel{}
 			s.mu.Lock()
-			s.cancels[id] = cancel
+			s.cancels[id] = func() { c.ask(s, v, id); cancel() }
 			s.mu.Unlock()
 			if j, err = s.store.job(id); err == nil && j.State != api.JobDone {
-				s.runJob(ctx, v, j)
+				c.hold(j)
+				s.runJobAsked(ctx, v, j, c)
 			}
 			cancel()
 			s.mu.Lock()
@@ -111,8 +116,67 @@ func (s *Server) deviceLoop(v *dev) {
 	}
 }
 
-func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
-	r := &jobRun{s: s, v: v, j: j, boot: s.cfg.BootTimeout}
+// jobCancel is a cancel asked of the job a Mac's loop has taken. It is
+// stored before cancelJob answers, on the copy of the job its run saves, so
+// no later save of the run writes it away; and the run honours it where a
+// stop would otherwise keep the job for the next labd.
+type jobCancel struct {
+	mu    sync.Mutex
+	asked bool
+	j     *api.Job // the run's copy, once it has one
+}
+
+// ask records the cancel. A job already sent to its Mac is not marked: no
+// stop keeps it, and its outcome says what the cancel did.
+func (c *jobCancel) ask(s *Server, v *dev, id string) {
+	c.mu.Lock()
+	c.asked = true
+	j := c.j
+	c.mu.Unlock()
+	if v.snapshot().ActiveJob == id {
+		return
+	}
+	mark := func(j *api.Job) {
+		if j.State != api.JobDone {
+			j.Canceled = true
+		}
+	}
+	if j != nil {
+		s.updateJob(j, mark)
+	} else {
+		s.updateJobByID(id, mark) // hold, which comes after, finds it asked
+	}
+}
+
+// hold gives c the run's copy of the job, a cancel stored before included.
+func (c *jobCancel) hold(j *api.Job) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.asked && j.State != api.JobDone {
+		j.Canceled = true
+	}
+	c.asked = c.asked || j.Canceled
+	c.j = j
+}
+
+func (c *jobCancel) wasAsked() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.asked
+}
+
+func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) { s.runJobAsked(ctx, v, j, nil) }
+
+func (s *Server) runJobAsked(ctx context.Context, v *dev, j *api.Job, c *jobCancel) {
+	r := &jobRun{s: s, v: v, j: j, boot: s.cfg.BootTimeout, cancel: c}
+	if r.cancel.wasAsked() {
+		// canceled before labd stopped, and the job kept then
+		r.finish(api.OutcomeCanceled, "canceled before it started")
+		return
+	}
 	// A job runs only on the enrollment it was submitted for: never on a Mac
 	// that took the name later, nor, when labd didn't record which, on any.
 	v.mu.Lock()
@@ -149,6 +213,10 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		// row is gone and the job has no Mac to run on.
 		if errors.Is(err, errForgotten) {
 			r.finish(api.OutcomeCanceled, "not run: "+j.Spec.Device+" left the lab before the job started")
+			return
+		}
+		if ctx.Err() != nil {
+			r.finish(api.OutcomeCanceled, "canceled before device commands")
 			return
 		}
 		r.finish(api.OutcomeInfra, "recovery mode admission failed before device commands: "+err.Error())
@@ -193,6 +261,9 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			// when labd stops: whatever they say then, the job was never sent.
 			if r.kept() {
 				return
+			}
+			if ctx.Err() != nil && outcome != api.OutcomeCanceled {
+				outcome, summary = api.OutcomeCanceled, "canceled while preparing: "+summary
 			}
 			if why := v.leaving(); why != "" {
 				outcome, summary = api.OutcomeCanceled, "canceled: "+why
@@ -520,7 +591,8 @@ func (s *Server) stopping() bool { return s.ctx.Err() != nil }
 // kept is whether the job, not yet sent to its Mac, is left unfinished in
 // the store for the next labd to queue again, as it is when labd stops:
 // the stop cut short its preparation or its wait, not the job.
-func (r *jobRun) kept() bool { return r.s.stopping() }
+// A cancel asked before is honoured instead: the job ends canceled.
+func (r *jobRun) kept() bool { return r.s.stopping() && !r.cancel.wasAsked() }
 
 func (r *jobRun) finishAt(outcome, summary string, at time.Time) {
 	// The Mac's authority over the job ends before anyone can see the job
