@@ -120,3 +120,33 @@ func TestAKnownSetsOmarchyPackageAloneLinksNoRelease(t *testing.T) {
 		t.Errorf("the sets of a Release of the omarchy package alone: %v", got)
 	}
 }
+
+// onlyPackages makes the run list exactly these packages, in order.
+func onlyPackages(doc *Object, pairs ...string) *Object {
+	var list []any
+	for i := 0; i+1 < len(pairs); i += 2 {
+		list = append(list, object("name", pairs[i], "version", pairs[i+1]))
+	}
+	at(doc, "system").(*Object).set("packages", list)
+	return doc
+}
+
+// Spec: "One package alone ... links nothing", whatever the run names. A
+// Verified run that lists one package links no Release of that package.
+func TestAVerifiedRunNamingOnePackageLinksNoRelease(t *testing.T) {
+	s := newShelf(t)
+	s.add(onlyPackages(onSetNamed(t, "edge-1"), "omarchy", "3.1.0-1"), "verified:a")
+	s.add(onlyPackages(onSetNamed(t, "edge-2"), "linux-aurora", "7.1.12.aurora1-1"), "verified:b")
+	p := s.published()
+	for set, release := range map[string]map[string]string{
+		"edge-1": {"omarchy": "3.1.0-1"},
+		"edge-2": {"linux-aurora": "7.1.12.aurora1-1"},
+	} {
+		if p.CandidateSet(set).Carries(release) {
+			t.Errorf("a Release of %v alone is %s's, whose Verified run names only it", release, set)
+		}
+		if got := p.SetsCarrying(release); len(got) != 0 {
+			t.Errorf("the sets of a Release of %v alone: %v", release, got)
+		}
+	}
+}

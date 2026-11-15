@@ -104,9 +104,10 @@ func (s *CandidateSet) VerifiedRuns() []*Run {
 // is this set's: a Verified run on the set names every package of the
 // Release at the Release's version, and the Release every package the run
 // names. A package alone, the omarchy package the lab knows the set by
-// included, links nothing. Community runs link nothing.
+// included, links nothing, even when the run names only it. Community runs
+// link nothing.
 func (s *CandidateSet) Carries(packages map[string]string) bool {
-	if len(packages) == 0 {
+	if len(packages) < 2 {
 		return false
 	}
 	for _, run := range s.VerifiedRuns() {
