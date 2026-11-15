@@ -792,8 +792,14 @@ func TestTheWayBackBeforeStep25(t *testing.T) {
 	if out, _ := d.script("", "day", "--where", "--state", d.state); !strings.Contains(out, "next is step 18") {
 		t.Errorf("after the way back the day does not start again at step 18: %s", out)
 	}
-	if exists(d.sshLog) || len(o.writes) != 0 {
-		t.Errorf("the way back went to the mini or wrote to Cloudflare")
+	// The mini is only asked where the lab is.
+	for _, line := range strings.Split(strings.TrimSpace(read(t, d.sshLog)), "\n") {
+		if line != "ssh -t owner@mini.test sudo ~/lab-cutover/open stage" {
+			t.Errorf("the way back asked the mini: %s", line)
+		}
+	}
+	if len(o.writes) != 0 {
+		t.Errorf("the way back wrote to Cloudflare")
 	}
 	// Step 25 is the point of no return: by the record, and by what the Lab address says.
 	d.days("18", "19", "20", "21", "22a", "22", "23", "24", "24a", "25a")
@@ -1025,5 +1031,29 @@ func TestALostOpeningIsTakenFromTheMiniAndTheDayGoesOn(t *testing.T) {
 	d2.stops(1, "", []string{"--go"}, "the mini says the lab is in Preview")
 	if d2.done() != "18 19 20 21 22a 22 23 24 24a" || d2.o.purges != 0 {
 		t.Errorf("the record %q, %d purges", d2.done(), d2.o.purges)
+	}
+}
+
+// The way back asks the mini itself: an opening that did not reach the
+// day's record, while the Lab address is Dark, is still past the point of
+// no return.
+func TestTheWayBackAsksTheMiniWhetherTheLabOpened(t *testing.T) {
+	m, _ := opening(t, 14)
+	m.ok("open", "--m-team", "14")
+	d := newDay(t, m)
+	o := d.o
+	o.set(func() { o.stage, o.siteUp, o.app = "dark", false, existingApp })
+	d.days(strings.Fields("18 19 20 21 22a 22 23 24 24a")...)
+	for _, args := range [][]string{{"--run"}, {"--run", "--done"}} {
+		out, code := d.script("", "back", append([]string{"--state", d.state, "--mini", "owner@mini.test"}, args...)...)
+		if code != 1 || !strings.Contains(out, "the mini says the lab opened") || !strings.Contains(out, "point of no return") {
+			t.Errorf("back %q with the lab open on the mini and Dark outside: exit %d\n%s", args, code, out)
+		}
+	}
+	if out, code := d.script("", "back", "--state", d.state, "--run"); code != 1 || !strings.Contains(out, "give --mini USER@HOST") {
+		t.Errorf("back with no mini: exit %d\n%s", code, out)
+	}
+	if d.done() != "18 19 20 21 22a 22 23 24 24a" {
+		t.Errorf("the record changed: %q", d.done())
 	}
 }

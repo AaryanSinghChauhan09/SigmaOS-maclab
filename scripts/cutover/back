@@ -8,8 +8,9 @@
 #   back --run --done    the owner's part is done: check it, and put the
 #                        day's record back to before the Freeze
 #
-#   --mini USER@HOST     the mini, for the line that gives the lab the
-#                        development OAuth app again
+#   --mini USER@HOST     the mini, which is asked whether the lab is in
+#                        Preview still, and for the line that gives the lab
+#                        the development OAuth app again
 #   --state FILE         the day's record (the one scripts/cutover/day keeps)
 #
 # It refuses once the lab has opened: step 25 is the point of no return,
@@ -23,7 +24,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/cutover/owner.sh
 . "$here/owner.sh"
 
-usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 mode=dry
 finished=0
@@ -68,7 +69,7 @@ EOF
 
 if [[ $mode == dry ]]; then
   say "a dry run of the way back. Nothing is asked of anything."
-  echo "  would check: the day's record does not hold the opening (step 25), and $ADDRESS still answers as a lab in Preview"
+  echo "  would check: the day's record does not hold the opening (step 25), $ADDRESS does not answer as an open lab, and the mini says the lab is in Preview ($(mini_line "open stage"))"
   echo "  would say, for the steps the day's record holds:"
   owners all
   echo "  would check, at --done: $OLD/ answers 200 again; the lab's Sign in link no longer names the existing OAuth app"
@@ -81,6 +82,15 @@ if is_done 25a || is_done 25; then
 fi
 is="$(lab_from_outside)"
 [[ $is != open ]] || fail "$ADDRESS answers as an open lab: step 25 is the point of no return. There is no way back; from here problems are fixed forward"
+# The Lab address can be Dark, and an opening's line can miss the day's
+# record: only the mini says for sure that the lab has not opened.
+[[ -n $MINI ]] || fail "the mini says whether the lab has opened: give --mini USER@HOST. Nothing was done"
+is="$(mini_stage)" || is=""
+case "$is" in
+  preview) ;;
+  "live "*) fail "the mini says the lab opened (${is#live }): step 25 is the point of no return. There is no way back; from here problems are fixed forward" ;;
+  *) fail "the mini could not say that the lab is in Preview (${is:-no answer}): there is a way back only from Preview. Ask it: $(mini_line "open stage")" ;;
+esac
 if ! is_done 20 && ! is_done 23; then
   say "the day's record holds neither the Freeze nor the callback's move: nothing public has changed, and there is nothing to take back"
   exit 0
