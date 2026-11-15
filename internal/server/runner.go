@@ -304,6 +304,10 @@ func (s *Server) runJobAsked(ctx context.Context, v *dev, j *api.Job, c *jobCanc
 			// it would cut the job's power
 			return fmt.Sprintf("waiting: a Hard reset of %s is on its way", v.d.Name)
 		}
+		if v.proving {
+			// its reset would cut the job
+			return fmt.Sprintf("waiting: a Proving reset of %s is under way", v.d.Name)
+		}
 		if v.updating != nil {
 			return fmt.Sprintf("waiting: %s's %s", v.d.Name, agentBeingUpdated)
 		}

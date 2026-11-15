@@ -524,6 +524,24 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 		return nil, refuse(http.StatusConflict, "no Proving reset was sent: another one is under way, and two at once prove nothing")
 	}
 	defer s.cables.proving.Unlock()
+	// Admitted under v.mu, which a job's dispatch holds: from here no job is
+	// given the Mac until the Proving reset has ended, however it ends.
+	v.mu.Lock()
+	d = v.d
+	busy := d.State == api.StateBusy || d.State == api.StateRecovering || d.ActiveJob != "" || v.resetting
+	if !busy {
+		v.proving = true
+	}
+	v.mu.Unlock()
+	if busy {
+		return nil, refuse(http.StatusConflict, "%s is busy; cancel its job first", name)
+	}
+	defer func() {
+		v.mu.Lock()
+		v.proving = false
+		v.bump()
+		v.mu.Unlock()
+	}()
 	ctx := s.ctx
 	s.sight(ctx)
 	s.cables.mu.Lock()

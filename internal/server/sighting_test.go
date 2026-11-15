@@ -1018,3 +1018,48 @@ func TestARetirementDuringAWaitingProvingResetSendsNoReset(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	l.wantResets("the Mac was retired while its Proving reset waited")
 }
+
+// A Proving reset holds the Mac from the moment it is admitted: a job that
+// comes while the reset reads the controller waits for it, and is never the
+// one the reset cuts.
+func TestAJobQueuedWhileAProvingResetReadsThePortsWaitsForIt(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	max := l.addMac("m2-max")
+	l.oob.plug(portMiddle, max, "", productM2Max)
+	l.sight()
+	reached, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	l.oob.onRead(func(rid int) {
+		if rid == portMiddle {
+			once.Do(func() { close(reached); <-release })
+		}
+	})
+	v := l.s.dev("m2-max")
+	proved := make(chan error, 1)
+	go func() { _, err := l.s.prove(v, portMiddle, harnessMaintainer); proved <- err }()
+	select {
+	case <-reached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the Proving reset never read the ports")
+	}
+	j, _, err := l.s.Submit(api.JobSpec{Device: "m2-max", Baseline: true})
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if d := v.snapshot(); d.ActiveJob != "" {
+			close(release)
+			t.Fatalf("job %s was given the Mac while its Proving reset read the ports", d.ActiveJob)
+		}
+	}
+	close(release)
+	if err := <-proved; err != nil {
+		t.Fatalf("the Proving reset: %v", err)
+	}
+	l.wantResets("the Proving reset", portMiddle)
+	if got := l.wait(j.ID, 60*time.Second); got.Outcome != api.OutcomePass {
+		t.Errorf("the job that waited for the Proving reset: %s %s", got.Outcome, got.Summary)
+	}
+}

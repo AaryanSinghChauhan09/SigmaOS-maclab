@@ -61,6 +61,8 @@ type dev struct {
 	oobCallCancel context.CancelFunc
 	// resetting: a person's Hard reset is on its way to the controller.
 	resetting bool
+	// proving: a Proving reset of the Mac was admitted and has not ended.
+	proving bool
 	// updating: lab agent-update holds the Mac (agent_software.go).
 	updating *agentUpdating
 	// agentStart is the api.Checkin.AgentStart labd last heard, and
