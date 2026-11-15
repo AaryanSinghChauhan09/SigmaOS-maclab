@@ -93,14 +93,19 @@ var out io.Writer = os.Stdout
 
 func say(key string, value any) { fmt.Fprintf(out, "%s=%v\n", key, value) }
 
+// credential is a token the lab hands out: a builder's, a Lab token, a Join
+// command's.
+var credential = regexp.MustCompile(`\b(bldr|lab|enr)_[0-9a-f]{16,}`)
+
 // plain is what a caller said, fit for a record: one line of plain
-// characters, and never a page.
+// characters, never a page and never a credential.
 func plain(b []byte) string {
 	head := strings.ToLower(string(b[:min(len(b), 512)]))
 	if strings.Contains(head, "<!doctype") || strings.Contains(head, "<html") || strings.Contains(head, "<body") {
 		return "a page, not shown"
 	}
 	line, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
+	line = credential.ReplaceAllString(line, "(a credential, not shown)")
 	var o strings.Builder
 	for _, r := range line {
 		if r < ' ' || r > '~' || r == '<' || r == '>' {
