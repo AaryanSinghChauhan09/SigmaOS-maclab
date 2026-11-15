@@ -136,6 +136,7 @@ type Sim struct {
 	leftLabs  int
 
 	testLength time.Duration    // see SetTestLength
+	testHold   chan struct{}    // see HoldTests
 	inhibitors map[int][]string // held inhibitors' --what names, by token; a boot clears them
 	inhibitSeq int
 }
@@ -747,6 +748,28 @@ func (s *Sim) SetTestLength(d time.Duration) {
 	s.testLength = d
 }
 
+// HoldTests makes every test the Sim runs wait until release is called,
+// unless its context ends or its boot ends first, as SetTestLength does: a
+// job that must hold the Mac while something else happens holds it however
+// slowly that happens. Safe to call while the agent runs.
+func (s *Sim) HoldTests() (release func()) {
+	hold := make(chan struct{})
+	s.mu.Lock()
+	s.testHold = hold
+	s.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			if s.testHold == hold {
+				s.testHold = nil
+			}
+			s.mu.Unlock()
+			close(hold)
+		})
+	}
+}
+
 // InhibitSuspend takes the inhibitor the real Mac's command line takes.
 func (s *Sim) InhibitSuspend(why string) (func(), error) {
 	var what []string
@@ -789,9 +812,18 @@ func (s *Sim) Inhibitors() []string {
 
 func (s *Sim) RunTest(ctx context.Context, job string, t api.TestSpec, fetch Fetcher, quiet Quieter, outDir string) api.TestResult {
 	s.mu.Lock()
-	b, length, down := s.behavior, s.testLength, s.down
+	b, length, down, hold := s.behavior, s.testLength, s.down, s.testHold
 	s.tested = true
 	s.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return api.TestResult{Name: t.Name, ExitCode: -1, Error: "stopped: " + context.Cause(ctx).Error()}
+		case <-down:
+			return api.TestResult{Name: t.Name, Error: "machine went away"}
+		}
+	}
 	if length > 0 {
 		wait := time.NewTimer(length)
 		defer wait.Stop()

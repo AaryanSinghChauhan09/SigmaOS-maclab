@@ -28,7 +28,8 @@ func TestALeaseSetsAsideJobsQueuedBeforeIt(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
 	joshua := l.addMaintainer(harnessToken, "joshua")
-	l.sim.SetTestLength(3 * time.Second)
+	release := l.sim.HoldTests() // busy holds the Mac until the lease is taken
+	t.Cleanup(release)
 	long := []api.TestSpec{{Name: "long-work", Builtin: "x"}}
 
 	busy := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-busy behavior=ok"), Tests: long, Holder: "ada@laptop"})
@@ -44,6 +45,7 @@ func TestALeaseSetsAsideJobsQueuedBeforeIt(t *testing.T) {
 		t.Fatalf("joshua's job during the lease: %d %s", code, body)
 	}
 	mine := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-mine behavior=ok"), Holder: "ada@laptop"})
+	release()
 
 	l.expect(l.jobAPI(busy, 60*time.Second), api.OutcomePass)
 	l.expect(l.jobAPI(mine, 60*time.Second), api.OutcomePass)
@@ -70,11 +72,12 @@ func TestALeaseSetsAsideJobsQueuedBeforeIt(t *testing.T) {
 }
 
 // setAside leaves a job of other's, queued before taker's lease, set aside by
-// it: taker's long job holds the Mac while other queues one, then taker
-// leases the Mac. It returns the set-aside job's id.
+// it: taker's job holds the Mac while other queues one and taker leases the
+// Mac. It returns the set-aside job's id.
 func (l *lab) setAside(takerToken, takerHolder, otherToken, otherHolder string) string {
 	l.t.Helper()
-	l.sim.SetTestLength(3 * time.Second)
+	release := l.sim.HoldTests()
+	l.t.Cleanup(release)
 	code, busy, body := l.submitAs(takerToken, api.JobSpec{Kernel: l.artifact("krel=7.2-busy behavior=ok"), Tests: []api.TestSpec{{Name: "long-work", Builtin: "x"}}, Holder: takerHolder})
 	if code != 200 {
 		l.t.Fatalf("the lease taker's job: %d %s", code, body)
@@ -87,6 +90,7 @@ func (l *lab) setAside(takerToken, takerHolder, otherToken, otherHolder string) 
 	if r, body := l.as(takerToken, "POST", "/api/devices/"+l.name+"/lease", api.LeaseRequest{Holder: takerHolder, TTLSec: 3600}); r.StatusCode != 200 {
 		l.t.Fatalf("lease: %s %s", r.Status, body)
 	}
+	release()
 	l.expect(l.jobAPI(busy, 60*time.Second), api.OutcomePass)
 	l.waitJob(theirs, func(j *api.Job) bool { return hasEvent(j, "waiting for the lease to end") })
 	return theirs
