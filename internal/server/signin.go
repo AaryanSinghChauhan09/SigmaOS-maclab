@@ -37,6 +37,10 @@ const (
 	formMax    = 1 << 20
 )
 
+// formWait is how long a signed-in browser's form may take to arrive; tests
+// shorten it.
+var formWait = 30 * time.Second
+
 // sessionCookie and stateCookie name labd's two cookies. Over https they are
 // Secure and host-only by name; at a plain-http loopback address, where a
 // lab under development is reached, a Secure cookie would never come back.
@@ -239,16 +243,22 @@ func (s *Server) hSignOut(w http.ResponseWriter, r *http.Request) {
 // answers w and reports false. A request with its own credential in
 // Authorization is not the browser session's: the cookie is not read for it.
 //
-// A form is read whole before the session is looked up: a body held back is
-// then judged by the session and the person as they are when the body has
-// come, so a form let in before a cut does nothing after it. Any other body
-// is read through liveBody, which holds each read to the same.
+// The session is looked up before any byte of the body is read: a cookie
+// that names no session costs labd nothing, and its body is left unread. A
+// form of a session is then read whole, within formWait, and the session is
+// looked up again: the body is judged by the session and the person as they
+// are when it has come, so a form let in before a cut does nothing after it.
+// Any other body is read through liveBody, which holds each read to the same.
 func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin string) (*http.Request, bool) {
 	if r.Header.Get("Authorization") != "" {
 		return r, true
 	}
 	c, err := r.Cookie(sessionCookie(strings.HasPrefix(origin, "https://")))
 	if err != nil || c.Value == "" {
+		return r, true
+	}
+	si := s.sessionOf(c.Value)
+	if si == nil {
 		return r, true
 	}
 	changes, form, read := true, false, false
@@ -258,13 +268,17 @@ func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin s
 	default:
 		if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "application/x-www-form-urlencoded" {
 			form = true
+			rc := http.NewResponseController(w)
+			rc.SetReadDeadline(time.Now().Add(formWait))
 			r.Body = http.MaxBytesReader(w, r.Body, formMax)
 			read = r.ParseForm() == nil
+			if read {
+				rc.SetReadDeadline(time.Time{})
+			}
+			if si = s.sessionOf(c.Value); si == nil {
+				return r, true
+			}
 		}
-	}
-	si := s.sessionOf(c.Value)
-	if si == nil {
-		return r, true
 	}
 	noteCaller(r, "person:"+si.Handle)
 	if changes {
