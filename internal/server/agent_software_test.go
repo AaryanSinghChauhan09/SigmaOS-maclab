@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -596,7 +597,7 @@ func TestBeforeEachJobTheBuiltInTestInstallsTheTestToolFromTheLabsInstallLine(t 
 
 	// The lab's release: installed from the lab's own line, then run.
 	res, said = run("j2", omtRelease(t, k, "9.9.9"))
-	if !res.Passed || installed() != "9.9.9" || !strings.Contains(said, "from "+l.url+"/install") || !strings.Contains(said, "Signature verified.") || !strings.Contains(said, "omarchy-m-test 9.9.9 on ") {
+	if !res.Passed || installed() != "9.9.9" || !strings.Contains(said, l.url+"/install") || !strings.Contains(said, "Signature verified") || !strings.Contains(said, "omarchy-m-test 9.9.9 on ") {
 		t.Fatalf("the lab's release: passed %v, installed %q\n%s", res.Passed, installed(), said)
 	}
 
@@ -613,11 +614,11 @@ func TestBeforeEachJobTheBuiltInTestInstallsTheTestToolFromTheLabsInstallLine(t 
 		t.Fatalf("a bad release over a good one: passed %v, installed %q\n%s", res.Passed, installed(), said)
 	}
 
-	// An install line that pins another key than lab-agent's is not run.
+	// The key lab-agent pins is the one asked, not the one the line pins.
 	mac.ReleaseKey = other.Public
-	res, said = run("j5", omtRelease(t, other, "9.9.12"))
-	if installed() != "9.9.10" || !strings.Contains(said, "does not pin the release key this lab-agent trusts") {
-		t.Fatalf("an install line pinning another key: installed %q\n%s", installed(), said)
+	res, said = run("j5", omtRelease(t, k, "9.9.12"))
+	if installed() != "9.9.10" || !strings.Contains(said, "doesn't match the release key this lab-agent pins") {
+		t.Fatalf("a release signed by the line's key, not lab-agent's: installed %q\n%s", installed(), said)
 	}
 
 	// The script names the lab and nobody else's install line.
@@ -629,6 +630,77 @@ func TestBeforeEachJobTheBuiltInTestInstallsTheTestToolFromTheLabsInstallLine(t 
 		if strings.Contains(string(script), never) {
 			t.Errorf("the built-in test still names %q", never)
 		}
+	}
+}
+
+// The lab's install line is read for where the release is and never run:
+// what the built-in test installs is a release whose signature it checked
+// itself, against the release key the running lab-agent pins. A line that
+// pins that key in a comment and runs a command runs nothing.
+func TestTheBuiltInTestRunsNothingOfTheLabsInstallLine(t *testing.T) {
+	for _, tool := range []string{"bash", "curl", "ssh-keygen", "tar", "gzip"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip("no " + tool)
+		}
+	}
+	k, other := sshsigtest.NewKey(t), sshsigtest.NewKey(t)
+	real := newReportsLab(t, func(c *Config) { c.ReleaseKey = k.Public }).do("GET", "/install", "").Body.String()
+	const latest = "https://github.com/omacom/omarchy-maclab/releases/latest/download"
+	var line string
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/install" {
+			http.NotFound(w, r)
+			return
+		}
+		io.WriteString(w, line)
+	}))
+	t.Cleanup(stub.Close)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("OMARCHY_M_TEST_RELEASES", "")
+	os.Unsetenv("OMARCHY_M_TEST_RELEASES")
+	ran := filepath.Join(home, "ran")
+	mac := &agent.Linux{WorkDir: t.TempDir(), Server: stub.URL, ReleaseKey: k.Public}
+	run := func(job string) (api.TestResult, string) {
+		out := filepath.Join(t.TempDir(), job)
+		os.MkdirAll(out, 0o755)
+		res := mac.RunTest(t.Context(), job, api.TestSpec{Name: "omarchy-m-test", Builtin: "omarchy-m-test", TimeoutSec: 120}, nil, nil, out)
+		log, _ := os.ReadFile(filepath.Join(out, "log.txt"))
+		return res, string(log)
+	}
+	installed := func() string {
+		b, _ := os.ReadFile(filepath.Join(home, ".local", "share", "omarchy-m-test", "VERSION"))
+		return strings.TrimSpace(string(b))
+	}
+
+	// A line that pins the key in a comment and runs a command.
+	line = "#!/usr/bin/env bash\n# release@omarchy-m-testing.org namespaces=\"omarchy-m-test-release\" " + k.Public + "\ntouch \"$HOME/ran\"\n"
+	res, said := run("j1")
+	if _, err := os.Stat(ran); err == nil || res.Passed || installed() != "" {
+		t.Fatalf("the lab's line ran: passed %v, installed %q\n%s", res.Passed, installed(), said)
+	}
+
+	// The line as labd serves it, naming a release here, with a command
+	// added: the release it names is installed, and the command never runs.
+	line = strings.Replace(real, latest, "file://"+omtRelease(t, k, "9.9.9"), 1) + "\ntouch \"$HOME/ran\"\n"
+	res, said = run("j2")
+	if _, err := os.Stat(ran); err == nil || !res.Passed || installed() != "9.9.9" || !strings.Contains(said, "Signature verified") {
+		t.Fatalf("the lab's line with a command: passed %v, installed %q\n%s", res.Passed, installed(), said)
+	}
+
+	// A release signed by a key the line pins and lab-agent does not.
+	line = strings.Replace(strings.Replace(real, k.Public, other.Public, 1), latest, "file://"+omtRelease(t, other, "9.9.10"), 1)
+	res, said = run("j3")
+	if installed() != "9.9.9" || !strings.Contains(said, "signature doesn't match") || !strings.Contains(said, "install failed; running 9.9.9") {
+		t.Fatalf("a release signed by the line's key: installed %q\n%s", installed(), said)
+	}
+
+	// A lab-agent that pins no release key installs nothing.
+	mac.ReleaseKey = ""
+	line = strings.Replace(real, latest, "file://"+omtRelease(t, k, "9.9.11"), 1)
+	if _, said = run("j4"); installed() != "9.9.9" || !strings.Contains(said, "pins no release key") {
+		t.Fatalf("a lab-agent with no key: installed %q\n%s", installed(), said)
 	}
 }
 
