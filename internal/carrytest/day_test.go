@@ -512,7 +512,8 @@ func TestTheDressRunOfTheDay(t *testing.T) {
 	d.stops(1, "", nil, "step 18 is done", "step 19 stops here: no passed Alias rehearsal")
 	d.record("2026-11-12-alias-rehearsal.md", "# The Alias rehearsal\n\nResult: pass\n")
 	out := d.stops(3, "", nil, "step 19 is yours", "DOMAIN=omarchy-m-testing.org scripts/cloud/nameservers.sh --apply", "--run --done 19")
-	if strings.Contains(out, "runner") || strings.Count(read(t, d.runLog), "\n") != 3 {
+	// The day prints its own path, which on a CI machine can hold "runner" too.
+	if strings.Contains(strings.ReplaceAll(out, repo(t), ""), "runner") || strings.Count(read(t, d.runLog), "\n") != 3 {
 		t.Errorf("started again, the day ran step 18 once more:\n%s", read(t, d.runLog))
 	}
 	// Started again it is at the same step, and no step is skipped.
