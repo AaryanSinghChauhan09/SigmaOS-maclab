@@ -357,6 +357,7 @@ func newMini(t *testing.T, shape oldlabtest.Shape) *mini {
 		"LAB_VERIFY_TRIES=1",
 		"LAB_AS_LAB="+bin+"/as-lab",
 		"LAB_LOOPBACK="+strings.TrimPrefix(loop.URL, "http://"),
+		"MACLAB_OLD_LAB=owner@omarchy-gpu",
 	)
 	return m
 }
@@ -636,6 +637,16 @@ func TestACopyThatIsNotTheOldDirectoryIsRefused(t *testing.T) {
 			t.Errorf("old-lab %v reached the old host:\n%s", bad, m.calls())
 		}
 	}
+	// The old lab's host is named by its owner: the repository names none.
+	named := m.env
+	m.env = append(m.env, "MACLAB_OLD_LAB=")
+	for _, step := range []string{"stop", "copy"} {
+		before := m.calls()
+		if out := m.refused("old-lab", step); !strings.Contains(out, "name the old lab's host") || m.calls() != before {
+			t.Errorf("old-lab %s with no host named: %s", step, out)
+		}
+	}
+	m.env = named
 	// The token files do not stay on the mini even if the old host's tar
 	// sends them.
 	write(t, gpuState+"/takes.all", "", 0o644)

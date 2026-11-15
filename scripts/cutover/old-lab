@@ -23,7 +23,8 @@
 #          the rest of what it had stays beside it in data.before-old-lab.
 #
 #   --dry-run   say what would be done, and change nothing anywhere
-#   --from      the old lab's host as SSH reaches it (owner@omarchy-gpu)
+#   --from      the old lab's host as SSH reaches it, USER@HOST (stop and copy;
+#               else MACLAB_OLD_LAB, from the environment or deploy/mini.conf)
 #   --unit      its labd's systemd user unit (labd)
 #   --data      its data directory there (.local/share/maclab)
 #   --stage     the folder of yours the copy waits in (copy: ~/old-lab)
@@ -40,7 +41,7 @@ usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2;
 
 step="${1:-}"
 [[ $# -gt 0 ]] && shift
-from="owner@omarchy-gpu"
+from=""
 unit="labd"
 data=".local/share/maclab"
 stage=""
@@ -59,7 +60,20 @@ while (( $# )); do
   esac
   shift
 done
-[[ $from =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || fail "--from is USER@HOST, as SSH reaches the old lab's host"
+# The old lab's host is the owner's to name, never the repository's: from
+# --from, else MACLAB_OLD_LAB from the environment or, when it is not set
+# there, from deploy/mini.conf beside this repository (deploy/mini.conf.example).
+if [[ -z $from ]]; then
+  if [[ -n ${MACLAB_OLD_LAB+x} ]]; then
+    from="$MACLAB_OLD_LAB"
+  elif [[ -f $here/../../deploy/mini.conf ]]; then
+    from="$(sed -n 's/^MACLAB_OLD_LAB=//p' "$here/../../deploy/mini.conf" | tail -n 1)"
+  fi
+fi
+if [[ $step == stop || $step == copy ]]; then
+  [[ -n $from ]] || fail "name the old lab's host: --from USER@HOST, or MACLAB_OLD_LAB in deploy/mini.conf (see deploy/mini.conf.example)"
+fi
+[[ -z $from || $from =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || fail "--from is USER@HOST, as SSH reaches the old lab's host"
 [[ $unit =~ ^[A-Za-z0-9@._-]+$ ]] || fail "--unit is a systemd unit's name"
 [[ $data =~ ^[A-Za-z0-9._/-]+$ && $data != -* ]] || fail "--data is the old data directory's path on its host, of letters, digits, dots, dashes and slashes"
 if [[ -z $stage ]]; then

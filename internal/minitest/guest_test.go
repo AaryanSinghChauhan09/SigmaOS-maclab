@@ -104,6 +104,7 @@ func newGuest(t *testing.T) *guest {
 		"STUB_STATE="+g.state,
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
+		"MACLAB_MINI_ADDRESS=192.168.1.20",
 	)
 	return g
 }
@@ -278,6 +279,13 @@ func TestTheGuestInstallsNothingThatIsNotItsPin(t *testing.T) {
 	if out, code := g.run("setup", "--mini", "the-mini"); code == 0 || !strings.Contains(out, "is not an address") {
 		t.Errorf("a name for the mini's address:\n%s", out)
 	}
+	// The mini's address is named by its owner: the repository names none.
+	named := g.env
+	g.env = append(g.env, "MACLAB_MINI_ADDRESS=")
+	if out, code := g.run("setup", "--dry-run"); code == 0 || !strings.Contains(out, "name the mini's address") {
+		t.Errorf("no address for the mini:\n%s", out)
+	}
+	g.env = named
 	// An account exists before a folder is given to it.
 	if !strings.Contains(read(t, filepath.Join(g.dir, "setup")), "\npackages\naccounts\nfolders\npins\n") {
 		t.Error("the guest's set-up does not make its accounts before their folders")

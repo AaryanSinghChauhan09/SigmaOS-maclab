@@ -36,3 +36,6 @@ omarchy-m-test-report.json
 
 # The cloud scripts' local names (scripts/cloud/lab.env.example)
 /scripts/cloud/lab.env
+
+# The mini and the old lab's host as the owner reaches them (deploy/mini.conf.example)
+/deploy/mini.conf
