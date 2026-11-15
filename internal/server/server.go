@@ -666,7 +666,7 @@ func (s *Server) Handler() http.Handler {
 	for _, p := range pageRoutes {
 		m.HandleFunc(p.pattern, s.pageHandler(p))
 	}
-	return bodyDeadlines(s.edge(s.capBodies(s.withPages(m))))
+	return bodyDeadlines(s.edge(s.answerCuts(s.capBodies(s.withPages(m)))))
 }
 
 // routes is every API route and who may reach it (see reach).

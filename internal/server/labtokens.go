@@ -135,28 +135,37 @@ func (s *Server) labTokenRequest(r *http.Request) *http.Request {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
 		default:
 			if r.Body != nil && r.Body != http.NoBody {
-				r.Body = liveBody{r.Body, func() bool { return s.tokenStillActs(hash, t.ID, p) }, errTokenCut}
+				r.Body = &liveBody{ReadCloser: r.Body, live: func() *bodyCut { return s.tokenCut(hash, t.ID, p) }}
 			}
 		}
 	}
 	return r.WithContext(context.WithValue(r.Context(), tokenUseKey{}, u))
 }
 
-// tokenStillActs reports whether the token with this hash is still the one
-// let in as id, unexpired, and its person neither Blocked nor in another role
-// than was's.
-func (s *Server) tokenStillActs(hash string, id int64, was Person) bool {
+// tokenCut is nil while the token with this hash is still the one let in as
+// id, unexpired, and its person neither Blocked nor in another role than
+// was's; otherwise it is why not.
+func (s *Server) tokenCut(hash string, id int64, was Person) *bodyCut {
 	p, t, err := s.store.labTokenByHash(hash)
-	if err != nil || t.ID != id || t.expired(s.now()) || p.Blocked {
-		return false
+	switch {
+	case err != nil || t.ID != id:
+		return &bodyCut{http.StatusUnauthorized, "refused: the Lab token that asked was revoked while its request was on the way, and what it sent was not done"}
+	case p.Blocked:
+		return &bodyCut{http.StatusForbidden, blockedSentence}
+	case t.expired(s.now()):
+		return &bodyCut{http.StatusUnauthorized, "refused: the Lab token that asked expired while its request was on the way, and what it sent was not done"}
 	}
 	s.fillIn(&p)
-	return p.Role() == was.Role()
+	if p.Role() != was.Role() {
+		return roleCut(p)
+	}
+	return nil
 }
 
-// errTokenCut is a body sent with a Lab token that was cut while its request
-// was on the way.
-var errTokenCut = errors.New("the Lab token that asked was cut")
+// roleCut is why a body of p's was cut when p's role changed on its way.
+func roleCut(p Person) *bodyCut {
+	return &bodyCut{http.StatusForbidden, fmt.Sprintf("refused: @%s's role in the lab changed while the request was on the way, and what it sent was not done", p.Handle)}
+}
 
 // tellOfServerMintedToken writes what a token made on a page has from the
 // start: its line of the People record and its line for "Agents". The

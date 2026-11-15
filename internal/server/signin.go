@@ -23,6 +23,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -295,30 +296,116 @@ func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin s
 			return r, false
 		}
 		if !form && r.Body != nil && r.Body != http.NoBody {
-			r.Body = liveBody{r.Body, func() bool {
-				now := s.sessionOf(c.Value)
-				return now != nil && now.AccountID == si.AccountID && now.Role() == si.Role()
-			}, errSessionEnded}
+			r.Body = &liveBody{ReadCloser: r.Body, live: func() *bodyCut { return s.sessionCut(c.Value, si) }}
 		}
 	}
 	return r.WithContext(withPerson(r.Context(), si)), true
 }
 
+// sessionCut is nil while the session of the cookie value is still si's, its
+// person in the role they had; otherwise it is why not.
+func (s *Server) sessionCut(value string, si *signedIn) *bodyCut {
+	now := s.sessionOf(value)
+	switch {
+	case now != nil && now.AccountID == si.AccountID && now.Role() == si.Role():
+		return nil
+	case now != nil && now.AccountID == si.AccountID:
+		return roleCut(now.Person)
+	}
+	if p, err := s.person(si.AccountID); err == nil && p.Blocked {
+		return &bodyCut{http.StatusForbidden, blockedSentence}
+	}
+	return &bodyCut{http.StatusUnauthorized, "refused: " + errSessionEnded.Error() + ", and what it sent was not done"}
+}
+
 // liveBody is the body of a request that changes something and is no
 // browser's form, sent by a signed-in browser or with a Lab token. A read
 // answers only while live says the credential is there and its person has
-// the role they had when the request was let in; otherwise it answers ended.
-// What comes after a cut is not read, so the request does nothing with it.
+// the role they had when the request was let in; otherwise it answers why
+// not, and keeps it for answerCuts. What comes after a cut is not read, so
+// the request does nothing with it.
 type liveBody struct {
 	io.ReadCloser
-	live  func() bool
-	ended error
+	live func() *bodyCut
+	cut  atomic.Pointer[bodyCut]
 }
 
-func (b liveBody) Read(p []byte) (int, error) {
+func (b *liveBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
-	if !b.live() {
-		return 0, b.ended
+	if why := b.live(); why != nil {
+		b.cut.Store(why)
+		return 0, why
 	}
 	return n, err
 }
+
+// bodyCut is why a body was cut on its way, and its answer.
+type bodyCut struct {
+	code int
+	why  string
+}
+
+func (c *bodyCut) Error() string { return c.why }
+
+// answerCuts answers a request whose body was cut on its way (see liveBody)
+// with the cut's own answer, through refuse, whatever its handler makes of
+// the failed read: a Block with the Blocked sentence, a revoked or ended
+// credential with 401, a role lost with 403.
+func (s *Server) answerCuts(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if b, ok := r.Body.(*liveBody); ok {
+			w = &cutAnswer{ResponseWriter: w, s: s, r: r, body: b}
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// cutAnswer is the writer of a request with a liveBody. Its first header
+// written is the cut's answer once the body was cut; what the handler writes
+// then is dropped.
+type cutAnswer struct {
+	http.ResponseWriter
+	s           *Server
+	r           *http.Request
+	body        *liveBody
+	wrote, drop bool
+}
+
+func (c *cutAnswer) WriteHeader(code int) {
+	if c.wrote {
+		return
+	}
+	c.wrote = true
+	if why := c.body.cut.Load(); why != nil {
+		c.drop = true
+		c.s.refuse(c.ResponseWriter, c.r, why.code, "%s", why.why)
+		return
+	}
+	c.ResponseWriter.WriteHeader(code)
+}
+
+func (c *cutAnswer) Write(p []byte) (int, error) {
+	if !c.wrote {
+		c.WriteHeader(http.StatusOK)
+	}
+	if c.drop {
+		return len(p), nil
+	}
+	return c.ResponseWriter.Write(p)
+}
+
+// Flush flushes, for the handlers that ask the writer itself.
+func (c *cutAnswer) Flush() {
+	if !c.wrote {
+		c.WriteHeader(http.StatusOK)
+	}
+	if c.drop {
+		return
+	}
+	if f, ok := c.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap lets http.ResponseController reach the writer below.
+func (c *cutAnswer) Unwrap() http.ResponseWriter { return c.ResponseWriter }

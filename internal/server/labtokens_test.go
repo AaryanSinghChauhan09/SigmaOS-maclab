@@ -868,6 +868,43 @@ func TestALabTokenBodyHeldOpenAcrossACutChangesNothing(t *testing.T) {
 	}
 }
 
+// A body cut on its way is answered with why: a Block with the Blocked
+// sentence and nothing else, as everywhere a Blocked person meets the lab;
+// a revoked or ended credential with 401; a lost role with 403.
+func TestABodyCutOnItsWayIsAnsweredWithWhy(t *testing.T) {
+	for name, c := range map[string]struct {
+		cut   string
+		token bool
+		code  int
+	}{
+		"Lab token, Blocked":                {"block", true, http.StatusForbidden},
+		"Lab token, End all access":         {"end-all-access", true, http.StatusUnauthorized},
+		"Lab token, no longer a Maintainer": {"maintainer/remove", true, http.StatusForbidden},
+		"session, Blocked":                  {"block", false, http.StatusForbidden},
+		"session, End all access":           {"end-all-access", false, http.StatusUnauthorized},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, _ := lendLab(t)
+			l.t = t
+			owner, ravi := l.signedIn(ownerID), l.signedIn(maintainerID)
+			body := `{"name":"cut-mini","model":"desktop"}`
+			var send func() *httptest.ResponseRecorder
+			if c.token {
+				send = l.heldAsToken(ravi.makeToken("cut", "90"), "/api/enroll-tokens", body)
+			} else {
+				send = ravi.heldPost("/api/enroll-tokens", "application/json", body)
+			}
+			owner.did(personPath(maintainerID, c.cut), "sure", "yes")
+			w := send()
+			answer := strings.TrimSpace(w.Body.String())
+			blocked := c.cut == "block"
+			if w.Code != c.code || (answer == blockedSentence) != blocked {
+				t.Errorf("a body cut by %s: %d %q", c.cut, w.Code, answer)
+			}
+		})
+	}
+}
+
 // A Join command asked for before End all access, its body read whole, and
 // stored only after the cut has swept the person's unused Join commands, is
 // not kept: the store checks in the one transaction that the credential that
