@@ -35,6 +35,7 @@ say() { echo "$ME: $*"; }
 fail() { echo "$ME: $*" >&2; exit 2; }
 
 mode=dry
+mode_flag=""
 only=""
 skip=""
 records=""
@@ -55,14 +56,22 @@ numbers() {
 
 while (( $# )); do
   case "$1" in
-    --dry-run) mode=dry ;;
-    --local) mode=local ;;
-    --lab) mode=lab ;;
+    --dry-run | --local | --lab)
+      [[ -z $mode_flag || $mode_flag == "$1" ]] || fail "$mode_flag and $1 are two modes: give one. Nothing was done."
+      mode_flag="$1"
+      mode="${1#--}"
+      [[ $mode != dry-run ]] || mode=dry
+      ;;
     --only) (( $# >= 2 )) || usage; only="$(numbers "$2")" || exit 2; shift ;;
     --skip) (( $# >= 2 )) || usage; skip="$(numbers "$2")" || exit 2; shift ;;
     --for)
       (( $# >= 3 )) || usage
       n="$(numbers "$2")" || exit 2
+      for word in $3; do
+        case "$word" in
+          --dry-run | --local | --lab) fail "--for $2 \"$3\" names a mode: the run's mode is for every test, given once outside --for. Nothing was done." ;;
+        esac
+      done
       extra+=("${n# }=$3")
       shift 2
       ;;

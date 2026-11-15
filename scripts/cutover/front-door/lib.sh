@@ -50,14 +50,23 @@ RECORD=""
 say() { echo "$ME: $*"; }
 fail() { echo "$ME: $*" >&2; exit 1; }
 
+# one_mode FLAG MODE: the run's mode. A second, other mode is refused before
+# anything is done: which one was meant is not guessed.
+MODE_FLAG=""
+one_mode() {
+  [[ -z $MODE_FLAG || $MODE_FLAG == "$1" ]] || fail "$MODE_FLAG and $1 are two modes: give one. Nothing was done."
+  MODE_FLAG="$1"
+  MODE="$2"
+}
+
 # fd_options ARGS...: the options every test takes. What it does not know
 # stays in REST for the test itself.
 fd_options() {
   while (( $# )); do
     case "$1" in
-      --dry-run) MODE=dry ;;
-      --local) MODE=local ;;
-      --lab) MODE=lab ;;
+      --dry-run) one_mode "$1" dry ;;
+      --local) one_mode "$1" local ;;
+      --lab) one_mode "$1" lab ;;
       --mac) (( $# >= 2 )) || fail "--mac needs a Mac's name"; MAC="$2"; shift ;;
       --size) (( $# >= 2 )) || fail "--size needs a number of bytes"; SIZE="$2"; shift ;;
       --records) (( $# >= 2 )) || fail "--records needs a folder"; RECORDS="$2"; shift ;;

@@ -165,3 +165,21 @@ func TestOOB08LeavesTheControllerStartedWhateverTheAnswer(t *testing.T) {
 		t.Errorf("the record does not say the controller was started again before its result:\n%s", record)
 	}
 }
+
+// Two modes are refused before anything is done, by each test and by run:
+// the last one used to win, so "--dry-run --lab" reset real Macs.
+func TestTwoModesAreRefused(t *testing.T) {
+	dir, calls := stubs(t, nil)
+	env := []string{"PATH=" + dir + ":" + os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example"}
+	for _, name := range append(append([]string{}, tests...), "run") {
+		for _, modes := range [][]string{{"--dry-run", "--lab"}, {"--local", "--lab"}, {"--lab", "--local"}} {
+			out, code := run(t, env, script(t, name), append(modes, "--mini", "owner@mini", "--bin", t.TempDir(), "--records", t.TempDir())...)
+			if code == 0 || !strings.Contains(out, "two modes") {
+				t.Errorf("%s %v: exit %d\n%s", name, modes, code, out)
+			}
+		}
+	}
+	if b, _ := os.ReadFile(calls); len(b) != 0 {
+		t.Errorf("a refused run ran something:\n%s", b)
+	}
+}

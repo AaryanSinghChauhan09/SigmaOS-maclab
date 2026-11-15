@@ -66,14 +66,23 @@ NUMBER=""
 say() { echo "$ME: $*"; }
 fail() { echo "$ME: $*" >&2; exit 1; }
 
+# one_mode FLAG MODE: the run's mode. A second, other mode is refused before
+# anything is done: which one was meant is not guessed.
+MODE_FLAG=""
+one_mode() {
+  [[ -z $MODE_FLAG || $MODE_FLAG == "$1" ]] || fail "$MODE_FLAG and $1 are two modes: give one. Nothing was done."
+  MODE_FLAG="$1"
+  MODE="$2"
+}
+
 # oob_options ARGS...: the options every test takes. What it does not know
 # stays in REST for the test itself.
 oob_options() {
   while (( $# )); do
     case "$1" in
-      --dry-run) MODE=dry ;;
-      --local) MODE=local ;;
-      --lab) MODE=lab ;;
+      --dry-run) one_mode "$1" dry ;;
+      --local) one_mode "$1" local ;;
+      --lab) one_mode "$1" lab ;;
       --mini) (( $# >= 2 )) || fail "--mini needs USER@HOST"; MINI="$2"; shift ;;
       --m1) (( $# >= 2 )) || fail "--m1 needs a Mac's name"; M1="$2"; shift ;;
       --m2) (( $# >= 2 )) || fail "--m2 needs a Mac's name"; M2="$2"; shift ;;

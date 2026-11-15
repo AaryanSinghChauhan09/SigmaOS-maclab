@@ -59,14 +59,18 @@ MODE=dry-run
 TOKEN_FILE=""
 ARGS=()
 
-# parse_mode "$@": takes the options every script has and leaves the rest in ARGS.
+# parse_mode "$@": takes the options every script has and leaves the rest in
+# ARGS. Two different modes are refused: which one was meant is not guessed.
 parse_mode() {
+  local given=""
   ARGS=()
   while (( $# )); do
     case "$1" in
-      --dry-run) MODE=dry-run ;;
-      --check) MODE=check ;;
-      --apply) MODE=apply ;;
+      --dry-run | --check | --apply)
+        [[ -z $given || $given == "$1" ]] || die "$given and $1 are two modes: give one. Nothing was done."
+        given="$1"
+        MODE="${1#--}"
+        ;;
       --token-file)
         [[ $# -ge 2 ]] || die "--token-file needs a file"
         TOKEN_FILE="$2"
