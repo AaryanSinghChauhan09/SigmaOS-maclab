@@ -64,19 +64,29 @@ held_now() { sed -n 's/^lab: labd holds \([0-9]*\) of [0-9]* parts$/\1/p' "$err"
 : > "$err"
 MACLAB_UPLOAD_PROGRESS=1 "$LAB_CMD" upload "$file" > "$out" 2> "$err" &
 pid=$!
+# A fast machine takes several parts between two looks: a part's time is
+# the time between the looks over the parts taken in it, and lab is held
+# still while that is worked out.
 first=""
 second=""
 while kill -0 "$pid" 2>/dev/null; do
   n="$(held_now)"
-  if [[ -z $first && ${n:-0} -ge 1 ]]; then first="$(now)"; fi
-  if [[ ${n:-0} -ge 2 ]]; then second="$(now)"; break; fi
+  if [[ -z $first && ${n:-0} -ge 1 ]]; then first="$(now)" n1="$n"; fi
+  if [[ -n $first && ${n:-0} -ge 2 && $n -gt $n1 ]]; then
+    kill -STOP "$pid" 2>/dev/null || break
+    second="$(now)" n2="$n"
+    break
+  fi
   sleep 0.02
 done
 if [[ -z $second ]]; then
   wait "$pid" || give_up "lab upload failed before any cut: $(plain "$err")"
   give_up "lab upload ended before labd was seen to hold two parts: no cut was made"
 fi
-sleep "$(calc "($second - $first) / 2")"
+half="$(calc "($second - $first) / ($n2 - $n1) / 2")"
+kill -CONT "$pid"
+sleep "$half"
+kill -STOP "$pid" 2>/dev/null || give_up "lab upload ended before the cut"
 before="$(held_now)"
 kill -9 "$pid" 2>/dev/null || give_up "lab upload ended before the cut"
 wait "$pid" 2>/dev/null || true
