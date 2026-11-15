@@ -604,6 +604,9 @@ func (e leaseEnding) said(l *api.Lease) string {
 // its holder, when it is canceled as `lab cancel` does and the Mac returns
 // to its Known-good kernel. The jobs others queued before the Lease run
 // again. Caller doesn't hold v.mu.
+//
+// The record's line is written before v.mu is released: anyone who sees
+// the Lease gone, or loses the race to end it, finds the line there.
 func (s *Server) endLease(v *dev, l *api.Lease, e leaseEnding) bool {
 	v.mu.Lock()
 	if l == nil || v.d.Lease != l {
@@ -611,16 +614,16 @@ func (s *Server) endLease(v *dev, l *api.Lease, e leaseEnding) bool {
 		return false
 	}
 	v.d.Lease, v.leaseCut = nil, ""
+	name, id := v.d.Name, v.d.ID
+	s.recordLease(name, id, l, e.event, e.by, e.why)
 	v.saveLocked()
 	v.publishLocked()
 	var aside []string
 	for _, p := range v.parked {
 		aside = append(aside, p.id)
 	}
-	name, id := v.d.Name, v.d.ID
 	v.mu.Unlock()
 
-	s.recordLease(name, id, l, e.event, e.by, e.why)
 	handle := orStr(l.Owner(), l.Holder)
 	switch {
 	case e.event == api.LeaseReleased:
