@@ -1467,12 +1467,11 @@ func (s *Server) hReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := leaser(r)
-	by := orStr(r.URL.Query().Get("by"), p.Handle)
 	if port := r.URL.Query().Get("prove"); port != "" {
 		s.hProve(w, r, v, p, port)
 		return
 	}
-	said, err := s.hardResetBy(r.Context(), v, p, by)
+	said, err := s.hardResetBy(r.Context(), v, p)
 	if err != nil {
 		httpErr(w, statusOf(err), "%v", err)
 		return
@@ -1483,7 +1482,7 @@ func (s *Server) hReset(w http.ResponseWriter, r *http.Request) {
 // hardResetBy is p's Hard reset of v's Mac: allowed to a Maintainer and to
 // the holder of a Lease on it, never on a Volunteer's Mac, and only where
 // the lab can place the Mac. It returns what to tell p once it is sent.
-func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person, by string) (said string, err error) {
+func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person) (said string, err error) {
 	// A reset restarts the Mac, so a Lease fences it like a job.
 	if err := s.fence(v, p, fenceReset); err != nil {
 		return "", err
@@ -1497,13 +1496,13 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person, by string) (
 	case noReset != "":
 		return "", refuse(s.cables.status(), "no Hard reset was sent: %s", noReset)
 	}
-	back, err := s.rejoin(v, "Hard reset by "+orStr(by, "a Maintainer"))
+	why := "Hard reset by " + orStr(p.Handle, "a Maintainer")
+	back, err := s.rejoin(v, why)
 	if err != nil {
 		return "", refuse(http.StatusNotFound, "%v", err)
 	}
 	// One at a time: a second press sends no second reset while the first
 	// is on its way, nor while the lab waits for it to bring the Mac back.
-	why := "Hard reset by " + orStr(by, "a Maintainer")
 	v.mu.Lock()
 	prev, reason := v.d.State, v.d.StateReason
 	switch {

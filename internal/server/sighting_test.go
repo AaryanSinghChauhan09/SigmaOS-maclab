@@ -712,3 +712,20 @@ func TestAResetWhoseLeaseEndsWhileItWaitsIsNotSent(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	l.wantResets("the Lease ended before the reset's turn")
 }
+
+// A Hard reset is attributed to the person whose credential asked for it,
+// never to a name the request carries.
+func TestAHardResetIsByWhoeverAskedNotByAName(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	boot := l.bootOf(l.name)
+	r, body := l.as(harnessToken, "POST", "/api/devices/"+l.name+"/reset?by=mallory", nil)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("a Hard reset: %s %s", r.Status, body)
+	}
+	l.waitDevice(func(d api.Device) bool { return d.BootID != boot && d.State == api.StateReady })
+	log := l.logs.String()
+	if strings.Contains(log, "mallory") || !strings.Contains(log, "recovering: Hard reset by "+harnessMaintainer) {
+		t.Fatalf("the reset's attribution, in labd's log:\n%s", log)
+	}
+}

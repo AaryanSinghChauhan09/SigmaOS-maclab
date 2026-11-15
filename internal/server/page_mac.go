@@ -384,6 +384,6 @@ func (s *Server) pMacHardReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := leaser(r)
-	_, err := s.hardResetBy(r.Context(), v, p, p.Handle)
+	_, err := s.hardResetBy(r.Context(), v, p)
 	s.backToMacs(w, r, err)
 }
