@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -230,6 +232,103 @@ func TestAnOpeningDuringTheImportLeavesTheReports(t *testing.T) {
 	}
 	if strings.Contains(m.calls(), "launchctl bootout") || everyFile(t, m.path("var/lab/data"))["reports.db"] != reports || exists(m.path("var/lab/import/reports-before/reports.db")) {
 		t.Errorf("the open lab's labd was stopped or its reports.db moved:\n%s", m.calls())
+	}
+}
+
+// openingInTheImport plays the lab account and, as the import is about to
+// take its earlier pass's mark away, starts the opening from a second
+// terminal: the mark of today is still there, labd runs in Preview.
+const openingInTheImport = `#!/bin/bash
+echo "as-lab $*" >> "$STUB_LOG"
+if [[ $1 == rm && $3 == */import/imported && ! -f $STUB_STATE/opening.code ]]; then
+  : > "$STUB_STATE/opening.code"
+  "$STUB_OPEN" --m-team 14 > "$STUB_STATE/opening.out" 2>&1
+  echo $? > "$STUB_STATE/opening.code"
+fi
+exec "$@"
+`
+
+// The opening and the import's emptying take one lock on the mini: an
+// opening started once the import has passed its last look at the stage
+// is refused, the lab stays in Preview and the import goes on to its pass.
+func TestAnOpeningStartedWhileTheImportEmptiesTheReportsIsRefused(t *testing.T) {
+	m, dump, public := rehearsal(t)
+	if out, code := m.run(hex.EncodeToString(machineIDKey())+"\n", "rehearsal-import", "key"); code != 0 {
+		t.Fatalf("the key: exit %d, %s", code, out)
+	}
+	s := openingOn(t, m, 14)
+	stub := filepath.Join(m.base, "opening-in-the-import")
+	write(t, stub, openingInTheImport, 0o755)
+	for i, e := range m.env {
+		if strings.HasPrefix(e, "LAB_AS_LAB=") {
+			m.env[i] = "LAB_AS_LAB=" + stub
+		}
+	}
+	m.env = append(m.env, "STUB_OPEN="+filepath.Join(repo(t), "scripts", "cutover", "open"))
+	out, code := m.run(oldLink+"\n", "rehearsal-import", "run", "--public-key", public, "--dumped", dump)
+	opening := read(t, filepath.Join(m.state, "opening.out"))
+	if strings.TrimSpace(read(t, filepath.Join(m.state, "opening.code"))) == "0" || !strings.Contains(opening, "changes the lab now") || !strings.Contains(opening, "Nothing was changed") {
+		t.Errorf("the opening during the import was not refused:\n%s", opening)
+	}
+	if !s.Preview() {
+		t.Fatal("the lab opened while the import emptied its reports")
+	}
+	if code != 0 || !strings.Contains(out, "the import and its three checks passed") {
+		t.Errorf("the import: exit %d, %s", code, out)
+	}
+	if exists(m.path(cutoverLock)) {
+		t.Error("the import left its lock behind")
+	}
+}
+
+// cutoverLock is the mini's lock for the opening and the import.
+const cutoverLock = "var/run/org.omarchy-mac.lab.cutover"
+
+// A lock held by a process that runs refuses the opening and the import
+// before either changes anything; a lock whose process is gone is taken.
+func TestTheCutoversLockHeldElsewhereRefusesAndALeftOneIsTaken(t *testing.T) {
+	m, dump, public := rehearsal(t)
+	if out, code := m.run(hex.EncodeToString(machineIDKey())+"\n", "rehearsal-import", "key"); code != 0 {
+		t.Fatalf("the key: exit %d, %s", code, out)
+	}
+	s := openingOn(t, m, 14)
+	mark := m.path("var/lab/import/imported")
+	lock := m.path(cutoverLock)
+	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(strconv.Itoa(os.Getpid()), lock); err != nil {
+		t.Fatal(err)
+	}
+	reports := everyFile(t, m.path("var/lab/data"))["reports.db"]
+	os.Remove(m.log)
+	if out := m.refused("open", "--m-team", "14"); !strings.Contains(out, "changes the lab now") {
+		t.Errorf("the opening under a held lock: %s", out)
+	}
+	out, code := m.run(oldLink+"\n", "rehearsal-import", "run", "--public-key", public, "--dumped", dump)
+	if code == 0 || !strings.Contains(out, "changes the lab now") {
+		t.Errorf("the import under a held lock: exit %d, %s", code, out)
+	}
+	if !s.Preview() || !exists(mark) || strings.Contains(m.calls(), "launchctl bootout") || everyFile(t, m.path("var/lab/data"))["reports.db"] != reports {
+		t.Errorf("a refused run changed the lab:\n%s", m.calls())
+	}
+	if got, _ := os.Readlink(lock); got != strconv.Itoa(os.Getpid()) {
+		t.Errorf("a refused run took the lock: %q", got)
+	}
+
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(lock)
+	if err := os.Symlink(strconv.Itoa(gone.Process.Pid), lock); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := m.run(oldLink+"\n", "rehearsal-import", "run", "--public-key", public, "--dumped", dump); code != 0 {
+		t.Fatalf("the import under a left lock: exit %d, %s", code, out)
+	}
+	if exists(lock) {
+		t.Error("the import left its lock behind")
 	}
 }
 

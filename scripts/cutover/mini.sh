@@ -46,6 +46,37 @@ in_preview() {
   [[ $is == preview ]] || { [[ $is == unknown ]] && (( ${DRY:-0} )) && [[ "$(id -u)" != 0 && -z $SYSROOT ]]; }
 }
 
+# hold_lab: one change to the lab at a time. The opening, and the import
+# from its last look at the stage to its pass's mark, hold this lock: an
+# opening never lands inside the import's emptying, nor two imports in each
+# other. It is a link to the holder's process id in root's /var/run; a
+# holder that died leaves a link to no process, which the next run takes.
+CUTOVER_LOCK="$SYSROOT/var/run/org.omarchy-mac.lab.cutover"
+held_lab=0
+hold_lab() {
+  local pid try
+  [[ -d ${CUTOVER_LOCK%/*} ]] || mkdir -p "${CUTOVER_LOCK%/*}"
+  for try in 1 2 3; do
+    if ln -s "$$" "$CUTOVER_LOCK" 2>/dev/null; then
+      held_lab=1
+      trap let_go_of_lab EXIT
+      return 0
+    fi
+    pid="$(readlink "$CUTOVER_LOCK" 2>/dev/null)" || pid=""
+    if [[ $pid =~ ^[0-9]+$ ]] && ps -p "$pid" >/dev/null 2>&1; then
+      fail "another of the Cutover's scripts changes the lab now (process $pid: the opening or the import): let it end, then run this again. Nothing was changed"
+    fi
+    rm -f "$CUTOVER_LOCK"
+  done
+  fail "could not take the lock $CUTOVER_LOCK: look at what is there. Nothing was changed"
+}
+let_go_of_lab() {
+  if (( held_lab )) && [[ "$(readlink "$CUTOVER_LOCK" 2>/dev/null)" == "$$" ]]; then
+    rm -f "$CUTOVER_LOCK"
+  fi
+  held_lab=0
+}
+
 labd_answers() {
   local n
   for (( n = ${LAB_VERIFY_TRIES:-30}; n > 0; n-- )); do

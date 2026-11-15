@@ -166,6 +166,8 @@ run() {
   fi
 
   # The lab may have opened from another terminal since the first check.
+  # From here to the pass's mark no opening and no other import runs.
+  hold_lab
   in_preview || fail "the lab is open ($(lab_stage)) since this run began: its reports are its own now. Nothing was emptied"
   # An earlier pass says nothing of what this run leaves: only its own pass
   # writes the mark again.
@@ -181,7 +183,7 @@ run() {
 
   out="$(mktemp "${TMPDIR:-/tmp}/lab-rehearsal.XXXXXX")"
   # shellcheck disable=SC2064
-  trap "rm -f '$out'" EXIT
+  trap "rm -f '$out'; let_go_of_lab" EXIT
   load=(import load --from "$dump" --data "$LAB_DATA")
   [[ -z $SYSROOT || -z ${LAB_GITHUB_URL:-} ]] || load+=(--github-url "$LAB_GITHUB_URL")
   as_lab "$LABD" "${load[@]}" | tee -a "$out" || fail "the import stopped: reports.db holds what it holds now, and the next run empties it again"
