@@ -564,6 +564,13 @@ func (ir *installedRun) dmesg(got []byte) *installed.DmesgCompare {
 var installedEvidence = []string{"identity-before.json", "identity-booted.json", "identity-after.json",
 	"omt-compare.json", "dmesg-compare.json", "dmesg-errors.txt"}
 
+// comparedEvidence are the files of an Installed run's evidence a Promotion
+// checks again by their digests: the kernel's own error lines and the two
+// comparisons made from them. They name no person: a forgetting leaves them
+// as they were, as it leaves a pinned file, where a handle that is also a
+// word of a kernel line would change them.
+var comparedEvidence = []string{"omt-compare.json", "dmesg-compare.json", "dmesg-errors.txt"}
+
 // seal writes installed/job.json and the frozen store's append-only copy, and
 // returns the job's final outcome: a pass whose evidence is missing, couldn't
 // be written or couldn't be copied is not a pass. job.json is the record the

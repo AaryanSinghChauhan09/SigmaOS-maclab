@@ -1205,3 +1205,41 @@ func TestAForgettingWhileAnInstalledRunIsSealedLeavesNoHandleInFrozen(t *testing
 		}
 	}
 }
+
+// Forgetting someone whose handle is a word of an Installed run's kernel
+// error lines breaks none of the run's evidence: the compared logs and their
+// comparisons name nobody and stay as they were, and a Promotion still passes.
+func TestForgettingSomeoneTheKernelLogNamesLeavesTheRunPromotable(t *testing.T) {
+	l, msha, _ := installedLab(t, nil)
+	j := l.wait(submitInstalledRun(t, l, msha), 60*time.Second)
+	l.expect(j, api.OutcomePass)
+	frozen := filepath.Join(l.s.frozenDir("9.9"), "installed", "sim-mac", j.ID)
+	evidence := func() map[string]string {
+		out := map[string]string{}
+		for _, dir := range []string{frozen, filepath.Join(l.s.jobDir(j.ID), "installed")} {
+			for _, name := range []string{"dmesg-errors.txt", "dmesg-compare.json", "omt-compare.json"} {
+				b, err := os.ReadFile(filepath.Join(dir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				out[filepath.Join(dir, name)] = string(b)
+			}
+		}
+		return out
+	}
+	before := evidence()
+	if dm := before[filepath.Join(frozen, "dmesg-errors.txt")]; !mentions("fault", -1)(dm) {
+		t.Fatalf("the run's kernel errors do not say fault:\n%s", dm)
+	}
+	by := Person{AccountID: testAccount("owner"), Handle: "owner", Maintainer: true, Admin: true}
+	fault := knownPerson{Person: Person{AccountID: 4242, Handle: "fault"}}
+	if err := l.s.forgetHeld(by, fault, newForgetting(fault.AccountID, fault.Handle)); err != nil {
+		t.Fatal(err)
+	}
+	if after := evidence(); !maps.Equal(before, after) {
+		t.Error("the forgetting rewrote the run's compared evidence")
+	}
+	if _, err := l.s.promotion(context.Background(), by, "9.9", promoteReq{Device: "sim-mac", Job: j.ID}); err != nil {
+		t.Errorf("a Promotion after the forgetting: %v", err)
+	}
+}

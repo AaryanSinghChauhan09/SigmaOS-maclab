@@ -885,7 +885,7 @@ func forgetInFiles(dir string, f forgetting) error {
 // manifest's approved_by is the Release's own, frozen with it. The frozen
 // copy of an Installed run's evidence is the job's own copy byte for byte,
 // which a Promotion checks: the job's copy under jobs is swept the same way
-// first.
+// first, and the compared logs and comparisons in both stay as they were.
 func forgetInFrozen(dir, jobs string, f forgetting) error {
 	releases, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -926,6 +926,9 @@ func forgetInFrozen(dir, jobs string, f forgetting) error {
 				return nil
 			}
 			if parts := strings.Split(rel, "/"); len(parts) == 4 && parts[0] == "installed" {
+				if slices.Contains(comparedEvidence, parts[3]) {
+					return nil
+				}
 				own := filepath.Join(jobs, parts[2], "installed", parts[3])
 				if err := forgetInFile(own, f.document); err != nil && !errors.Is(err, os.ErrNotExist) {
 					return err
