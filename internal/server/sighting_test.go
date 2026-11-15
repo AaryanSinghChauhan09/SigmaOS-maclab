@@ -955,3 +955,63 @@ func TestALookBegunBeforeTheControllerStoppedDoesNotUndoItsTrouble(t *testing.T)
 		t.Fatalf("after a look once the controller answers again: %q", why)
 	}
 }
+
+// A Mac retired while its Proving reset waits its turn at the controller
+// gets no reset: the retirement calls the reset off, as it does the
+// ladder's, and the Proving reset says it was not sent.
+func TestARetirementDuringAWaitingProvingResetSendsNoReset(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	max := l.addMac("m2-max")
+	l.oob.plug(portMiddle, max, "", productM2Max)
+	l.sight()
+	l.wantCable("m2-max", api.CableNotSighted, "--prove")
+	probing, release := l.oob.holdProbes(t)
+	probed := make(chan error, 1)
+	go func() { _, err := l.oob.client.Probe(context.Background(), portLeft); probed <- err }()
+	<-probing
+	v := l.s.dev("m2-max")
+	proved := make(chan error, 1)
+	go func() { _, err := l.s.prove(v, portMiddle, harnessMaintainer); proved <- err }()
+	for end := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
+		l.oob.mu.Lock()
+		asked := l.oob.resetsAsked
+		l.oob.mu.Unlock()
+		if asked > 0 {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("the Proving reset never reached the controller")
+		}
+	}
+	retired := make(chan error, 1)
+	go func() {
+		retired <- l.s.endEnrollment(v, leaving{how: leftByMaintainer, by: Person{Handle: harnessMaintainer}})
+	}()
+	select {
+	case err := <-proved:
+		if err == nil || !strings.Contains(err.Error(), "no Proving reset") {
+			t.Errorf("the Proving reset of a Mac retired while it waited: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("the Proving reset still waits at the controller after the Mac was retired")
+	}
+	// The controller sees the call off before its turn comes free.
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(time.Millisecond) {
+		l.oob.mu.Lock()
+		ended := l.oob.resetsEnded == l.oob.resetsAsked
+		l.oob.mu.Unlock()
+		if ended {
+			break
+		}
+	}
+	release()
+	if err := <-probed; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-retired; err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	l.wantResets("the Mac was retired while its Proving reset waited")
+}

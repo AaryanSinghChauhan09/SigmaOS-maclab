@@ -478,6 +478,33 @@ func (s *Server) hardReset(ctx context.Context, v *dev) (port string, err error)
 	return port, nil
 }
 
+// provingResetOOB sends a Proving reset of rid as resetOOB sends a Hard
+// reset: one controller call of v's at a time, called off by a retirement
+// (or a policy transition) while it waits, and never for a Mac leaving the
+// lab.
+func (v *dev) provingResetOOB(ctx context.Context, rid int, seen *oob.Seen) error {
+	v.oobCallMu.Lock()
+	defer v.oobCallMu.Unlock()
+	v.mu.Lock()
+	if v.forgotten {
+		name := v.d.Name
+		v.mu.Unlock()
+		return refuse(http.StatusNotFound, "no Proving reset was sent: %s is leaving the lab", name)
+	}
+	op, cancel := context.WithCancel(ctx)
+	v.oobCallCancel = cancel
+	v.mu.Unlock()
+	defer func() { cancel(); v.mu.Lock(); v.oobCallCancel = nil; v.mu.Unlock() }()
+	return v.s.cfg.OOB.Reset(op, rid, seen)
+}
+
+// leavingLab is whether v's enrollment is ending or has ended.
+func (v *dev) leavingLab() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.forgotten || v.goneWhy != ""
+}
+
 // prove is a Proving reset: a Maintainer names the port of a Mac that
 // shows no name, the lab resets that port, and the Mac is placed there only
 // if it returns on a new boot and every other Lab-owned Mac keeps its boot
@@ -547,9 +574,11 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 	}
 	sent := s.now()
 	s.log.Printf("%s: Proving reset of %s by %s", name, port, by)
-	err = s.cfg.OOB.Reset(ctx, rid, &start)
+	err = v.provingResetOOB(ctx, rid, &start)
 	var moved *oob.Changed
 	switch {
+	case err != nil && v.leavingLab():
+		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s left the lab while it waited at the controller", name)
 	case errors.As(err, &moved):
 		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s", moved.Reason)
 	case err != nil:
