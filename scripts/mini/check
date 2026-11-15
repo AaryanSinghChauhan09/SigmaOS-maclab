@@ -572,7 +572,7 @@ tool_wrong() {
 
 tool() {
   local n why=""
-  formulae | sed 's|.*/||' | grep -qx "$1" || fail "$1 is not on the lab's Homebrew list (deploy/homebrew-formulae)"
+  formulae | sed 's|.*/||' | grep -x "$1" >/dev/null || fail "$1 is not on the lab's Homebrew list (deploy/homebrew-formulae)"
   for (( n = ${LAB_TOOL_TRIES:-60}; n > 0; n-- )); do
     why="$(tool_wrong "$1")"
     if [[ -z $why ]]; then

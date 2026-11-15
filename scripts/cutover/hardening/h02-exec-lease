@@ -63,7 +63,7 @@ rec "under the Maintainer's own Lease lab exec ran, exit code 3"
 
 if playing; then
   ask m-free --token-file "$WORK/member.token" --json "{\"command\":\"echo $tag-member-free\"}" POST "/api/devices/$MAC/exec"
-  { [[ "$(status_of m-free)" == 40[39] ]] && said_of m-free | grep -q Lease; } || give_up "an M team member's lab exec with no Lease: $(status_of m-free) $(said_of m-free)"
+  { [[ "$(status_of m-free)" == 40[39] ]] && said_of m-free | grep Lease >/dev/null; } || give_up "an M team member's lab exec with no Lease: $(status_of m-free) $(said_of m-free)"
   rec "an M team member's lab exec with no Lease: $(status_of m-free), $(said_of m-free)"
   ask m-lease --token-file "$WORK/member.token" --json '{"holder":"member@laptop","ttl_sec":600}' POST "/api/devices/$MAC/lease"
   [[ "$(status_of m-lease)" == 200 ]] || give_up "the member's Lease: $(status_of m-lease) $(said_of m-lease)"

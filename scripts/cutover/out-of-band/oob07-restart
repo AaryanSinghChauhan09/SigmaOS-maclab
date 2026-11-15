@@ -96,7 +96,7 @@ after() {
     [[ -n $since && ! $since < $asked ]] || give_up "$1: the Sighting of $mac is from $since, before the restart was asked at $asked: labd did not start again"
     rec "$1: $mac is sighted again on the $port port, since $since, unaided"
   done
-  "$LAB_CMD" oob "$M1" 2>/dev/null | grep -q '^  controller:  *healthy' || give_up "$1: the lab does not say the controller is healthy: $("$LAB_CMD" oob "$M1" 2>/dev/null | sed -n 's/^  controller: *//p')"
+  "$LAB_CMD" oob "$M1" 2>/dev/null | grep '^  controller:  *healthy' >/dev/null || give_up "$1: the lab does not say the controller is healthy: $("$LAB_CMD" oob "$M1" 2>/dev/null | sed -n 's/^  controller: *//p')"
   rec "$1: the lab says the controller is healthy"
 }
 after "after an Unlock" "$COLD"

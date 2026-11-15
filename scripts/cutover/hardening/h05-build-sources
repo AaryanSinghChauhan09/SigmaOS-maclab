@@ -67,9 +67,9 @@ for source in "https://gitlab.com/hardening/linux" "https://127.0.0.1:$port/hard
   shown="${source//$secret/PASSWORD}"
   ask source --timeout 60s --json "{\"source\":\"$source\",\"config\":\"$config\"}" POST /api/builds
   [[ "$(status_of source)" == 400 ]] || give_up "the source $shown: $(status_of source) $(said_of source)"
-  said_of source | grep -qiE "a build's source|source" || give_up "the source $shown was refused, but not by the source rule: $(said_of source)"
+  said_of source | grep -iE "a build's source|source" >/dev/null || give_up "the source $shown was refused, but not by the source rule: $(said_of source)"
   ! grep -qF "$secret" "$WORK/source.body" || give_up "the refusal of $shown said its secret back"
-  ! said_of source | grep -q 'ls-remote' || give_up "labd tried the source $shown: $(said_of source)"
+  ! said_of source | grep 'ls-remote' >/dev/null || give_up "labd tried the source $shown: $(said_of source)"
   rec "$shown: 400, $(said_of source)"
 done
 ask builds-after --rows id GET /api/builds

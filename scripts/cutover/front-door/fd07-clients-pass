@@ -112,7 +112,7 @@ fi
 
 # 4. curl.
 ask install -fSL "$ADDRESS/install"
-if [[ $STATUS == 200 ]] && ! edge_page install && head -c 2 "$WORK/install.body" | grep -q '^#!'; then
+if [[ $STATUS == 200 ]] && ! edge_page install && head -c 2 "$WORK/install.body" | grep '^#!' >/dev/null; then
   rec "curl -fsSL …/install: the install script ($(wc -c < "$WORK/install.body" | tr -d ' ') bytes)"
 else
   rec "FAIL: curl -fsSL …/install: $(where install)"

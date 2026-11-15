@@ -88,7 +88,7 @@ else
   "$LAB_CMD" installed status --release "$release" > "$WORK/release.out" 2>&1 || give_up "lab installed status --release $release: $(plain "$WORK/release.out")"
   manifest="$(grep -oE '[0-9a-f]{64}' "$WORK/release.out" | head -n 1 || true)"
   [[ -n $manifest ]] || give_up "lab installed status names no frozen manifest of Release $release"
-  "$LAB_CMD" oob "$volunteers" 2>/dev/null | grep -q "a Volunteer's Mac" || give_up "$volunteers is not a Volunteer's Mac of this lab"
+  "$LAB_CMD" oob "$volunteers" 2>/dev/null | grep "a Volunteer's Mac" >/dev/null || give_up "$volunteers is not a Volunteer's Mac of this lab"
 fi
 jobs_of() { "$LAB_CMD" jobs "$volunteers" 2>/dev/null | wc -l | tr -d ' '; }
 before="$(jobs_of)"

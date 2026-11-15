@@ -277,7 +277,7 @@ trap 'rm -rf "$work"' EXIT
 # group but its own. labd and the other unprivileged daemons run as it.
 
 dscl_value() { dscl . -read "$1" "$2" 2>/dev/null | awk '{ print $2 }' || true; }
-uid_taken() { dscl . -list /Users UniqueID | awk '{ print $NF }' | grep -qx "$1"; }
+uid_taken() { dscl . -list /Users UniqueID | awk '{ print $NF }' | grep -x "$1" >/dev/null; }
 
 free_id() {
   local used id
@@ -661,7 +661,7 @@ start_tunnel() {
 
 tunnel() {
   local plist="$LAUNCHD_DIR/$CLOUDFLARED_LABEL.plist" restart=0 have=0
-  formulae | grep -qx cloudflared || return 0
+  formulae | grep -x cloudflared >/dev/null || return 0
   [[ ! -s $TUNNEL_TOKEN ]] || have=1
   if [[ -n $credential ]]; then
     if (( have )) && cmp -s "$credential" "$TUNNEL_TOKEN"; then
@@ -700,7 +700,7 @@ install_sender() {
 
 sender() {
   local again=$TOOLS_COPIED
-  formulae | grep -qx signal-cli || return 0
+  formulae | grep -x signal-cli >/dev/null || return 0
   [[ -f $deploy/$SIGNAL_LABEL.plist ]] || fail "no deploy/$SIGNAL_LABEL.plist beside scripts/"
   if [[ "$(looks "$SIGNAL_DATA")" != "$(shape d 700) $LAB_OWNER:$LAB_GROUP" ]] && [[ ! -d $LAB_HOME/secrets || -r $LAB_HOME/secrets ]]; then
     change "make $SIGNAL_DATA ($LAB_OWNER:$LAB_GROUP, 700)" lab_folder "$SIGNAL_DATA" 700
@@ -813,7 +813,7 @@ backup_keys() {
 
 backups() {
   local missing restart=0
-  formulae | grep -qx restic || return 0
+  formulae | grep -x restic >/dev/null || return 0
   command -v jq >/dev/null || fail "no jq on $PATH: the nightly backup and the Restore drill read restic's answers with it, and macOS has it from version 15"
   if [[ -n $guest ]] && ! grep -Eq "^${guest//./\\.}[[:space:]]+$BACKUP_GUEST\$" "$HOSTS_FILE" 2>/dev/null; then
     change "name the backup guest in $HOSTS_FILE: $guest $BACKUP_GUEST" name_guest
@@ -1117,7 +1117,7 @@ join_tailnet() {
 
 tailnet() {
   local plist="$LAUNCHD_DIR/$TAILSCALED_LABEL.plist" state
-  formulae | grep -qx tailscale || return 0
+  formulae | grep -x tailscale >/dev/null || return 0
   [[ -f $deploy/$TAILSCALED_LABEL.plist ]] || fail "no deploy/$TAILSCALED_LABEL.plist beside scripts/"
   if [[ -e $TAILSCALE_APP ]]; then
     say "tailscaled is not started: the Tailscale Standalone app is still at $TAILSCALE_APP, and the two must not be on one machine. At the mini's own screen: quit Tailscale, move the app to the Trash, empty it, restart, Unlock. Then run the set-up again, from the house's network: the tailnet is gone until the mini has joined anew"

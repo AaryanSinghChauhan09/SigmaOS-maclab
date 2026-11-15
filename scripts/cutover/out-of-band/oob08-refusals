@@ -112,7 +112,7 @@ if playing; then
   sleep 16
 fi
 if [[ -n $volunteers ]]; then
-  "$LAB_CMD" oob "$volunteers" 2>/dev/null | grep -q "a Volunteer's Mac" || give_up "$volunteers is not a Volunteer's Mac of this lab: $("$LAB_CMD" oob "$volunteers" 2>&1 | head -n 1)"
+  "$LAB_CMD" oob "$volunteers" 2>/dev/null | grep "a Volunteer's Mac" >/dev/null || give_up "$volunteers is not a Volunteer's Mac of this lab: $("$LAB_CMD" oob "$volunteers" 2>&1 | head -n 1)"
   REASONS="the lab never sends a Volunteer's Mac a Hard reset"
   never "$volunteers" "a Hard reset of a Volunteer's Mac"
   never "$volunteers" "a Proving reset aimed at a Volunteer's Mac" --prove left
@@ -136,7 +136,7 @@ mini_controller stop || give_up "the controller was not stopped on the mini"
 rec "the controller is stopped on the mini"
 REASONS="$(printf 'no Hard reset was sent\nthe Out-of-band controller is not healthy')"
 never "$M2" "a Hard reset with the controller stopped"
-"$LAB_CMD" oob "$M2" 2>/dev/null | grep -q '^  hard reset:  none: ' || give_up "with the controller stopped lab oob $M2 still shows a Hard reset: $("$LAB_CMD" oob "$M2" 2>&1 | sed -n 3p)"
+"$LAB_CMD" oob "$M2" 2>/dev/null | grep '^  hard reset:  none: ' >/dev/null || give_up "with the controller stopped lab oob $M2 still shows a Hard reset: $("$LAB_CMD" oob "$M2" 2>&1 | sed -n 3p)"
 rec "lab oob $M2: $("$LAB_CMD" oob "$M2" 2>/dev/null | sed -n 's/^  hard reset:  *//p')"
 wait_until 90 status_says "Out-of-band controller" "not answering since*" || give_up "/status does not say the controller is not answering: $(status_part "Out-of-band controller")"
 rec "/status: Out-of-band controller: $(status_part "Out-of-band controller")"
@@ -152,7 +152,7 @@ rec "\"Agents\" was told: $TROUBLE"
 AT_END=""
 mini_controller start || give_up "the controller was not started again on the mini: sudo launchctl bootstrap system $OOBD_PLIST"
 wait_until 90 status_says "Out-of-band controller" "answering" || give_up "started again, /status still says of the controller: $(status_part "Out-of-band controller")"
-wait_until 60 eval "\"$LAB_CMD\" oob \"$M2\" 2>/dev/null | grep -q '^  controller:  *healthy'" || give_up "started again, the lab does not say the controller is healthy"
+wait_until 60 eval "\"$LAB_CMD\" oob \"$M2\" 2>/dev/null | grep '^  controller:  *healthy' >/dev/null" || give_up "started again, the lab does not say the controller is healthy"
 rec "the controller started again: /status says $(status_part "Out-of-band controller"), lab oob says healthy"
 if playing; then
   wait_until 90 agents_has "$RECOVERED" || give_up "\"Agents\" was not told that the controller answers again"

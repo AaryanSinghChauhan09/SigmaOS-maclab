@@ -312,7 +312,7 @@ build() {
     STATE[k]=failed
     "$LAB_CMD" build-log "$id" > "$WORK/log.$k" 2> /dev/null || true
     stage="$(sed -n 's/^==> \([a-z][a-z]*\)\( .*\)\{0,1\}$/\1/p' "$WORK/log.$k" | tail -n 1)"
-    if [[ $stage == fetch ]] || tail -n 40 "$WORK/log.$k" | grep -qiE 'could not resolve host|temporary failure in name resolution|network is unreachable|no route to host|failed to connect to|connection timed out|failure while downloading'; then
+    if [[ $stage == fetch ]] || tail -n 40 "$WORK/log.$k" | grep -iE 'could not resolve host|temporary failure in name resolution|network is unreachable|no route to host|failed to connect to|connection timed out|failure while downloading' >/dev/null; then
       await "build $k end id=$id " 60 || true
       network_stop "$k" "$id" "$title" "$stage"
     fi

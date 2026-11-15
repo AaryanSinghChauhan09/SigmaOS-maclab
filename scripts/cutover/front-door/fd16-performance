@@ -105,7 +105,7 @@ for n in $(seq 20); do
   (( n > 2 )) || continue
   calc "($first - $pre) * 1000" >> "$WORK/first-bytes"
   echo >> "$WORK/first-bytes"
-  if tr -d '\r' < "$WORK/head" | grep -qi '^cf-cache-status: HIT$'; then hits=$((hits + 1)); fi
+  if tr -d '\r' < "$WORK/head" | grep -i '^cf-cache-status: HIT$' >/dev/null; then hits=$((hits + 1)); fi
 done
 if [[ $answered != 200 ]]; then
   target fail 1 "the signed-out page answered $answered"

@@ -77,6 +77,6 @@ offline() {
 wait_until 40 offline || give_up "with $MAC off the network lab exec said: $(status_of offline) $(said_of offline)"
 rec "lab exec on $MAC, off the network, under the caller's Lease: 409, $(said_of offline)"
 ask execs --rows handle,command,state,why GET "/api/devices/$MAC/execs"
-rows execs | grep -q '^owner|echo through-the-console|refused|' || give_up "the refused attempt is not in the Exec record: $(rows execs | tr '\n' ';')"
+rows execs | grep '^owner|echo through-the-console|refused|' >/dev/null || give_up "the refused attempt is not in the Exec record: $(rows execs | tr '\n' ';')"
 rec "the Exec record holds it: $(rows execs | grep 'through-the-console' | head -n 1)"
 passed
