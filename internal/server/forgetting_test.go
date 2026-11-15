@@ -995,6 +995,7 @@ func TestAJobSavedDuringAForgettingBringsNobodyBack(t *testing.T) {
 	l.signedIn(edithID)
 	l.lrMac("m1", "j293", nil)
 	blocker := l.addMac("ravi-mini", maintainerID)
+	blocker.copyAudit([]api.AuditEntry{{Time: l.clock.Now(), Maintainer: "edith", Action: "screenshot", End: 40}})
 	l.pjJob("j-done", "m1", edithID, "edith", l.clock.Now(), nil)
 	l.pjJob("j-run", "m1", edithID, "edith", l.clock.Now(), func(j *api.Job) { j.State, j.Outcome = api.JobQueued, "" })
 	stale, _ := l.s.store.job("j-run")
@@ -1038,6 +1039,12 @@ func TestAJobSavedDuringAForgettingBringsNobodyBack(t *testing.T) {
 	if names("j-done") {
 		t.Error("an exclusion during the forgetting saved the job with her in it")
 	}
+	// The sweep of the Audit log copies reads every Mac under its lock: the
+	// Mac is held only once the forgetting is past it, at the caller log.
+	waitFor("the Audit log copies", func() bool {
+		es, err := l.s.readAuditCopy("ravi-mini")
+		return err == nil && len(es) == 1 && es[0].Maintainer == ""
+	})
 	blocker.mu.Lock()
 	l.s.callers.mu.Unlock()
 	waitFor("the databases", func() bool { return !l.known(edithID) })
