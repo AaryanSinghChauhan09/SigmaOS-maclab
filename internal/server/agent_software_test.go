@@ -443,6 +443,85 @@ func TestASameVersionUpdateHoldsTheMacUntilTheRestartedAgentChecksIn(t *testing.
 	}
 }
 
+// A Maintainer who goes away mid-update cuts labd's wait, not the Mac's
+// download: the Mac stays reserved for the hold after the call ends, and the
+// update labd gave up on installs without restarting lab-agent.
+func TestADisconnectedUpdateHoldsTheMacAndRestartsNothing(t *testing.T) {
+	k := sshsigtest.NewKey(t)
+	handed := signedAgent(t, k, "0.11.0")
+	fetching, fetch := make(chan struct{}), make(chan struct{})
+	var once, let sync.Once
+	letFetch := func() { let.Do(func() { close(fetch) }) }
+	wrap := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "GET" && r.URL.Path == "/api/agent/lab-agent" {
+				once.Do(func() { close(fetching); <-fetch })
+			}
+			h.ServeHTTP(w, r)
+		})
+	}
+	sl := newWrappedSoftwareLab(t, k, false, agentUpdateMinAgent, func(c *Config) { c.AgentBinary, c.LabAgent = handed, "0.11.0" }, wrap)
+	t.Cleanup(letFetch) // before the lab's own cleanup, which waits on the download
+	sl.baseline()
+	sl.waitAgent(agentUpdateMinAgent)
+	v := sl.s.dev(sl.name)
+	v.mu.Lock()
+	v.updateHold = 3 * time.Second
+	v.mu.Unlock()
+	leasePath := "/api/devices/" + sl.name + "/lease"
+
+	ctx, cut := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "POST", sl.url+"/api/devices/"+sl.name+"/agent-update", nil)
+	req.Header.Set("Authorization", "Bearer "+harnessToken)
+	go func() {
+		if resp, err := sl.client().Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	select {
+	case <-fetching:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the Mac never fetched the lab's lab-agent")
+	}
+	cut()
+	for end := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		v.mu.Lock()
+		gaveUp := len(v.gaveUp)
+		v.mu.Unlock()
+		if gaveUp > 0 {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("labd never stopped waiting for the update its Maintainer left")
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	if resp, body := sl.post(leasePath, api.LeaseRequest{Holder: "t"}); resp.StatusCode != http.StatusConflict || !strings.Contains(body, agentBeingUpdated) {
+		sl.as(harnessToken, "DELETE", leasePath, nil)
+		t.Fatalf("a Lease just after the Maintainer left, the download still going: %d %s", resp.StatusCode, body)
+	}
+
+	letFetch()
+	for end := time.Now().Add(15 * time.Second); !strings.Contains(sl.logs.String(), "labd gave up waiting for it"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatalf("the Mac never heard labd gave up on the update:\n%s", sl.logs.String())
+		}
+	}
+	for end := time.Now().Add(15 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		resp, body := sl.post(leasePath, api.LeaseRequest{Holder: "t"})
+		if resp.StatusCode == 200 {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatalf("the Mac stayed reserved past the hold: %d %s", resp.StatusCode, body)
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+	if sl.restarts != 0 {
+		t.Fatalf("an update labd gave up on restarted lab-agent %d times", sl.restarts)
+	}
+}
+
 func TestAgentUpdateRefusesWhatItCannotDo(t *testing.T) {
 	k := sshsigtest.NewKey(t)
 

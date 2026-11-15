@@ -209,7 +209,8 @@ func updateCmd(ctx context.Context, cfg *Config, sys System, args []string, out 
 }
 
 // updateSelf is the lab's order to update, on a Lab-owned Mac that is idle.
-// The new agent starts once labd has heard the result.
+// The new agent starts once labd has heard the result; one labd gave up
+// waiting for is installed and not started.
 func (a *Agent) updateSelf(ctx context.Context, c api.Command) (any, *afterAck, error) {
 	a.mu.Lock()
 	job := ""
@@ -230,5 +231,9 @@ func (a *Agent) updateSelf(ctx context.Context, c api.Command) (any, *afterAck, 
 		if err := a.cfg.self().Restart(); err != nil {
 			a.log.Printf("the new lab-agent is installed but was not started: %v", err)
 		}
+	}, dropped: func() {
+		// labd no longer holds the Mac for it: a restart now could cut
+		// whatever it has started since. The new one starts with the next.
+		a.log.Printf("lab-agent %s is installed, and starts when lab-agent next restarts", res.To)
 	}}, nil
 }

@@ -66,6 +66,9 @@ type dev struct {
 	// agentStart is the api.Checkin.AgentStart labd last heard, and
 	// factsStart the one its d.Facts came with.
 	agentStart, factsStart string
+	// updateHold is how long lab agent-update still holds the Mac after its
+	// call ends; 0 is agentUpdateWait. Only a test sets it, under mu.
+	updateHold time.Duration
 	// beforeSend, which only a test sets (under mu), runs once a job's wait
 	// is over and before labd gives it the Mac.
 	beforeSend func()

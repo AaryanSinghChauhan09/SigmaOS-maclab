@@ -15,6 +15,8 @@ package server
 // (`lab agent-update`). There is no fleet-wide minimum agent.
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -141,7 +143,14 @@ func (s *Server) hAgentUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	var res api.AgentUpdate
 	if err := v.call(r.Context(), api.CmdAgentUpdate, "", nil, agentUpdateWait, &res); err != nil {
-		v.endUpdating(mark)
+		if errors.Is(err, errAgentRefused) {
+			v.endUpdating(mark) // the agent's own refusal: nothing was installed
+		} else {
+			// A Maintainer gone, a timeout: the Mac may still be downloading.
+			// Its result, if it comes, is answered forgotten, and a forgotten
+			// update restarts nothing; hold the Mac a while for it.
+			v.holdUpdating(mark)
+		}
 		httpErr(w, 502, "%s did not update its lab-agent: %v", d.Name, err)
 		return
 	}
@@ -154,7 +163,7 @@ func (s *Server) hAgentUpdate(w http.ResponseWriter, r *http.Request) {
 	mark.to = res.To
 	v.heardAgentLocked()
 	v.mu.Unlock()
-	time.AfterFunc(agentUpdateWait, func() { v.endUpdating(mark) })
+	v.holdUpdating(mark)
 	s.log.Printf("%s: lab-agent %s -> %s by %s", d.Name, res.From, res.To, callerOf(r).maintainer)
 	writeJSON(w, res)
 }
@@ -193,6 +202,15 @@ func (v *dev) heardAgentLocked() {
 		v.updating = nil
 		v.bump()
 	}
+}
+
+// holdUpdating lets the Mac go agentUpdateWait from now, if mark still
+// holds it then.
+func (v *dev) holdUpdating(mark *agentUpdating) {
+	v.mu.Lock()
+	hold := cmp.Or(v.updateHold, agentUpdateWait)
+	v.mu.Unlock()
+	time.AfterFunc(hold, func() { v.endUpdating(mark) })
 }
 
 // endUpdating lets the Mac go, if mark still holds it.
