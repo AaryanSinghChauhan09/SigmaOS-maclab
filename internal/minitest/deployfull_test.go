@@ -1071,3 +1071,46 @@ exec /bin/cp "$@"
 		t.Errorf("no word of the way back:\n%s", out)
 	}
 }
+
+// launchd loads the controller's file at boot: a first Deploy that fails
+// stops the controller it found loaded, as one it started, and leaves no
+// build behind.
+func TestAFirstDeployThatFailsStopsAControllerLoadedAtBoot(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.installedController()
+	m.load(oobdLabel)
+	bad := "v0.2.0-rc.1"
+	bundle(t, k, filepath.Join(r.dir, bad), bad, false)
+
+	out := m.refused("deploy", "--from", r.from(bad), bad)
+
+	if m.current() != "" || len(m.builds()) != 0 || m.loaded() || m.oobdLoaded() {
+		t.Errorf("left behind: current %q, builds %v, labd loaded %v, controller loaded %v\n%s", m.current(), m.builds(), m.loaded(), m.oobdLoaded(), out)
+	}
+	if !exists(m.path(oobdPlist)) {
+		t.Error("the controller's LaunchDaemon file was removed")
+	}
+}
+
+// The first Deploy on a mini restarted since its set-up: the controller is
+// loaded already, and runs from the build once it is there.
+func TestAFirstDeployWithTheControllerLoadedAtBootGoesThrough(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	m.installedController()
+	m.load(oobdLabel)
+	stop := m.controllerFollows(o)
+	defer stop()
+	tag := "v0.2.0-rc.1"
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+
+	out := m.ok("deploy", "--from", r.from(tag), tag)
+
+	if m.current() != tag || !m.loaded() || !m.oobdLoaded() {
+		t.Fatalf("the mini runs %q, labd loaded %v, controller loaded %v\n%s", m.current(), m.loaded(), m.oobdLoaded(), out)
+	}
+	if !strings.Contains(out, "restarted "+oobdLabel) || !strings.Contains(out, "Deployed "+tag) {
+		t.Errorf("no word of the controller's restart or the Deploy:\n%s", out)
+	}
+}

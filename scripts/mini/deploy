@@ -21,7 +21,7 @@
 #   7. reports in "Agents".
 #
 # When the check fails it Deploys the previous version by itself; with none
-# before it, labd stays stopped, and a controller it started is stopped. Going back
+# before it, labd and the controller, loaded here or at boot, stay stopped. Going back
 # from a release that says "No way back." (its build carries
 # deploy/no-way-back) also puts the databases back as step 4 copied them:
 # what arrived since is lost. So does a Deploy of an older version over a
@@ -75,9 +75,6 @@ announced=0
 # Set while labd is stopped for a switch whose check has not passed: an exit
 # then, whatever failed, puts the previous build back.
 switching=0
-# Set once this Deploy started the controller: a first Deploy that fails
-# stops it again.
-started_oobd=0
 # Set once this Deploy, of an older version over a release that says "No
 # way back.", began to put the databases back: going back from it puts the
 # marked release's own databases back too.
@@ -222,7 +219,6 @@ switch_to() {
     fresh="$OOBD_LABEL"
     launchctl enable "system/$OOBD_LABEL" || true
     if launchctl bootstrap system "$OOBD_PLIST" && loaded "$OOBD_LABEL"; then
-      started_oobd=1
       say "started $OOBD_LABEL from the build of $1"
     else
       say "launchd did not start $OOBD_LABEL from $OOBD_PLIST: see /var/log/oobd.log"
@@ -327,11 +323,13 @@ way_back() {
     fail "$tag was not Deployed: $previous is back and answers"
   fi
   stop_labd
-  # The controller runs from the build: while it runs, the build stays.
-  if (( started_oobd )) && ! stopped "$OOBD_LABEL"; then
+  # The controller runs from the build, whoever loaded it: this Deploy, or
+  # launchd at boot from the file the set-up installed. While it runs, the
+  # build stays.
+  if ! stopped "$OOBD_LABEL"; then
     say "$OOBD_LABEL did not stop (20 s)"
     rm -f "$plist"
-    tell "Deploy of $tag on the mini failed its check. There was no build before it, so labd is stopped; $OOBD_LABEL, which the Deploy started, did not stop, so its build stays at $LAB_BUILDS/$tag: the way back is incomplete.$lost"
+    tell "Deploy of $tag on the mini failed its check. There was no build before it, so labd is stopped; $OOBD_LABEL did not stop, so its build stays at $LAB_BUILDS/$tag: the way back is incomplete.$lost"
     fail "$tag was not Deployed, and $OOBD_LABEL did not stop: the way back is incomplete. Stop it (sudo launchctl bootout system/$OOBD_LABEL), then remove $LAB_CURRENT and $LAB_BUILDS/$tag"
   fi
   rm -f "$LAB_CURRENT" "$plist"
