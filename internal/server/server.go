@@ -908,8 +908,11 @@ func (s *Server) hEnrollToken(w http.ResponseWriter, r *http.Request) {
 	tok := "enr_" + randHex(16)
 	now := s.now()
 	exp := now.Add(joinCommandTTL)
-	if _, err := s.store.addJoinCommand(hashSecret(tok), req, by, now, exp); errors.Is(err, errNameHeld) {
+	if _, err := s.store.addJoinCommandAsked(hashSecret(tok), req, by, askerOf(r), now, exp); errors.Is(err, errNameHeld) {
 		httpErr(w, 409, "a Join command for a Mac called %s is waiting already: names are unique", req.Name)
+		return
+	} else if errors.Is(err, errAskerCut) {
+		s.refuse(w, r, 401, "%v", err)
 		return
 	} else if err != nil {
 		httpErr(w, 500, "%v", err)

@@ -868,6 +868,42 @@ func TestALabTokenBodyHeldOpenAcrossACutChangesNothing(t *testing.T) {
 	}
 }
 
+// A Join command asked for before End all access, its body read whole, and
+// stored only after the cut has swept the person's unused Join commands, is
+// not kept: the store checks in the one transaction that the credential that
+// asked is still there.
+func TestAJoinCommandAskedBeforeACutAndStoredAfterItIsNotKept(t *testing.T) {
+	for name, ask := range map[string]func(l *signInLab, ravi *browser) *httptest.ResponseRecorder{
+		"Lab token": func(l *signInLab, ravi *browser) *httptest.ResponseRecorder {
+			return l.heldAsToken(ravi.makeToken("stolen", "90"), "/api/enroll-tokens", `{"name":"late-mini","model":"desktop"}`)()
+		},
+		"browser session": func(_ *signInLab, ravi *browser) *httptest.ResponseRecorder {
+			return ravi.write("POST", "/api/enroll-tokens", `{"name":"late-mini","model":"desktop"}`, "Content-Type", "application/json")
+		},
+		"Lend a Mac": func(_ *signInLab, ravi *browser) *httptest.ResponseRecorder {
+			return ravi.form("/lend/join-command", "model", lendModelID, "name", "late-mini")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, _ := lendLab(t)
+			l.t = t
+			owner, ravi := l.signedIn(ownerID), l.signedIn(maintainerID)
+			var once sync.Once
+			beforeJoinCommandStored = func() {
+				once.Do(func() { owner.did(personPath(maintainerID, "end-all-access"), "sure", "yes") })
+			}
+			defer func() { beforeJoinCommandStored = nil }()
+			w := ask(l, ravi)
+			if strings.Contains(w.Body.String(), "enr_") {
+				t.Errorf("the answer shows a Join command made across the cut: %d", w.Code)
+			}
+			if n := l.count(`SELECT count(*) FROM tokens WHERE name = 'late-mini'`); n != 0 {
+				t.Errorf("%d Join commands were kept across the cut", n)
+			}
+		})
+	}
+}
+
 // A slow body of a Lab token that is still good is taken.
 func TestAHeldBodyOfALiveLabTokenIsTaken(t *testing.T) {
 	l, _ := lendLab(t)
