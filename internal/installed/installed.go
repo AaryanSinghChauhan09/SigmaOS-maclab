@@ -199,10 +199,15 @@ func (m *Manifest) Validate(payload []byte) error {
 	if err := PayloadName(m.Kernel.PayloadManifest); err != nil {
 		return err
 	}
+	named := map[string]bool{}
 	for _, a := range m.Artifacts {
 		if a.Name == "" || len(a.SHA256) != 64 || a.Version == "" || len(a.MtreeSHA256) != 64 {
 			return fmt.Errorf("artifact %q needs name, sha256, version and mtree_sha256", a.Name)
 		}
+		if named[a.Name] {
+			return fmt.Errorf("artifact %q is named twice: a Release has one version of each package", a.Name)
+		}
+		named[a.Name] = true
 	}
 	sum := sha256.Sum256(payload)
 	if hex.EncodeToString(sum[:]) != m.Kernel.PayloadManifestSHA256 {

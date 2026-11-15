@@ -787,3 +787,30 @@ func TestCandidatesStillShowsWhenTheReleasesCannotBeRead(t *testing.T) {
 		}
 	}
 }
+
+// A Release stored before the freeze refused a package named twice says
+// nothing certain of that package: it links no set, whichever version of
+// it comes last, and shows no verdict on Candidates.
+func TestAStoredReleaseNamingAPackageTwiceLinksNoSet(t *testing.T) {
+	l := newPublicLab(t, nil)
+	l.add(onSet(working(t, "m2-max-image2"), "edge-1"), "verified:t")
+	packages := setsPackages(t, goldenDoc(t, "m2-max-image2"))
+	ravi := Person{AccountID: 3003, Handle: "ravi", Maintainer: true}
+	kernel := checkedPackage(t, goldenDoc(t, "m2-max-image2"), "linux-aurora")
+	twice := append([]api.ReleasePackage{{Name: "linux-aurora", Version: "0.0.1-1"}}, packages...)
+	if twice[len(twice)-1].Name == "linux-aurora" || kernel == "0.0.1-1" {
+		t.Fatal("the run's kernel package is not after the other version")
+	}
+	relFreeze(t, l.s, "twice", time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), ravi, twice)
+	relVerdict(t, l.s, ravi, "twice", api.ReleaseNotQualified, "no")
+	if n := l.page("/candidates").count(t, ".lab-verdict"); n != 0 {
+		t.Errorf("a Release naming linux-aurora twice put %d verdict lines on Candidates", n)
+	}
+	r := httptest.NewRequest("GET", "/releases", nil)
+	r = r.WithContext(context.WithValue(r.Context(), signedInKey{}, &signedIn{Person: ravi, csrf: "the-csrf-token"}))
+	shown := httptest.NewRecorder()
+	l.s.pReleases(shown, r)
+	if n := parseHTML(t, shown.Body.String()).sole(t, `tr.release-row[id="release-twice"]`).count(t, `td[data-label="Candidate set"] a`); n != 0 {
+		t.Errorf("a Release naming linux-aurora twice links %d sets on Releases", n)
+	}
+}

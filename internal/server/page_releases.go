@@ -119,9 +119,15 @@ func runWords(outcome string) string {
 
 func releasePath(name string) string { return "/releases?open=" + url.QueryEscape(name) }
 
+// packagesOf is a Release's packages, name to version. A Release stored
+// with one package named twice (before the freeze refused that) has none,
+// so it links no candidate set.
 func packagesOf(r *api.Release) map[string]string {
 	packages := map[string]string{}
 	for _, pkg := range r.Packages {
+		if _, seen := packages[pkg.Name]; seen {
+			return nil
+		}
 		packages[pkg.Name] = pkg.Version
 	}
 	return packages
