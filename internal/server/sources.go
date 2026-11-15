@@ -137,7 +137,8 @@ func resolve(ctx context.Context, s api.Source) (api.Source, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	args := []string{"ls-remote", "--", s.Repo}
+	// A redirect is never followed: the source names the host it comes from.
+	args := []string{"-c", "http.followRedirects=false", "ls-remote", "--", s.Repo}
 	want := s.Ref
 	if want == "" {
 		want = "HEAD"

@@ -78,8 +78,9 @@ step "fetch $URL $SHA"
 git -C $C/git rev-parse --git-dir >/dev/null 2>&1 || git init -q --bare $C/git
 # Depth-1 fetch of just this commit; objects shared with earlier commits are not re-sent.
 # Sources are public: the Builder holds no credential for one, and git asks for none.
+# A redirect is never followed: the source names the host it is fetched from.
 if ! git -C $C/git cat-file -e "$SHA^{commit}" 2>/dev/null; then
-  GIT_TERMINAL_PROMPT=0 git -C $C/git fetch -q --depth=1 --no-tags "$URL" "$SHA"
+  GIT_TERMINAL_PROMPT=0 git -C $C/git -c http.followRedirects=false fetch -q --depth=1 --no-tags "$URL" "$SHA"
 fi
 git -C $C/git update-ref "refs/lab/$SHA" "$SHA"
 

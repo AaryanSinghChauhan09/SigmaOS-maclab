@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -166,12 +170,13 @@ func TestARefusedSourceContactsNothing(t *testing.T) {
 }
 
 // fakeGit puts a git first on PATH that records each call and answers
-// ls-remote with one commit for the ref asked, and returns a reader of what it recorded.
+// ls-remote (after its two -c words) with one commit for the ref asked,
+// and returns a reader of what it recorded.
 func fakeGit(t *testing.T) func() string {
 	t.Helper()
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls")
-	script := "#!/bin/sh\necho \"$*\" >> '" + calls + "'\nprintf '17cba00e43b94ba6b5c64be7cbe3db9234a41f84\\t%s\\n' \"$4\"\n"
+	script := "#!/bin/sh\necho \"$*\" >> '" + calls + "'\nprintf '17cba00e43b94ba6b5c64be7cbe3db9234a41f84\\t%s\\n' \"$6\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -238,5 +243,50 @@ func TestASourceThatCouldCarryACredentialRunsNoGit(t *testing.T) {
 	}
 	if got := calls(); !strings.Contains(got, "ls-remote -- https://github.com/o/r ") || !strings.Contains(got, "ls-remote -- https://git.example.org/linux.git v7.1") {
 		t.Fatalf("git was not asked for the public forms:\n%s", got)
+	}
+}
+
+// A listed host that redirects is not followed: git is asked for the
+// address given and no other, so a source names the host it is fetched
+// from. The host redirected to is never contacted.
+func TestASourceWhoseHostRedirectsIsNeverFetchedFromTheSecondHost(t *testing.T) {
+	var reached atomic.Int32
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Add(1)
+		http.Error(w, "no repository here", http.StatusNotFound)
+	}))
+	t.Cleanup(second.Close)
+	var asked atomic.Int32
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		http.Redirect(w, r, second.URL+r.URL.RequestURI(), http.StatusFound)
+	}))
+	t.Cleanup(first.Close)
+	_, err := resolve(context.Background(), api.Source{Repo: first.URL + "/o/r.git", Ref: "main"})
+	if err == nil {
+		t.Fatal("a redirected source resolved")
+	}
+	if asked.Load() == 0 {
+		t.Fatalf("git never asked the source's own host: %v", err)
+	}
+	if n := reached.Load(); n != 0 {
+		t.Fatalf("git followed the redirect: %d requests reached the second host", n)
+	}
+}
+
+// The Builder's fetch of a source follows no redirect either.
+func TestTheBuildersFetchFollowsNoRedirect(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "builder", "kbuild"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetches := regexp.MustCompile(`(?m)^.*\bgit\b.*\bfetch\b.*$`).FindAllString(string(b), -1)
+	if len(fetches) == 0 {
+		t.Fatal("kbuild fetches nothing with git: the check proves nothing")
+	}
+	for _, line := range fetches {
+		if !strings.Contains(line, "-c http.followRedirects=false") {
+			t.Errorf("kbuild fetches with redirects followed: %s", strings.TrimSpace(line))
+		}
 	}
 }
