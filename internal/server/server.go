@@ -1407,8 +1407,11 @@ func (s *Server) forget(v *dev, by Person, holder string, force bool) (int, erro
 	if err != nil {
 		return code, err
 	}
-	if !s.endEnrollment(v, leaving{how: leftByMaintainer, by: by}) {
+	switch err := s.endEnrollment(v, leaving{how: leftByMaintainer, by: by}); {
+	case errors.Is(err, errMacGone):
 		return 404, fmt.Errorf("no device %q", v.snapshot().Name)
+	case err != nil:
+		return 500, err
 	}
 	close(v.gone)
 	return 200, nil
