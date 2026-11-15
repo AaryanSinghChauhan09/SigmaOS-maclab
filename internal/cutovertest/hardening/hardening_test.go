@@ -393,8 +393,17 @@ case "$*" in
   "form "*" /me/tokens name="*) echo lab_0123456789012345678901234567890123456789 > "$out"; echo status=200 ;;
   "form "*" /me/tokens/7/revoke sure=yes") echo status=303 ;;
   "form "*" /people/mark handle=someone as=m-team")
+    if [ -n "${H08_MARK_HANGS:-}" ]; then
+      # labd answers once the test writes the answer: 303 with the mark
+      # written, or the post's own deadline (0) with the write still to land.
+      touch "$S/posted"
+      until [ -f "$S/answer" ]; do sleep 0.05; done
+      a="$(cat "$S/answer")"
+      if [ "$a" = 0 ]; then (sleep 1; touch "$S/marked") & else touch "$S/marked"; fi
+      echo "status=$a"
+      exit 0
+    fi
     touch "$S/marked"
-    [ -z "${H08_MARK_HANGS:-}" ] || { touch "$S/posted"; exec sleep 30; }
     echo "status=${H08_MARK:-303}" ;;
   "form "*" /people/42/end-all-access sure=yes") touch "$S/cut"; echo status=303 ;;
   "form "*" /people/42/m-team/remove sure=yes") echo status=303 ;;
@@ -430,22 +439,25 @@ func TestH08sNormalEndTakesOffOnlyItsOwnMark(t *testing.T) {
 
 // A mark whose answer was lost is taken off only when People's record shows
 // it is the owner's, whose browser H 8 is: another Maintainer's mark made
-// after H 8's look stays.
+// after H 8's look stays. With no answer and no mark the write may still
+// land: that is not undone.
 func TestH08TakesOffOnlyAMarkOfItsOwnWhoseAnswerWasLost(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
+		mark    string
 		env     []string
 		removed bool
 		want    string
 	}{
-		"a lost 409 over another Maintainer's mark": {[]string{"H08_MARK=0", "H08_MARKED_BY=maint"}, false, "left: @maint marked someone as M team, not this test"},
-		"no mark made":        {[]string{"H08_MARK=0", "H08_KIND_AFTER=", "H08_MARKED_BY="}, false, "undone: People shows no M team mark on someone"},
-		"the test's own mark": {[]string{"H08_MARK=0"}, true, "undone: the M team mark was taken off someone"},
+		"a lost 409 over another Maintainer's mark": {"0", []string{"H08_MARKED_BY=maint"}, false, "left: @maint marked someone as M team, not this test"},
+		"no answer and no mark yet":                 {"0", []string{"H08_KIND_AFTER=", "H08_MARKED_BY="}, false, "NOT UNDONE: the post that marks someone as M team had no answer"},
+		"an answer and no mark made":                {"502", []string{"H08_KIND_AFTER=", "H08_MARKED_BY="}, false, "undone: People shows no M team mark on someone"},
+		"the test's own mark":                       {"0", nil, true, "undone: the M team mark was taken off someone"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			out, code, record, calls := labRun(t, "h08-agents-lines", "", h08Probe, "session\nyes\n", c.env, "--other", "someone")
-			if code != 1 || !strings.Contains(record, "FAILED: someone was not marked M team: 0") {
+			out, code, record, calls := labRun(t, "h08-agents-lines", "", h08Probe, "session\nyes\n", append(c.env, "H08_MARK="+c.mark), "--other", "someone")
+			if code != 1 || !strings.Contains(record, "FAILED: someone was not marked M team: "+c.mark) {
 				t.Fatalf("exit %d\n%s\n%s", code, out, record)
 			}
 			if got := strings.Contains(calls, "/people/42/m-team/remove"); got != c.removed {
@@ -513,35 +525,60 @@ func TestH08ReadsWhoGaveTheNewestMarkInThePagesOrder(t *testing.T) {
 	}
 }
 
-// A Ctrl-C while the mark's post is out still checks the mark: one of the
-// test's own is taken off.
-func TestACtrlCWhileH08MarksChecksTheMark(t *testing.T) {
+// A Ctrl-C while the mark's post is out checks the mark once labd's request
+// has ended: a mark written just before labd answers is the test's own and
+// is taken off; with no answer by the post's deadline and no mark yet, the
+// write may still land after, and the record says NOT UNDONE.
+func TestACtrlCWhileH08MarksChecksTheMarkOnceLabdAnswered(t *testing.T) {
 	t.Parallel()
-	l := labCommand(t, "h08-agents-lines", "", h08Probe, "session\nyes\n", []string{"H08_MARK_HANGS=1"}, "--other", "someone")
-	l.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := l.cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer syscall.Kill(-l.cmd.Process.Pid, syscall.SIGKILL)
-	for end := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		if _, err := os.Stat(filepath.Join(l.stubs, "posted")); err == nil {
-			break
-		}
-		if time.Now().After(end) {
-			t.Fatalf("the mark was not posted:\n%s\n%s", l.calls(), l.record())
-		}
-	}
-	syscall.Kill(-l.cmd.Process.Pid, syscall.SIGINT)
-	done := make(chan error, 1)
-	go func() { done <- l.cmd.Wait() }()
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("the run did not end after Ctrl-C")
-	}
-	record := l.record()
-	if !strings.Contains(l.calls(), "/people/42/m-team/remove sure=yes") || !strings.Contains(record, "undone: the M team mark was taken off someone") || !strings.Contains(record, "Result: stopped") {
-		t.Errorf("the mark was not checked and taken off:\n%s\n%s", l.calls(), record)
+	for name, c := range map[string]struct {
+		answer  string
+		removed bool
+		want    string
+	}{
+		"labd marks and answers after the Ctrl-C": {"303", true, "undone: the M team mark was taken off someone"},
+		"the mark lands after the post gave up":   {"0", false, "NOT UNDONE: the post that marks someone as M team had no answer"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			l := labCommand(t, "h08-agents-lines", "", h08Probe, "session\nyes\n", []string{"H08_MARK_HANGS=1"}, "--other", "someone")
+			l.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			if err := l.cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer syscall.Kill(-l.cmd.Process.Pid, syscall.SIGKILL)
+			for end := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+				if _, err := os.Stat(filepath.Join(l.stubs, "posted")); err == nil {
+					break
+				}
+				if time.Now().After(end) {
+					t.Fatalf("the mark was not posted:\n%s\n%s", l.calls(), l.record())
+				}
+			}
+			syscall.Kill(-l.cmd.Process.Pid, syscall.SIGINT)
+			done := make(chan error, 1)
+			go func() { done <- l.cmd.Wait() }()
+			select {
+			case <-done:
+				t.Fatalf("the run ended before labd answered the mark:\n%s\n%s", l.calls(), l.record())
+			case <-time.After(time.Second):
+			}
+			if err := os.WriteFile(filepath.Join(l.stubs, "answer"), []byte(c.answer), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				t.Fatal("the run did not end after labd answered")
+			}
+			record := l.record()
+			if got := strings.Contains(l.calls(), "/people/42/m-team/remove sure=yes"); got != c.removed {
+				t.Errorf("the mark taken off: %v, want %v:\n%s", got, c.removed, l.calls())
+			}
+			if !strings.Contains(record, c.want) || !strings.Contains(record, "Result: stopped") || strings.Contains(record, "undone: People shows no M team mark") {
+				t.Errorf("the record lacks %q:\n%s", c.want, record)
+			}
+		})
 	}
 }
 

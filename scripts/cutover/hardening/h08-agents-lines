@@ -83,10 +83,22 @@ marked_by() {
 # theirs. DONE is the record's line once the mark is off. MARK says how it
 # went: off, left (not the test's, or gone) or unsure.
 MARK=""
+# The mark's post: SENT once it is out, POST its process while it is.
+MARK_SENT=""
+MARK_POST=""
+# mark_answered: labd answered the mark's post, so its request has ended.
+mark_answered() {
+  [[ -z $MARK_SENT ]] || { [[ -f $WORK/mark.out ]] && [[ "$(status_of mark)" =~ ^[1-9] ]]; }
+}
 # shellcheck disable=SC2329
 check_mark() {
   local kind id by="" done="${3:-undone: the M team mark was taken off $1}"
   MARK=unsure
+  if [[ -n $MARK_POST ]]; then
+    say "waiting for labd's answer to the mark on $1 before looking at it (at most 2 minutes)"
+    wait "$MARK_POST" 2>/dev/null || true
+    MARK_POST=""
+  fi
   if ! kind="$(kind_of "$1")"; then
     rec "NOT UNDONE: $1 may still be marked M team: People did not open at $ADDRESS/people; if its record shows @$2 marked $1, take the mark off there"
     return 0
@@ -94,7 +106,14 @@ check_mark() {
   case "$kind" in
     "M team") ;;
     Maintainer | Admin) MARK=left; rec "left: People shows $1 as $kind, which is not this test's to change"; return 0 ;;
-    *) MARK=left; rec "undone: People shows no M team mark on $1"; return 0 ;;
+    *)
+      if mark_answered; then
+        MARK=left
+        rec "undone: People shows no M team mark on $1"
+      else
+        rec "NOT UNDONE: the post that marks $1 as M team had no answer, so labd may still write the mark: if People's record shows @$2 marked $1, take the mark off on $ADDRESS/people"
+      fi
+      return 0 ;;
   esac
   id="$(account_of "$1")"
   [[ -z $id ]] || by="$(marked_by "$1" "$id")"
@@ -163,9 +182,16 @@ if ! playing; then
   [[ -n $me ]] || give_up "$ADDRESS/me does not say your handle: the test could not tell its own mark from another's. Nothing was marked"
   # Armed before the post: whatever its answer, or none (a Ctrl-C while it
   # is out), the mark is looked at in the end, and taken off only if it is
-  # the test's own. A refusal (4xx) changed nothing.
+  # the test's own. A refusal (4xx) changed nothing. The post goes in the
+  # background, where a Ctrl-C does not stop it: the run then ends once
+  # labd has answered, or the post's own deadline passed, and the look
+  # comes after labd's write; with no answer a mark not seen is NOT UNDONE.
   arm mark check_mark "$other" "$me"
-  form mark --session "$OWNER_SESSION" --page /people /people/mark "handle=$other" as=m-team
+  MARK_SENT=1
+  form mark --session "$OWNER_SESSION" --page /people /people/mark "handle=$other" as=m-team &
+  MARK_POST=$!
+  wait "$MARK_POST" || true
+  MARK_POST=""
   [[ "$(status_of mark)" != 4?? ]] || disarm mark
   [[ "$(status_of mark)" == 303 ]] || give_up "$other was not marked M team: $(status_of mark) $(said_of mark)"
   rec "the owner marked $other as M team on People"
