@@ -24,6 +24,9 @@ signal-cli's device link with it, for the owner's phone to scan.
 const (
 	qrLevel = qr.L
 	qrQuiet = 2
+
+	// More than any line a QR code holds: labd qr reads no further.
+	qrMaxInput = 4096
 )
 
 // qrCode is `labd qr`. It returns the command's exit status.
@@ -32,7 +35,7 @@ func qrCode(args []string, in io.Reader, out, errw io.Writer) int {
 		fmt.Fprint(errw, qrUsage)
 		return 2
 	}
-	line, err := bufio.NewReader(in).ReadString('\n')
+	line, err := bufio.NewReader(io.LimitReader(in, qrMaxInput)).ReadString('\n')
 	line = strings.TrimSuffix(line, "\n")
 	if line == "" {
 		if err != nil && err != io.EOF {

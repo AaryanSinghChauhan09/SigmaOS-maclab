@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"regexp"
 	"strings"
 	"testing"
@@ -112,6 +113,35 @@ func TestLabdQRDrawsARealLinkInAnOrdinaryTerminal(t *testing.T) {
 			t.Errorf("a link of %d bytes draws %d lines of %d columns, want at most 23 of 45", len(link), len(lines), len(rows[0]))
 		}
 	}
+}
+
+// labd qr reads at most 4 KiB looking for its line, however long the input.
+func TestLabdQRReadsAtMost4KiB(t *testing.T) {
+	in := &endless{}
+	var out, errw bytes.Buffer
+	if code := qrCode(nil, in, &out, &errw); code == 0 || out.Len() != 0 {
+		t.Errorf("an endless line: status %d, %d bytes drawn", code, out.Len())
+	}
+	if in.n > 4096 {
+		t.Errorf("labd qr read %d bytes, want at most 4096", in.n)
+	}
+	if strings.Contains(errw.String(), "xxxx") {
+		t.Errorf("the refusal holds the line: %q", errw.String())
+	}
+}
+
+// endless is a line that never ends, counting what was read of it.
+type endless struct{ n int }
+
+func (e *endless) Read(p []byte) (int, error) {
+	if e.n > 1<<20 {
+		return 0, io.EOF
+	}
+	for i := range p {
+		p[i] = 'x'
+	}
+	e.n += len(p)
+	return len(p), nil
 }
 
 // labd qr refuses an argument (the line is never one), an empty line and a
