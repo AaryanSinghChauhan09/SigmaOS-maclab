@@ -316,9 +316,23 @@ func TestUnmarkingAVolunteerMidJobStopsTheJobAtTheNextCheckIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(h.release)
-	j := l.wait(id, 60*time.Second)
-	if j.Outcome != api.OutcomeIncomplete || !strings.Contains(j.Summary, termsCut) {
-		t.Fatalf("the job on a Mac that came to wait for the terms ended %s: %s", j.Outcome, j.Summary)
+	// Stopped: cut short for the terms and restoring the Mac, which can take
+	// a while when the cut came as the one-shot was armed, or done.
+	v := l.s.dev(l.name)
+	for deadline := time.Now().Add(60 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		j, _ := l.s.store.job(id)
+		if j.State == api.JobDone {
+			if j.Outcome != api.OutcomeIncomplete || !strings.Contains(j.Summary, termsCut) {
+				t.Fatalf("the job on a Mac that came to wait for the terms ended %s: %s", j.Outcome, j.Summary)
+			}
+			break
+		}
+		if j.State == api.JobRestoring && v.siteCutOf(id) == termsCut {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the job on a Mac that came to wait for the terms is %s: %v", j.State, j.Events)
+		}
 	}
 	if !l.s.view(l.s.dev(l.name)).TermsWaiting {
 		t.Error("the Mac does not wait for its Volunteer")

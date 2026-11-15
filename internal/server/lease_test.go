@@ -174,8 +174,9 @@ func TestRemovingAMaintainerEndsTheirLeases(t *testing.T) {
 		t.Fatalf("a removed Maintainer's lease outlived them: %+v", q)
 	}
 	const ended = "@joshua is no longer a Maintainer"
-	if !strings.Contains(l.logs.String(), ended) {
-		t.Fatalf("labd's log doesn't say why the lease ended:\n%s", l.logs.String())
+	// labd's log, which a forgetting does not reach, has the account; the job says why.
+	if logs := l.logs.String(); !strings.Contains(logs, fmt.Sprintf("the Lease of account %d, until", testAccount("joshua"))) || strings.Contains(logs, ended) {
+		t.Fatalf("labd's log doesn't say by account whose lease ended:\n%s", logs)
 	}
 	j := l.jobAPI(mine, 60*time.Second)
 	l.expect(j, api.OutcomePass)
