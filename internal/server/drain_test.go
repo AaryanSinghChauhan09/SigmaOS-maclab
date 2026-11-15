@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -206,6 +207,84 @@ func TestAJobWaitingForItsBuildIsQueuedAgainAtTheStart(t *testing.T) {
 	if j, _ := s.store.job("j-building"); strings.Contains(j.Summary, "labd restarted") {
 		t.Fatalf("the job that waited for its build: %s %s", j.State, j.Summary)
 	}
+}
+
+// saidTimes waits until job id has n events containing what.
+func saidTimes(t *testing.T, s *Server, id, what string, n int) {
+	t.Helper()
+	got := 0
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		got = 0
+		if j, err := s.store.job(id); err == nil {
+			for _, e := range j.Events {
+				if strings.Contains(e.Msg, what) {
+					got++
+				}
+			}
+		}
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job %s said %q %d times, want %d", id, what, got, n)
+		}
+	}
+}
+
+// pendingOf counts the commands of this kind waiting for the Mac.
+func pendingOf(v *dev, kind string) int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	n := 0
+	for _, c := range v.pending {
+		if c.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// restartLabd starts a labd again on the data the stopped one left.
+func restartLabd(t *testing.T, s *Server) *Server {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	again, err := New(ctx, s.cfg, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); idleAfterStop(t, again) })
+	return again
+}
+
+// A Deploy stops labd while a job from a source prepares: it resolves the
+// source and waits for its Mac's kernel config. The job was never sent, so
+// the stop ends nothing: it is still unfinished in the store and the next
+// labd prepares it again.
+func TestAStopWhileASourceJobPreparesKeepsItQueued(t *testing.T) {
+	l := rolesLab(t, func(c *Config) { c.AliveWindow, c.OfflineAfter = time.Hour, time.Hour })
+	v := l.lrMac("desk-mac", "j313", nil)
+	go l.s.deviceLoop(v)
+	spec, _ := json.Marshal(api.JobSpec{Device: "desk-mac", Source: gitRepo(t)})
+	w := l.signedIn(maintainerID).write("POST", "/api/jobs", string(spec), "Content-Type", "application/json")
+	var j api.Job
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &j) != nil {
+		t.Fatalf("submit: %d %s", w.Code, w.Body)
+	}
+	jobSaid(t, l.s, j.ID, "resolving")
+	for deadline := time.Now().Add(10 * time.Second); pendingOf(v, api.CmdConfig) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the job never asked the Mac for its kernel config")
+		}
+	}
+
+	stopLabd(t, l.s)
+	idleAfterStop(t, l.s)
+	if got, _ := l.s.store.job(j.ID); got.State == api.JobDone {
+		t.Fatalf("the stop ended the job: %s: %s", got.Outcome, got.Summary)
+	}
+	again := restartLabd(t, l.s)
+	saidTimes(t, again, j.ID, "resolving", 2)
+	again.cancelJob(j.ID, "")
 }
 
 // While a person's Hard reset waits for the controller the Mac takes no

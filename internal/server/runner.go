@@ -142,6 +142,9 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		return
 	}
 	if err := s.beginJobRecoveryMode(ctx, v, j); err != nil {
+		if r.kept() {
+			return
+		}
 		// The Mac left the lab, or was forgotten, as the job started: its
 		// row is gone and the job has no Mac to run on.
 		if errors.Is(err, errForgotten) {
@@ -173,7 +176,7 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			r.state(api.JobQueued)
 			r.ev("%s", jobsDrained)
 			err := v.waitFor(ctx, 0, func() bool { return !s.drained() })
-			if s.stopping() {
+			if r.kept() {
 				return
 			}
 			if gone := v.goneReason(); gone != "" {
@@ -186,8 +189,10 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			}
 		}
 		if outcome, summary := r.build(ctx); outcome != "" {
-			if outcome == api.OutcomeCanceled && s.stopping() {
-				return // never sent: the next labd queues it again
+			// Resolving the source, the Mac's config and the build all end
+			// when labd stops: whatever they say then, the job was never sent.
+			if r.kept() {
+				return
 			}
 			if why := v.leaving(); why != "" {
 				outcome, summary = api.OutcomeCanceled, "canceled: "+why
@@ -248,8 +253,8 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			r.state(api.JobQueued) // a job built from source waits as queued, too
 			r.ev("%s", why)
 			err := v.waitFor(ctx, 0, func() bool { return holdLocked() != why })
-			if s.stopping() {
-				return false // never sent: it stays queued for the next labd
+			if r.kept() {
+				return false
 			}
 			if v.leaving() != "" {
 				break
@@ -511,6 +516,11 @@ func (r *jobRun) finish(outcome, summary string) { r.finishAt(outcome, summary, 
 // stopping is whether labd is stopping. A job not yet sent to its Mac is
 // then left as it is in the store, for the next labd to queue again.
 func (s *Server) stopping() bool { return s.ctx.Err() != nil }
+
+// kept is whether the job, not yet sent to its Mac, is left unfinished in
+// the store for the next labd to queue again, as it is when labd stops:
+// the stop cut short its preparation or its wait, not the job.
+func (r *jobRun) kept() bool { return r.s.stopping() }
 
 func (r *jobRun) finishAt(outcome, summary string, at time.Time) {
 	// The Mac's authority over the job ends before anyone can see the job
