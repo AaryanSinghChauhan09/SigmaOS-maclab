@@ -231,3 +231,23 @@ func TestAnOpeningDuringTheImportLeavesTheReports(t *testing.T) {
 		t.Errorf("the open lab's labd was stopped or its reports.db moved:\n%s", m.calls())
 	}
 }
+
+// A run that empties the reports and then fails leaves no pass from earlier
+// the same day for the opening to read.
+func TestAFailedImportTakesAwayTheDaysEarlierPass(t *testing.T) {
+	m, dump, public := rehearsal(t)
+	mark := m.path("var/lab/import/imported")
+	if out, code := m.run(hex.EncodeToString(machineIDKey())+"\n", "rehearsal-import", "key"); code != 0 {
+		t.Fatalf("the key: exit %d, %s", code, out)
+	}
+	if out, code := m.run(oldLink+"\n", "rehearsal-import", "run", "--public-key", public, "--dumped", dump); code != 0 || !exists(mark) {
+		t.Fatalf("the first import: exit %d, %s", code, out)
+	}
+	wrong := "https://omarchy-m-testing.org/reports/" + strings.Repeat("0", 32) + "/deletion?token=not-the-one"
+	if out, code := m.run(wrong+"\n", "rehearsal-import", "run", "--public-key", public, "--dumped", dump); code == 0 || !strings.Contains(out, "the third check failed") {
+		t.Fatalf("the second import, with a deletion link that is not the old site's: exit %d, %s", code, out)
+	}
+	if exists(mark) {
+		t.Errorf("the failed import left the earlier pass's mark: %q", read(t, mark))
+	}
+}
