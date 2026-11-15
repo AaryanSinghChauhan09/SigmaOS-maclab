@@ -9,7 +9,7 @@
 #   sudo scripts/mini/signal [--dry-run] test
 #
 # link      links the sender to the owner's own number as a device named
-#           "Omarchy Mac Lab": it shows a QR code (the link alone without
+#           "Omarchy Mac Lab": it shows a QR code (it needs Homebrew's
 #           qrencode) to scan in Signal on his phone, under Settings, Linked
 #           devices. Lines then come from his own number.
 # register  or: asks for a number of the sender's own, the captcha link and
@@ -111,18 +111,13 @@ qrencode() {
   return 1
 }
 
-# show_link: signal-cli link's output, with the link shown as a QR code.
+# show_link QRENCODE: signal-cli link's output, with the link shown as a QR code.
 show_link() {
-  local line q
+  local line
   while IFS= read -r line; do
     if [[ $line == sgnl://* ]]; then
       echo "In Signal on your phone: Settings, Linked devices, Link a new device, and scan:" >&2
-      if q="$(qrencode)" && printf '%s' "$line" | as_lab "$q" -t ansiutf8 >&2; then
-        :
-      else
-        echo "(no qrencode here: make a QR code of this link on a machine you trust, or install qrencode from Homebrew and run link again)" >&2
-        printf '%s\n' "$line" >&2
-      fi
+      printf '%s' "$line" | as_lab "$1" -t ansiutf8 >&2 || echo "(qrencode failed: the link is not shown. Stop with Ctrl-C and run link again)" >&2
       echo "Waiting for the phone..." >&2
     else
       printf '%s\n' "$line"
@@ -130,9 +125,13 @@ show_link() {
   done
 }
 
+# The link is never printed, nor traced: whoever has it can link a device.
 link() {
+  local q
+  set +x
+  q="$(qrencode)" || fail "no qrencode here, and the link is shown only as a QR code: install it as the account /opt/homebrew belongs to (brew install qrencode) and run link again. Nothing was changed"
   alone
-  cli link -n "$DEVICE_NAME" | show_link || fail "signal-cli did not link: run link again for a new QR code"
+  cli link -n "$DEVICE_NAME" | show_link "$q" || fail "signal-cli did not link: run link again for a new QR code"
   say "linked as \"$DEVICE_NAME\", a device of your number: lines come from your own number. Then: scripts/mini/signal groups"
 }
 

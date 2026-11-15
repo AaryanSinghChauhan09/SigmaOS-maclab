@@ -336,10 +336,18 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 		t.Fatalf("--dry-run link: exit %d\n%s\n%s", code, out, m.callsOrNone())
 	}
 
-	// No qrencode: the link alone, for the owner to make a QR code of.
+	// No qrencode: refused before the sender is stopped, and no link is made.
 	out, code := m.signal("", "link")
-	if code != 0 || !strings.Contains(out, linkURL) || !strings.Contains(out, "Associated with") {
-		t.Fatalf("link with no qrencode: exit %d\n%s", code, out)
+	if code == 0 || !strings.Contains(out, "qrencode") || strings.Contains(out, "sgnl://") || exists(m.log) {
+		t.Fatalf("link with no qrencode: exit %d\n%s\n%s", code, out, m.callsOrNone())
+	}
+
+	// With qrencode: the link goes to it on its input, as the lab account.
+	qrencode := m.path("opt/homebrew/bin/qrencode")
+	write(t, qrencode, "#!/bin/bash\necho \"qrencode $*\" >> \"$STUB_LOG\"\necho \"[QR of $(cat)]\"\n", 0o755)
+	out, code = m.signal("", "link")
+	if code != 0 || !strings.Contains(out, "[QR of "+linkURL+"]") || !strings.Contains(out, "Associated with") {
+		t.Fatalf("link with qrencode: exit %d\n%s", code, out)
 	}
 	calls := m.calls()
 	var order []int
@@ -361,14 +369,6 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 		t.Errorf("link changed the owner's profile or named an account:\n%s", calls)
 	}
 
-	// With qrencode: the link goes to it on its input, as the lab account.
-	qrencode := m.path("opt/homebrew/bin/qrencode")
-	write(t, qrencode, "#!/bin/bash\necho \"qrencode $*\" >> \"$STUB_LOG\"\necho \"[QR of $(cat)]\"\n", 0o755)
-	os.Remove(m.log)
-	out, code = m.signal("", "link")
-	if code != 0 || !strings.Contains(out, "[QR of "+linkURL+"]") {
-		t.Fatalf("link with qrencode: exit %d\n%s", code, out)
-	}
 	if !strings.Contains(m.calls(), "as-lab "+qrencode+" -t ansiutf8") {
 		t.Errorf("qrencode was not run as the lab account:\n%s", m.calls())
 	}
@@ -381,6 +381,19 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 		}
 		return nil
 	})
+
+	// Run under bash -x, the trace still shows no link.
+	cmd := exec.Command("bash", "-x", filepath.Join(m.tree, "scripts", "mini", "signal"), "link")
+	cmd.Env = m.env
+	traced, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(traced), "[QR of "+linkURL+"]") {
+		t.Fatalf("link under bash -x: %v\n%s", err, traced)
+	}
+	for _, line := range strings.Split(string(traced), "\n") {
+		if strings.HasPrefix(line, "+") && strings.Contains(line, "sgnl://") {
+			t.Errorf("the trace shows the link: %s", line)
+		}
+	}
 
 	// signal-cli failing is a failure, and the sender is started again.
 	write(t, m.path(signalCLI), "#!/bin/bash\necho \"signal-cli $*\" >> \"$STUB_LOG\"\necho 'Link request error: Connection closed!' >&2\nexit 3\n", 0o755)
