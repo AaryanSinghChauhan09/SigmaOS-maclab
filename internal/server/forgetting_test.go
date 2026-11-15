@@ -798,3 +798,46 @@ func TestAFileTheForgettingCannotSweepFailsItAndItCanBeDoneAgain(t *testing.T) {
 		t.Errorf("labd's copy of the Audit log: %+v %v", es, err)
 	}
 }
+
+// A person renamed on GitHub since the lab wrote of them is forgotten under
+// every handle the lab kept beside their account id, and a name kept beside
+// their account id goes whatever it says. Another person's handle of today
+// is theirs, though the forgotten person once had it.
+func TestAForgettingFindsTheHandlesThePersonHadBefore(t *testing.T) {
+	l := rolesLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	l.signedIn(linusID)
+	now := l.clock.Now()
+	// Written while she was "edie", and once, long ago, "linus".
+	for _, line := range []recordLine{
+		{At: now, ActorID: edithID, Actor: "edie", What: "marked as M team", AboutID: graceID, About: "grace", Note: "asked by @edie"},
+		{At: now, ActorID: edithID, Actor: "linus", What: "asked to be forgotten"},
+		{At: now, ActorID: linusID, Actor: "linus", What: "made a Lab token"},
+	} {
+		if err := l.s.store.addRecord(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := l.s.store.db.Exec(`INSERT INTO lease_record (at, mac, device_id, event, account_id, handle, holder, until, by_id, by, why)
+		VALUES (?, 'm1', 'd-m1', 'ended', 0, '', 'grace-laptop', ?, ?, 'Edie R.', 'ended for @edie')`, now.UnixMicro(), now.UnixMicro(), edithID); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.s.store.saveJob(&api.Job{ID: "j-41", Spec: api.JobSpec{Device: "m1"}, Maintainer: "edie", AccountID: edithID, State: api.JobDone, Summary: "asked by @edie", Created: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	ravi.did(personPath(edithID, "forget"), "sure", "yes")
+
+	if traces := l.traces("edie", -1); len(traces) != 0 {
+		t.Errorf("her earlier handle is still in: %v", traces)
+	}
+	var by string
+	l.s.store.db.QueryRow(`SELECT by FROM lease_record WHERE holder = 'grace-laptop'`).Scan(&by)
+	if by != "" {
+		t.Errorf("the name beside her account id in the Lease record: %q", by)
+	}
+	if got := strings.Join(l.recorded(), "\n"); !strings.Contains(got, "@linus made a Lab token") {
+		t.Errorf("another person's handle of today went:\n%s", got)
+	}
+}

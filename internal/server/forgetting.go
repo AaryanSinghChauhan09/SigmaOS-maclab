@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -40,16 +41,23 @@ const forgottenWord = "someone"
 // Forgotten.
 const leftForgotten = "forgotten"
 
-// forgetting is one person being forgotten: how their handle and account
-// id are found in what labd keeps.
+// forgetting is one person being forgotten: how their handles and account
+// id are found in what labd keeps. handles are the handle of today first,
+// then those the lab kept beside their account id before a rename.
 type forgetting struct {
-	id     int64
-	idText string
-	handle string
+	id      int64
+	idText  string
+	handles []string
 }
 
-func newForgetting(id int64, handle string) forgetting {
-	return forgetting{id: id, idText: strconv.FormatInt(id, 10), handle: handle}
+func newForgetting(id int64, handle string, earlier ...string) forgetting {
+	f := forgetting{id: id, idText: strconv.FormatInt(id, 10)}
+	for _, h := range append([]string{handle}, earlier...) {
+		if h != "" && !slices.ContainsFunc(f.handles, func(have string) bool { return strings.EqualFold(have, h) }) {
+			f.handles = append(f.handles, h)
+		}
+	}
+	return f
 }
 
 // handleByte is a byte a GitHub handle may hold: a name is a mention of the
@@ -68,13 +76,17 @@ func asciiLower(s string) string {
 	return string(b)
 }
 
-// words is text with every mention of the handle, "@" and all, in any case,
+// words is text with every mention of a handle, "@" and all, in any case,
 // replaced by forgottenWord.
 func (f forgetting) words(s string) string {
-	if f.handle == "" {
-		return s
+	for _, h := range f.handles {
+		s = wordsWithout(s, h)
 	}
-	lower, h := asciiLower(s), asciiLower(f.handle)
+	return s
+}
+
+func wordsWithout(s, handle string) string {
+	lower, h := asciiLower(s), asciiLower(handle)
 	var b strings.Builder
 	i := 0
 	for {
@@ -100,10 +112,11 @@ func (f forgetting) words(s string) string {
 	}
 }
 
-// value is a stored value with the person taken out: one that names the
-// handle alone becomes empty, and words lose its mentions.
+// value is a stored value with the person taken out: one that names a
+// handle alone becomes empty, and words lose their mentions.
 func (f forgetting) value(s string) string {
-	if f.handle != "" && strings.EqualFold(strings.TrimPrefix(strings.TrimSpace(s), "@"), f.handle) {
+	name := strings.TrimPrefix(strings.TrimSpace(s), "@")
+	if slices.ContainsFunc(f.handles, func(h string) bool { return strings.EqualFold(name, h) }) {
 		return ""
 	}
 	return f.words(s)
@@ -297,11 +310,15 @@ func (s *Server) forgetPerson(r *http.Request, k knownPerson) error {
 	if err := mayForget(&by, k); err != nil {
 		return err
 	}
-	f := newForgetting(k.AccountID, k.Handle)
+	earlier, err := s.store.earlierHandles(k.AccountID, k.Handle)
+	if err != nil {
+		return fmt.Errorf("labd.db: %w", err)
+	}
+	f := newForgetting(k.AccountID, k.Handle, earlier...)
 
 	// No line leaves for Signal until the handle is off every one.
 	s.lines.sending.Lock()
-	err := s.forgetHeld(by, k, f)
+	err = s.forgetHeld(by, k, f)
 	s.lines.sending.Unlock()
 	if err != nil {
 		return err
@@ -572,6 +589,18 @@ func forgetEverywhere(tx *sql.Tx, f forgetting) error {
 			columns = append(columns, c)
 		}
 		cols.Close()
+		// A name kept beside their account id is theirs, whatever it says.
+		if table != "people" {
+			for _, c := range columns {
+				if beside := besideID(c.name, func(name string) bool {
+					return slices.ContainsFunc(columns, func(t column) bool { return t.name == name && textKind(t.kind) })
+				}); beside != "" && strings.EqualFold(c.kind, "INTEGER") {
+					if _, err := tx.Exec(`UPDATE "`+table+`" SET "`+beside+`" = '' WHERE "`+c.name+`" = ?`, f.id); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		for _, c := range columns {
 			q := `"` + table + `"`
 			name := `"` + c.name + `"`
@@ -585,7 +614,7 @@ func forgetEverywhere(tx *sql.Tx, f forgetting) error {
 						return err
 					}
 				}
-			case strings.EqualFold(c.kind, "TEXT") || c.kind == "":
+			case textKind(c.kind):
 				if err := forgetInColumn(tx, q, name, f); err != nil {
 					return err
 				}
@@ -595,11 +624,115 @@ func forgetEverywhere(tx *sql.Tx, f forgetting) error {
 	return nil
 }
 
+func textKind(kind string) bool { return strings.EqualFold(kind, "TEXT") || kind == "" }
+
+// besideID is the column that holds the name of the person whose account id
+// column holds (handle beside account_id, actor beside actor_id), or "" when
+// has finds none.
+func besideID(column string, has func(string) bool) string {
+	name := strings.TrimSuffix(column, "_id")
+	if column == "account_id" {
+		name = "handle"
+	}
+	if name == column || !has(name) {
+		return ""
+	}
+	return name
+}
+
+// earlierHandles are the handles other than this one that labd kept beside
+// the account id: what the person was called before a rename on GitHub. A
+// handle another person has today is theirs, and is left out.
+func (st *store) earlierHandles(id int64, handle string) ([]string, error) {
+	tables, err := st.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'people'`)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for tables.Next() {
+		var t string
+		tables.Scan(&t)
+		names = append(names, t)
+	}
+	tables.Close()
+	type column struct{ name, kind string }
+	var found []string
+	for _, table := range names {
+		cols, err := st.db.Query(`SELECT name, type FROM pragma_table_info(?)`, table)
+		if err != nil {
+			return nil, err
+		}
+		var columns []column
+		for cols.Next() {
+			var c column
+			cols.Scan(&c.name, &c.kind)
+			columns = append(columns, c)
+		}
+		cols.Close()
+		for _, c := range columns {
+			beside := besideID(c.name, func(name string) bool {
+				return slices.ContainsFunc(columns, func(t column) bool { return t.name == name && textKind(t.kind) })
+			})
+			if beside == "" || !strings.EqualFold(c.kind, "INTEGER") {
+				continue
+			}
+			names, err := scanNames(st.db.Query(`SELECT DISTINCT "`+beside+`" FROM "`+table+`" WHERE "`+c.name+`" = ?`, id))
+			if err != nil {
+				return nil, err
+			}
+			found = append(found, names...)
+		}
+	}
+	for _, q := range []string{
+		`SELECT DISTINCT json_extract(data, '$.maintainer') FROM jobs WHERE json_extract(data, '$.account_id') = ?`,
+		`SELECT DISTINCT json_extract(data, '$.asked_by') FROM builds WHERE json_extract(data, '$.asked_by_id') = ?`,
+	} {
+		names, err := scanNames(st.db.Query(q, id))
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, names...)
+	}
+	var out []string
+	for _, name := range found {
+		name = strings.TrimPrefix(strings.TrimSpace(name), "@")
+		if name == "" || strings.EqualFold(name, handle) || slices.Contains(out, name) || strings.IndexFunc(name, func(r rune) bool { return r > 127 || !handleByte(byte(r)) }) >= 0 {
+			continue
+		}
+		var other int
+		if err := st.db.QueryRow(`SELECT count(*) FROM people WHERE handle = ? COLLATE NOCASE AND account_id != ?`, name, id).Scan(&other); err != nil {
+			return nil, err
+		}
+		if other == 0 {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+func scanNames(rows *sql.Rows, err error) ([]string, error) {
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name sql.NullString
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		if name.Valid {
+			out = append(out, name.String)
+		}
+	}
+	return out, rows.Err()
+}
+
 func forgetInColumn(tx *sql.Tx, table, column string, f forgetting) error {
 	pattern := []any{}
 	where := []string{}
-	if f.handle != "" {
-		where, pattern = append(where, column+` LIKE '%' || ? || '%'`), append(pattern, f.handle)
+	for _, h := range f.handles {
+		where, pattern = append(where, column+` LIKE '%' || ? || '%'`), append(pattern, h)
 	}
 	where, pattern = append(where, column+` LIKE '%' || ? || '%'`), append(pattern, f.idText)
 	rows, err := tx.Query(`SELECT rowid, `+column+` FROM `+table+` WHERE typeof(`+column+`) = 'text' AND (`+strings.Join(where, " OR ")+`)`, pattern...)
