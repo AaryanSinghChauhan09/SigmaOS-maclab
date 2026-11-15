@@ -33,22 +33,31 @@ import (
 // noteMax is how long a verdict's note may be.
 const noteMax = 1000
 
-func (st *store) addRelease(r api.Release) error {
+// addRelease lists the Release with who approved its manifest, in its
+// order, all at once. An approver who is not a person the lab knows when
+// it is written, forgotten since the manifest was checked, is left out: the
+// read follows a write, so a forgetting commits before all of it or after.
+// An account id of 0, an approver a manifest frozen before named by handle,
+// is kept as it was.
+func (st *store) addRelease(r api.Release, approvers ...int64) error {
 	pkgs, _ := json.Marshal(r.Packages)
 	macs, _ := json.Marshal(r.Macs)
-	_, err := st.db.Exec(`INSERT INTO releases (name, frozen_at, frozen_by_id, frozen_by, manifest_sha256, kernel, packages, macs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.Name, r.FrozenAt.UnixMicro(), r.FrozenByID, r.FrozenBy, r.ManifestSHA256, r.Kernel, string(pkgs), string(macs))
-	return err
-}
-
-// addApprovals keeps who approved the Release's manifest, in its order.
-func (st *store) addApprovals(release string, ids []int64) error {
-	for i, id := range ids {
-		if _, err := st.db.Exec(`INSERT INTO release_approvals (release, position, account_id) VALUES (?, ?, ?)`, release, i, id); err != nil {
+	tx, err := st.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO releases (name, frozen_at, frozen_by_id, frozen_by, manifest_sha256, kernel, packages, macs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Name, r.FrozenAt.UnixMicro(), r.FrozenByID, r.FrozenBy, r.ManifestSHA256, r.Kernel, string(pkgs), string(macs)); err != nil {
+		return err
+	}
+	for i, id := range approvers {
+		if _, err := tx.Exec(`INSERT INTO release_approvals (release, position, account_id) SELECT ?1, ?2, ?3
+			WHERE ?3 = 0 OR EXISTS (SELECT 1 FROM people WHERE account_id = ?3 AND handle != '')`, r.Name, i, id); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // approvers are the handles of who approved the Release's manifest, as
@@ -226,14 +235,11 @@ func (s *Server) listRelease(m *installed.Manifest, manifestSHA string, by Perso
 		r.Macs = append(r.Macs, mac)
 	}
 	sort.Slice(r.Macs, func(i, j int) bool { return r.Macs[i].Mac < r.Macs[j].Mac })
-	if err := s.store.addRelease(r); err != nil {
-		return err
-	}
 	var ids []int64
 	for _, a := range m.ApprovedBy {
 		ids = append(ids, a.AccountID)
 	}
-	return s.store.addApprovals(r.Name, ids)
+	return s.store.addRelease(r, ids...)
 }
 
 // approversOf is why the manifest's approved_by is refused, or nil: from

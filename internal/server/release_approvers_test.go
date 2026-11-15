@@ -101,3 +101,57 @@ func TestAManifestFrozenBeforeKeepsItsApproversHandles(t *testing.T) {
 		t.Errorf("written back as %s", b)
 	}
 }
+
+// A freeze whose approver is forgotten between its check and its writing
+// keeps no approval of them, and a Release is listed with its approvals at
+// once or not at all.
+func TestAFreezeRacingAForgettingStoresNoApprovalOfThem(t *testing.T) {
+	l, _, _ := installedLab(t, nil)
+	l.member("grace")
+	l.member("bob")
+	grace, bob := testAccount("grace"), testAccount("bob")
+	m := installed.Manifest{Release: "10.2", ApprovedBy: []installed.Approver{{AccountID: grace}, {AccountID: bob}}}
+	m.Kernel.Release = "7.1"
+	if err := l.s.approversOf(&m); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.s.store.forget(newForgetting(bob, "bob")); err != nil {
+		t.Fatal(err)
+	}
+	by := Person{AccountID: testAccount(harnessMaintainer), Handle: harnessMaintainer, Maintainer: true}
+	if err := l.s.listRelease(&m, strings.Repeat("e", 64), by, l.s.now()); err != nil {
+		t.Fatal(err)
+	}
+	count := func(q string, args ...any) (n int) {
+		l.s.store.db.QueryRow(q, args...).Scan(&n)
+		return n
+	}
+	if n := count(`SELECT count(*) FROM release_approvals WHERE account_id = ?`, bob); n != 0 {
+		t.Errorf("%d approvals of a person forgotten before the freeze wrote them", n)
+	}
+	if n := count(`SELECT count(*) FROM release_approvals WHERE release = '10.2' AND account_id = ?`, grace); n != 1 {
+		t.Errorf("%d approvals of grace, want 1", n)
+	}
+
+	if _, err := l.s.store.db.Exec(`CREATE TRIGGER full_disk BEFORE INSERT ON release_approvals BEGIN SELECT RAISE(FAIL, 'database or disk is full'); END`); err != nil {
+		t.Fatal(err)
+	}
+	m.Release = "10.3"
+	if err := l.s.listRelease(&m, strings.Repeat("f", 64), by, l.s.now()); err == nil {
+		t.Fatal("a Release whose approvals could not be written was listed")
+	}
+	if n := count(`SELECT count(*) FROM releases WHERE name = '10.3'`); n != 0 {
+		t.Error("a Release is listed without its approvals")
+	}
+}
+
+// addApprovals adds approvals to a Release listed already, as a test's
+// Release would have had them from its freeze.
+func (st *store) addApprovals(release string, ids []int64) error {
+	for i, id := range ids {
+		if _, err := st.db.Exec(`INSERT INTO release_approvals (release, position, account_id) VALUES (?, ?, ?)`, release, i, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
