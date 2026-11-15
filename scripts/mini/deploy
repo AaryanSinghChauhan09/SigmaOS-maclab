@@ -95,6 +95,9 @@ cleanup() {
     (set +e; lift_drain; rm -rf "${LAB_BUILDS:?}/$tag"; tell "Deploy of $tag on the mini stopped before anything was switched: ${previous:-nothing} runs as before.") || true
   fi
   (set +e; lift_drain) || true
+  # However it ended, a restore stopped part-way leaves Litestream as the
+  # Deploy found it.
+  (set +e; litestream_up) || true
   rm -rf "$work"
   [[ -z $stage ]] || rm -rf "$stage"
   [[ -z $lock ]] || rmdir "$lock" 2>/dev/null || true

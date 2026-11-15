@@ -1022,6 +1022,27 @@ func TestAStuckLitestreamChangesNoDatabase(t *testing.T) {
 	}
 }
 
+// A disk that fills while the copies are put beside the databases leaves
+// them as they were: the marked release is back on its own, and Litestream,
+// stopped for the restore, runs again.
+func TestAFailingSecondCopyLeavesTheMarkedReleaseUpWithLitestreamStarted(t *testing.T) {
+	m, o, r, old, mark := marked(t)
+	write(t, m.bin+"/cp", `#!/bin/bash
+[[ "$*" != *reports.db.restored* ]] || { echo "cp: No space left on device" >&2; exit 1; }
+exec /bin/cp "$@"
+`, 0o755)
+
+	out := m.refused("deploy", "--from", r.from(old), old)
+
+	theMarkedReleasesDatabases(t, m, mark, out)
+	if !m.daemonLoaded(litestreamLabel) {
+		t.Errorf("Litestream was left stopped:\n%s", m.calls())
+	}
+	if got := strings.Join(o.told(), "\n"); !strings.Contains(got, mark+" is back and answers") || strings.Contains(got, "as they were before "+mark) {
+		t.Errorf("\"Agents\" was told %q", got)
+	}
+}
+
 // The way back from an older Deploy that put the databases back needs no
 // room: it renames, so a full disk does not leave the lab Dark.
 func TestTheWayBackFromAnOlderDeployNeedsNoRoom(t *testing.T) {
