@@ -109,7 +109,8 @@ func TestTheRehearsalImportFillsAnEmptiedReportsDBAndPassesItsThreeChecks(t *tes
 	if out, code := m.run("", "rehearsal-import", "run", "--dry-run", "--public-key", public, "--dump", dump); code != 0 || !strings.Contains(out, "the old site is not read") || !strings.Contains(out, "would stop labd") {
 		t.Fatalf("the dry run: exit %d, %s", code, out)
 	}
-	if out, code := m.run("", "rehearsal-import", "run", "--dry-run", "--public-key", public); code != 0 || !strings.Contains(out, "ask for the address of the old site's Postgres") {
+	if out, code := m.run("", "rehearsal-import", "run", "--dry-run", "--public-key", public); code != 0 || !strings.Contains(out, "ask for the address of the old site's Postgres") ||
+		!strings.Contains(out, "show its certificate chain") || !strings.Contains(out, "and its CA file") {
 		t.Fatalf("the dry run with no dump: exit %d, %s", code, out)
 	}
 	if n := count(t, reports, `SELECT count(*) FROM reports`); n != 0 {
@@ -249,5 +250,50 @@ func TestAFailedImportTakesAwayTheDaysEarlierPass(t *testing.T) {
 	}
 	if exists(mark) {
 		t.Errorf("the failed import left the earlier pass's mark: %q", read(t, mark))
+	}
+}
+
+// Reading the old site, the rehearsal shows the certificate chain its
+// Postgres presents, keeps the chain's last certificate as the CA file,
+// and the dump checks the certificate against the file given at its
+// prompt. Here the made-up Postgres passes TLS and then refuses the user:
+// no dump, and nothing of the lab changed.
+func TestTheRehearsalShowsTheCertificateChainBeforeTheDumpChecksIt(t *testing.T) {
+	m, _, public := rehearsal(t)
+	if out, code := m.run(hex.EncodeToString(machineIDKey())+"\n", "rehearsal-import", "key"); code != 0 {
+		t.Fatalf("the key: exit %d, %s", code, out)
+	}
+	a := oldsitetest.NewAuthority(t)
+	port, _ := a.TLSPostgres(t)
+	address := "postgresql://postgres:hunter2-not-real@127.0.0.1:" + port + "/railway"
+	ca := m.path("var/lab/import/old-site-ca.pem")
+	os.Remove(m.log)
+	out, code := m.run(address+"\n"+address+"\n"+ca+"\n", "rehearsal-import", "run", "--public-key", public)
+	if code == 0 || !strings.Contains(out, "did not accept that user and password") || !strings.Contains(out, "no dump was written") {
+		t.Fatalf("exit %d, %s", code, out)
+	}
+	sum := sha256.Sum256(a.CA.Raw)
+	if !strings.Contains(out, "SHA-256 ") || !strings.Contains(out, strings.ToUpper(hex.EncodeToString(sum[:1]))+":") || !strings.Contains(out, "at the dump's CA file prompt give "+ca) {
+		t.Errorf("the chain was not shown:\n%s", out)
+	}
+	if strings.Contains(out, "hunter2") {
+		t.Error("the run repeats the password")
+	}
+	if !strings.Contains(read(t, ca), "BEGIN CERTIFICATE") {
+		t.Error("the CA file was not kept")
+	}
+	calls := m.calls()
+	if c, d := strings.Index(calls, "import check certificate --save "), strings.Index(calls, "import dump --to "); c < 0 || d < c {
+		t.Errorf("the chain was not shown before the dump:\n%s", calls)
+	}
+	if strings.Contains(calls, "launchctl bootout") || strings.Contains(calls, " import load ") {
+		t.Errorf("a run with no dump changed the lab:\n%s", calls)
+	}
+
+	// The day's dump asks for the CA file the rehearsal kept.
+	os.Remove(ca)
+	day := m.path("var/lab/import/the-day.dump")
+	if out, code := m.run("", "rehearsal-import", "dump", "--dump", day); code == 0 || !strings.Contains(out, "no CA file at") || exists(day) {
+		t.Errorf("the day's dump with no CA file: exit %d, %s", code, out)
 	}
 }
