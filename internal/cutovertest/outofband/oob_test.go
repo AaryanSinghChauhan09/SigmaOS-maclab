@@ -406,6 +406,23 @@ func TestTheResultsAreGreenOnlyWhenAllEightPassed(t *testing.T) {
 	}
 }
 
+// Test 1 is of all three ports: --ports names each of them once.
+func TestTest1TakesTheThreePortsEachOnce(t *testing.T) {
+	dir, calls := stubs(t, nil)
+	env := []string{"PATH=" + dir + ":" + os.Getenv("PATH")}
+	for _, ports := range []string{"", "right", "right left", "right left left", "right left middle middle", "left middle top"} {
+		if out, code := run(t, env, script(t, "oob01-tool"), "--ports", ports); code != 1 || !strings.Contains(out, "Nothing was done") {
+			t.Errorf("--ports %q: exit %d\n%s", ports, code, out)
+		}
+	}
+	if out, code := run(t, env, script(t, "oob01-tool"), "--ports", "middle right left"); code != 0 || !strings.Contains(out, "(middle right left)") {
+		t.Errorf("--ports in another order: exit %d\n%s", code, out)
+	}
+	if b, _ := os.ReadFile(calls); len(b) != 0 {
+		t.Errorf("a refused run ran something:\n%s", b)
+	}
+}
+
 func TestTheScriptsPassShellcheck(t *testing.T) {
 	if _, err := exec.LookPath("shellcheck"); err != nil {
 		t.Skip("no shellcheck")

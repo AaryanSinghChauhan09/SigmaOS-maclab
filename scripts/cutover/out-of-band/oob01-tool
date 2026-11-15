@@ -26,9 +26,15 @@ if (( ${#REST[@]} )); then
   [[ ${REST[0]} == --ports && ${#REST[@]} == 2 ]] || fail "an option it does not take: ${REST[0]}. Nothing was done."
   ports="${REST[1]}"
 fi
+# All three ports, each once (spec: "all three ports"), in any order.
+seen=" "
 for port in $ports; do
-  [[ $port == left || $port == middle || $port == right ]] || fail "--ports: $port is not left, middle or right"
+  [[ $port == left || $port == middle || $port == right ]] || fail "--ports: $port is not left, middle or right. Nothing was done."
+  [[ $seen != *" $port "* ]] || fail "--ports names $port twice: name left, middle and right once each. Nothing was done."
+  seen+="$port "
 done
+[[ $seen == *" left "* && $seen == *" middle "* && $seen == *" right "* ]] ||
+  fail "--ports is \"$ports\": the test is of all three ports, so name left, middle and right once each. Nothing was done."
 
 if [[ $MODE == dry ]]; then
   cat <<PLAN
