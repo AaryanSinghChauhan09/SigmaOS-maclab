@@ -168,13 +168,14 @@ func TestRecoveryNetworkTransitionCancelsAndDrainsPriorControllerCall(t *testing
 	if e := l.s.beginJobRecoveryMode(ctx, v, j); e != nil {
 		t.Fatal(e)
 	}
-	select {
-	case e := <-resetDone:
-		if e == nil {
-			t.Fatal("prior reset not canceled")
-		}
-	default:
+	// A controller call holds oobCallMu from start to end; resetOOB lets go
+	// of it only as it returns, so its goroutine may not have said so yet.
+	if !v.oobCallMu.TryLock() {
 		t.Fatal("device commands could start before the controller call stopped")
+	}
+	v.oobCallMu.Unlock()
+	if e := <-resetDone; e == nil {
+		t.Fatal("prior reset not canceled")
 	}
 	// The controller learns its caller left when it sees the connection
 	// close, a moment after labd let go: the reset ends without its turn.
