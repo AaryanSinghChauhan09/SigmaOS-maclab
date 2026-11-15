@@ -576,6 +576,58 @@ func TestTheTransferWindowStartsAtTheFirstPart(t *testing.T) {
 	wants(t, "the record", g.record(), "FAILED: labd's page times were not read with a transfer in flight during the cold kernel build")
 }
 
+// pkgbuild says its build stage where compiling starts: makepkg checks the
+// sources first, and a checksum that does not match is no build failure,
+// which fewer cores would mend. The part of pkgbuild that runs makepkg, with
+// makepkg and nproc made up.
+func TestPkgbuildSaysTheBuildStageWhereCompilingStarts(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repo(t), "builder", "pkg", "pkgbuild"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	cut := func(from, to string) string {
+		i := strings.Index(text, from)
+		j := strings.Index(text[max(i, 0):], to)
+		if i < 0 || j < 0 {
+			t.Fatalf("pkgbuild has no %q ... %q", from, to)
+		}
+		return text[i : i+j+len(to)]
+	}
+	defs := cut("step() {", "\n") + cut("fail() {", "\n")
+	if strings.Contains(text, "\nstages() {") {
+		defs += cut("\nstages() {", "\n}\n")
+	}
+	end := strings.Index(text, `fail "makepkg failed"`)
+	begin := strings.LastIndex(text[:strings.Index(text, "start=$(date +%s)")], "\nstep ")
+	if end < 0 || begin < 0 {
+		t.Fatal("pkgbuild has no step before makepkg, or no check of its status")
+	}
+	part := text[begin : end+len(`fail "makepkg failed"`)]
+	for name, c := range map[string]struct{ makepkg, stage string }{
+		"a checksum that does not match": {"echo '==> Making package: linux-aurora 7.2-1'\necho '==> Validating source files with sha256sums...'\necho '    linux-7.2.tar.xz ... FAILED'\necho '==> ERROR: One or more files did not pass the validity check!'\nexit 1\n", "sources"},
+		"a compiler that breaks":         {"echo '==> Making package: linux-aurora 7.2-1'\necho '==> Starting build()...'\necho 'make: *** Error 2'\nexit 2\n", "build"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			os.WriteFile(filepath.Join(dir, "makepkg"), []byte("#!/bin/bash\n"+c.makepkg), 0o755)
+			os.WriteFile(filepath.Join(dir, "nproc"), []byte("#!/bin/sh\necho 10\n"), 0o755)
+			script := "set -euo pipefail\nC=" + dir + " W=" + dir + "\n" + defs + "\nas_build() { \"$@\"; }\n" + part + "\n"
+			cmd := exec.Command("/bin/bash", "-c", script)
+			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin"}
+			out, _ := cmd.CombinedOutput()
+			// What the gate reads: the last "==> word" line of the build's log.
+			m := regexp.MustCompile(`(?m)^==> ([a-z]+)( .*)?$`).FindAllStringSubmatch(string(out), -1)
+			if len(m) == 0 || m[len(m)-1][1] != c.stage {
+				t.Errorf("the last stage said is %v, want %s:\n%s", m, c.stage, out)
+			}
+			if !strings.Contains(string(out), "error: makepkg failed") {
+				t.Errorf("makepkg's failure was not said:\n%s", out)
+			}
+		})
+	}
+}
+
 // A build that reaches nothing past the mini, as container's VMs once did:
 // fewer cores mend nothing, so the run stops at once, with what the mini
 // read of pf while that VM was up saved beside the record.

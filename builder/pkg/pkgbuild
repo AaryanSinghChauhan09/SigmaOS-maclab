@@ -17,6 +17,18 @@ rm -rf "$W" /io/out
 mkdir -p "$W/recipe" "$W/out" /io/out
 step() { echo "==> $*"; echo "@@stage ${1%% *}"; }
 fail() { echo "error: $*"; exit 1; }
+# stages: makepkg's lines as they come, with the build stage said where
+# compiling starts. Before it makepkg fetches and checks the sources and runs
+# prepare(): a failure there is the sources', which no number of cores mends.
+stages() {
+  local line
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    case "$line" in
+      "==> Starting build()"*) step "build ($(nproc) cpus)" ;;
+    esac
+  done
+}
 
 step "recipe"
 tar -C "$W/recipe" -xf /in/recipe.tar
@@ -52,7 +64,7 @@ fi
 echo "toolchain: $(gcc --version | head -1); $(pacman -Q rustup rust-bindgen pahole binutils | tr '\n' ' ')"
 echo "jobs: OMARCHY_BUILD_JOBS=${OMARCHY_BUILD_JOBS:-(unset: the recipe default)}"
 
-step "build ($(nproc) cpus)"
+step "sources"
 start=$(date +%s)
 total=$(cat $C/.objcount 2>/dev/null || echo 0)
 ( while sleep 5; do echo "@@progress $(find "$W/b" -name '*.o' 2>/dev/null | wc -l) $total"; done ) &
@@ -61,7 +73,7 @@ trap 'kill $ticker 2>/dev/null || true' EXIT
 # The log keeps makepkg's own lines and every diagnostic; kbuild's one line per
 # object ("  CC  foo.o") and strip -v chatter are dropped, as kernel builds' -s does.
 set +e
-as_build makepkg -sf --noconfirm --nocheck 2>&1 | grep --line-buffered -vE '^  [A-Z][A-Z0-9_]*( \[M\])? +[^ ]|^copy from |^Removing '
+as_build makepkg -sf --noconfirm --nocheck 2>&1 | grep --line-buffered -vE '^  [A-Z][A-Z0-9_]*( \[M\])? +[^ ]|^copy from |^Removing ' | stages
 st=${PIPESTATUS[0]}
 set -e
 [ "$st" -eq 0 ] || fail "makepkg failed"
