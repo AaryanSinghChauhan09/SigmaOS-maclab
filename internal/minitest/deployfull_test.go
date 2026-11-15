@@ -1134,3 +1134,22 @@ func TestALitestreamThatDoesNotStartAgainFailsTheDeploy(t *testing.T) {
 		t.Errorf("\"Agents\" was told %q", got)
 	}
 }
+
+// A rename that fails part-way through putting the databases back leaves no
+// copy beside them: the way back gives the marked release its own, and the
+// copy left would go into the house backup.
+func TestAFailingSecondRenameLeavesNoCopyBesideTheDatabases(t *testing.T) {
+	m, _, r, old, mark := marked(t)
+	write(t, m.bin+"/mv", `#!/bin/bash
+[[ "$*" != *reports.db.restored* ]] || { echo "mv: rename failed" >&2; exit 1; }
+exec /bin/mv "$@"
+`, 0o755)
+
+	out := m.refused("deploy", "--from", r.from(old), old)
+
+	theMarkedReleasesDatabases(t, m, mark, out)
+	if !strings.Contains(out, "reports.db could not be put in place") || !strings.Contains(out, mark+" is back and answers") {
+		t.Errorf("no word of the rename or the way back:\n%s", out)
+	}
+	order(t, m.calls(), "ops POST /agents/line Deploy of "+old+" on the mini failed its check", "as-lab rm -f "+m.path("var/lab/data/reports.db.restored"))
+}

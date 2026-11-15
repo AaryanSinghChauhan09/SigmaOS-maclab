@@ -83,7 +83,7 @@ went_back=0
 litestream_ran=0
 # shellcheck disable=SC2317,SC2329
 cleanup() {
-  local status=$?
+  local status=$? name
   trap - EXIT
   if (( switching )); then
     say "the Deploy of $tag stopped part-way (exit $status)"
@@ -92,6 +92,13 @@ cleanup() {
     (set +e; lift_drain; rm -rf "${LAB_BUILDS:?}/$tag"; tell "Deploy of $tag on the mini stopped before anything was switched: ${previous:-nothing} runs as before.") || true
   fi
   (set +e; lift_drain) || true
+  # A copy put beside a database and never renamed into place goes, whatever
+  # stopped the restore: it is a whole database the backup would carry.
+  if [[ -n $lock ]]; then
+    for name in $LAB_DATABASES; do
+      [[ ! -e $LAB_DATA/$name.restored && ! -L $LAB_DATA/$name.restored ]] || (set +e; as_lab rm -f "$LAB_DATA/$name.restored") || true
+    done
+  fi
   # However it ended, a restore stopped part-way leaves Litestream as the
   # Deploy found it. One that does not run again fails the Deploy: the
   # databases are not replicated.

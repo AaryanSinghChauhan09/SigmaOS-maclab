@@ -131,7 +131,7 @@ copy_databases() {
 house() {
   local name leave=()
   for name in $LAB_DATABASES; do
-    leave+=(--exclude "$LAB_DATA/$name" --exclude "$LAB_DATA/$name-*" --exclude "$LAB_DATA/.$name-litestream")
+    leave+=(--exclude "$LAB_DATA/$name" --exclude "$LAB_DATA/$name-*" --exclude "$LAB_DATA/$name.restored" --exclude "$LAB_DATA/.$name-litestream")
   done
   leave+=(--exclude "$LAB_DATA/callers" --exclude ".upload-*")
   step "the house copy: the data directory to $BACKUP_GUEST" house backup --host "$BACKUP_HOST" "${leave[@]}" "$LAB_DATA" || true
