@@ -41,6 +41,21 @@ case "$1" in
     outcome="$(cat "$GATE/outcome.$(cores).$step" 2>/dev/null || echo done)"
     took=(0 31m12s 4m3s 11m40s)
     echo "$id  queued  src" > "$GATE/row.$id"
+    # meta: who asked and what, as labd lists a build: asked_by, kind,
+    # device, config_name, recipe_dir.
+    if [[ $1 == package ]]; then
+      meta="owner|package|||$(cd "$2" && pwd)"
+    else
+      dev="" cfg="" prev=""
+      for a in "$@"; do [[ $prev != --device ]] || dev="$a"; [[ $prev != --config ]] || cfg="$(basename "$a")"; prev="$a"; done
+      meta="owner||$dev|$cfg|"
+    fi
+    echo "$meta" > "$GATE/meta.$id"
+    # another.build: another Maintainer asks for the same build meanwhile.
+    if [[ -f $GATE/another.build ]]; then
+      echo "b1115-999999-other  queued  src" > "$GATE/row.b1115-999999-other"
+      echo "maint|${meta#*|}" > "$GATE/meta.b1115-999999-other"
+    fi
     (
       sleep 0.3
       uploads="$(wc -l < "$GATE/uploads")"
@@ -181,6 +196,15 @@ printf 'probe_pages=13\nprobe_requests=260\nprobe_p95_ms=%s\nprobe_max_ms=%s\nda
 const gateProbeStub = `#!/bin/bash
 echo "probe $*" >> "$GATE/calls"
 case "$*" in
+  "ask --out "*" GET /api/auth") echo '{"trusted":true,"login":"owner","kind":"Admin"}' > "$3"; echo status=200 ;;
+  "ask --rows id,state,asked_by,kind,device,config_name,recipe_dir GET /api/builds?limit=100")
+    echo status=200
+    for f in "$GATE"/row.*; do
+      [ -f "$f" ] || continue
+      read -r id state _ < "$f"
+      IFS='|' read -r by kind dev cfg rec < "$GATE/meta.$id"
+      echo "row=$id|${state%:}|$by|$kind|$dev|$cfg|$rec"
+    done ;;
   "ask POST /api/builds/"*"/cancel")
     id="${3#/api/builds/}"; id="${id%/cancel}"
     echo "$id  canceled  src" > "$GATE/row.$id"
@@ -555,6 +579,25 @@ func TestAGateThatEndsFirstLeavesNoBuild(t *testing.T) {
 		record := g.record()
 		if i := strings.Index(record, "build b1115-000001-abcd was canceled"); i < 0 || i > strings.Index(record, "Result: fail") {
 			t.Errorf("the record does not say the build was canceled before its result:\n%s", record)
+		}
+	})
+	// With no id read, the run cancels only a build of its own: asked under
+	// its login, for what it asked.
+	t.Run("an answer lost beside another Maintainer's build", func(t *testing.T) {
+		t.Parallel()
+		g := newGate(t)
+		g.set("answer.lost", "")
+		g.set("another.build", "")
+		out, code := g.run()
+		if code != 1 {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		calls := g.calls("calls")
+		if !strings.Contains(calls, "probe ask POST /api/builds/b1115-000001-abcd/cancel\n") {
+			t.Errorf("the run's build was left:\n%s", calls)
+		}
+		if strings.Contains(calls, "b1115-999999-other/cancel") || strings.Contains(g.record(), "b1115-999999-other") {
+			t.Errorf("another Maintainer's build was canceled:\n%s\n%s", calls, g.record())
 		}
 	})
 	t.Run("stopped by the owner", func(t *testing.T) {
