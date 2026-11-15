@@ -98,7 +98,10 @@ func (s *Server) transitionRecoveryMode(ctx context.Context, v *dev, requested, 
 	if mode == api.RecoveryNetworkOnly && v.oobCallCancel != nil {
 		v.oobCallCancel()
 	}
-	if err := v.s.store.saveDevice(&v.d, v.secretHash); err != nil {
+	// storeLocked, not saveDevice: once the Mac has left (or was
+	// forgotten) its row is gone, and a job starting just then must not
+	// write it back, where it would hold the name a new Mac enrolls under.
+	if err := v.storeLocked(); err != nil {
 		v.d.EffectiveRecoveryMode = previous
 		v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob = previousTransaction, previousHolder, previousJob
 		v.mu.Unlock()
@@ -126,7 +129,7 @@ func (s *Server) liftRecoveryHold(v *dev) error {
 	defer v.mu.Unlock()
 	mode, transaction, holder, job := v.d.EffectiveRecoveryMode, v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob
 	v.d.EffectiveRecoveryMode, v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob = "", "", "", ""
-	if err := s.store.saveDevice(&v.d, v.secretHash); err != nil {
+	if err := v.storeLocked(); err != nil {
 		v.d.EffectiveRecoveryMode, v.d.RecoveryTransaction, v.d.RecoveryHolder, v.d.RecoveryModeJob = mode, transaction, holder, job
 		return fmt.Errorf("persist the lifted recovery policy: %w", err)
 	}

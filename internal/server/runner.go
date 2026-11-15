@@ -142,6 +142,12 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		return
 	}
 	if err := s.beginJobRecoveryMode(ctx, v, j); err != nil {
+		// The Mac left the lab, or was forgotten, as the job started: its
+		// row is gone and the job has no Mac to run on.
+		if errors.Is(err, errForgotten) {
+			r.finish(api.OutcomeCanceled, "not run: "+j.Spec.Device+" left the lab before the job started")
+			return
+		}
 		r.finish(api.OutcomeInfra, "recovery mode admission failed before device commands: "+err.Error())
 		return
 	}
