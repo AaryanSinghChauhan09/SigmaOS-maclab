@@ -87,6 +87,7 @@ partly_held() {
 : > "$err"
 MACLAB_UPLOAD_PROGRESS=1 "$LAB_CMD" upload "$file" > "$out" 2> "$err" &
 pid=$!
+HALTED_PIDS+=("$pid")
 # Parts may go four at a time and end in waves, so the time between two
 # looks says nothing about how long the parts under way still need: lab is
 # stopped the moment it is seen past one part, and labd is looked at then.

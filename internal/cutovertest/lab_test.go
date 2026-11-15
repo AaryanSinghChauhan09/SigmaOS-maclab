@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -110,6 +111,40 @@ shasum -a 256 "$2" | cut -d' ' -f1
 	// Through the Lab address labd's upload folder is on the mini.
 	if out, code := run(t, nil, "", frontDoor(t, "fd04-upload-resume"), "--lab"); code != 1 || !strings.Contains(out, "--lab needs --mini USER@HOST") {
 		t.Errorf("--lab with no --mini: exit %d\n%s", code, out)
+	}
+}
+
+// A stop while lab is stopped for the cut (here, while labd's folder is
+// read) ends the run: the stopped lab is killed, not waited for.
+func TestFD04StoppedWhileLabIsStoppedEnds(t *testing.T) {
+	bin := bins(t)
+	stubs := t.TempDir()
+	mark := filepath.Join(stubs, "looking")
+	if err := os.WriteFile(filepath.Join(stubs, "find"), []byte("#!/bin/bash\ntouch \""+mark+"\"\nexec sleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(frontDoor(t, "fd04-upload-resume"), "--local", "--bin", bin, "--size", fmt.Sprint(200*mib))
+	cmd.Env = append(os.Environ(), "PATH="+stubs+":"+os.Getenv("PATH"))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	for end := time.Now().Add(60 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(mark); err == nil {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("the run never stopped lab to look at labd's folder")
+		}
+	}
+	syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the run did not end: its cleanup waits for the stopped lab")
 	}
 }
 

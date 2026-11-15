@@ -133,7 +133,16 @@ plain() {
   fi
 }
 
+# Processes a test stops (SIGSTOP) while it runs. A stopped process takes no
+# signal but KILL, so the cleanup kills these first: its wait would wait for
+# them for good.
+HALTED_PIDS=()
+
 cleanup() {
+  local pid
+  for pid in ${HALTED_PIDS[@]+"${HALTED_PIDS[@]}"}; do
+    kill -9 "$pid" 2>/dev/null || true
+  done
   [[ -z $SIM_PID ]] || kill "$SIM_PID" 2>/dev/null || true
   [[ -z $LABD_PID ]] || kill "$LABD_PID" 2>/dev/null || true
   wait 2>/dev/null || true
