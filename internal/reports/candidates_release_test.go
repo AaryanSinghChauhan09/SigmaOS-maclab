@@ -150,3 +150,17 @@ func TestAVerifiedRunNamingOnePackageLinksNoRelease(t *testing.T) {
 		}
 	}
 }
+
+// A run that names one package at two versions says nothing certain of
+// that package: it links no Release, whichever of the two it has.
+func TestARunNamingAPackageAtTwoVersionsLinksNoRelease(t *testing.T) {
+	s := newShelf(t)
+	s.add(onlyPackages(onSetNamed(t, "edge-1"),
+		"omarchy", "3.1.0-1", "omarchy", "3.2.0-1", "linux-aurora", "7.1.12.aurora1-1"), "verified:a")
+	set := s.published().CandidateSet("edge-1")
+	for _, omarchy := range []string{"3.1.0-1", "3.2.0-1"} {
+		if set.Carries(map[string]string{"omarchy": omarchy, "linux-aurora": "7.1.12.aurora1-1"}) {
+			t.Errorf("a Release with omarchy %s is the set's, whose run names omarchy at two versions", omarchy)
+		}
+	}
+}
