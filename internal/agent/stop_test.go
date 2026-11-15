@@ -444,7 +444,7 @@ func TestAHungSyncHoldsLabAgentNoLongerThanTheBound(t *testing.T) {
 	hung := make(chan struct{})
 	var started atomic.Int32
 	syncFS = func() { started.Add(1); <-hung }
-	t.Cleanup(func() { close(hung); toolTimeout, syncFS = was, wasFS })
+	t.Cleanup(func() { close(hung); noFlush(t); toolTimeout, syncFS = was, wasFS })
 	for i := 0; i < 2; i++ {
 		done := make(chan struct{})
 		go func() { syncDisks(); close(done) }()
@@ -482,7 +482,7 @@ func hangSync(t *testing.T) {
 	toolTimeout = time.Second
 	hung := make(chan struct{})
 	syncFS = func() { <-hung }
-	t.Cleanup(func() { close(hung); toolTimeout, syncFS = was, wasFS })
+	t.Cleanup(func() { close(hung); noFlush(t); toolTimeout, syncFS = was, wasFS })
 }
 
 // A flush that did not end refuses the panic: SysRq c with the lab's writes
