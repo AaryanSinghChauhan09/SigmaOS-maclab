@@ -74,7 +74,8 @@ run "the 11 production reports give their expected builds" go test -count=1 -run
 # 3.
 postgres=0
 if have pg_isready && pg_isready -q 2>/dev/null; then postgres=1; fi
-want_ruby="$(tr -d 'ruby-\n' < site/.ruby-version)"
+want_ruby="$(< site/.ruby-version)"
+want_ruby="${want_ruby#ruby-}"
 rails=0
 if (( postgres )) && have ruby && [[ "$(ruby -e 'print RUBY_VERSION')" == "$want_ruby" ]]; then rails=1; fi
 if (( rails )); then
