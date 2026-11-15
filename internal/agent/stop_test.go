@@ -438,6 +438,7 @@ func TestAHungLoginctlLetsARunningAgentStop(t *testing.T) {
 // a system tool's bound, and a second flush meanwhile waits on the first
 // rather than starting another.
 func TestAHungSyncHoldsLabAgentNoLongerThanTheBound(t *testing.T) {
+	noFlush(t)
 	was, wasFS := toolTimeout, syncFS
 	toolTimeout = time.Second
 	hung := make(chan struct{})
@@ -458,8 +459,25 @@ func TestAHungSyncHoldsLabAgentNoLongerThanTheBound(t *testing.T) {
 	}
 }
 
+// noFlush waits until no flush an earlier test started is under way, so the
+// next one starts the test's own.
+func noFlush(t *testing.T) {
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(10 * time.Millisecond) {
+		syncMu.Lock()
+		idle := syncing == nil
+		syncMu.Unlock()
+		if idle {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a flush from before the test never ended")
+		}
+	}
+}
+
 // hangSync makes every flush hang until the test ends, with a 1 s bound.
 func hangSync(t *testing.T) {
+	noFlush(t)
 	was, wasFS := toolTimeout, syncFS
 	toolTimeout = time.Second
 	hung := make(chan struct{})
