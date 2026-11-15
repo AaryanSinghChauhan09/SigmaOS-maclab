@@ -324,25 +324,46 @@ const probeArgs = `out=""; prev=""; for a in "$@"; do [ "$prev" != --out ] || ou
 // record and how the probe and lab were called.
 func labRun(t *testing.T, name, lab, probe, stdin string, env []string, args ...string) (out string, code int, record, calls string) {
 	t.Helper()
-	if lab == "" {
-		lab = `case "$1" in status) echo "NAME STATE" ;; *) exit 9 ;; esac`
-	}
-	dir, callsFile := stubs(t, map[string]string{"lab": lab, "hardening-probe": probeArgs + probe})
-	records := t.TempDir()
-	cmd := exec.Command(script(t, name), append([]string{"--lab", "--bin", dir, "--records", records}, args...)...)
-	cmd.Env = append(append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example"), env...)
-	cmd.Stdin = strings.NewReader(stdin)
-	b, err := cmd.CombinedOutput()
+	l := labCommand(t, name, lab, probe, stdin, env, args...)
+	b, err := l.cmd.CombinedOutput()
 	if ee, ok := err.(*exec.ExitError); ok {
 		code = ee.ExitCode()
 	} else if err != nil {
 		t.Fatal(err)
 	}
-	if files, _ := filepath.Glob(filepath.Join(records, "*-hardening-"+name[1:3]+".md")); len(files) == 1 {
-		record = read(t, files[0])
+	return string(b), code, l.record(), l.calls()
+}
+
+// labTest is a test made ready to run through a made-up Lab address.
+type labTest struct {
+	t                    *testing.T
+	cmd                  *exec.Cmd
+	stubs, name, records string
+}
+
+func labCommand(t *testing.T, name, lab, probe, stdin string, env []string, args ...string) *labTest {
+	t.Helper()
+	if lab == "" {
+		lab = `case "$1" in status) echo "NAME STATE" ;; *) exit 9 ;; esac`
 	}
-	c, _ := os.ReadFile(callsFile)
-	return string(b), code, record, string(c)
+	dir, _ := stubs(t, map[string]string{"lab": lab, "hardening-probe": probeArgs + probe})
+	records := t.TempDir()
+	cmd := exec.Command(script(t, name), append([]string{"--lab", "--bin", dir, "--records", records}, args...)...)
+	cmd.Env = append(append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example"), env...)
+	cmd.Stdin = strings.NewReader(stdin)
+	return &labTest{t: t, cmd: cmd, stubs: dir, name: name, records: records}
+}
+
+func (l *labTest) record() string {
+	if files, _ := filepath.Glob(filepath.Join(l.records, "*-hardening-"+l.name[1:3]+".md")); len(files) == 1 {
+		return read(l.t, files[0])
+	}
+	return ""
+}
+
+func (l *labTest) calls() string {
+	c, _ := os.ReadFile(filepath.Join(l.stubs, "calls"))
+	return string(c)
 }
 
 // H 8 through the Lab address: the owner's browser makes a token and marks
@@ -542,10 +563,24 @@ func TestARunThatStartsTakesItsOldPassOutOfTheResults(t *testing.T) {
 const h09Lab = `S="$(dirname "$0")"
 case "$1" in
   status) echo "NAME STATE"; [ -z "${2:-}" ] || touch "$S/reported" ;;
-  run) touch "$S/job"; echo "job j-1 queued on $2" ;;
-  cancel) echo "canceled" ;;
+  run)
+    echo "$MACLAB_HOLDER" > "$S/holder"; touch "$S/job"
+    [ -z "${H09_RUN_HANGS:-}" ] || { touch "$S/posted"; exec sleep 30; }
+    echo "job j-1 queued on $2" ;;
+  cancel) echo "$2" >> "$S/canceled"; echo "canceled" ;;
   *) exit 9 ;;
 esac`
+
+// h09Jobs: the Mac's jobs as labd lists them: another person's, queued, and
+// once lab run was called the run's own, under the holder it was given.
+const h09Jobs = `  "ask "*"GET /api/jobs?device=m2-max&limit=50")
+    echo status=200
+    {
+      printf '[{"id":"j-0","spec":{"device":"m2-max","tests":[{"name":"boot-health"}],"holder":"someone@laptop"},"state":"queued","events":[{"state":"queued"}]}'
+      [ ! -f "$S/job" ] || printf ',{"id":"j-1","spec":{"device":"m2-max","tests":[{"name":"boot-health"}],"holder":"%s"},"state":"queued","events":[{"state":"queued"}]}' "$(cat "$S/holder")"
+      echo ']'
+    } > "$out" ;;
+`
 
 const h09Probe = `S="$(dirname "$0")"
 card() {
@@ -555,7 +590,7 @@ card() {
   echo '</section>'
 }
 case "$*" in
-  "page "*" /me") echo status=200 ;;
+` + h09Jobs + `  "page "*" /me") echo status=200 ;;
   "page "*" /my-macs") echo status=303; echo "location=/macs?show=mine" ;;
   "page "*" /macs?show=mine")
     echo status=200
@@ -594,6 +629,47 @@ func TestH09ReadsTheMacsCardAsAnAdmin(t *testing.T) {
 	}
 	if !strings.Contains(calls, "lab cancel j-1") || !strings.Contains(record, "BY HAND: at m2-max, put its topic back") {
 		t.Errorf("the job was left, or the topic not named:\n%s\n%s", calls, record)
+	}
+}
+
+// H 9's job is armed by the holder it is asked under before it is asked
+// for: a Ctrl-C while lab run is still out cancels it, and nobody else's.
+func TestACtrlCRightAfterH09sPostCancelsTheJob(t *testing.T) {
+	t.Parallel()
+	l := labCommand(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\nyes\n", []string{"H09_WAIT=10", "H09_RUN_HANGS=1"},
+		"--volunteers-mac", "m2-max", "--redirect", "https://redirect.example/h09")
+	l.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := l.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Kill(-l.cmd.Process.Pid, syscall.SIGKILL)
+	for end := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(l.stubs, "posted")); err == nil {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatalf("lab run was not called:\n%s\n%s", l.calls(), l.record())
+		}
+	}
+	// Ctrl-C at the owner's terminal: the whole group gets it.
+	syscall.Kill(-l.cmd.Process.Pid, syscall.SIGINT)
+	done := make(chan error, 1)
+	go func() { done <- l.cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the run did not end after Ctrl-C")
+	}
+	canceled, _ := os.ReadFile(filepath.Join(l.stubs, "canceled"))
+	if string(canceled) != "j-1\n" {
+		t.Errorf("canceled %q, want the run's own job j-1 alone:\n%s", canceled, l.calls())
+	}
+	record := l.record()
+	if !strings.Contains(record, "undone: job j-1 on m2-max was canceled") || !strings.Contains(record, "Result: stopped") {
+		t.Errorf("the record:\n%s", record)
+	}
+	if holder := read(t, filepath.Join(l.stubs, "holder")); !strings.HasPrefix(holder, "hardening-tests-h09-") {
+		t.Errorf("lab run was given the holder %q, not the run's own tag", holder)
 	}
 }
 
