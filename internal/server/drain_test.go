@@ -648,3 +648,34 @@ func TestAJobEndedByALeaveIsNotWrittenBackByACopyReadBefore(t *testing.T) {
 		t.Fatalf("a change by id between another's read and save was lost: %s canceled=%v", got.State, got.Canceled)
 	}
 }
+
+// A job set aside behind another's Lease, ended by a Leave between the run
+// reading it and setting it aside, stays ended: the Mac's loop has let it
+// go, so a Queued written back would leave it queued for good.
+func TestAJobEndedByALeaveAsItParksStaysDone(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	v := l.s.dev(l.name)
+	v.mu.Lock()
+	v.d.Lease = &api.Lease{Holder: "lender", Maintainer: "lender", Expires: l.s.now().Add(time.Hour)}
+	v.mu.Unlock()
+	j := &api.Job{ID: "j-parks", Spec: api.JobSpec{Device: l.name, Baseline: true}, Maintainer: "other", State: api.JobQueued, Created: time.Now()}
+	l.s.store.saveJob(j)
+	held, _ := l.s.store.job(j.ID) // the run's copy
+	l.s.updateJobByID(j.ID, func(j *api.Job) {
+		j.State, j.Outcome, j.Summary = api.JobDone, api.OutcomeCanceled, "canceled: it left the lab"
+	})
+	r := &jobRun{s: l.s, v: v, j: held}
+	if !r.park() {
+		t.Fatal("the job was not held back by the Lease")
+	}
+	if got, _ := l.s.store.job(j.ID); got.State != api.JobDone || got.Outcome != api.OutcomeCanceled {
+		t.Fatalf("a job ended as it parked was written back: %s %s", got.State, got.Outcome)
+	}
+	v.mu.Lock()
+	parked := len(v.parked)
+	v.mu.Unlock()
+	if parked != 0 {
+		t.Errorf("an ended job was set aside: %d parked", parked)
+	}
+}

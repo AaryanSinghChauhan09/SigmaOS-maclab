@@ -470,21 +470,29 @@ func (v *dev) leaseHoldsBackLocked(o jobOwner) string {
 }
 
 // park sets a queued job aside while someone else's lease holds the Mac, so
-// the lease holder's jobs queued after it run first, and says whether it did.
+// the lease holder's jobs queued after it run first, and says whether it did,
+// or found the job ended (a Leave, a cancel): either way its run stops here.
 // unpark queues it again once the lease no longer holds it.
 func (r *jobRun) park() bool {
 	v := r.v
 	v.mu.Lock()
 	why := v.leaseHoldsBackLocked(ownerOf(r.j))
-	if why != "" {
-		v.parked = append(v.parked, parkedJob{r.j.ID, ownerOf(r.j)})
-	}
 	v.mu.Unlock()
 	if why == "" {
 		return false
 	}
-	r.state(api.JobQueued)
-	r.ev("%s; waiting for the lease to end", why)
+	msg := why + "; waiting for the lease to end"
+	r.s.updateJobUnlessDone(r.j, func(j *api.Job) {
+		j.State = api.JobQueued
+		j.Events = append(j.Events, api.JobEvent{Time: r.s.now(), Msg: msg})
+	})
+	if r.j.State == api.JobDone {
+		return true
+	}
+	r.s.log.Printf("job %s (%s): %s", r.j.ID, r.j.Spec.Device, msg)
+	v.mu.Lock()
+	v.parked = append(v.parked, parkedJob{r.j.ID, ownerOf(r.j)})
+	v.mu.Unlock()
 	return true
 }
 
