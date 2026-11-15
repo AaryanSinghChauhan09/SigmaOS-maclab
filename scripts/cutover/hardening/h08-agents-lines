@@ -188,7 +188,9 @@ if ! playing; then
   # comes after labd's write; with no answer a mark not seen is NOT UNDONE.
   arm mark check_mark "$other" "$me"
   MARK_SENT=1
-  form mark --session "$OWNER_SESSION" --page /people /people/mark "handle=$other" as=m-team &
+  # It ignores SIGINT itself: bash 5.2 gives a background job of a script
+  # that traps INT the default action, so the Ctrl-C ended the post.
+  (trap '' INT; form mark --session "$OWNER_SESSION" --page /people /people/mark "handle=$other" as=m-team) &
   MARK_POST=$!
   wait "$MARK_POST" || true
   MARK_POST=""
