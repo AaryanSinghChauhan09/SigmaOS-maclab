@@ -93,11 +93,17 @@ cleanup() {
   fi
   (set +e; lift_drain) || true
   # However it ended, a restore stopped part-way leaves Litestream as the
-  # Deploy found it.
-  (set +e; litestream_up) || true
+  # Deploy found it. One that does not run again fails the Deploy: the
+  # databases are not replicated.
+  if ! (set +e; litestream_up); then
+    status=1
+    (set +e; tell "Litestream did not start again after the Deploy of $tag on the mini: the databases are not replicated until it runs (sudo launchctl bootstrap system $LAUNCHD_DIR/$LITESTREAM_LABEL.plist).") || true
+    echo "$ME: Litestream did not start again: the databases are not replicated until it runs. Start it: sudo launchctl bootstrap system $LAUNCHD_DIR/$LITESTREAM_LABEL.plist" >&2
+  fi
   rm -rf "$work"
   [[ -z $stage ]] || rm -rf "$stage"
   [[ -z $lock ]] || rmdir "$lock" 2>/dev/null || true
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -141,12 +147,13 @@ litestream_down() {
   stopped "$LITESTREAM_LABEL" || fail "Litestream did not stop (20 s), so no database was put back${1:+: $1}"
 }
 
-# litestream_up: Litestream runs again if it ran when the Deploy began.
+# litestream_up: Litestream runs again if it ran when the Deploy began;
+# false when launchd does not have it loaded after that.
 # shellcheck disable=SC2317,SC2329
 litestream_up() {
-  if (( litestream_ran )) && ! loaded "$LITESTREAM_LABEL"; then
-    launchctl bootstrap system "$LAUNCHD_DIR/$LITESTREAM_LABEL.plist" || say "launchd did not start Litestream again"
-  fi
+  (( litestream_ran )) || return 0
+  loaded "$LITESTREAM_LABEL" || launchctl bootstrap system "$LAUNCHD_DIR/$LITESTREAM_LABEL.plist" || true
+  loaded "$LITESTREAM_LABEL" || { say "launchd did not start Litestream again"; return 1; }
 }
 
 # restore_beside BUILD [WHY]: the databases as they were before the Deploy
@@ -193,7 +200,8 @@ restore_in_place() {
       say "removed $name: there was none before the Deploy of $1"
     fi
   done
-  litestream_up
+  # A Litestream that does not start again fails the Deploy on its way out.
+  litestream_up || true
 }
 
 # switch_to TAG: stop labd, point the mini at that build, start labd from it
@@ -303,7 +311,7 @@ way_back() {
     for name in $LAB_DATABASES; do
       into_place "$BEFORE_DEPLOY/$tag/$name" "$name" || fail "$name could not be put back from $BEFORE_DEPLOY/$tag: the lab is Dark"
     done
-    litestream_up
+    litestream_up || true
     lost=" The databases are as $previous had them."
   elif [[ -f $LAB_BUILDS/$tag/deploy/no-way-back && -d $BEFORE_DEPLOY/$tag && "$(running)" == "$tag" ]]; then
     stop_labd

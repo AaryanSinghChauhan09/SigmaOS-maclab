@@ -1114,3 +1114,23 @@ func TestAFirstDeployWithTheControllerLoadedAtBootGoesThrough(t *testing.T) {
 		t.Errorf("no word of the controller's restart or the Deploy:\n%s", out)
 	}
 }
+
+// A Litestream that launchd does not start again once the databases went
+// back fails the Deploy, though the older release runs: "Agents" is told
+// that nothing is replicated.
+func TestALitestreamThatDoesNotStartAgainFailsTheDeploy(t *testing.T) {
+	m, o, r, old, _ := marked(t)
+	m.bootstrapFails(litestreamLabel, "99")
+
+	out := m.refused("deploy", "--from", r.from(old), old)
+
+	if m.current() != old || !m.loaded() || m.daemonLoaded(litestreamLabel) {
+		t.Fatalf("the mini runs %q (loaded %v), Litestream loaded %v\n%s", m.current(), m.loaded(), m.daemonLoaded(litestreamLabel), out)
+	}
+	if !strings.Contains(out, "Litestream did not start again") {
+		t.Errorf("no word of Litestream:\n%s", out)
+	}
+	if got := strings.Join(o.told(), "\n"); !strings.Contains(got, "Litestream did not start again") || !strings.Contains(got, "not replicated") {
+		t.Errorf("\"Agents\" was told %q", got)
+	}
+}
