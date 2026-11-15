@@ -666,7 +666,7 @@ func (s *Server) Handler() http.Handler {
 	for _, p := range pageRoutes {
 		m.HandleFunc(p.pattern, s.pageHandler(p))
 	}
-	return s.edge(s.capBodies(s.withPages(m)))
+	return bodyDeadlines(s.edge(s.capBodies(s.withPages(m))))
 }
 
 // routes is every API route and who may reach it (see reach).
@@ -1038,7 +1038,7 @@ const (
 func (s *Server) hEnroll(w http.ResponseWriter, r *http.Request) {
 	// Anyone may send this body, before labd knows who they are: it must
 	// arrive soon, not trickle in to hold the connection.
-	http.NewResponseController(w).SetReadDeadline(time.Now().Add(enrollBodyTimeout))
+	readBodyBy(w, r.Context(), time.Now().Add(enrollBodyTimeout))
 	var req api.EnrollRequest
 	if !decodeBody(w, r, enrollBodyMax, &req) {
 		return

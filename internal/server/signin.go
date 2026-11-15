@@ -268,13 +268,9 @@ func (s *Server) browserSession(w http.ResponseWriter, r *http.Request, origin s
 	default:
 		if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "application/x-www-form-urlencoded" {
 			form = true
-			rc := http.NewResponseController(w)
-			rc.SetReadDeadline(time.Now().Add(formWait))
+			readBodyBy(w, r.Context(), time.Now().Add(formWait))
 			r.Body = http.MaxBytesReader(w, r.Body, formMax)
 			read = r.ParseForm() == nil
-			if read {
-				rc.SetReadDeadline(time.Time{})
-			}
 			if si = s.sessionOf(c.Value); si == nil {
 				return r, true
 			}
