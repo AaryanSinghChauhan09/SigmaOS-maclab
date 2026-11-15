@@ -918,3 +918,40 @@ func TestAResetThatMayHaveGoneOutAndDidNotEndsWithTheMacUp(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	l.wantResets("no reset went out")
 }
+
+// A look at the ports that began before the controller stopped, and ends
+// after a Hard reset found it not answering, does not make it healthy again:
+// the newer news stands until a look that began after it answers.
+func TestALookBegunBeforeTheControllerStoppedDoesNotUndoItsTrouble(t *testing.T) {
+	l := newLabWith(t, labConfig{oob: true, config: func(c *Config) { c.SightEvery = time.Hour }})
+	l.baseline()
+	l.sight()
+	if _, ok := l.s.cables.of(l.name); !ok {
+		t.Fatal("the Mac is not sighted")
+	}
+	last := oob.RIDs[len(oob.RIDs)-1]
+	reached, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	l.oob.onRead(func(rid int) {
+		if rid == last {
+			once.Do(func() { close(reached); <-release })
+		}
+	})
+	done := make(chan struct{})
+	go func() { l.sight(); close(done) }()
+	<-reached
+	l.oob.stop(true)
+	if _, err := l.s.hardReset(l.ctx, l.s.dev(l.name)); err == nil || !strings.Contains(err.Error(), "not healthy") {
+		t.Fatalf("a Hard reset with the controller stopped: %v", err)
+	}
+	close(release)
+	<-done
+	if why := l.s.dev(l.name).noHardReset(); !strings.Contains(why, "not healthy") {
+		t.Fatalf("after the look that began before the stop, the Mac's Hard reset: %q", why)
+	}
+	l.oob.stop(false)
+	l.sight()
+	if why := l.s.dev(l.name).noHardReset(); why != "" {
+		t.Fatalf("after a look once the controller answers again: %q", why)
+	}
+}

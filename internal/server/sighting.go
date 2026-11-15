@@ -45,6 +45,9 @@ type cables struct {
 	lost map[string]string
 	// down is why the controller is not healthy; "" while it answers.
 	down string
+	// downs counts the times it was found not answering, so that a look
+	// that began before one does not undo it.
+	downs uint64
 	// proving is held for the length of a Proving reset: one at a time.
 	proving sync.Mutex
 	// looking is held for the length of a look at the ports, from the
@@ -237,6 +240,9 @@ func (s *Server) sight(ctx context.Context) {
 	}
 	s.cables.looking.Lock()
 	defer s.cables.looking.Unlock()
+	s.cables.mu.Lock()
+	downs := s.cables.downs
+	s.cables.mu.Unlock()
 	ports := map[int]oob.Port{}
 	for _, rid := range oob.RIDs {
 		actx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -250,11 +256,18 @@ func (s *Server) sight(ctx context.Context) {
 		}
 		ports[rid] = p
 	}
-	s.controllerUp()
 	macs := s.labOwnedMacs()
 	now := s.now()
 	s.cables.mu.Lock()
 	defer s.cables.mu.Unlock()
+	if s.cables.downs != downs {
+		// found not answering while this look was under way: its ports are older news
+		return
+	}
+	if s.cables.down != "" {
+		s.cables.down = ""
+		s.log.Printf("the Out-of-band controller answers again")
+	}
 	said := s.cables.apply(ports, macs, now)
 	for _, line := range said {
 		s.log.Printf("sighting: %s", line)
@@ -410,19 +423,10 @@ func (s *Server) controllerDown(err error) {
 	s.cables.mu.Lock()
 	was := s.cables.down
 	s.cables.down = why
+	s.cables.downs++
 	s.cables.mu.Unlock()
 	if was != why {
 		s.log.Printf("no Hard reset: %s", why)
-	}
-}
-
-func (s *Server) controllerUp() {
-	s.cables.mu.Lock()
-	was := s.cables.down
-	s.cables.down = ""
-	s.cables.mu.Unlock()
-	if was != "" {
-		s.log.Printf("the Out-of-band controller answers again")
 	}
 }
 
