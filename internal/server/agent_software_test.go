@@ -1124,3 +1124,48 @@ func TestBothInstallLinesServeTheReleaseCandidateInPreviewAndTheLatestAfter(t *t
 		t.Error("the edge is not told it may keep /install/lab")
 	}
 }
+
+// lab agent-update counts on the agent's start number to know when the new
+// one is back. A labd that has heard none since it started cannot tell an
+// old run from a new one, and waits for a check-in; an agent that sends none
+// (every lab-agent before the start number) would restart after the hold
+// ended, and is Joined again instead.
+func TestAgentUpdateWaitsForAStartNumberHeardSinceLabdStarted(t *testing.T) {
+	k := sshsigtest.NewKey(t)
+	handed := signedAgent(t, k, "0.11.0")
+	sl := newSoftwareLab(t, k, false, agentUpdateMinAgent, func(c *Config) { c.AgentBinary, c.LabAgent = handed, "0.11.0" })
+	sl.baseline()
+	sl.waitAgent(agentUpdateMinAgent)
+	why := func(v *dev) string {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		return v.notUpdatableLocked(true)
+	}
+
+	// labd started again: the Mac's lab-agent has not checked in with it.
+	fresh, err := New(sl.ctx, sl.s.cfg, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fv := fresh.dev(sl.name)
+	fv.mu.Lock()
+	fv.d.LastSeen = fresh.now() // as alive as it gets
+	fv.mu.Unlock()
+	if got := why(fv); !strings.Contains(got, "not checked in since labd started") {
+		t.Errorf("agent-update before the first check-in since labd started: %q", got)
+	}
+	d := fv.snapshot()
+	fv.heartbeat(api.Checkin{BootID: d.BootID, Kernel: d.Kernel, AgentStart: "a-new-run"})
+	if got := why(fv); got != "" {
+		t.Errorf("agent-update once the Mac checked in with its start number: %q", got)
+	}
+
+	// An agent that sends no start number.
+	sl.stopAgent()
+	v := sl.s.dev(sl.name)
+	d = v.snapshot()
+	v.heartbeat(api.Checkin{BootID: d.BootID, Kernel: d.Kernel})
+	if got := why(v); !strings.Contains(got, "sends no start number") || !strings.Contains(got, "Join the Mac again") {
+		t.Errorf("agent-update of an agent that sends no start number: %q", got)
+	}
+}

@@ -195,6 +195,11 @@ func (v *dev) notUpdatableLocked(signed bool) string {
 		return fmt.Sprintf("%s is not idle: it is %s. lab agent-update waits for no job and no Lease", d.Name, d.State)
 	case !versionAtLeast(d.Facts.AgentVersion, agentUpdateMinAgent):
 		return fmt.Sprintf("%s runs lab-agent %s; lab agent-update needs %s or later, the first that updates itself: Join the Mac again to give it the lab's", d.Name, orStr(d.Facts.AgentVersion, "(unknown)"), agentUpdateMinAgent)
+	// The start number is how labd knows the new lab-agent is back.
+	case !v.heardSinceStart:
+		return fmt.Sprintf("%s has not checked in since labd started, so labd could not tell when its new lab-agent is back: try again once it has", d.Name)
+	case v.agentStart == "":
+		return fmt.Sprintf("%s runs a lab-agent that sends no start number, so labd could not tell when a new one is back, nor keep it from restarting after labd let the Mac go: Join the Mac again to give it the lab's", d.Name)
 	}
 	return ""
 }

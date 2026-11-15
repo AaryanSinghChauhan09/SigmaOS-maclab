@@ -68,6 +68,8 @@ type dev struct {
 	// agentStart is the api.Checkin.AgentStart labd last heard, and
 	// factsStart the one its d.Facts came with.
 	agentStart, factsStart string
+	// heardSinceStart: the Mac has checked in since labd started.
+	heardSinceStart bool
 	// cleaning: the idle clean-up is on its way to the Mac or running there.
 	cleaning bool
 	// updateHold is how long lab agent-update still holds the Mac after its
@@ -370,7 +372,7 @@ func (v *dev) heartbeat(ci api.Checkin) {
 		v.d.JobNotices = *ci.JobNotices
 		persist = true
 	}
-	v.agentStart = ci.AgentStart
+	v.agentStart, v.heardSinceStart = ci.AgentStart, true
 	if ci.Facts != nil {
 		v.d.Facts, v.factsStart = *ci.Facts, ci.AgentStart
 	}
