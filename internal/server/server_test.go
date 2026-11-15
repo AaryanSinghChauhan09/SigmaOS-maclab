@@ -250,7 +250,18 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	a := agent.New(l.agent, sim, logger)
 	actx, stop := context.WithCancel(ctx)
 	l.stopAgent = stop
-	go a.Run(actx)
+	ran := make(chan struct{})
+	go func() { defer close(ran); a.Run(actx) }()
+	// Registered after the agent's work dir, so it runs before that is
+	// removed: the Mac's lab-agent and its commands no longer write in it.
+	t.Cleanup(func() {
+		stop()
+		select {
+		case <-ran:
+		case <-time.After(time.Minute):
+			t.Errorf("the simulated Mac's lab-agent did not stop within a minute of its lab")
+		}
+	})
 	if withOOB {
 		l.oob.plug(portRight, sim, name, productM1Pro)
 		l.sight()

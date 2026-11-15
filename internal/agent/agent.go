@@ -119,6 +119,7 @@ type Agent struct {
 	mu                sync.Mutex
 	seen              map[string]bool
 	running           map[string]runningCmd
+	commands          sync.WaitGroup // the commands start runs; Run waits for them
 	results           []api.CommandResult
 	events            []api.KernelEvent
 	factsRevision     uint64
@@ -207,9 +208,12 @@ func EnrollWith(ctx context.Context, server, token string, facts api.Facts, p la
 
 // Run heartbeats until ctx ends. The heartbeat is a long poll: labd holds it
 // until it has a command for this Mac, so commands arrive at once. Results and
-// kernel events go out on their own request the moment they exist.
+// kernel events go out on their own request the moment they exist. Once
+// ctx ends, Run returns after the commands it started have ended with it, so
+// none still writes in the work dir.
 func (a *Agent) Run(ctx context.Context) error {
 	ctx, a.stop = context.WithCancel(ctx)
+	defer a.commands.Wait()
 	defer a.stop()
 	a.life = ctx
 	a.holdWatchdog(ctx)
@@ -846,7 +850,9 @@ func (a *Agent) start(ctx context.Context, c api.Command) {
 	a.keepAwake()
 	a.log.Printf("command %s %s job=%s", c.ID, c.Kind, c.JobID)
 	a.wd.Load().idle() // labd sent it
+	a.commands.Add(1)
 	go func() {
+		defer a.commands.Done()
 		defer stop(nil)
 		out, after, err := a.exec(ctx, c)
 		// ending is not a sign of labd: a command whose uploads can't reach it
