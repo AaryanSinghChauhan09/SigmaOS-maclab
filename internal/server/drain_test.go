@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -369,6 +370,43 @@ func TestAStoredCancelIsHonouredAtTheStart(t *testing.T) {
 	}
 	cancel()
 	idleAfterStop(t, s)
+}
+
+// A job waiting for its build when labd stops resumes from that build at
+// the next start: the commit it resolved and the config it took, though
+// the branch it named has moved on meanwhile.
+func TestAJobQueuedAgainBuildsTheCommitItRecorded(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	src := gitRepo(t)
+	id := l.submitJob(api.JobSpec{Source: src})
+	jobSaid(t, l.s, id, "no builder host is connected")
+	j, _ := l.s.store.job(id)
+	first, err := l.s.getBuild(j.Spec.Build)
+	if err != nil || first.Source.SHA == "" || first.ConfigSHA == "" {
+		t.Fatalf("the recorded build: %+v %v", first, err)
+	}
+	l.cancel()
+	idleAfterStop(t, l.s)
+
+	dir := filepath.Join(testGitRoot, strings.TrimSuffix(strings.TrimPrefix(src, testGitHub), "#main"))
+	commit := exec.Command("git", "-c", "user.name=t", "-c", "user.email=t@example.org", "commit", "-q", "--allow-empty", "-m", "moved on")
+	commit.Dir = dir
+	if out, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v %s", err, out)
+	}
+	if now, _ := resolve(context.Background(), mustParse(t, src)); now.SHA == first.Source.SHA {
+		t.Fatal("main did not move")
+	}
+
+	again := restartLabd(t, l.s)
+	saidTimes(t, again, id, "no builder host is connected", 2)
+	j, _ = again.store.job(id)
+	b, err := again.getBuild(j.Spec.Build)
+	if err != nil || b.Source.SHA != first.Source.SHA || b.ConfigSHA != first.ConfigSHA {
+		t.Fatalf("after the restart the job builds %+v (%v), want commit %s with config %s", b, err, first.Source.SHA, first.ConfigSHA)
+	}
+	again.cancelJob(id, "")
 }
 
 // While a person's Hard reset waits for the controller the Mac takes no

@@ -1516,9 +1516,19 @@ func (r *jobRun) restore(ctx context.Context) error {
 // outcome only on failure.
 func (r *jobRun) build(ctx context.Context) (string, string) {
 	r.state(api.JobBuilding)
-	r.ev("resolving %s", r.j.Spec.Source)
-	b, err := r.s.EnsureBuild(ctx, api.BuildRequest{Source: r.j.Spec.Source, Device: r.j.Spec.Device, Config: r.j.Spec.Config,
-		AskedBy: orStr(r.j.Maintainer, "labd"), AskedByID: r.j.AccountID})
+	var b *api.Build
+	var err error
+	if id := r.j.Spec.Build; id != "" {
+		// queued again at the start: the build it recorded says what it builds
+		r.ev("resuming from build %s", id)
+		if b, err = r.s.getBuild(id); err == nil {
+			b, err = r.s.againFrom(b)
+		}
+	} else {
+		r.ev("resolving %s", r.j.Spec.Source)
+		b, err = r.s.EnsureBuild(ctx, api.BuildRequest{Source: r.j.Spec.Source, Device: r.j.Spec.Device, Config: r.j.Spec.Config,
+			AskedBy: orStr(r.j.Maintainer, "labd"), AskedByID: r.j.AccountID})
+	}
 	if err != nil {
 		return api.OutcomeBuildFailed, err.Error()
 	}

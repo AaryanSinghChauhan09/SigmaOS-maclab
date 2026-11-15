@@ -188,6 +188,24 @@ func (s *Server) EnsureBuild(ctx context.Context, req api.BuildRequest) (*api.Bu
 	return s.queueBuild(b, req.Force)
 }
 
+// againFrom is a build of what b was asked to build, its commit and its
+// config, for a job whose build b was when labd stopped: b itself while
+// it is still queued, or done with its outputs kept, and otherwise a new
+// build of the same commit and config. A source that moved since, or a
+// Mac's config that changed, gives the job no other inputs.
+func (s *Server) againFrom(b *api.Build) (*api.Build, error) {
+	if b.Kind == api.BuildPackage || b.Source.Repo == "" || b.Source.SHA == "" || b.ConfigSHA == "" {
+		return nil, fmt.Errorf("build %s recorded no commit or no config, so the job can't build what it resolved before labd restarted; submit it again", b.ID)
+	}
+	if _, err := os.Stat(s.artifactPath(b.ConfigSHA)); err != nil {
+		return nil, fmt.Errorf("build %s's config %s has been collected since, so the job can't build what it resolved before labd restarted; submit it again", b.ID, short(b.ConfigSHA))
+	}
+	now := s.now()
+	return s.queueBuild(&api.Build{ID: "b" + now.Format("0102-150405") + "-" + randHex(2), Key: buildKey(b.Source, b.ConfigSHA), Source: b.Source,
+		Device: b.Device, ConfigSHA: b.ConfigSHA, ConfigName: b.ConfigName, State: api.BuildQueued, Created: now, Updated: now,
+		AskedBy: b.AskedBy, AskedByID: b.AskedByID, ByTeam: b.ByTeam}, false)
+}
+
 // ensurePackageBuild queues a makepkg run of an uploaded recipe, optionally
 // pointed at another commit and pkgrel.
 func (s *Server) ensurePackageBuild(ctx context.Context, req api.BuildRequest) (*api.Build, error) {
