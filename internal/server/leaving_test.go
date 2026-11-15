@@ -894,3 +894,26 @@ func TestALeavingThatCannotBeWrittenChangesNothing(t *testing.T) {
 		t.Error("the Mac is still in the lab after it left")
 	}
 }
+
+// A Mac ended while it was out of reach still learns it was ended when the
+// Maintainer who ended it has been Forgotten since: the answer says "a
+// Maintainer", never nothing, and the Mac leaves.
+func TestAMacEndedByAForgottenMaintainerStillLeavesAtItsNextCheckin(t *testing.T) {
+	l, _ := lendLab(t)
+	owner, ravi := l.signedIn(ownerID), l.signedIn(maintainerID)
+	ravi.did("/people/mark", "handle", "grace", "as", "invite")
+	grace := l.signedIn(graceID)
+	_, secret := grace.lent("shelf-mac")
+	if w := ravi.write("POST", "/api/devices/shelf-mac/end-enrollment", ""); w.Code != http.StatusOK {
+		t.Fatalf("a Maintainer ending an enrollment: %d %s", w.Code, w.Body)
+	}
+	owner.did(personPath(maintainerID, "forget"), "sure", "yes")
+
+	w := l.checkin(secret, api.Checkin{})
+	if w.Code != http.StatusUnauthorized || w.Header().Get(api.EndedHeader) != "a Maintainer" {
+		t.Errorf("the ended Mac's next check-in: %d, by %q", w.Code, w.Header().Get(api.EndedHeader))
+	}
+	if strings.Contains(w.Body.String(), "ravi") {
+		t.Errorf("the answer names the forgotten Maintainer: %s", w.Body)
+	}
+}

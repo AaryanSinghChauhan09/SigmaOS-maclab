@@ -270,12 +270,15 @@ func (s *Server) hAgentLeave(w http.ResponseWriter, r *http.Request) {
 }
 
 // ended answers a request carrying the secret of a Mac whose enrollment a
-// Maintainer ended: 401, with the Maintainer's name for the Mac to read.
+// Maintainer ended: 401, with the Maintainer's name for the Mac to read. A
+// Maintainer Forgotten since is "a Maintainer": the Mac leaves on any name,
+// and on none at all it would not.
 func (s *Server) ended(w http.ResponseWriter, r *http.Request, secret string) bool {
 	by, err := s.store.endedBy(hashSecret(secret))
 	if err != nil {
 		return false
 	}
+	by = orStr(by, "a Maintainer")
 	w.Header().Set(endedHeader, by)
 	s.refuse(w, r, 401, "enrollment ended by %s", by)
 	return true
