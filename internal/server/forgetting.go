@@ -6,9 +6,9 @@ package server
 // person had ends as when a Maintainer ends it (sessions, Lab tokens,
 // Leases, Mac sign-ins, the Macs they lend, what was on the way to lending),
 // their record goes, and everything else labd keeps loses their handle and
-// account id: both databases, labd's copies of Audit logs, the frozen
-// Releases' notes, the caller log, and the lines for Signal, sent or not.
-// Exec record lines keep the handle until they are 12 months old. A Blocked
+// account id: both databases, labd's copies of Audit logs, what the frozen
+// Releases keep but their pinned files, the caller log, and the lines for
+// Signal, sent or not. Exec record lines keep the handle until they are 12 months old. A Blocked
 // person stays Blocked: the account id, the date and who blocked are kept.
 // No list of forgettings is kept; the lines for one name only who carried
 // it out.
@@ -376,13 +376,13 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 }
 
 // forgetInFilesOf takes the person off the files labd keeps beside its
-// databases: its copies of Audit logs, the frozen Releases' notes and the
-// caller log.
+// databases: its copies of Audit logs, what the frozen Releases keep but
+// their pinned files, and the caller log.
 func (s *Server) forgetInFilesOf(f forgetting) error {
 	if err := forgetInFiles(filepath.Join(s.cfg.DataDir, "audit"), f); err != nil {
 		return fmt.Errorf("the Audit log copies: %w", err)
 	}
-	if err := forgetInFrozen(filepath.Join(s.cfg.DataDir, "frozen"), f); err != nil {
+	if err := forgetInFrozen(filepath.Join(s.cfg.DataDir, "frozen"), filepath.Join(s.cfg.DataDir, "jobs"), f); err != nil {
 		return fmt.Errorf("the frozen Releases: %w", err)
 	}
 	if err := s.callers.forget(f); err != nil {
@@ -791,16 +791,19 @@ func forgetInFiles(dir string, f forgetting) error {
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		return forgetInFile(path, func(line string) string { return f.stored(line) })
+		return forgetInFile(path, func(b []byte) ([]byte, bool) { return forgetInLines(b, f.stored) })
 	})
 }
 
-// forgetInFrozen takes the person off the frozen Releases' notes: the
-// comment lines of each pins file and the Promotion ledger. Every other
-// file there is pinned, or the copy of a job's evidence that a Promotion
-// checks byte for byte, and stays as it was: a handle in a manifest's
-// approved_by is the Release's own, frozen with it.
-func forgetInFrozen(dir string, f forgetting) error {
+// forgetInFrozen takes the person off what the frozen Releases keep: the
+// comment lines of each pins file, and every file no pins file names, an
+// Installed run's record and the Promotion ledger among them. A file a pins
+// file names stays as it was, so its pin still matches: a handle in a
+// manifest's approved_by is the Release's own, frozen with it. The frozen
+// copy of an Installed run's evidence is the job's own copy byte for byte,
+// which a Promotion checks: the job's copy under jobs is swept the same way
+// first.
+func forgetInFrozen(dir, jobs string, f forgetting) error {
 	releases, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -812,43 +815,101 @@ func forgetInFrozen(dir string, f forgetting) error {
 		if !r.IsDir() {
 			continue
 		}
-		notes, err := os.ReadDir(filepath.Join(dir, r.Name()))
+		root := filepath.Join(dir, r.Name())
+		pinned, err := frozenPinned(root)
 		if err != nil {
 			return err
 		}
-		for _, n := range notes {
-			name := n.Name()
-			change := func(line string) string { return f.stored(line) }
-			switch {
-			case !n.Type().IsRegular():
-				continue
-			case strings.HasPrefix(name, "PINS."):
-				change = func(line string) string {
-					if !strings.HasPrefix(line, "#") {
-						return line
-					}
-					return f.words(line)
-				}
-			case name != "promotions.log":
-				continue
-			}
-			if err := forgetInFile(filepath.Join(dir, r.Name(), name), change); err != nil {
+		err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !d.Type().IsRegular() {
 				return err
 			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			switch {
+			case strings.HasPrefix(rel, "PINS."):
+				return forgetInFile(path, func(b []byte) ([]byte, bool) {
+					return forgetInLines(b, func(line string) string {
+						if !strings.HasPrefix(line, "#") {
+							return line
+						}
+						return f.words(line)
+					})
+				})
+			case pinned[rel]:
+				return nil
+			}
+			if parts := strings.Split(rel, "/"); len(parts) == 4 && parts[0] == "installed" {
+				own := filepath.Join(jobs, parts[2], "installed", parts[3])
+				if err := forgetInFile(own, f.document); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
+			return forgetInFile(path, f.document)
+		})
+		if err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// forgetInFile passes each line of the file through change, and replaces
-// the file when one changed, keeping its mode and its time: a Release
-// first frozen before labd kept Releases is dated by its pins file.
-func forgetInFile(path string, change func(string) string) error {
+// frozenPinned is every file a pins file of the Release frozen in root names,
+// by its path in root.
+func frozenPinned(root string) (map[string]bool, error) {
+	names, err := filepath.Glob(filepath.Join(root, "PINS.*"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, name := range names {
+		pins, err := readPins(name)
+		if err != nil {
+			return nil, err
+		}
+		for rel := range pins {
+			out[filepath.ToSlash(filepath.Clean(rel))] = true
+		}
+	}
+	return out, nil
+}
+
+// document is a file's bytes with the person taken out: a whole JSON
+// document by its keys, indented as it was, anything else a line at a time.
+func (f forgetting) document(b []byte) ([]byte, bool) {
+	t := bytes.TrimSpace(b)
+	if len(t) == 0 || (t[0] != '{' && t[0] != '[') || !json.Valid(t) {
+		return forgetInLines(b, f.stored)
+	}
+	out, changed := f.json(string(t))
+	if !changed {
+		return b, false
+	}
+	if lines := bytes.SplitN(t, []byte("\n"), 3); len(lines) > 1 {
+		indent := lines[1][:len(lines[1])-len(bytes.TrimLeft(lines[1], " \t"))]
+		var ib bytes.Buffer
+		if json.Indent(&ib, []byte(out), "", string(indent)) == nil {
+			out = ib.String()
+		}
+	}
+	if bytes.HasSuffix(b, []byte("\n")) {
+		out += "\n"
+	}
+	return []byte(out), true
+}
+
+// forgetInFile passes the file through change, and replaces it when it
+// changed, keeping its mode and its time: a Release first frozen before
+// labd kept Releases is dated by its pins file.
+func forgetInFile(path string, change func([]byte) ([]byte, bool)) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	out, changed := forgetInLines(b, change)
+	out, changed := change(b)
 	if !changed {
 		return nil
 	}

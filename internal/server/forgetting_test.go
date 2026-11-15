@@ -2,7 +2,9 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
@@ -865,5 +867,80 @@ func TestALateAuditEntryOfAForgottenPersonIsKeptWithoutTheHandle(t *testing.T) {
 	}
 	if es[1].Maintainer != "ravi" || es[1].AccountID != maintainerID {
 		t.Errorf("an entry of a person the lab knows: %+v", es[1])
+	}
+}
+
+// An Installed run's record, which the frozen store keeps beside its
+// evidence, loses its person at a forgetting as the job does, and the job's
+// own copy with it: the Release's pinned files stay byte for byte, and a
+// Promotion still finds the frozen copy to be the job's evidence.
+func TestForgettingSomeoneWhoRanAnInstalledRunLeavesNoHandleInFrozen(t *testing.T) {
+	l, msha, _ := installedLab(t, nil)
+	id := testAccount(harnessMaintainer)
+	v := l.s.dev("sim-mac")
+	v.mu.Lock()
+	v.d.Lease.Maintainer, v.d.Lease.AccountID = harnessMaintainer, id
+	v.mu.Unlock()
+	resp, body := l.post("/api/jobs", api.JobSpec{Device: "sim-mac", InstalledManifest: msha, Holder: "tester"})
+	var sub api.Job
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &sub) != nil {
+		t.Fatalf("submit: %s %s", resp.Status, body)
+	}
+	j := l.wait(sub.ID, 60*time.Second)
+	l.expect(j, api.OutcomePass)
+	if j.Maintainer != harnessMaintainer || j.AccountID != id {
+		t.Fatalf("the run was asked by %q %d", j.Maintainer, j.AccountID)
+	}
+	dir := l.s.frozenDir("9.9")
+	pinnedNow := func() map[string]string {
+		out := map[string]string{}
+		names, _ := filepath.Glob(filepath.Join(dir, "PINS.*"))
+		for _, p := range names {
+			pins, err := readPins(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rel := range pins {
+				b, _ := os.ReadFile(filepath.Join(dir, rel))
+				out[rel] = string(b)
+			}
+		}
+		return out
+	}
+	before := pinnedNow()
+	k, err := l.s.store.knownPerson(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := Person{AccountID: testAccount("owner"), Handle: "owner", Maintainer: true, Admin: true}
+	if err := l.s.forgetHeld(by, k, newForgetting(id, k.Handle)); err != nil {
+		t.Fatal(err)
+	}
+
+	found := mentions(harnessMaintainer, id)
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, path)
+		if _, ok := before[rel]; ok || strings.HasPrefix(rel, "PINS.") {
+			return nil
+		}
+		if b, _ := os.ReadFile(path); found(string(b)) {
+			t.Errorf("frozen/9.9/%s still names the person:\n%s", rel, b)
+		}
+		return nil
+	})
+	if after := pinnedNow(); !maps.Equal(before, after) {
+		t.Error("the forgetting changed a pinned file")
+	}
+	jb, _ := os.ReadFile(filepath.Join(l.s.jobDir(j.ID), "installed", "job.json"))
+	fb, _ := os.ReadFile(filepath.Join(dir, "installed", "sim-mac", j.ID, "job.json"))
+	var rec api.Job
+	if string(jb) != string(fb) || json.Unmarshal(fb, &rec) != nil || rec.ID != j.ID || rec.Outcome != api.OutcomePass {
+		t.Errorf("the frozen record and the job's own: equal %v, read %+v", string(jb) == string(fb), rec.ID)
+	}
+	if _, err := l.s.promotion(context.Background(), by, "9.9", promoteReq{Device: "sim-mac", Job: j.ID}); err != nil {
+		t.Errorf("a Promotion after the forgetting: %v", err)
 	}
 }
