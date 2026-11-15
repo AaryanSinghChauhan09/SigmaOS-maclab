@@ -389,17 +389,22 @@ older() {
   (( 10#$x < 10#$y ))
 }
 
-previous="$(running)"
 # Set when this Deploy goes back from a running release that says "No way
 # back." and the databases from before it are kept.
 going_back=0
-if [[ -n $previous && -f $LAB_BUILDS/$previous/deploy/no-way-back ]] && older "$tag" "$previous"; then
-  # Without that copy the older labd would start on databases only the
-  # marked release reads: refused while labd still runs.
-  [[ -d $BEFORE_DEPLOY/$previous && ! -L $BEFORE_DEPLOY/$previous ]] ||
-    fail "$previous says \"No way back.\", and there is no copy of the databases from before it ($BEFORE_DEPLOY/$previous): $tag would start on databases only $previous reads. Nothing was changed, and $previous still runs"
-  going_back=1
-fi
+# decide: what runs now, and whether this Deploy goes back from it.
+decide() {
+  previous="$(running)"
+  going_back=0
+  if [[ -n $previous && -f $LAB_BUILDS/$previous/deploy/no-way-back ]] && older "$tag" "$previous"; then
+    # Without that copy the older labd would start on databases only the
+    # marked release reads: refused while labd still runs.
+    [[ -d $BEFORE_DEPLOY/$previous && ! -L $BEFORE_DEPLOY/$previous ]] ||
+      fail "$previous says \"No way back.\", and there is no copy of the databases from before it ($BEFORE_DEPLOY/$previous): $tag would start on databases only $previous reads. Nothing was changed, and $previous still runs"
+    going_back=1
+  fi
+}
+decide
 if [[ $previous == "$tag" ]]; then
   if verify; then
     say "$tag is already the running build, and labd answers"
@@ -421,6 +426,9 @@ else
   mkdir -p "$LAB_BUILDS"
   mkdir "$LAB_ROOT/.deploying" 2>/dev/null || fail "another Deploy is running ($LAB_ROOT/.deploying)"
   lock="$LAB_ROOT/.deploying"
+  # Another Deploy may have ended since the first look.
+  decide
+  [[ $previous != "$tag" ]] || fail "$tag became the running build while this Deploy downloaded it: nothing was changed"
   if loaded "$LITESTREAM_LABEL"; then litestream_ran=1; fi
   rm -rf "$LAB_BUILDS"/.incoming.*
   stage="$LAB_BUILDS/.incoming.$$"

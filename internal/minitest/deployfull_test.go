@@ -1153,3 +1153,35 @@ exec /bin/mv "$@"
 	}
 	order(t, m.calls(), "ops POST /agents/line Deploy of "+old+" on the mini failed its check", "as-lab rm -f "+m.path("var/lab/data/reports.db.restored"))
 }
+
+// Another Deploy that ends while this one downloads changes what runs: the
+// build this Deploy goes back to is the one that runs once it holds the lock.
+func TestTheWayBackIsWhatRunsOnceTheDeployHoldsTheLock(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	first, other, bad := "v0.2.0-rc.1", "v0.2.0-rc.2", "v0.2.0-rc.3"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, other), other, true)
+	bundle(t, k, filepath.Join(r.dir, bad), bad, false)
+	m.ok("deploy", "--from", r.from(first), first)
+	curl, err := exec.LookPath("curl")
+	if err != nil {
+		t.Skip("no curl")
+	}
+	write(t, m.bin+"/curl", `#!/bin/bash
+if [[ "$*" == *"/`+bad+`/"* && ! -f $STUB_STATE/raced ]]; then
+  touch "$STUB_STATE/raced"
+  `+filepath.Join(m.tree, "scripts", "mini", "deploy")+` --from `+r.from(other)+` `+other+` >/dev/null 2>&1 || exit 9
+fi
+exec `+curl+` "$@"
+`, 0o755)
+
+	out := m.refused("deploy", "--from", r.from(bad), bad)
+
+	if m.current() != other || !m.loaded() {
+		t.Fatalf("the mini runs %q (loaded %v), want %s, which ran when the Deploy took the lock\n%s", m.current(), m.loaded(), other, out)
+	}
+	if !strings.Contains(out, other+" is back and answers") || !strings.Contains(out, "started, from "+other) {
+		t.Errorf("no word of %s:\n%s", other, out)
+	}
+}
