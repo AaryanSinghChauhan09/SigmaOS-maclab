@@ -968,8 +968,11 @@ func TestASecondStopDuringTheWayOutStillLiftsTheDrain(t *testing.T) {
 	cmd := exec.Command(r.path("usr/local/lab/current/scripts/mini/maintenance"), "--wait", "5")
 	cmd.Env = r.env
 	cmd.Dir = filepath.Dir(r.tree)
+	// The lift comes from the run, so after Start; started says so to Go too.
+	started := make(chan struct{})
 	r.ops.set(func(o *ops) {
 		o.onLift = func() {
+			<-started
 			cmd.Process.Signal(syscall.SIGTERM)
 			time.Sleep(300 * time.Millisecond)
 		}
@@ -977,6 +980,7 @@ func TestASecondStopDuringTheWayOutStillLiftsTheDrain(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	close(started)
 	for deadline := time.Now().Add(20 * time.Second); !strings.Contains(r.callsOrNone(), "ops POST /drain"); time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			cmd.Process.Kill()
