@@ -358,6 +358,7 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 	}
 
 	m.deployed("v0.2.0-rc.1", "")
+	write(t, m.path("usr/local/lab/current/VERSION"), "v0.2.0-rc.1\n", 0o644)
 	labd := m.path("usr/local/lab/current/bin/labd")
 	write(t, labd, labdQR, 0o755)
 	drawn := fmt.Sprintf("[QR %x]", sha256.Sum256([]byte(linkURL)))
@@ -445,4 +446,43 @@ func (m *mini) nothingHolds(secret string) {
 		}
 		return nil
 	})
+}
+
+// linkReady is a mini set up with the sender running and a build Deployed
+// whose labd draws, at version, for link.
+func linkReady(t *testing.T, version string) (*mini, string) {
+	t.Helper()
+	need(t, "openssl")
+	m := newMini(t)
+	k := newKey(t)
+	m.withSender()
+	m.ok("setup", "--release-key", k.signers)
+	os.Chmod(filepath.Dir(m.path(signalCLI)), 0o755)
+	write(t, m.path(signalCLI), linkStub, 0o755)
+	m.deployed(version, "")
+	write(t, m.path("usr/local/lab/current/VERSION"), version+"\n", 0o644)
+	labd := m.path("usr/local/lab/current/bin/labd")
+	write(t, labd, labdQR, 0o755)
+	return m, labd
+}
+
+// A Deployed labd from before labd qr (v0.2.0-rc.0 and older) starts a lab
+// given qr: link refuses before the sender is stopped, runs no labd, and says
+// which build to Deploy.
+func TestLinkRefusesALabdThatCannotDraw(t *testing.T) {
+	m, labd := linkReady(t, "v0.2.0-rc.0")
+	write(t, labd, "#!/bin/bash\necho \"labd $*\" >> \"$STUB_LOG\"\necho 'a lab starts'\nsleep 5\n", 0o755)
+	version := m.path("usr/local/lab/current/VERSION")
+	for _, v := range []string{"v0.2.0-rc.0", "v0.1.15", "dev", ""} {
+		if v == "" {
+			os.Remove(version)
+		} else {
+			write(t, version, v+"\n", 0o644)
+		}
+		os.Remove(m.log)
+		out, code := m.signal("", "link")
+		if code == 0 || !strings.Contains(out, "e61152eb") || !strings.Contains(out, "Nothing was changed") || exists(m.log) || !m.senderLoaded() {
+			t.Errorf("link over %q: exit %d, sender up %v\n%s\n%s", v, code, m.senderLoaded(), out, m.callsOrNone())
+		}
+	}
 }

@@ -116,12 +116,25 @@ show_link() {
   done
 }
 
+# draws VERSION: whether the build numbered VERSION has labd qr. It came
+# after v0.2.0-rc.0, whose labd starts a lab when given qr, so an older labd
+# is never run with it.
+draws() {
+  [[ $1 =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.([0-9]+))?$ ]] || return 1
+  local major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]} rc=${BASH_REMATCH[5]}
+  (( major > 0 || minor > 2 )) && return 0
+  (( minor == 2 )) || return 1
+  (( patch > 0 )) || [[ -z $rc ]] || (( rc > 0 ))
+}
+
 # The link is never traced, written down, shown as text or an argument of
 # anything: whoever has it can link a device.
 link() {
-  local labd="$LAB_CURRENT/bin/labd"
+  local labd="$LAB_CURRENT/bin/labd" version
   set +x
   [[ -x $labd ]] || fail "no build is Deployed: the QR code for your phone is drawn by labd. Deploy first, then run link again. Nothing was changed"
+  version="$(cat "$LAB_CURRENT/VERSION" 2>/dev/null || true)"
+  draws "$version" || fail "the Deployed build is ${version:-of no version}, whose labd cannot draw the QR code for your phone. Deploy a Release candidate cut from build at or after e61152eb (v0.2.0-rc.1 or later), then run link again. Nothing was changed"
   alone
   cli link -n "$DEVICE_NAME" | show_link "$labd" || fail "signal-cli did not link: run link again for a new link"
   say "linked as \"$DEVICE_NAME\", a device of your number: lines come from your own number. Then: scripts/mini/signal groups"
