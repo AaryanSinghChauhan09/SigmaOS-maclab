@@ -175,9 +175,22 @@ func (v *dev) setStateLocked(st api.DeviceState, reason string) {
 	if v.d.State == api.StateLeft {
 		return
 	}
+	was := v.d.State
 	v.d.State, v.d.StateReason = st, reason
 	if st != api.StateNeedsHands {
 		v.d.Action = nil
+	}
+	if !v.d.IsVolunteer() && v.s.lines != nil {
+		key := v.d.ID
+		if key == "" {
+			key = v.d.Name
+		}
+		switch {
+		case st == api.StateNeedsHands && was != st:
+			v.s.agents.NeedsHands(key, v.d.Name, reason)
+		case was == api.StateNeedsHands && st != was:
+			v.s.agents.NoLongerNeedsHands(key, v.d.Name, st)
+		}
 	}
 	v.saveLocked()
 	v.publishLocked()
