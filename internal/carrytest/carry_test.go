@@ -761,6 +761,27 @@ func TestASwitchThatStopsPartWayPutsEachFileBackFromWhereItIs(t *testing.T) {
 	}
 }
 
+// Litestream that does not stop leaves labd stopped part-way: the way back
+// is armed before the stop, and labd runs again on the directory it had.
+func TestAStopThatFailsPartWayStartsLabdAgain(t *testing.T) {
+	m := newMini(t, oldlabtest.OnOmarchyGPU)
+	m.ok("old-lab", "stop")
+	m.ok("old-lab", "copy", "--stage", m.stage)
+	mine := everyFile(t, m.path("var/lab/data"))
+	stubs := filepath.Join(m.base, "stubs")
+	write(t, stubs+"/launchctl", strings.Replace(launchctlStub, `bootout) rm -f "$state" ;;`, `bootout) [[ $label == `+litestreamLabel+` ]] || rm -f "$state" ;;`, 1), 0o755)
+	write(t, stubs+"/sleep", "#!/bin/sh\nexit 0\n", 0o755)
+
+	out := m.refused("old-lab", "upgrade", "--stage", m.stage, "--account-id", "7", "owner")
+
+	if !strings.Contains(out, "Litestream did not stop") || !m.loaded(labdLabel) {
+		t.Errorf("labd was left stopped (loaded %v):\n%s", m.loaded(labdLabel), out)
+	}
+	if got := everyFile(t, m.path("var/lab/data")); !reflect.DeepEqual(less(got, "labd.db-shm", "labd.db-wal"), less(mine, "labd.db-shm", "labd.db-wal")) {
+		t.Errorf("the lab's directory changed: %v", changed(mine, got))
+	}
+}
+
 // A copy of scripts/cutover alone, as the owner puts it on the mini, takes
 // the mini's own library from the Deployed build.
 func TestACopyOfTheScriptsUsesTheDeployedBuildsLibrary(t *testing.T) {

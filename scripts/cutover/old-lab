@@ -216,7 +216,8 @@ put_back() {
 cleanup() {
   local status=$?
   trap - EXIT
-  if (( switching )); then (set +e; put_back) || true; fi
+  # From the stop on: labd or Litestream may be stopped already.
+  if (( switching || lab_stopping )); then (set +e; put_back) || true; fi
   exit "$status"
 }
 
@@ -269,6 +270,8 @@ upgrade() {
   is="$(as_lab "$LABD" old-lab counts --data "$new" | tr '\n' ' ' | sed 's/ $//')"
   [[ $is == "$was" ]] || fail "the upgraded directory holds $is, and the copy held $was: the lab's own directory was not touched"
 
+  # Armed before the stop: a Litestream that does not stop leaves labd
+  # stopped, and the way back starts it again.
   trap cleanup EXIT
   stop_lab
   switching=1

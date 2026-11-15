@@ -59,14 +59,18 @@ labd_answers() {
 
 # stop_lab: labd and Litestream let go of the data directory, once the jobs
 # that run have ended. had_litestream remembers whether Litestream ran, so
-# that start_lab starts it again.
+# that start_lab starts it again. lab_stopping is 1 from the moment after
+# the drain on, when a daemon may be stopped: a way back that starts labd
+# again is armed by then.
 had_litestream=0
+lab_stopping=0
 stop_lab() {
   if loaded "$LITESTREAM_LABEL"; then had_litestream=1; fi
   # As a Deploy does: no job is cut by the stop.
   if declare -F drain_jobs >/dev/null; then
     drain_jobs 30 || fail "$NOT_DRAINED. Nothing was changed"
   fi
+  lab_stopping=1
   stopped "$LABD_LABEL" || fail "labd did not stop (20 s): nothing was changed"
   stopped "$LITESTREAM_LABEL" || fail "Litestream did not stop (20 s): labd is stopped, and nothing else was changed. Start labd again with: launchctl bootstrap system $LABD_PLIST"
 }
