@@ -33,7 +33,7 @@ if [[ $MODE == dry ]]; then
 $ME: dry run. Through $ADDRESS, as the owner's browser (the session cookie typed at a hidden prompt), it would:
   1. make the Lab token h08-... on $ADDRESS/me, then revoke it there
      expects: "Agents" gets: <you> made the Lab token "h08-...", which expires on ...
-  2. mark ${other:-HANDLE} as M team on People
+  2. mark ${other:-HANDLE} as M team on People; before anything, it stops if People shows ${other:-HANDLE} on the M team already
      expects: "Agents" gets: <you> marked ${other:-HANDLE} as M team.
   3. use "End all access" on ${other:-HANDLE} on People
      expects: "Agents" gets: <you> used "End all access" on ${other:-HANDLE}.
@@ -46,14 +46,32 @@ PLAN
   exit 0
 fi
 
+# kind_of HANDLE: the person's kind on People (M team, Maintainer, Admin,
+# External volunteer, no role), or nothing when People has no row for them.
+# It fails when People does not open.
+kind_of() {
+  "$PROBE" page --session "$OWNER_SESSION" --find "(?i)<b>@$1</b></a>[^\\n]*</td>\\s*<td data-label=\"Kind\"><span class=\"badge[^\"]*\">([^<]*)</span>" /people > "$WORK/kind.out" 2>&1 || true
+  grep -qx 'status=200' "$WORK/kind.out" || return 1
+  sed -n 's/^found=//p' "$WORK/kind.out" | head -n 1
+}
+
 begin 08 "a people change, a new Lab token and a cut each appear in \"Agents\""
 if playing; then
   people
   other=member
   rec "the owner marked @member and @other as M team"
+  [[ "$(kind_of member)" == "M team" ]] || fail "People does not show @member as M team: the test would not see a member named with --other"
   told_agents "member as M team." "a people change (the M team mark)"
 else
   owner_session
+  if [[ -n $other ]]; then
+    # The test marks the person and takes the mark off again: someone who
+    # has a mark already would lose theirs.
+    kind="$(kind_of "$other")" || stopped "People did not open at $ADDRESS/people: whether $other is on the M team already is not known"
+    case "$kind" in
+      "M team" | Maintainer | Admin) stopped "@$other is on the M team already ($kind): the test would take their mark off at its end. Run it again with --other naming an account with no mark" ;;
+    esac
+  fi
 fi
 tag="h08-$(nonce)"
 
@@ -97,8 +115,10 @@ if [[ -z $other ]]; then
   stopped "a people change and a cut need a person who is not the owner: run it again with --other HANDLE, a GitHub account the owner names"
 fi
 if ! playing; then
-  arm mark undo_mark "$other"
   form mark --session "$OWNER_SESSION" --page /people /people/mark "handle=$other" as=m-team
+  # A refusal (4xx) changed nothing; any other answer, or none, may have
+  # marked a person People showed with no mark.
+  [[ "$(status_of mark)" == 4?? ]] || arm mark undo_mark "$other"
   [[ "$(status_of mark)" == 303 ]] || give_up "$other was not marked M team: $(status_of mark) $(said_of mark)"
   rec "the owner marked $other as M team on People"
   told_agents "marked $other as M team." "a people change (the M team mark)"

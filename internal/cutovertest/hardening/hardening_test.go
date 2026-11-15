@@ -348,12 +348,13 @@ func labRun(t *testing.T, name, lab, probe, stdin string, env []string, args ...
 // H 8 through the Lab address: the owner's browser makes a token and marks
 // a person M team. A "no" at a question leaves the lab as it was.
 const h08Probe = `case "$*" in
+  "page "*'data-label="Kind"'*) echo status=200; [ -z "${H08_KIND:-}" ] || echo "found=$H08_KIND" ;;
   "page "*"--find /me/tokens/"*) echo status=200; echo found=7 ;;
   "page "*"--find /people/"*"end-all-access"*) echo status=200; echo found=42 ;;
   "page "*" /me") echo status=200 ;;
   "form "*" /me/tokens name="*) echo lab_0123456789012345678901234567890123456789 > "$out"; echo status=200 ;;
   "form "*" /me/tokens/7/revoke sure=yes") echo status=303 ;;
-  "form "*" /people/mark handle=someone as=m-team") echo status=303 ;;
+  "form "*" /people/mark handle=someone as=m-team") echo "status=${H08_MARK:-303}" ;;
   "form "*" /people/42/m-team/remove sure=yes") echo status=303 ;;
   *) echo status=500 ;;
 esac`
@@ -375,6 +376,37 @@ func TestANoAtH08sQuestionLeavesTheLabAsItWas(t *testing.T) {
 			}
 			if !strings.Contains(record, c.record) || strings.Index(record, c.record) > strings.Index(record, "Result: fail") {
 				t.Errorf("the record does not say it was undone before its result:\n%s", record)
+			}
+		})
+	}
+}
+
+// H 8 never takes away a mark it did not give: a person already on the M
+// team is refused before anything is changed, and a mark the lab refused
+// is not undone.
+func TestH08LeavesAnExistingMemberMarked(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		env   []string
+		stdin string
+		code  int
+		want  string
+	}{
+		"People shows them on the M team": {[]string{"H08_KIND=M team"}, "session\n", 3, "STOPPED: @someone is on the M team already (M team)"},
+		"People shows them a Maintainer":  {[]string{"H08_KIND=Maintainer"}, "session\n", 3, "STOPPED: @someone is on the M team already (Maintainer)"},
+		"the lab refuses the mark":        {[]string{"H08_MARK=409"}, "session\nyes\n", 1, "FAILED: someone was not marked M team: 409"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out, code, record, calls := labRun(t, "h08-agents-lines", "", h08Probe, c.stdin, c.env, "--other", "someone")
+			if code != c.code || !strings.Contains(record, c.want) {
+				t.Fatalf("exit %d, want %d and %q\n%s\n%s", code, c.code, c.want, out, record)
+			}
+			if strings.Contains(calls, "/m-team/remove") || strings.Contains(record, "the M team mark was taken off") {
+				t.Errorf("the mark was taken off a person the test did not mark:\n%s\n%s", calls, record)
+			}
+			if c.code == 3 && (strings.Contains(calls, "/people/mark") || strings.Contains(calls, "/me/tokens name=")) {
+				t.Errorf("the run changed the lab before it refused:\n%s", calls)
 			}
 		})
 	}
