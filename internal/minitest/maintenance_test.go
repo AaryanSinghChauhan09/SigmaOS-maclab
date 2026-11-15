@@ -767,6 +767,36 @@ func TestASwitchBackThatCannotCopyLeavesTheToolAsItWas(t *testing.T) {
 	}
 }
 
+// A switch back that cannot write HELD (a full disk) keeps the tool's
+// folder as it was until then, and starts its daemon again.
+func TestASwitchBackThatCannotWriteHeldLeavesTheDaemonStarted(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.newer("cloudflared", "2.0", "#!/bin/sh\n# bad\necho cloudflared 2.0\n")
+	r.went()
+	r.ops.set(func(o *ops) { o.lines = nil })
+	tools := r.path("usr/local/lab/tools")
+	if err := os.Mkdir(tools+"/current/HELD.new", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(r.log)
+
+	r.stopped("--after-restart")
+
+	if !r.tunnelLoaded() {
+		t.Errorf("the tunnel was left stopped:\n%s", r.calls())
+	}
+	if got := read(t, tools+"/current/cloudflared/bin/cloudflared"); !strings.Contains(got, "cloudflared 2.0") {
+		t.Errorf("the copy the daemons run from holds: %q", got)
+	}
+	if r.version("cloudflared") != "2.0" || exists(tools+"/current/HELD") || exists(tools+"/current/.cloudflared.failed") || exists(tools+"/current/VERSIONS.new") {
+		t.Errorf("VERSIONS or HELD changed, or a file was left:\n%s", read(t, tools+"/current/VERSIONS"))
+	}
+	if !strings.Contains(r.report(), "tool cloudflared 2.0 fails its check, and it could not be switched back to 1.0") {
+		t.Errorf("the report:\n%s", r.report())
+	}
+}
+
 // Each Homebrew tool by its own check, as the Maintenance run asks it.
 func TestEachToolsOwnCheck(t *testing.T) {
 	t.Parallel()

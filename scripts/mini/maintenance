@@ -322,27 +322,30 @@ state() { awk -v k="$1" '$1 == k { sub(/^[^ ]+ /, ""); print; exit }' "$STATE"; 
 # the previous copy's again, and its daemon starts from it. The copy names
 # NEW in HELD, so that the set-up does not copy that version again.
 back() {
-  local name="$1" label cur prev
+  local name="$1" label cur prev held
   label="$(daemon_of "$name")"
   cur="$(cd -P "$LAB_TOOLS/current" 2>/dev/null && pwd -P)" || return 1
   prev="$(cd -P "$LAB_TOOLS/previous" 2>/dev/null && pwd -P)" || return 1
   [[ -d $prev/$name && $cur != "$prev" ]] || return 1
-  if [[ -n $label ]] && loaded "$label"; then stopped "$label" || return 1; fi
+  if [[ -n $label ]] && loaded "$label"; then stopped "$label" || { again "$label"; return 1; }; fi
   rm -rf "${cur:?}/.$name.failed" || { again "$label"; return 1; }
   mv "$cur/$name" "$cur/.$name.failed" || { again "$label"; return 1; }
-  # Called as "if ! back", errexit is off here: each step is checked, and a
-  # copy that fails puts the tool's folder back as it was.
-  if ! cp -R "$prev/$name" "$cur/$name" || ! chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$cur/$name" || ! chmod -R ug-s,go-w "$cur/$name"; then
+  # Called as "if ! back", errexit is off here: each step is checked. Until
+  # VERSIONS and HELD are written in full the tool's own folder is kept, and
+  # anything that fails puts it back as it was, with its daemon started.
+  held="$(grep -v "^$name " "$cur/HELD" 2>/dev/null || true)"
+  if ! cp -R "$prev/$name" "$cur/$name" || ! chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$cur/$name" || ! chmod -R ug-s,go-w "$cur/$name" ||
+    ! awk -v n="$name" -v v="$2" '$1 == n { print n, v; next } { print }' "$cur/VERSIONS" > "$cur/VERSIONS.new" ||
+    ! printf '%s%s %s\n' "${held:+$held$'\n'}" "$name" "$3" > "$cur/HELD.new" ||
+    ! mv -f "$cur/VERSIONS.new" "$cur/VERSIONS"; then
+    rm -f "$cur/VERSIONS.new" "$cur/HELD.new" 2>/dev/null
     rm -rf "${cur:?}/$name"
     mv "$cur/.$name.failed" "$cur/$name" || true
     again "$label"
     return 1
   fi
-  rm -rf "${cur:?}/.$name.failed" || return 1
-  awk -v n="$name" -v v="$2" '$1 == n { print n, v; next } { print }' "$cur/VERSIONS" > "$cur/VERSIONS.new" || return 1
-  mv -f "$cur/VERSIONS.new" "$cur/VERSIONS" || return 1
-  { grep -v "^$name " "$cur/HELD" 2>/dev/null || true; echo "$name $3"; } > "$cur/HELD.new" || return 1
-  mv -f "$cur/HELD.new" "$cur/HELD" || return 1
+  mv -f "$cur/HELD.new" "$cur/HELD" || { again "$label"; return 1; }
+  rm -rf "${cur:?}/.$name.failed" || true
   again "$label"
 }
 
