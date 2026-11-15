@@ -378,6 +378,11 @@ func (f *fake) zone(w http.ResponseWriter, r *http.Request, path string, in map[
 		}
 		f.ok(w, map[string]any{"enabled": f.routing, "name": labDomain, "status": status})
 	case "email/routing/dns POST":
+		// Cloudflare takes name only for a subdomain; the apex goes as {} (B5.2, 2026-11-15).
+		if _, ok := in["name"]; ok {
+			f.refuse(w, http.StatusUnprocessableEntity, 2007, "Invalid Input: must be a subdomains of "+labDomain)
+			return
+		}
 		f.routing = true
 		f.ok(w, map[string]any{"enabled": true, "name": labDomain, "status": "ready"})
 	case "email/routing/rules GET":
