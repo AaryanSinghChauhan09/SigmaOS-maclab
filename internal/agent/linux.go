@@ -85,7 +85,7 @@ func (l *Linux) Health() api.Health {
 	if f := strings.Fields(readTrim("/proc/uptime")); len(f) > 0 {
 		h.Uptime, _ = strconv.ParseFloat(f[0], 64)
 	}
-	out, _ := exec.Command("systemctl", "is-system-running").Output()
+	out, _ := toolOutput("systemctl", "is-system-running")
 	h.SystemState = strings.TrimSpace(string(out))
 	h.Tainted, _ = strconv.ParseInt(readTrim("/proc/sys/kernel/tainted"), 10, 64)
 	_, _, cmd := l.Identity()
@@ -128,7 +128,7 @@ func (l *Linux) Facts() api.Facts {
 	}
 	_, err := os.Stat("/dev/watchdog0")
 	f.Watchdog = err == nil
-	out, _ := exec.Command("systemctl", "show", "-p", "RuntimeWatchdogUSec", "--value").Output()
+	out, _ := toolOutput("systemctl", "show", "-p", "RuntimeWatchdogUSec", "--value")
 	v := strings.TrimSpace(string(out))
 	f.WatchdogArmed = f.Watchdog && v != "" && v != "0" && v != "infinity"
 	f.PanicTimeout, _ = strconv.Atoi(readTrim("/proc/sys/kernel/panic"))
@@ -262,10 +262,10 @@ func (l *Linux) QuiesceBootSync() (resume func()) {
 	defer cancel()
 	var again []string
 	for _, u := range bootSyncUnits {
-		if exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", u).Run() != nil {
+		if runGroup(exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", u)) != nil {
 			continue // not running, or not installed (a GRUB Mac)
 		}
-		if exec.CommandContext(ctx, "systemctl", "stop", u).Run() != nil {
+		if runGroup(exec.CommandContext(ctx, "systemctl", "stop", u)) != nil {
 			continue
 		}
 		if u != "snapper-cleanup.service" {
@@ -274,14 +274,14 @@ func (l *Linux) QuiesceBootSync() (resume func()) {
 	}
 	return func() {
 		if len(again) > 0 {
-			exec.Command("systemctl", append([]string{"start"}, again...)...).Run()
+			tool(nil, nil, "systemctl", append([]string{"start"}, again...)...)
 		}
 	}
 }
 
 func (l *Linux) Reboot() error {
-	exec.Command("sync").Run()
-	return exec.Command("systemctl", "reboot").Run()
+	tool(nil, nil, "sync")
+	return tool(nil, nil, "systemctl", "reboot")
 }
 
 func (l *Linux) Crash(mode string) error {
@@ -357,7 +357,7 @@ func (l *Linux) Collect(ctx context.Context, boot, outDir string) error {
 }
 
 func (l *Linux) PreviousBoot(since time.Time) string {
-	out, err := exec.Command("journalctl", "--list-boots", "-o", "json", "--no-pager").Output()
+	out, err := toolOutput("journalctl", "--list-boots", "-o", "json", "--no-pager")
 	if err != nil {
 		return ""
 	}
@@ -457,7 +457,7 @@ func guiEnv(name string, wait time.Duration) (*user.User, []string, error) {
 			env := []string{"XDG_RUNTIME_DIR=" + run, "WAYLAND_DISPLAY=" + sock, "HOME=" + u.HomeDir, "USER=" + u.Username,
 				"DBUS_SESSION_BUS_ADDRESS=unix:path=" + run + "/bus"}
 			// The user's desktop session, so a test counts as run at the Mac's own seat.
-			if o, err := exec.Command("loginctl", "show-user", u.Username, "--property=Display", "--value").Output(); err == nil {
+			if o, err := toolOutput("loginctl", "show-user", u.Username, "--property=Display", "--value"); err == nil {
 				if id := strings.TrimSpace(string(o)); id != "" {
 					env = append(env, "XDG_SESSION_ID="+id)
 				}

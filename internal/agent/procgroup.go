@@ -2,6 +2,8 @@ package agent
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -83,4 +85,33 @@ func endGroup(pg int, termed time.Time) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	syscall.Kill(-pg, syscall.SIGKILL)
+}
+
+// toolTimeout bounds a system tool lab-agent runs outside any command's
+// context (grub-editenv, chattr, findmnt, systemctl, sync). It is a bound,
+// not a stop: a tool that changes the boot is not cut when a command is.
+var toolTimeout = time.Minute
+
+// tool runs a system tool through runGroup, ended after toolTimeout, its
+// output to stdout and stderr (nil discards).
+func tool(stdout, stderr io.Writer, name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	return runGroup(cmd)
+}
+
+// toolOutput is a tool's stdout, as cmd.Output.
+func toolOutput(name string, args ...string) ([]byte, error) {
+	var b bytes.Buffer
+	err := tool(&b, nil, name, args...)
+	return b.Bytes(), err
+}
+
+// toolCombined is a tool's stdout and stderr together, as cmd.CombinedOutput.
+func toolCombined(name string, args ...string) ([]byte, error) {
+	var b bytes.Buffer
+	err := tool(&b, &b, name, args...)
+	return b.Bytes(), err
 }

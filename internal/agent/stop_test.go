@@ -281,3 +281,37 @@ func TestPacmansChildEndsWithTheInstall(t *testing.T) {
 		t.Error("pacman's child outlived the install")
 	}
 }
+
+// A system tool lab-agent runs outside a command's context (grub-editenv
+// here) is bounded: one that hangs is ended, with its group, and lab-agent
+// goes on.
+func TestASystemToolThatHangsIsEnded(t *testing.T) {
+	bin, pids := t.TempDir(), filepath.Join(t.TempDir(), "pids")
+	fake := "#!/bin/sh\necho $$ >> " + pids + "\nsleep 600 &\necho $! >> " + pids + "\nwait\n"
+	if err := os.WriteFile(filepath.Join(bin, "grub-editenv"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	was := toolTimeout
+	toolTimeout = time.Second
+	t.Cleanup(func() { toolTimeout = was })
+	env := filepath.Join(t.TempDir(), "maclab.env")
+	os.WriteFile(env, nil, 0o644)
+	t.Cleanup(func() {
+		for _, pid := range readPids(t, pids) {
+			syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	done := make(chan string, 1)
+	go func() { done <- (&grubLayout{EnvFile: env}).armed() }()
+	select {
+	case <-done:
+	case <-time.After(toolTimeout + stopGrace + 3*time.Second):
+		t.Fatal("a hung grub-editenv held lab-agent")
+	}
+	for _, pid := range readPids(t, pids) {
+		if !ended(pid) {
+			t.Errorf("process %d of the hung tool still runs", pid)
+		}
+	}
+}
