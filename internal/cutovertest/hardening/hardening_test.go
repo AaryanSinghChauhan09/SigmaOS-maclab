@@ -563,6 +563,9 @@ func TestSecretsSeenFailsWhereItWouldReadNothing(t *testing.T) {
 		"no process": {func(root, stubs string) {
 			os.WriteFile(filepath.Join(stubs, "ps"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
 		}, "ps showed no process"},
+		"a planted link": {func(root, stubs string) {
+			os.Symlink("/etc/hosts", filepath.Join(root, "var/lab/secrets/cloudflared.token"))
+		}, "is a symbolic link"},
 		"": {func(string, string) {}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
