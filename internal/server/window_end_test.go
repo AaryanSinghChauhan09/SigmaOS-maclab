@@ -269,16 +269,21 @@ func TestPauseMidJobStopsItAsTheWindowEndWould(t *testing.T) {
 	})
 }
 
-// A Lab boot that hasn't reached labd yet is stopped by a Pause too, well
-// before its no-contact deadline would have rebooted it, and the job is
-// incomplete rather than lost_contact.
+// A Lab boot that hasn't reached labd yet is stopped by a Pause too, before
+// its no-contact deadline would have rebooted it, and the job is incomplete
+// rather than lost_contact. Which deadline rebooted the Mac says so, on the
+// lab's clock: the wall time it takes is the machine's load.
 func TestPauseDuringALabBootThatHasNotReachedLabdReturnsTheMacAtOnce(t *testing.T) {
 	l, _ := windowEndLab(t, labConfig{})
 	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-offline behavior=no-network")})
 	labBoot := l.lostBoot("7.2-offline")
 	l.mustVolunteer("pause")
-	l.backOnItsOwnSystem(labBoot, 3*time.Second, "the Volunteer paused during the Lab boot (its no-contact deadline is 8s)")
-	l.expect(l.jobAPI(id, 30*time.Second), api.OutcomeIncomplete)
+	l.backOnItsOwnSystem(labBoot, 30*time.Second, "the Volunteer paused during the Lab boot")
+	j := l.jobAPI(id, 30*time.Second)
+	l.expect(j, api.OutcomeIncomplete)
+	if !hasEvent(j, "the Availability window closing deadline rebooted it") {
+		t.Fatalf("the Pause did not reboot the Lab boot (its no-contact deadline is 8s): %v", j.Events)
+	}
 }
 
 // leaseNow is the Mac's lease as labd's API shows it.
