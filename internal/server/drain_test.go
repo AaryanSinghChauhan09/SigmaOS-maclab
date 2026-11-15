@@ -277,6 +277,10 @@ func TestADrainHoldsASourceJobBeforeItsPreparation(t *testing.T) {
 	l.staysQueued(id, 1500*time.Millisecond, "jobs are drained")
 	opsOf(l.s, "DELETE", "/drain")
 	jobSaid(t, l.s, id, "resolving")
+	// The job is ended before the test is, so it writes nothing into the
+	// lab's data folder while that is removed.
+	l.cancelWhen(id, "resolving")
+	l.wait(id, 30*time.Second)
 }
 
 // What Deploy asks after its switch: whether the Builder asks this labd for
