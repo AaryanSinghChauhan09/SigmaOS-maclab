@@ -7,6 +7,8 @@ package server
 // Known-good run.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,7 +131,8 @@ func (r *jobRun) omtResult(name string, tr *api.TestResult) {
 		tr.Passed, tr.Error = false, "omarchy-m-test report is not JSON: "+err.Error()
 		return
 	}
-	res := &api.OMTResult{Report: file, Tool: rep.Tool.Version, Catalogue: rep.Catalogue, Kernel: rep.Machine.Kernel,
+	sum := sha256.Sum256(data)
+	res := &api.OMTResult{Report: file, ReportSHA256: hex.EncodeToString(sum[:]), Tool: rep.Tool.Version, Catalogue: rep.Catalogue, Kernel: rep.Machine.Kernel,
 		KnownGood: j.Spec.Kernel == "" && j.Spec.Source == ""}
 	status := map[string]string{}
 	byID := map[string]api.OMTCheck{}
@@ -528,6 +531,9 @@ func (s *Server) publishOMT(j *api.Job, by Person) (string, error) {
 	body, err := os.ReadFile(filepath.Join(s.jobDir(j.ID), res.Report))
 	if err != nil {
 		return "", err
+	}
+	if sum := sha256.Sum256(body); res.ReportSHA256 != "" && hex.EncodeToString(sum[:]) != res.ReportSHA256 {
+		return "", errors.New("the report in the job's files is not the one its verdict was computed from: it stays private")
 	}
 	if err := packagedOMTReport(body, res.Kernel); err != nil {
 		return "", fmt.Errorf("report remains private: %w", err)

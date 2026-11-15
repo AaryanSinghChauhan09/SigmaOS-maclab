@@ -1128,3 +1128,30 @@ func TestAReportOfAnotherMachineKeyIsRefusedAndTheRecordedIDStays(t *testing.T) 
 		t.Errorf("%d reports were published, want 1", n)
 	}
 }
+
+// What is published is the report the run's verdict was computed from. A
+// later test of the same name that leaves another report in its place
+// changes nothing that is published: that job's report stays private.
+func TestASecondTestOfTheSameNameDoesNotChangeWhatIsPublished(t *testing.T) {
+	l := publishLab(t, nil)
+	l.lrMac("m2-max", "j416c", nil)
+	ravi := l.lrMaintainer()
+	first := labReport(t, "m2-max", lrKnownGood, nil)
+	j := l.ran("j-two", "m2-max", 0, first, func(j *api.Job) { j.Result.OMT = nil })
+	j.State = api.JobCollecting
+	tr := api.TestResult{Name: omtTest, Passed: true}
+	(&jobRun{s: l.s, j: j, v: l.s.dev("m2-max")}).omtResult(omtTest, &tr)
+	if j.Result.OMT == nil {
+		t.Fatal("the run has no verdict")
+	}
+	later := labReport(t, "m2-max", lrKnownGood, func(body map[string]any) { check(body, "hardware.firmware")["status"] = "pass" })
+	if err := os.WriteFile(filepath.Join(l.s.jobDir("j-two"), omtFile), later, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j.State = api.JobDone
+	l.s.updateJob(j, func(*api.Job) {})
+	ravi.notPublished("j-two", http.StatusConflict, "not the one its verdict was computed from")
+	if n := len(l.everyReport()); n != 0 {
+		t.Errorf("%d reports were published", n)
+	}
+}

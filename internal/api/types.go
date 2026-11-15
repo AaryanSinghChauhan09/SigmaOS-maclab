@@ -1111,6 +1111,9 @@ type OMTResult struct {
 	// ReportDeleted is who deleted the published report and when. The lab
 	// never publishes the job again by itself.
 	ReportDeleted *ReportDeleted `json:"report_deleted,omitempty"`
+	// ReportSHA256 is the sha256 of the report the verdict was computed
+	// from: only those bytes are published.
+	ReportSHA256 string `json:"report_sha256,omitempty"`
 }
 
 // What became of a job's omarchy-m-test report.
