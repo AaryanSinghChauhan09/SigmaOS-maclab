@@ -63,7 +63,12 @@ printf 'fixture host modpost' > "$1/scripts/mod/modpost"
         subprocess.run(["git", "init", "-q", str(self.src)], check=True)
         subprocess.run(["git", "-C", str(self.src), "add", "."], check=True)
         subprocess.run(
-            ["git", "-C", str(self.src), "commit", "-qm", "fixture"], check=True
+            [
+                "git", "-C", str(self.src),
+                "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "-qm", "fixture",
+            ],
+            check=True,
         )
         self.sha = subprocess.check_output(
             ["git", "-C", str(self.src), "rev-parse", "HEAD"], text=True
