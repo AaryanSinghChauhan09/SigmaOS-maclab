@@ -160,6 +160,9 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 	// A source is built (or an identical earlier build reused) before the Mac is needed.
 	if j.Spec.Source != "" && j.Spec.Kernel == "" {
 		if outcome, summary := r.build(ctx); outcome != "" {
+			if outcome == api.OutcomeCanceled && s.stopping() {
+				return // never sent: the next labd queues it again
+			}
 			if why := v.leaving(); why != "" {
 				outcome, summary = api.OutcomeCanceled, "canceled: "+why
 			}
@@ -216,6 +219,9 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			r.state(api.JobQueued) // a job built from source waits as queued, too
 			r.ev("%s", why)
 			err := v.waitFor(ctx, 0, func() bool { return holdLocked() != why })
+			if s.stopping() {
+				return false // never sent: it stays queued for the next labd
+			}
 			if v.leaving() != "" {
 				break
 			}
@@ -470,6 +476,10 @@ func (r *jobRun) canceledAfter(outcome, summary string) (string, string) {
 }
 
 func (r *jobRun) finish(outcome, summary string) { r.finishAt(outcome, summary, r.s.now()) }
+
+// stopping is whether labd is stopping. A job not yet sent to its Mac is
+// then left as it is in the store, for the next labd to queue again.
+func (s *Server) stopping() bool { return s.ctx.Err() != nil }
 
 func (r *jobRun) finishAt(outcome, summary string, at time.Time) {
 	// The Mac's authority over the job ends before anyone can see the job

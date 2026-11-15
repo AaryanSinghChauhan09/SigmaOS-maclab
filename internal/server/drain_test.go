@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +124,87 @@ func TestAJobWaitingForAWindowDoesNotHoldADrain(t *testing.T) {
 	opsOf(l.s, "DELETE", "/drain")
 	if !heldWithin(v, first, 10*time.Second) {
 		t.Fatalf("the job was not sent once the drain was lifted: %s", v.snapshot().StateReason)
+	}
+}
+
+// idleAfterStop waits until a stopped labd runs no job any more.
+func idleAfterStop(t *testing.T, s *Server) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		s.mu.Lock()
+		n := len(s.cancels)
+		s.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("labd still runs %d jobs after it stopped", n)
+		}
+	}
+}
+
+// A Deploy drains, then restarts labd. A Volunteer's job waiting for its
+// Mac's window was never sent, so the restart takes nothing from it: it
+// is still queued in the store, the next labd queues it again, and it is
+// sent once the window opens.
+func TestAJobWaitingForAWindowStaysQueuedAcrossARestart(t *testing.T) {
+	l, _ := lendLab(t)
+	l.signedIn(maintainerID).did("/people/mark", "handle", "grace", "as", "invite")
+	v, secret := l.signedIn(graceID).lent("shelf-mac")
+	first := v.snapshot().FirstBaseline.Job
+	l.checkin(secret, api.Checkin{AccessLevel: api.AccessQualification})
+	jobSaid(t, l.s, first, "no Availability window")
+	if w := opsOf(l.s, "POST", "/drain"); w.Body.String() != "0 0\n" {
+		t.Fatalf("with a job waiting for its window: %q", w.Body)
+	}
+
+	stopLabd(t, l.s)
+	idleAfterStop(t, l.s)
+	j, err := l.s.store.job(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.State != api.JobQueued {
+		t.Fatalf("after labd stopped the waiting job is %s: %s", j.State, j.Summary)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	again, err := New(ctx, l.s.cfg, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.s, l.h = again, again.Handler()
+	l.checkin(secret, api.Checkin{AccessLevel: api.AccessQualification, Window: &window.Settings{OpenUntil: l.clock.Now().Add(6 * time.Hour)}})
+	if !heldWithin(again.dev("shelf-mac"), first, 10*time.Second) {
+		j, _ := again.store.job(first)
+		t.Fatalf("the job was not sent after the restart: %s %s %+v", j.State, j.Summary, j.Events)
+	}
+}
+
+// A job that waited for its build when labd stopped was never sent to its
+// Mac either: the next labd queues it again, and its build is asked for
+// again, instead of ending it as one that was running.
+func TestAJobWaitingForItsBuildIsQueuedAgainAtTheStart(t *testing.T) {
+	dir := t.TempDir()
+	st, err := openStore(filepath.Join(dir, "labd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := api.Device{ID: "1", Name: "built-for", State: api.StateReady, KnownGood: "7.2"}
+	st.saveDevice(&d, "h1")
+	st.saveJob(&api.Job{ID: "j-building", DeviceID: "1", Spec: api.JobSpec{Device: d.Name, Source: "https://github.com/o/r/commit/" + strings.Repeat("a", 40)},
+		State: api.JobBuilding, Created: time.Now()})
+	st.db.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := newWith(harnessMaintainer, "lab_mtok", ctx, Config{DataDir: dir}, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobSaid(t, s, "j-building", "resolving")
+	if j, _ := s.store.job("j-building"); strings.Contains(j.Summary, "labd restarted") {
+		t.Fatalf("the job that waited for its build: %s %s", j.State, j.Summary)
 	}
 }
 

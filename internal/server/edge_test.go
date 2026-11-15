@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -38,7 +39,22 @@ func labServer(t *testing.T, pub string, config func(*Config)) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stops.Store(s, cancel)
 	return s
+}
+
+// stops is each labServer's stop: the end of the context it started with,
+// as a signal ends labd's.
+var stops sync.Map
+
+// stopLabd stops a labServer as a Deploy's restart does.
+func stopLabd(t *testing.T, s *Server) {
+	t.Helper()
+	stop, ok := stops.Load(s)
+	if !ok {
+		t.Fatal("this labd was not made by labServer")
+	}
+	stop.(context.CancelFunc)()
 }
 
 const (

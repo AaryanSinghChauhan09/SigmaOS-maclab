@@ -448,11 +448,16 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 	}
 	s.adoptReleases()
 	s.termsTookEffect()
-	// Jobs that were running when labd stopped cannot be resumed.
+	s.builds = newBuildMgr(s)
+	s.reconcileRunningBuilds()
+	// A job never sent to its Mac, queued or waiting for its build, is
+	// queued again, after the builds the last labd left running have
+	// failed: its build is asked for again. Jobs that were running when
+	// labd stopped cannot be resumed.
 	unfinished, _ := st.jobs("", 1000, true)
 	sort.Slice(unfinished, func(i, k int) bool { return unfinished[i].Created.Before(unfinished[k].Created) })
 	for _, j := range unfinished {
-		if j.State == api.JobQueued {
+		if j.State == api.JobQueued || j.State == api.JobBuilding {
 			if v := s.devs[j.Spec.Device]; v != nil {
 				v.queue <- j.ID
 				continue
@@ -462,8 +467,6 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		j.State, j.Outcome, j.Summary = api.JobDone, api.OutcomeInfra, "labd restarted while the job was running"
 		st.saveJob(j)
 	}
-	s.builds = newBuildMgr(s)
-	s.reconcileRunningBuilds()
 	// A labd that starts refuses no address: what the one before counted
 	// went with it.
 	s.agents.LimiterQuiet()
