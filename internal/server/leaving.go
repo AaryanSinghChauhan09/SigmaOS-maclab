@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 )
@@ -217,19 +219,43 @@ func (s *Server) leftOnPeopleRecord(d *api.Device, l leaving) {
 	}
 }
 
-// endEnrollmentsOf has every Mac the person lends leave the lab, as l says.
-// A Mac that could not is in the error, and still enrolled: its secret
-// still works.
+// retiringWait is how long endEnrollmentsOf waits for a Mac of the
+// person's that is leaving the lab already.
+var retiringWait = 10 * time.Second
+
+// endEnrollmentsOf has every Mac enrolled under the person's account id
+// leave the lab, as l says, the ones that told the lab they are leaving
+// among them. A Mac another ending holds is waited for: when that ending
+// fails, this one ends it. A Mac that could not leave is in the error, and
+// still enrolled: its secret still works.
 func (s *Server) endEnrollmentsOf(accountID int64, l leaving) error {
-	var errs []error
-	for _, name := range s.macsLentBy(accountID) {
-		if v := s.dev(name); v != nil {
+	if accountID == 0 {
+		return nil
+	}
+	deadline := time.Now().Add(retiringWait)
+	for {
+		names, err := scanNames(s.store.db.Query(`SELECT name FROM devices WHERE json_extract(data, '$.volunteer_id') = ? ORDER BY name`, accountID))
+		if err != nil {
+			return err
+		}
+		var errs []error
+		for _, name := range names {
+			v := s.dev(name)
+			if v == nil {
+				continue
+			}
 			if err := s.endEnrollment(v, l); err != nil && !errors.Is(err, errMacGone) {
 				errs = append(errs, err)
 			}
 		}
+		if len(errs) > 0 || len(names) == 0 {
+			return errors.Join(errs...)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s is leaving the lab already, and has not left yet", strings.Join(names, ", "))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	return errors.Join(errs...)
 }
 
 // leaveMac is the Mac's Volunteer leaving the lab from the site. The Mac

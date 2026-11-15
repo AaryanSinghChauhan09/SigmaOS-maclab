@@ -1005,3 +1005,56 @@ func TestABlockOrAForgetWhoseMacCannotLeaveFails(t *testing.T) {
 		t.Errorf("forgetting again: the Mac %v, Blocked %v", l.s.dev("shelf-mac") != nil, l.who(graceID).Blocked)
 	}
 }
+
+// A Forget leaves no Mac of the person enrolled: not one whose retirement
+// was under way and then failed, nor one that told the lab it is leaving
+// and waits for `lab remove`. Each is found in the store by account id.
+func TestAForgetEndsAMacMidRetirementOrLeftAsWell(t *testing.T) {
+	l := rolesLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	retiring, left := l.addMac("edith-air", edithID), l.addMac("edith-pro", edithID)
+	retiring.mu.Lock()
+	retiring.forgotten = true // another ending has it, and will fail
+	retiring.mu.Unlock()
+	left.mu.Lock()
+	left.d.State = api.StateLeft
+	left.saveLocked()
+	left.mu.Unlock()
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		retiring.mu.Lock()
+		retiring.forgotten = false
+		retiring.mu.Unlock()
+	}()
+
+	ravi.did(personPath(edithID, "forget"), "sure", "yes")
+
+	for _, name := range []string{"edith-air", "edith-pro"} {
+		if l.s.dev(name) != nil || l.count(`SELECT count(*) FROM devices WHERE name = ?`, name) != 0 {
+			t.Errorf("%s is still enrolled after its Volunteer was forgotten", name)
+		}
+	}
+}
+
+// A retirement still under way when a Forget has waited long enough fails
+// the Forget, which can be done again.
+func TestAForgetWhoseMacIsStillLeavingFails(t *testing.T) {
+	l := rolesLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	v := l.addMac("edith-air", edithID)
+	v.mu.Lock()
+	v.forgotten = true
+	v.mu.Unlock()
+	saved := retiringWait
+	retiringWait = 200 * time.Millisecond
+	t.Cleanup(func() { retiringWait = saved })
+
+	if w := ravi.post(personPath(edithID, "forget"), "sure", "yes"); w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "Nothing is forgotten yet") {
+		t.Errorf("a Forget whose Mac is still leaving: %d\n%s", w.Code, refusalIn(w.Body.String()))
+	}
+	if !l.known(edithID) {
+		t.Fatal("the person is forgotten though her Mac is still enrolled")
+	}
+}
