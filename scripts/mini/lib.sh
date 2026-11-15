@@ -532,7 +532,7 @@ NOT_DRAINED=""
 drain_jobs() {
   local limit=$(( $1 * 60 )) step="${LAB_DRAIN_STEP:-5}" waited=0 jobs builds
   if loaded "$LABD_LABEL" && ops_socket_missing; then
-    NOT_DRAINED="labd runs with no ops socket at $OPS_SOCKET, though its LaunchDaemon file names one, so running jobs could not be kept whole"
+    NOT_DRAINED="labd runs with no ops socket at $OPS_SOCKET, though its LaunchDaemon file names one, so running jobs could not be kept whole. If labd is down for good, stop it (sudo launchctl bootout system/$LABD_LABEL) and run this again"
     return 1
   fi
   if [[ ! -S $OPS_SOCKET ]] || ! loaded "$LABD_LABEL"; then

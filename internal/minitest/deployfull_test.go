@@ -428,8 +428,8 @@ func TestALabdThatShouldHaveAnOpsSocketAndHasNoneFailsDeploy(t *testing.T) {
 		if strings.Contains(m.calls(), "launchctl boot") {
 			t.Errorf("a service was touched:\n%s", m.calls())
 		}
-		if !strings.Contains(out, "no ops socket") || !strings.Contains(out, "Nothing was switched") {
-			t.Errorf("no word of the ops socket:\n%s", out)
+		if !strings.Contains(out, "no ops socket") || !strings.Contains(out, "Nothing was switched") || !strings.Contains(out, "launchctl bootout system/"+labdLabel) {
+			t.Errorf("no word of the ops socket, or of the way past it:\n%s", out)
 		}
 	})
 }
