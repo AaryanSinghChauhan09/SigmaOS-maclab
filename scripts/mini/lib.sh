@@ -473,12 +473,14 @@ drain_jobs() {
     say "labd does not run: there is no job to drain"
     return 0
   fi
+  # Set before the drain is asked for, so that a stop while it is asked lifts it.
+  DRAINING=1
   ops_status POST /drain
   if [[ $OPS_STATUS == 404 ]]; then
+    DRAINING=0
     say "the labd that runs does not drain jobs (it is older than this script): a job that runs now ends with the restart"
     return 0
   fi
-  DRAINING=1
   while :; do
     if [[ $OPS_STATUS != 200 ]]; then
       NOT_DRAINED="labd's drain of jobs failed (status $OPS_STATUS on its ops socket), so running jobs could not be kept whole"

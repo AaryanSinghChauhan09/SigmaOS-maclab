@@ -207,13 +207,14 @@ first_half() {
   note "Maintenance run on the mini, started $stamp, on the build $(basename "$(readlink "$LAB_CURRENT")")"
 
   tell "Maintenance run on the mini: started. Jobs are drained; the tools, container and macOS are brought up to date; then the mini restarts with no Unlock. The lab is Dark while it restarts."
+  # Armed before the drain: a stop while it waits for running jobs lifts it.
+  trap first_half_ended EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT TERM
   if ! drain_jobs "$wait"; then
     tell "Maintenance run on the mini did not go on: $NOT_DRAINED. Nothing was changed, and jobs start again."
     fail "$NOT_DRAINED. Nothing was changed"
   fi
-  trap first_half_ended EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT TERM
 
   before="$(versions)"
   pins_before="$(pinned_now)"

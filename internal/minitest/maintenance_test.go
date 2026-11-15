@@ -10,7 +10,9 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const maintenanceLabel = "org.omarchy-mac.lab.maintenance"
@@ -700,6 +702,35 @@ func TestAFirstHalfThatDoesNotRestartLiftsTheDrain(t *testing.T) {
 	order(t, r.calls(), "ops POST /drain", "fdesetup authrestart", "ops DELETE /drain")
 	got := r.ops.told()
 	if len(got) == 0 || !strings.Contains(got[len(got)-1], "was not restarted, and jobs start again") {
+		t.Errorf("\"Agents\" was told %q", got)
+	}
+}
+
+// A run stopped while it waits for running jobs lifts the drain it set.
+func TestAStopDuringTheDrainLiftsIt(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.ops.set(func(o *ops) { o.drain = []string{"1 0"} })
+	r.env = append(r.env, "LAB_DRAIN_STEP=1")
+	cmd := exec.Command(r.path("usr/local/lab/current/scripts/mini/maintenance"), "--wait", "5")
+	cmd.Env = r.env
+	cmd.Dir = filepath.Dir(r.tree)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(20 * time.Second); !strings.Contains(r.callsOrNone(), "ops POST /drain"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			cmd.Process.Kill()
+			t.Fatalf("the run never drained:\n%s", r.callsOrNone())
+		}
+	}
+	cmd.Process.Signal(syscall.SIGTERM)
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("a stopped run ended as done")
+	}
+
+	order(t, r.calls(), "ops POST /drain", "ops DELETE /drain")
+	if got := r.ops.told(); len(got) == 0 || !strings.Contains(got[len(got)-1], "jobs start again") {
 		t.Errorf("\"Agents\" was told %q", got)
 	}
 }
