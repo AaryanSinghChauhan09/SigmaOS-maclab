@@ -476,14 +476,20 @@ ops_socket_missing() {
 
 # drain_jobs MINUTES: labd starts no further job, and this waits until the
 # jobs and builds that run have ended. A job that waits stays queued and
-# starts after the restart. Only a labd too old to drain (404) is gone on
-# from with no drain. Returns 1, with the drain lifted, when some still run
-# after MINUTES or labd's drain fails or answers what is not understood;
-# NOT_DRAINED then says which, and STILL_RUNNING what still ran.
+# starts after the restart. Only a labd too old to drain (404, or a
+# LaunchDaemon file that names no ops socket) is gone on from with no drain.
+# Returns 1, with the drain lifted, when some still run after MINUTES, when
+# labd runs with no ops socket though its file names one, or when labd's
+# drain fails or answers what is not understood; NOT_DRAINED then says
+# which, and STILL_RUNNING what still ran.
 STILL_RUNNING=""
 NOT_DRAINED=""
 drain_jobs() {
   local limit=$(( $1 * 60 )) step="${LAB_DRAIN_STEP:-5}" waited=0 jobs builds
+  if loaded "$LABD_LABEL" && ops_socket_missing; then
+    NOT_DRAINED="labd runs with no ops socket at $OPS_SOCKET, though its LaunchDaemon file names one, so running jobs could not be kept whole"
+    return 1
+  fi
   if [[ ! -S $OPS_SOCKET ]] || ! loaded "$LABD_LABEL"; then
     say "labd does not run: there is no job to drain"
     return 0

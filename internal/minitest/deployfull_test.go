@@ -401,6 +401,32 @@ func TestALabdThatShouldHaveAnOpsSocketAndHasNoneFailsDeploy(t *testing.T) {
 			t.Errorf("no word of the ops socket:\n%s", out)
 		}
 	})
+	t.Run("the drain before labd stops", func(t *testing.T) {
+		m, k, r := deployed(t)
+		o := m.ops()
+		first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+		bundle(t, k, filepath.Join(r.dir, first), first, true)
+		withOpsSocket(t, k, filepath.Join(r.dir, first), first)
+		bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+		m.ok("deploy", "--from", r.from(first), first)
+		o.set(func(o *ops) { o.lines = nil })
+		if err := os.Remove(m.path("var/lab/run/ops.sock")); err != nil {
+			t.Fatal(err)
+		}
+		os.Remove(m.log)
+
+		out := m.refused("deploy", "--from", r.from(tag), tag)
+
+		if m.current() != first || !m.loaded() || !reflect.DeepEqual(m.builds(), []string{first}) {
+			t.Fatalf("the mini runs %q (loaded %v), builds %v\n%s", m.current(), m.loaded(), m.builds(), out)
+		}
+		if strings.Contains(m.calls(), "launchctl boot") {
+			t.Errorf("a service was touched:\n%s", m.calls())
+		}
+		if !strings.Contains(out, "no ops socket") || !strings.Contains(out, "Nothing was switched") {
+			t.Errorf("no word of the ops socket:\n%s", out)
+		}
+	})
 }
 
 func TestDeployGoesBackWhenTheBuilderOrTheControllerIsNotWell(t *testing.T) {
