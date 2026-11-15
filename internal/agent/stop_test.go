@@ -316,6 +316,46 @@ func TestASystemToolThatHangsIsEnded(t *testing.T) {
 	}
 }
 
+// The lab-boot lock wait's last step, ending the Volunteer's unlocked
+// session, is a bounded system tool too: a loginctl that hangs is ended,
+// with its group, and the wait returns, so lab-agent can stop.
+func TestAHungLoginctlInTheLockWaitIsEnded(t *testing.T) {
+	bin, pids := t.TempDir(), filepath.Join(t.TempDir(), "pids")
+	fake := "#!/bin/sh\necho $$ >> " + pids + "\nsleep 600 &\necho $! >> " + pids + "\nwait\n"
+	if err := os.WriteFile(filepath.Join(bin, "loginctl"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	was := toolTimeout
+	toolTimeout = time.Second
+	t.Cleanup(func() { toolTimeout = was })
+	t.Cleanup(func() {
+		for _, pid := range readPids(t, pids) {
+			syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	done := make(chan error, 1)
+	go func() {
+		done <- (&Linux{GUIUser: "volunteer"}).awaitLock(context.Background(), filepath.Join(t.TempDir(), "locked"), 0)
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "terminated") {
+			t.Errorf("the lock wait: %v", err)
+		}
+	case <-time.After(toolTimeout + stopGrace + 3*time.Second):
+		t.Fatal("a hung loginctl held the lock wait, and so lab-agent's stop")
+	}
+	if len(readPids(t, pids)) != 2 {
+		t.Fatalf("the fake loginctl wrote pids %v", readPids(t, pids))
+	}
+	for _, pid := range readPids(t, pids) {
+		if !ended(pid) {
+			t.Errorf("process %d of the hung loginctl still runs", pid)
+		}
+	}
+}
+
 // A stopped lab exec's leader has the whole grace between SIGTERM and
 // SIGKILL: one that takes four seconds to clean up gets to finish.
 func TestAStoppedExecsLeaderHasTheWholeGrace(t *testing.T) {
