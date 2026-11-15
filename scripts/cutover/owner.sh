@@ -84,9 +84,18 @@ sign_in_app() { header_of "$ADDRESS/sign-in" Location | sed -n 's/.*[?&]client_i
 done_at() { [[ -f $STATE ]] && awk -F '\t' -v s="$1" '$1 == s { print $2; found = 1; exit } END { exit !found }' "$STATE"; }
 note_of() { [[ -f $STATE ]] && awk -F '\t' -v s="$1" '$1 == s { print $3; exit }' "$STATE"; }
 is_done() { done_at "$1" >/dev/null 2>&1; }
+# record STEP [NOTE [TIME]]: TIME is now unless it is given.
 record() {
   mkdir -p "$(dirname "$STATE")"
-  is_done "$1" || printf '%s\t%s\t%s\n' "$1" "$(stamp)" "${2:-}" >> "$STATE"
+  is_done "$1" || printf '%s\t%s\t%s\n' "$1" "${3:-$(stamp)}" "${2:-}" >> "$STATE"
+}
+
+# brisbane TIME: a time in UTC as labd says it (2026-11-20T00:01:02Z), as
+# the day's record writes times.
+brisbane() {
+  [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+  TZ=Australia/Brisbane date -j -f '%Y-%m-%dT%H:%M:%S%z' "${1%Z}+0000" '+%Y-%m-%d %H:%M' 2>/dev/null ||
+    TZ=Australia/Brisbane date -d "$1" '+%Y-%m-%d %H:%M' 2>/dev/null
 }
 
 # newest_record NAME: the newest dated record DATE-NAME.md, or nothing.
@@ -106,6 +115,14 @@ on_mini() {
   [[ -n $MINI ]] || fail "this step runs on the mini: give --mini USER@HOST"
   say "on the mini: $(mini_line "$@")"
   ssh -t "$MINI" "sudo $MINI_SCRIPTS/$*"
+}
+
+# mini_stage: where the mini itself says the lab is (open stage): preview,
+# "live <time>", open or unknown; nothing when it could not be asked.
+mini_stage() {
+  [[ -n $MINI ]] || return 1
+  echo "$ME: on the mini: $(mini_line "open stage")" >&2
+  ssh -t "$MINI" "sudo $MINI_SCRIPTS/open stage" | tr -d '\r' | grep -E '^(preview|open|unknown|live [0-9TZ:-]+)$' | tail -n 1
 }
 
 token_option() { [[ -z $TOKEN_FILE ]] || printf -- ' --token-file %s' "$TOKEN_FILE"; }

@@ -149,6 +149,24 @@ confirmed() {
   is_done 28 || { WHY="Confirmed is not written yet (step 28)"; return 1; }
 }
 
+# lost_opening: the lab answers open and the day's record has no 25a: the
+# opening ran and its line did not reach the record. The mini says since
+# when, and that becomes 25a.
+lost_opening() {
+  local is at
+  [[ -n $MINI ]] || { WHY="$ADDRESS answers as an open lab and the day's record does not hold the opening: give --mini USER@HOST, and the mini is asked since when"; return 1; }
+  say "$ADDRESS answers as an open lab and the day's record does not hold the opening: asking the mini"
+  is="$(mini_stage)" || is=""
+  case "$is" in
+    "live "*) ;;
+    preview) WHY="$ADDRESS answers as an open lab and the mini says the lab is in Preview: ask it again before anything else: $(mini_line "open stage")"; return 1 ;;
+    *) WHY="$ADDRESS answers as an open lab and the mini could not say since when (${is:-no answer}): ask it: $(mini_line "open stage")"; return 1 ;;
+  esac
+  at="$(brisbane "${is#live }")" || { WHY="the mini says \"$is\", which is no time the day can write down"; return 1; }
+  record 25a "the lab opened (the mini's stage)" "$at"
+  say "the lab opened at $at (Brisbane), the mini says: step 25 goes on from there"
+}
+
 # must N: whether what must be true before step N is. WHY says what is not.
 WHY=""
 must() {
@@ -178,6 +196,9 @@ must() {
       ;;
     22 | 23 | 24 | 24a | 25)
       is="$(lab_from_outside)"
+      if [[ $1 == 25 && $is == open ]] && ! is_done 25a; then
+        lost_opening || return 1
+      fi
       if [[ $1 == 25 ]] && is_done 25a; then is=preview; fi
       [[ $is == preview ]] || { WHY="the lab does not answer as a lab in Preview at $ADDRESS ($is)"; return 1; }
       case "$1" in

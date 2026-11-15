@@ -990,3 +990,40 @@ func TestTheDaysScriptsParseAndPassShellcheck(t *testing.T) {
 		t.Errorf("shellcheck: %v\n%s", err, out)
 	}
 }
+
+// An opening whose 25a did not reach the day's record (a dropped SSH, the
+// outside check failing): the lab answers open, the mini says since when,
+// and the day writes 25a down from it and goes on with the purge and the
+// redirect. The mini is not asked to open again.
+func TestALostOpeningIsTakenFromTheMiniAndTheDayGoesOn(t *testing.T) {
+	m, s := opening(t, 14)
+	m.ok("open", "--m-team", "14")
+	at, ok := s.Live()
+	if !ok {
+		t.Fatal("labd did not open")
+	}
+	d := newDay(t, m)
+	o := d.o
+	o.set(func() { o.stage, o.app = "open", existingApp })
+	d.days(strings.Fields("18 19 20 21 22a 22 23 24 24a")...)
+	d.stops(3, "", []string{"--go"}, "the lab opened at", "step 25 is yours", "git push origin v0.2.0")
+	if d.done() != "18 19 20 21 22a 22 23 24 24a 25a 25b 25c" || o.purges != 1 || len(o.redirect) != 1 {
+		t.Fatalf("the record %q, %d purges, %d redirect rules", d.done(), o.purges, len(o.redirect))
+	}
+	zone, _ := time.LoadLocation("Australia/Brisbane")
+	if want := "25a\t" + at.In(zone).Format("2006-01-02 15:04") + "\t"; !strings.Contains(read(t, d.state), want) {
+		t.Errorf("25a is not written down at the opening's time %q:\n%s", want, read(t, d.state))
+	}
+	if got := read(t, d.sshLog); strings.Contains(got, "open --m-team") || !strings.Contains(got, "lab-cutover/open stage") {
+		t.Errorf("ssh was asked:\n%s", got)
+	}
+	// A lab that answers open from outside while the mini says Preview is not taken for opened.
+	m2 := newMini(t, oldlabtest.OnOmarchyGPU)
+	d2 := newDay(t, m2)
+	d2.o.set(func() { d2.o.stage, d2.o.app = "open", existingApp })
+	d2.days(strings.Fields("18 19 20 21 22a 22 23 24 24a")...)
+	d2.stops(1, "", []string{"--go"}, "the mini says the lab is in Preview")
+	if d2.done() != "18 19 20 21 22a 22 23 24 24a" || d2.o.purges != 0 {
+		t.Errorf("the record %q, %d purges", d2.done(), d2.o.purges)
+	}
+}
