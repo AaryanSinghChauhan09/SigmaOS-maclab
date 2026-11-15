@@ -349,3 +349,44 @@ func TestHoldStopsOnePartHalfwayOnceLabdHoldsTwo(t *testing.T) {
 		t.Errorf("progress %v, part 4 tried %d times: want two parts held and nothing after the held one", said, f.tries[4])
 	}
 }
+
+func TestHoldHoldsWithProgressOff(t *testing.T) {
+	f, _ := newFakeLab(t)
+	half := make(chan int, 1)
+	rest := make(chan int, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/parts/3") {
+			f.ServeHTTP(w, r)
+			return
+		}
+		b := make([]byte, testPart)
+		n, _ := io.ReadFull(r.Body, b[:testPart/2])
+		half <- n
+		more, _ := io.ReadAll(r.Body)
+		rest <- len(more)
+	}))
+	t.Cleanup(ts.Close)
+	s := sender(ts)
+	s.Hold = true
+	s.Progress = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.File(ctx, fileOf(t, content(5*testPart)))
+		done <- err
+	}()
+	<-half
+	select {
+	case n := <-rest:
+		t.Fatalf("with progress off part 3 went on past its middle (%d more bytes): the hold did not hold", n)
+	case <-time.After(500 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("the held upload ended without an error")
+	}
+	if f.tries[4] != 0 {
+		t.Errorf("part 4 tried %d times after the held one", f.tries[4])
+	}
+}

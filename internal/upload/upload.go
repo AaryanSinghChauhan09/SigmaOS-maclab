@@ -175,9 +175,11 @@ func (s Sender) Send(ctx context.Context, f io.ReaderAt, size int64) (string, er
 				if err != nil && first == nil {
 					first = err
 				}
-				if err == nil && s.Progress != nil {
+				if err == nil {
 					held++
-					s.Progress(held, total)
+					if s.Progress != nil {
+						s.Progress(held, total)
+					}
 				}
 				mu.Unlock()
 				if err != nil {
