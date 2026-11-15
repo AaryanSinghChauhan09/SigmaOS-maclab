@@ -226,6 +226,9 @@ type Server struct {
 	// releaseMu makes a verdict one step: whose turn it is depends on the
 	// history it is added to.
 	releaseMu sync.Mutex
+	// forgetting is held by a forgetting's sweep, and read by an Installed
+	// run's seal (installed.go).
+	forgetting sync.RWMutex
 	// cables are the Sightings: which Lab-owned Mac is on which of the
 	// Out-of-band controller's ports (see sighting.go).
 	cables *cables

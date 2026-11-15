@@ -357,6 +357,9 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 		return refuse(http.StatusInternalServerError, "Nothing is forgotten yet: a Mac they lend could not leave the lab (%v). Forget again.", err)
 	}
 
+	// An Installed run being sealed publishes its record before or after.
+	s.forgetting.Lock()
+	defer s.forgetting.Unlock()
 	end, err := s.forgetInJobs(f)
 	if err != nil {
 		return fmt.Errorf("the jobs: %w", err)

@@ -1135,3 +1135,73 @@ func TestAForgettingFindsAnEarlierHandleInTheAuditLogs(t *testing.T) {
 		t.Errorf("the old report: %v", err)
 	}
 }
+
+// submitInstalledRun has the harness's Maintainer, under a Lease of
+// sim-mac, submit an Installed run of the frozen Release; it is not waited for.
+func submitInstalledRun(t *testing.T, l *lab, msha string) string {
+	t.Helper()
+	v := l.s.dev("sim-mac")
+	v.mu.Lock()
+	v.d.Lease.Maintainer, v.d.Lease.AccountID = harnessMaintainer, testAccount(harnessMaintainer)
+	v.mu.Unlock()
+	resp, body := l.post("/api/jobs", api.JobSpec{Device: "sim-mac", InstalledManifest: msha, Holder: "tester"})
+	var sub api.Job
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &sub) != nil {
+		t.Fatalf("submit: %s %s", resp.Status, body)
+	}
+	return sub.ID
+}
+
+// A forgetting that comes while an Installed run is being sealed waits for
+// the seal: the record the run publishes to frozen/ is swept with the rest,
+// and the job's own copy with it.
+func TestAForgettingWhileAnInstalledRunIsSealedLeavesNoHandleInFrozen(t *testing.T) {
+	l, msha, _ := installedLab(t, nil)
+	id := testAccount(harnessMaintainer)
+	k, err := l.s.store.knownPerson(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := Person{AccountID: testAccount("owner"), Handle: "owner", Maintainer: true, Admin: true}
+	frozenMacs := filepath.Join(l.s.frozenDir("9.9"), "installed", "sim-mac")
+	forgot := make(chan error, 1)
+	started := false
+	saved := syncDir
+	t.Cleanup(func() { syncDir = saved })
+	// The run has written its record and is about to publish it.
+	syncDir = func(p string) error {
+		if p == frozenMacs && !started {
+			started = true
+			go func() { forgot <- l.s.forgetHeld(by, k, newForgetting(id, k.Handle)) }()
+			select {
+			case err := <-forgot:
+				forgot <- err
+			case <-time.After(2 * time.Second):
+			}
+		}
+		return saved(p)
+	}
+	j := l.wait(submitInstalledRun(t, l, msha), 60*time.Second)
+	select {
+	case err := <-forgot:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the forgetting never ended")
+	}
+	if !started {
+		t.Fatalf("the run was never sealed: %s %s", j.Outcome, j.Summary)
+	}
+	found := mentions(harnessMaintainer, id)
+	for _, p := range []string{filepath.Join(frozenMacs, j.ID, "job.json"), filepath.Join(l.s.jobDir(j.ID), "installed", "job.json")} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found(string(b)) {
+			rel, _ := filepath.Rel(l.s.cfg.DataDir, p)
+			t.Errorf("%s still names the person:\n%s", rel, b)
+		}
+	}
+}

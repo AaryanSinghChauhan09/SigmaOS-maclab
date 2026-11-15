@@ -587,8 +587,17 @@ func (ir *installedRun) seal(outcome, summary string, at time.Time) (string, str
 		downgrade(strings.Join(ir.errs, "; "))
 	}
 	dst := filepath.Join(ir.c.dir, "installed", ir.r.j.Spec.Device, ir.r.j.ID)
+	// The record is read, written and published while no forgetting runs:
+	// one between the read and the publishing would sweep neither copy.
+	ir.r.s.forgetting.RLock()
+	defer ir.r.s.forgetting.RUnlock()
 	record := func() error {
+		jobMu.Lock()
 		j, err := ir.r.s.store.job(ir.r.j.ID)
+		if err == nil {
+			ir.r.s.forgottenLocked(j)
+		}
+		jobMu.Unlock()
 		if err != nil {
 			return err
 		}
