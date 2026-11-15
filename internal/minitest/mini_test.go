@@ -250,7 +250,7 @@ func newMini(t *testing.T) *mini {
 		write(t, m.tree+"/deploy/"+f, read(t, filepath.Join(repo(t), "deploy", f)), 0o644)
 	}
 	write(t, m.tree+"/deploy/pins", "# none\n", 0o644)
-	m.env = append(os.Environ(),
+	m.env = append(minisEnviron(),
 		"LAB_SYSROOT="+m.root,
 		"PATH="+m.bin+":"+os.Getenv("PATH"),
 		"STUB_LOG="+m.log,
@@ -260,6 +260,20 @@ func newMini(t *testing.T) *mini {
 	)
 	m.machine()
 	return m
+}
+
+// minisEnviron is this process's environment less what the mini's
+// programs never get: the scripts run under sudo and the daemons under
+// launchd, neither of which passes a JAVA_HOME. A runner's own JAVA_HOME
+// would have signal-cli's wrapper run that Java instead of its copy's.
+func minisEnviron() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "JAVA_HOME=") {
+			env = append(env, kv)
+		}
+	}
+	return env
 }
 
 // run starts one of the mini's scripts and returns what it printed and its exit status.
