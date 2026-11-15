@@ -23,8 +23,22 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: ShellCheck 0.11.0, the version the scripts' tests are written against
+        # Ubuntu's own (0.9) reports info-level findings 0.11 does not.
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) arch=linux.x86_64 sum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198 ;;
+            macOS-ARM64) arch=darwin.aarch64 sum=56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79 ;;
+            *) echo "no ShellCheck pinned for $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          f="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl -fsSL -o "$f" "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.$arch.tar.xz"
+          echo "$sum  $f" | shasum -a 256 -c -
+          tar -xJf "$f" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v0.11.0" >> "$GITHUB_PATH"
       - run: go vet ./...
       - run: GOOS=linux GOARCH=arm64 go vet ./...
+      - run: shellcheck --version
       - run: go test -race -timeout 40m ./...
       - run: make all
       - name: omarchy-m-test against this labd
