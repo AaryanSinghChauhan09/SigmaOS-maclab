@@ -1109,3 +1109,22 @@ func TestALabRunsReportIsTheAskedTestsInTheJobsOwnFolder(t *testing.T) {
 		t.Errorf("%d reports were published", n)
 	}
 }
+
+// Once the lab has a Mac's machine id, a report signed by another Machine
+// key is not that Mac's: it is refused, and the id the lab recorded stays.
+func TestAReportOfAnotherMachineKeyIsRefusedAndTheRecordedIDStays(t *testing.T) {
+	l := publishLab(t, nil)
+	l.lrMac("m2-max", "j416c", nil)
+	ravi := l.lrMaintainer()
+	want := machineIDOf(t, "m2-max")
+	l.ran("j1", "m2-max", 0, nil, nil)
+	ravi.published("j1")
+	l.ran("j2", "m2-max", 0, labReport(t, "m1-pro", lrKnownGood, nil), nil)
+	ravi.notPublished("j2", http.StatusConflict, "another Machine key")
+	if got := l.s.dev("m2-max").snapshot().MachineID; got != want {
+		t.Errorf("the Mac's machine id is %q, want the one it had, %q", got, want)
+	}
+	if n := len(l.everyReport()); n != 1 {
+		t.Errorf("%d reports were published, want 1", n)
+	}
+}

@@ -163,6 +163,9 @@ type Lab struct {
 	Job       string
 	Handle    string
 	AccountID int64
+	// Machine is the machine id the lab recorded for the job's Mac, "" when
+	// it has none yet: a report signed by another Machine key is refused.
+	Machine string
 }
 
 // held tells of the report with that digest: whether the lab has stored it,

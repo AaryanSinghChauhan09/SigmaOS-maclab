@@ -533,7 +533,7 @@ func (s *Server) publishOMT(j *api.Job, by Person) (string, error) {
 		return "", fmt.Errorf("report remains private: %w", err)
 	}
 	site := s.labAddress()
-	stored, refusal, err := s.uploads.ReceiveFromLab(body, site+"/install", reports.Lab{Job: j.ID, Handle: by.Handle, AccountID: by.AccountID})
+	stored, refusal, err := s.uploads.ReceiveFromLab(body, site+"/install", reports.Lab{Job: j.ID, Handle: by.Handle, AccountID: by.AccountID, Machine: d.MachineID})
 	switch {
 	case refusal != nil && refusal.Held != "":
 		return "", fmt.Errorf("%s: %s/reports/%s", refusal.Error, site, refusal.Held)
@@ -547,8 +547,10 @@ func (s *Server) publishOMT(j *api.Job, by Person) (string, error) {
 		}
 		return "", errors.New(msg)
 	}
+	// The first report the lab publishes of a Mac records its machine id;
+	// a recorded one is never replaced.
 	v.mu.Lock()
-	if v.d.ID == j.DeviceID && v.d.MachineID != stored.MachineID {
+	if v.d.ID == j.DeviceID && v.d.MachineID == "" {
 		v.d.MachineID = stored.MachineID
 		v.saveLocked()
 	}

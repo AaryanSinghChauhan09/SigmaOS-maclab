@@ -84,6 +84,9 @@ func (u *Uploads) receive(body []byte, installURL string, lab *Lab) (*Stored, *R
 	if refusal != nil {
 		return nil, refusal, nil
 	}
+	if lab != nil && lab.Machine != "" && judged.MachineID != lab.Machine {
+		return nil, &Refusal{Status: http.StatusForbidden, Error: "The report is signed by another Machine key than the Mac's own: it is not this Mac's report."}, nil
+	}
 	heldAs, held, err := u.store.held(Digest(judged.MachineID, judged.Body))
 	if err != nil {
 		return nil, notStored, err
