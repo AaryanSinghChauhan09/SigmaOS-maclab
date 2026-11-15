@@ -263,6 +263,22 @@ func TestADrainHandsTheBuilderNoBuild(t *testing.T) {
 	}
 }
 
+// A job from a source asks the drain before it prepares anything: while
+// jobs are drained it reads no config from its Mac and resolves nothing,
+// and it goes on once the drain is lifted.
+func TestADrainHoldsASourceJobBeforeItsPreparation(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	if w := opsOf(l.s, "POST", "/drain"); w.Body.String() != "0 0\n" {
+		t.Fatalf("draining: %q", w.Body)
+	}
+	id := l.submitJob(api.JobSpec{Source: "https://github.com/o/r/commit/" + strings.Repeat("b", 40)})
+	jobSaid(t, l.s, id, jobsDrained)
+	l.staysQueued(id, 1500*time.Millisecond, "jobs are drained")
+	opsOf(l.s, "DELETE", "/drain")
+	jobSaid(t, l.s, id, "resolving")
+}
+
 // What Deploy asks after its switch: whether the Builder asks this labd for
 // work and whether the Out-of-band controller answers it.
 func TestPartsSaysHowTheBuilderAndTheControllerAre(t *testing.T) {

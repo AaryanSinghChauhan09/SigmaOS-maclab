@@ -157,8 +157,26 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 		})
 	}
 
-	// A source is built (or an identical earlier build reused) before the Mac is needed.
+	// A source is built (or an identical earlier build reused) before the
+	// Mac is needed, and not while jobs are drained: its preparation reads
+	// the Mac's config, and the restart that follows would end the build.
 	if j.Spec.Source != "" && j.Spec.Kernel == "" {
+		for s.drained() {
+			r.state(api.JobQueued)
+			r.ev("%s", jobsDrained)
+			err := v.waitFor(ctx, 0, func() bool { return !s.drained() })
+			if s.stopping() {
+				return
+			}
+			if gone := v.goneReason(); gone != "" {
+				r.finish(api.OutcomeCanceled, "canceled: "+gone)
+				return
+			}
+			if err != nil {
+				r.finish(api.OutcomeCanceled, "canceled while waiting for the drain to end")
+				return
+			}
+		}
 		if outcome, summary := r.build(ctx); outcome != "" {
 			if outcome == api.OutcomeCanceled && s.stopping() {
 				return // never sent: the next labd queues it again
