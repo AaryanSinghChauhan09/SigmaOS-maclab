@@ -84,25 +84,28 @@ up() {
 
 # back: each daemon under its Deployed file, the one apart from the other:
 # a tunnel that does not start keeps nothing from labd. 1 when either did
-# not start; what to run by hand is said.
+# not start; what to run by hand is said. The way back stays armed until
+# both were tried.
 back() {
   local ok=0
-  armed=0
   put "$CLOUDFLARED_LABEL" "$tunnel_source" || { say "the tunnel could not be started under its Deployed file: sudo launchctl bootstrap system $tunnel_plist"; ok=1; }
   put "$LABD_LABEL" "$labd_source" || { say "labd could not be started under its Deployed file: sudo launchctl bootstrap system $labd_plist"; ok=1; }
   rm -rf "$rehearsal"
+  armed=0
   return "$ok"
 }
 
 # The way back is armed before the first change: however the run ends
-# before both are up under NAME, both go back under the Deployed files.
+# before both are up under NAME, both go back under the Deployed files. A
+# further stop does not cut the way back short.
 armed=0
 made=""
-trap '(( ! armed )) || back || true; [[ -z $made ]] || rm -rf "$made"' EXIT
+trap 'trap "" HUP INT TERM; (( ! armed )) || back || true; [[ -z $made ]] || rm -rf "$made"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT TERM
 
 if [[ $want == deployed ]]; then
+  armed=1
   back || fail "not both were put back under the Deployed files: see above"
   up tunnel || fail "the tunnel is back under the Deployed files and has not connected yet: look at $LAB_HOME/log/cloudflared.log"
   up labd || fail "labd is back under the Deployed files and does not answer yet: look at $LABD_LOG"

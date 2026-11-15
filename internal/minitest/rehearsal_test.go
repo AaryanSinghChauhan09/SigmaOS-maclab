@@ -320,3 +320,17 @@ func TestTransportStoppedDuringItsWayBackLeavesTheTunnelStarted(t *testing.T) {
 		t.Errorf("the tunnel is loaded %v, under its file as before %v:\n%s\n%s", m.tunnelLoaded(), read(t, daemon) == before, out, m.calls())
 	}
 }
+
+// A second stop while rehearsal-alias puts the tunnel back does not leave
+// it stopped.
+func TestRehearsalAliasStoppedDuringItsWayBackLeavesTheTunnelStarted(t *testing.T) {
+	m, _, tunnel := rehearsalReady(t)
+	deployedTunnel := read(t, tunnel)
+	m.ready(false)
+
+	out := m.stoppedTwice("launchctl bootstrap system "+tunnel, "/deploy/"+cloudflaredLabel+".plist", "rehearsal-alias", rehearsalName)
+
+	if !m.tunnelLoaded() || read(t, tunnel) != deployedTunnel || !m.loaded() {
+		t.Errorf("the tunnel is loaded %v, under its Deployed file %v, labd loaded %v:\n%s\n%s", m.tunnelLoaded(), read(t, tunnel) == deployedTunnel, m.loaded(), out, m.calls())
+	}
+}
