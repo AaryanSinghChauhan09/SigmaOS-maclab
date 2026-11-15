@@ -5,9 +5,9 @@
 #   fd04-upload-resume [--dry-run | --local | --lab] [--size BYTES] [--records DIR]
 #
 # lab upload sends a file of random bytes in 32 MiB parts and says each part
-# as labd takes it (MACLAB_UPLOAD_PROGRESS=1). Once labd holds two, the test
-# waits half the time a part took and kills lab: the cut falls inside a
-# part. The same command, run again, must say that it resumes and that labd
+# as labd takes it (MACLAB_UPLOAD_PROGRESS=1). The first time lab says labd
+# holds two or more, and not all, lab is stopped at once and killed: the
+# parts it sends beside or after the one just taken are cut inside. The same command, run again, must say that it resumes and that labd
 # still holds at least the parts it held, and not all; it is left to finish,
 # and the SHA-256 lab prints must be the file's. labd stores the file only
 # under the SHA-256 the upload named, so a wrong byte anywhere fails the
@@ -64,29 +64,23 @@ held_now() { sed -n 's/^lab: labd holds \([0-9]*\) of [0-9]* parts$/\1/p' "$err"
 : > "$err"
 MACLAB_UPLOAD_PROGRESS=1 "$LAB_CMD" upload "$file" > "$out" 2> "$err" &
 pid=$!
-# A fast machine takes several parts between two looks: a part's time is
-# the time between the looks over the parts taken in it, and lab is held
-# still while that is worked out.
-first=""
-second=""
+# Parts may go four at a time and end in waves, so the time between two
+# looks says nothing about how long the parts under way still need: lab is
+# stopped the moment it is seen past one part, not after a guessed wait.
+stopped=""
 while kill -0 "$pid" 2>/dev/null; do
   n="$(held_now)"
-  if [[ -z $first && ${n:-0} -ge 1 ]]; then first="$(now)" n1="$n"; fi
-  if [[ -n $first && ${n:-0} -ge 2 && $n -gt $n1 ]]; then
+  if [[ ${n:-0} -ge 2 ]]; then
     kill -STOP "$pid" 2>/dev/null || break
-    second="$(now)" n2="$n"
+    stopped=1
     break
   fi
   sleep 0.02
 done
-if [[ -z $second ]]; then
+if [[ -z $stopped ]]; then
   wait "$pid" || give_up "lab upload failed before any cut: $(plain "$err")"
   give_up "lab upload ended before labd was seen to hold two parts: no cut was made"
 fi
-half="$(calc "($second - $first) / ($n2 - $n1) / 2")"
-kill -CONT "$pid"
-sleep "$half"
-kill -STOP "$pid" 2>/dev/null || give_up "lab upload ended before the cut"
 before="$(held_now)"
 kill -9 "$pid" 2>/dev/null || give_up "lab upload ended before the cut"
 wait "$pid" 2>/dev/null || true
