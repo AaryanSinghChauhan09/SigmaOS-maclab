@@ -938,3 +938,35 @@ func TestTheLogNamesNobodyForABuildOrAnEnding(t *testing.T) {
 		}
 	}
 }
+
+// Who ended a Mac's enrollment is written with its retirement, or neither
+// is: a Mac whose ending could not be recorded stays enrolled, never
+// "unknown" to the lab with nothing to tell it why.
+func TestAnEndingWhoseRecordCannotBeWrittenLeavesTheMacEnrolled(t *testing.T) {
+	l, _ := lendLab(t)
+	ravi := l.signedIn(maintainerID)
+	ravi.did("/people/mark", "handle", "grace", "as", "invite")
+	grace := l.signedIn(graceID)
+	v, secret := grace.lent("shelf-mac")
+	if _, err := l.s.store.db.Exec(`CREATE TRIGGER full_disk BEFORE INSERT ON ended BEGIN SELECT RAISE(FAIL, 'database or disk is full'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if w := ravi.write("POST", "/api/devices/shelf-mac/end-enrollment", ""); w.Code != http.StatusInternalServerError {
+		t.Errorf("an ending that could not be recorded answers %d %s", w.Code, w.Body)
+	}
+	if l.s.dev("shelf-mac") != v {
+		t.Fatal("the Mac is gone from the lab")
+	}
+	if r := l.checkin(secret, api.Checkin{AccessLevel: api.AccessQualification}); r.Code != http.StatusOK {
+		t.Errorf("the Mac's secret after the failed ending: %d %s", r.Code, r.Body)
+	}
+	if _, err := l.s.store.db.Exec(`DROP TRIGGER full_disk`); err != nil {
+		t.Fatal(err)
+	}
+	if w := ravi.write("POST", "/api/devices/shelf-mac/end-enrollment", ""); w.Code != http.StatusOK {
+		t.Fatalf("ending it again: %d %s", w.Code, w.Body)
+	}
+	if w := l.checkin(secret, api.Checkin{}); w.Code != http.StatusUnauthorized || w.Header().Get(api.EndedHeader) != "ravi" {
+		t.Errorf("the ended Mac's next check-in: %d, by %q", w.Code, w.Header().Get(api.EndedHeader))
+	}
+}

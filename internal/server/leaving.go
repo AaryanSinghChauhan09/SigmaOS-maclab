@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 )
@@ -83,7 +82,13 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 	if s.dev(name) != v {
 		return errMacGone
 	}
-	if err := s.store.retire(&d, l.how, s.now()); err != nil {
+	// Who ended it is written with the retirement, so its secret is never
+	// unknown without an answer to why.
+	var by *endedRow
+	if !l.atMac {
+		by = &endedRow{secretHash: secretHash, name: name, by: l.by.Handle}
+	}
+	if err := s.store.retire(&d, l.how, s.now(), by); err != nil {
 		v.mu.Lock()
 		v.forgotten = false
 		v.mu.Unlock()
@@ -92,13 +97,6 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 	}
 	s.endLeaseOfLeaving(v, reason)
 	s.mu.Lock()
-	// The record of who ended it is written before the Mac disappears, so its
-	// secret is never unknown without an answer to why.
-	if !l.atMac {
-		if err := s.store.addEnded(secretHash, name, l.by.Handle, s.now()); err != nil {
-			s.log.Printf("record who ended %s's enrollment: %v", name, err)
-		}
-	}
 	delete(s.devs, name)
 	s.mu.Unlock()
 	s.afterRetiring(&d, l)
@@ -152,7 +150,7 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 // record, the Lab group) are written and what labd kept under the Mac's
 // name goes. When the record cannot be Retired, nothing else is done.
 func (s *Server) retired(d *api.Device, l leaving) error {
-	if err := s.store.retire(d, l.how, s.now()); err != nil {
+	if err := s.store.retire(d, l.how, s.now(), nil); err != nil {
 		s.log.Printf("retire %s: %v", d.Name, err)
 		return err
 	}
@@ -284,10 +282,9 @@ func (s *Server) ended(w http.ResponseWriter, r *http.Request, secret string) bo
 	return true
 }
 
-func (st *store) addEnded(secretHash, name, by string, at time.Time) error {
-	_, err := st.db.Exec(`INSERT OR REPLACE INTO ended(secret_hash,name,maintainer,at) VALUES(?,?,?,?)`, secretHash, name, by, at.Unix())
-	return err
-}
+// endedRow is who ended a Mac's enrollment from the lab, for the Mac that
+// holds secretHash to learn when it next reaches the lab.
+type endedRow struct{ secretHash, name, by string }
 
 // endedBy is the Maintainer who ended the enrollment the secret belonged to.
 func (st *store) endedBy(secretHash string) (string, error) {

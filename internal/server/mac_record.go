@@ -121,7 +121,7 @@ type RetiredMac struct {
 // retire moves a Mac's record out of the fleet: its row in devices goes,
 // which frees its name, and the record is kept as Retired. Neither happens
 // without the other.
-func (st *store) retire(d *api.Device, how string, at time.Time) error {
+func (st *store) retire(d *api.Device, how string, at time.Time, ended *endedRow) error {
 	kept := *d
 	// A Retired Mac holds nothing and nobody reaches it.
 	kept.Lease, kept.OOB, kept.ActiveJob, kept.Action, kept.SitePause = nil, nil, "", nil, nil
@@ -141,6 +141,11 @@ ON CONFLICT(id) DO UPDATE SET retired = excluded.retired, how = excluded.how, da
 	}
 	if _, err := tx.Exec(`DELETE FROM devices WHERE id = ?`, d.ID); err != nil {
 		return err
+	}
+	if ended != nil {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO ended(secret_hash,name,maintainer,at) VALUES(?,?,?,?)`, ended.secretHash, ended.name, ended.by, at.Unix()); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
