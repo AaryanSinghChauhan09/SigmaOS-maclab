@@ -891,7 +891,7 @@ class Controller:
         dev = self.device
         if self.manifest_mode == 'reuse':
             cohort = installed.source_cohort(self.prof['manifest_source_release'], dev)
-            man, raw = installed.new_manifest(cohort, self.release, dev)
+            man, raw = installed.new_manifest(cohort, self.release, dev, self.approved_by)
             payload = cohort['payload_raw']
             rows = {a['name']: a for a in man['artifacts']}
             for i in self.cands:
