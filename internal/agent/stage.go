@@ -370,9 +370,15 @@ func (l *Linux) install(ctx context.Context, job, sha string, fetch Fetcher, boo
 	src := dirs[0]
 	krel := filepath.Base(src)
 
+	// The image must be a regular file, not a link: a FIFO or a device
+	// would hang the copy that opens it.
 	var image string
 	for _, c := range []string{filepath.Join(src, "vmlinuz"), filepath.Join(src, "Image"), filepath.Join(x, "boot", "Image"), filepath.Join(x, "Image")} {
-		if _, err := os.Stat(c); err == nil {
+		if st, err := os.Lstat(c); err == nil {
+			if !st.Mode().IsRegular() {
+				rel, _ := filepath.Rel(x, c)
+				return "", fmt.Errorf("%s in the artifact is not a regular file", rel)
+			}
 			image = c
 			break
 		}

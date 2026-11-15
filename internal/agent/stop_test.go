@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/json"
 	"io"
@@ -172,4 +173,56 @@ func readPids(t *testing.T, path string) []int {
 		}
 	}
 	return pids
+}
+
+// fifoKernel is a kernel artifact whose usr/lib/modules/<release>/vmlinuz
+// is a FIFO, and a Fetcher that hands it over.
+func fifoKernel(t *testing.T, krel string) Fetcher {
+	t.Helper()
+	art := filepath.Join(t.TempDir(), "artifact.tar")
+	f, err := os.Create(art)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := tar.NewWriter(f)
+	dir := "usr/lib/modules/" + krel + "/"
+	for _, h := range []*tar.Header{
+		{Name: "usr/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "usr/lib/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "usr/lib/modules/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: dir, Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: dir + "vmlinuz", Typeflag: tar.TypeFifo, Mode: 0o644},
+	} {
+		if err := w.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	return func(_ context.Context, _, dst string) error {
+		b, err := os.ReadFile(art)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, b, 0o644)
+	}
+}
+
+// A kernel image must be a regular file: a FIFO passes a plain stat, and the
+// copy to the boot files would hang opening it, holding lab-agent's stop.
+func TestAKernelImageThatIsNotARegularFileIsRefused(t *testing.T) {
+	l := &Linux{WorkDir: t.TempDir()}
+	booted := false
+	_, err := l.install(context.Background(), "j1", strings.Repeat("a", 64), fifoKernel(t, "6.99.0-labtest-fifo"), func(krel, image string) error {
+		booted = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("staging a FIFO vmlinuz: %v", err)
+	}
+	if booted {
+		t.Error("a FIFO vmlinuz was handed to the boot files")
+	}
 }
