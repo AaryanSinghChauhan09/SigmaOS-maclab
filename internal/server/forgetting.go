@@ -319,7 +319,11 @@ func (s *Server) forgetPerson(r *http.Request, k knownPerson) error {
 	if err := mayForget(&by, k); err != nil {
 		return err
 	}
-	earlier, err := s.store.earlierHandles(k.AccountID, k.Handle)
+	audited, err := auditedHandles(filepath.Join(s.cfg.DataDir, "audit"), k.AccountID)
+	if err != nil {
+		return fmt.Errorf("the Audit log copies: %w", err)
+	}
+	earlier, err := s.store.earlierHandles(k.AccountID, k.Handle, audited...)
 	if err != nil {
 		return fmt.Errorf("labd.db: %w", err)
 	}
@@ -363,7 +367,7 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 	if err := s.forgetInFilesOf(f); err != nil {
 		return err
 	}
-	if err := s.reports.Forget(k.AccountID, k.Handle); err != nil {
+	if err := s.reports.Forget(f.id, f.handles...); err != nil {
 		return fmt.Errorf("reports.db: %w", err)
 	}
 	if err := s.store.forget(f); err != nil {
@@ -405,6 +409,32 @@ func (s *Server) forgetInAudit(f forgetting) error {
 		defer v.auditMu.Unlock()
 	}
 	return forgetInFiles(filepath.Join(s.cfg.DataDir, "audit"), f)
+}
+
+// auditedHandles are the handles labd's copies of Audit logs keep beside
+// this account id.
+func auditedHandles(dir string, id int64) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil || d.IsDir() || !d.Type().IsRegular() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			var e api.AuditEntry
+			if json.Unmarshal([]byte(line), &e) == nil && e.AccountID == id && id != 0 && e.Maintainer != "" {
+				out = append(out, e.Maintainer)
+			}
+		}
+		return nil
+	})
+	return out, err
 }
 
 // forgetInFleet takes the person off the Macs enrolled now, as labd holds
@@ -703,9 +733,10 @@ func besideID(column string, has func(string) bool) string {
 }
 
 // earlierHandles are the handles other than this one that labd kept beside
-// the account id: what the person was called before a rename on GitHub. A
-// handle another person has today is theirs, and is left out.
-func (st *store) earlierHandles(id int64, handle string) ([]string, error) {
+// the account id, in its database and as kept (found elsewhere): what the
+// person was called before a rename on GitHub. A handle another person has
+// today is theirs, and is left out.
+func (st *store) earlierHandles(id int64, handle string, kept ...string) ([]string, error) {
 	tables, err := st.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'people'`)
 	if err != nil {
 		return nil, err
@@ -756,7 +787,7 @@ func (st *store) earlierHandles(id int64, handle string) ([]string, error) {
 		found = append(found, names...)
 	}
 	var out []string
-	for _, name := range found {
+	for _, name := range append(found, kept...) {
 		name = strings.TrimPrefix(strings.TrimSpace(name), "@")
 		if name == "" || strings.EqualFold(name, handle) || slices.Contains(out, name) || strings.IndexFunc(name, func(r rune) bool { return r > 127 || !handleByte(byte(r)) }) >= 0 {
 			continue

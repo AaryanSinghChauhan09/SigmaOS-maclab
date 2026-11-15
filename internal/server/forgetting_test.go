@@ -1103,3 +1103,35 @@ func TestAnAuditEntryArrivingDuringAForgettingIsKeptWithoutTheHandle(t *testing.
 		}
 	}
 }
+
+// A handle the person had that only an Audit entry kept beside their
+// account id is forgotten too: in labd's copies of Audit logs, and on an
+// old report that names its person by handle alone.
+func TestAForgettingFindsAnEarlierHandleInTheAuditLogs(t *testing.T) {
+	l := macLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	mini := l.addMac("ravi-mini", maintainerID)
+	mini.copyAudit([]api.AuditEntry{{Time: l.clock.Now(), Maintainer: "edith", Action: "screenshot", End: 40}})
+	line, _ := json.Marshal(api.AuditEntry{Time: l.clock.Now(), Maintainer: "edie", AccountID: edithID, Action: "reboot", End: 80})
+	f, err := os.OpenFile(l.s.auditPath("ravi-mini"), os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write(append(line, '\n'))
+	f.Close()
+	l.mustMacSignIn("air", linusID)
+	old := l.storedReport(l.macUpload("air", "m2-max-image2")).PublicID
+	if _, err := l.openDB("reports.db").Exec(`UPDATE reports SET handle = 'edie', account_id = NULL WHERE public_id = ?`, old); err != nil {
+		t.Fatal(err)
+	}
+
+	ravi.did(personPath(edithID, "forget"), "sure", "yes")
+
+	if traces := l.traces("edie", 1<<40); len(traces) != 0 {
+		t.Errorf("her earlier handle is still in: %v", traces)
+	}
+	if r, err := l.s.reports.Report(old); err != nil || r.Handle != "" {
+		t.Errorf("the old report: %v", err)
+	}
+}
