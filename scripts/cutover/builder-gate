@@ -77,6 +77,13 @@ WATCH_PID=""
 STREAM=""
 # The build asked for and not ended yet: a run that ends first cancels it.
 BUILD_ID=""
+# While lab asks for a build, before its id is read: what lab said, and the
+# builds labd listed just before. A run that ends then cancels the build lab
+# named, or else each build queued or running that was not listed before:
+# the run has the Builder to itself (it refuses to start otherwise), so a
+# build that came while it asked for one is the one it asked for.
+ASKING=""
+ASKED_BEFORE=""
 PROBE=""
 POLLER=""
 # lab upload says each part as labd takes it: the transfer's window opens at
@@ -164,15 +171,28 @@ fail() {
 # cancel_build: the build the run asked for and did not see end, canceled
 # under the saved login.
 cancel_build() {
-  local id="$BUILD_ID"
-  [[ -n $id ]] || return 0
+  local ids="$BUILD_ID" id
   BUILD_ID=""
-  "$PROBE" ask POST "/api/builds/$id/cancel" > "$WORK/cancel.out" 2>&1 || true
-  if grep -qxE 'status=(200|204)' "$WORK/cancel.out"; then
-    rec "build $id was canceled: the run ended before it did"
-  else
-    rec "NOT CANCELED: build $id may still be queued or running: cancel it on $ADDRESS/builds/$id ($(sed -n 's/^said=//p' "$WORK/cancel.out" | head -n 1))"
+  if [[ -z $ids && -n $ASKING ]]; then
+    ids="$(sed -n 's/^build \(b[0-9a-z-]*\)[: ].*/\1/p' "$ASKING" 2> /dev/null | head -n 1)"
+    if [[ -z $ids ]]; then
+      if ! "$LAB_CMD" builds > "$WORK/builds.after" 2> /dev/null; then
+        ASKING=""
+        rec "NOT CANCELED: the run ended while it asked for a build, and lab builds did not answer: cancel any build of the run's that is queued or running on $ADDRESS/builds"
+        return 0
+      fi
+      ids="$(awk 'NR == FNR { seen[$1] = 1; next } $1 ~ /^b[0-9a-z-]+$/ && !seen[$1] && $2 ~ /^(queued|running)/ { print $1 }' "$ASKED_BEFORE" "$WORK/builds.after")"
+    fi
   fi
+  ASKING=""
+  for id in $ids; do
+    "$PROBE" ask POST "/api/builds/$id/cancel" > "$WORK/cancel.out" 2>&1 || true
+    if grep -qxE 'status=(200|204)' "$WORK/cancel.out"; then
+      rec "build $id was canceled: the run ended before it did"
+    else
+      rec "NOT CANCELED: build $id may still be queued or running: cancel it on $ADDRESS/builds/$id ($(sed -n 's/^said=//p' "$WORK/cancel.out" | head -n 1))"
+    fi
+  done
 }
 
 # gate_done WORD STATUS: pass, fail or stopped.
@@ -312,11 +332,15 @@ build() {
   local readings unread worst slow failed inflight peak
   shift 3
   t0="$(date +%s)"
+  ASKED_BEFORE="$WORK/builds.before.$k"
+  "$LAB_CMD" builds > "$ASKED_BEFORE" 2> "$WORK/builds.before.err" || give_up "lab builds did not answer before $title was asked for: $(plain "$WORK/builds.before.err")"
+  ASKING="$WORK/ask.$k"
   "$LAB_CMD" "$@" --force --no-wait > "$WORK/ask.$k" 2> "$WORK/ask.$k.err" \
     || give_up "$title could not be asked for: $(plain "$WORK/ask.$k.err")"
   id="$(sed -n 's/^build \(b[0-9a-z-]*\)[: ].*/\1/p' "$WORK/ask.$k" | head -n 1)"
   [[ -n $id ]] || give_up "lab did not name the build it asked for ($title)"
   BUILD_ID="$id"
+  ASKING=""
   say "$title: build $id asked for"
   while :; do
     state="$(build_state "$id")"

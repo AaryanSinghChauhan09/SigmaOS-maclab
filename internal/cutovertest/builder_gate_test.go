@@ -69,6 +69,8 @@ case "$1" in
           echo "$id  failed  src" > "$GATE/row.$id" ;;
       esac
     ) > /dev/null 2>&1 &
+    # answer.lost: labd took the build, and its answer never reached lab.
+    [[ ! -f $GATE/answer.lost ]] || { echo "lab: the lab did not answer" >&2; exit 1; }
     echo "build $id: o/linux-aurora @ 0123456789ab (queued)" ;;
   upload)
     [[ ! -f $GATE/upload.fails ]] || { echo "lab: the lab answered 502" >&2; exit 1; }
@@ -525,6 +527,24 @@ func TestAGateThatEndsFirstLeavesNoBuild(t *testing.T) {
 		t.Parallel()
 		g := newGate(t)
 		g.set("watch.dies", "")
+		out, code := g.run()
+		if code != 1 {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		if !strings.Contains(g.calls("calls"), "probe ask POST /api/builds/b1115-000001-abcd/cancel\n") {
+			t.Errorf("the build was left:\n%s", g.calls("calls"))
+		}
+		record := g.record()
+		if i := strings.Index(record, "build b1115-000001-abcd was canceled"); i < 0 || i > strings.Index(record, "Result: fail") {
+			t.Errorf("the record does not say the build was canceled before its result:\n%s", record)
+		}
+	})
+	// The cancel is armed before the build is asked for: a build labd took
+	// whose answer was lost is the run's too.
+	t.Run("an answer lost", func(t *testing.T) {
+		t.Parallel()
+		g := newGate(t)
+		g.set("answer.lost", "")
 		out, code := g.run()
 		if code != 1 {
 			t.Fatalf("exit %d\n%s", code, out)
