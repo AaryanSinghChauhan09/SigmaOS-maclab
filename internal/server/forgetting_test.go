@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"database/sql"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -597,6 +598,68 @@ func TestABlockedPersonWhoIsForgottenStaysBlocked(t *testing.T) {
 		}
 	}
 	ravi.refused("forgotten already", personPath(eddaID, "forget"), "sure", "yes")
+}
+
+// writePinned writes a frozen Release's files and a pins file for them,
+// named in its comment line by who froze them.
+func writePinned(t *testing.T, dir, pinsName, by string, files map[string]string) {
+	t.Helper()
+	pins := "# " + pinsName + " 2026-11-14T12:00:00Z by maclab, frozen by @" + by + ": do not rewrite\n"
+	for _, rel := range slices.Sorted(maps.Keys(files)) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(files[rel]), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		pins += installed.SHA256([]byte(files[rel])) + "  " + rel + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, pinsName), []byte(pins), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A frozen Release's pinned files stay byte for byte through a forgetting,
+// though they name the person: a manifest's approved_by, a key that is the
+// handle. Their pins still match, so its Installed runs still load; the
+// pins files' notes lose the handle.
+func TestForgettingLeavesAFrozenReleasesPinnedFilesAsTheyWere(t *testing.T) {
+	l := rolesLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	dir := l.s.frozenDir("r9")
+	expected := map[string]string{
+		"expected/manifest.json": `{"schema":"maclab.installed-manifest/2","release":"r9","approved_by":["edith"],"kernel":{"release":"7.1","payload_manifest":"k.sha256"},"macs":{"m1":{"board":"edith"}}}` + "\n",
+		"expected/k.sha256":      strings.Repeat("d", 64) + "  usr/lib/modules/edith\n",
+	}
+	preinstall := map[string]string{"preinstall/m1/omt-report.json": `{"asked_by":"@edith","edith":true}` + "\n"}
+	writePinned(t, dir, "PINS.expected", "edith", expected)
+	writePinned(t, dir, "PINS.preinstall", "edith", preinstall)
+
+	ravi.did(personPath(edithID, "forget"), "sure", "yes")
+
+	for rel, want := range maps.All(expected) {
+		if got, _ := os.ReadFile(filepath.Join(dir, rel)); string(got) != want {
+			t.Errorf("the pinned %s changed:\n%s", rel, got)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "preinstall/m1/omt-report.json")); string(got) != preinstall["preinstall/m1/omt-report.json"] {
+		t.Errorf("the pinned preinstall reference changed:\n%s", got)
+	}
+	if m, _, err := frozenManifest(dir); err != nil || m.Release != "r9" {
+		t.Errorf("the Release's manifest no longer loads: %v", err)
+	}
+	pre, err := readPins(filepath.Join(dir, "PINS.preinstall"))
+	if _, _, perr := pinned(dir, "preinstall/m1/omt-report.json", pre); err != nil || perr != nil {
+		t.Errorf("the preinstall reference no longer matches its pin: %v %v", err, perr)
+	}
+	for _, name := range []string{"PINS.expected", "PINS.preinstall"} {
+		b, _ := os.ReadFile(filepath.Join(dir, name))
+		if strings.Contains(string(b), "edith") || !strings.Contains(string(b), "frozen by someone") {
+			t.Errorf("%s's note still names her, or lost its words:\n%s", name, b)
+		}
+	}
 }
 
 // Blocked ends the person's Leases, Mac sign-ins and enrollments, along with

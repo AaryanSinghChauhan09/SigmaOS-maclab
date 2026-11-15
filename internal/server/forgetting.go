@@ -333,10 +333,11 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 		return fmt.Errorf("labd.db: %w", err)
 	}
 	s.forgetInFleet(f)
-	for _, dir := range []string{filepath.Join(s.cfg.DataDir, "audit"), filepath.Join(s.cfg.DataDir, "frozen")} {
-		if err := forgetInFiles(dir, f); err != nil {
-			s.log.Printf("a forgetting, %s: %v", dir, err)
-		}
+	if err := forgetInFiles(filepath.Join(s.cfg.DataDir, "audit"), f); err != nil {
+		s.log.Printf("a forgetting, the Audit log copies: %v", err)
+	}
+	if err := forgetInFrozen(filepath.Join(s.cfg.DataDir, "frozen"), f); err != nil {
+		s.log.Printf("a forgetting, the frozen Releases: %v", err)
 	}
 	if err := s.callers.forget(f); err != nil {
 		s.log.Printf("a forgetting, the caller log: %v", err)
@@ -534,8 +535,8 @@ func forgetInColumn(tx *sql.Tx, table, column string, f forgetting) error {
 }
 
 // forgetInFiles takes the person off the files under dir, a line at a
-// time: labd's copies of Audit logs (JSON lines) and the frozen Releases'
-// notes. A file that changes is replaced whole, keeping its mode.
+// time: labd's copies of Audit logs (JSON lines). A file that changes is
+// replaced whole, keeping its mode.
 func forgetInFiles(dir string, f forgetting) error {
 	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if errors.Is(err, os.ErrNotExist) {
@@ -547,20 +548,75 @@ func forgetInFiles(dir string, f forgetting) error {
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		out, changed := forgetInLines(b, func(line string) string { return f.stored(line) })
-		if !changed {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		return replaceFile(path, out, info.Mode().Perm())
+		return forgetInFile(path, func(line string) string { return f.stored(line) })
 	})
+}
+
+// forgetInFrozen takes the person off the frozen Releases' notes: the
+// comment lines of each pins file and the Promotion ledger. Every other
+// file there is pinned, or the copy of a job's evidence that a Promotion
+// checks byte for byte, and stays as it was: a handle in a manifest's
+// approved_by is the Release's own, frozen with it.
+func forgetInFrozen(dir string, f forgetting) error {
+	releases, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, r := range releases {
+		if !r.IsDir() {
+			continue
+		}
+		notes, err := os.ReadDir(filepath.Join(dir, r.Name()))
+		if err != nil {
+			return err
+		}
+		for _, n := range notes {
+			name := n.Name()
+			change := func(line string) string { return f.stored(line) }
+			switch {
+			case !n.Type().IsRegular():
+				continue
+			case strings.HasPrefix(name, "PINS."):
+				change = func(line string) string {
+					if !strings.HasPrefix(line, "#") {
+						return line
+					}
+					return f.words(line)
+				}
+			case name != "promotions.log":
+				continue
+			}
+			if err := forgetInFile(filepath.Join(dir, r.Name(), name), change); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// forgetInFile passes each line of the file through change, and replaces
+// the file when one changed, keeping its mode and its time: a Release
+// first frozen before labd kept Releases is dated by its pins file.
+func forgetInFile(path string, change func(string) string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	out, changed := forgetInLines(b, change)
+	if !changed {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if err := replaceFile(path, out, info.Mode().Perm()); err != nil {
+		return err
+	}
+	return os.Chtimes(path, info.ModTime(), info.ModTime())
 }
 
 // forgetInLines is b with each line passed through change, and whether any
