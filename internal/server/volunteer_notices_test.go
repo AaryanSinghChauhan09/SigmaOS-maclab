@@ -422,17 +422,25 @@ func TestNotifyCmdIsRunForMaintainersNoticesOnAVolunteerMacButNotNeedsHands(t *t
 	n.expect(n.jobAPI(n.submitJob(api.JobSpec{Kernel: n.artifact("krel=7.2-ok behavior=ok")}), 60*time.Second), api.OutcomePass)
 	n.needsHandsAfter(topic)
 	n.finish()
-	time.Sleep(500 * time.Millisecond)
-	lines := n.cmdLines()
-	var jobResult bool
+	// --notify-cmd runs in the background, a shell each time: the hung job's
+	// notice and "is back" both come after the needs hands, and once they
+	// are in, a needs hands run for the Volunteer would be too.
+	var lines []string
+	var jobResult, back bool
+	for deadline := time.Now().Add(20 * time.Second); !(jobResult && back) && time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		lines = n.cmdLines()
+		for _, l := range lines {
+			jobResult = jobResult || strings.Contains(l, "job ")
+			back = back || strings.Contains(l, " is back")
+		}
+	}
 	for _, l := range lines {
 		low := strings.ToLower(l)
 		if strings.Contains(low, "hold") && strings.Contains(low, "10 s") || strings.Contains(low, "power cycle") {
 			t.Fatalf("--notify-cmd was run for the Volunteer's needs hands: %q", l)
 		}
-		jobResult = jobResult || strings.Contains(l, "job ")
 	}
-	if !jobResult {
+	if !jobResult || !back {
 		t.Fatalf("--notify-cmd no longer runs for Maintainers' job notices on a Volunteer Mac: %q", lines)
 	}
 }
