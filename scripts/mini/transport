@@ -47,15 +47,41 @@ if [[ -z $want ]]; then
 fi
 need_root
 
-# start FILE: the tunnel under a copy of FILE.
+# put FILE: the tunnel under a copy of FILE. 1 when it did not stop or
+# launchd did not take it.
+put() {
+  stopped "$CLOUDFLARED_LABEL" || return 1
+  cp "$1" "$plist.new" || return 1
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$plist.new" || return 1
+  chmod 0644 "$plist.new" || return 1
+  mv "$plist.new" "$plist" || return 1
+  boot_in "$CLOUDFLARED_LABEL" "$plist"
+}
+
+# The way back is armed before the tunnel is first stopped: however the run
+# ends before the tunnel is up again, it runs under the file it ran under.
+was="$(mktemp "${TMPDIR:-/tmp}/transport-was.XXXXXX")"
+made=""
+armed=0
+# shellcheck disable=SC2329
+way_back() {
+  (( armed )) || return 0
+  armed=0
+  if put "$was"; then
+    say "the tunnel runs again under the LaunchDaemon file it ran under before"
+  else
+    say "the tunnel could not be started again: start it with sudo launchctl bootstrap system $plist"
+  fi
+}
+trap 'way_back; rm -f "$was" ${made:+"$made"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT TERM
+cp "$plist" "$was"
+
+# start FILE: the tunnel under a copy of FILE, with the way back armed.
 start() {
-  stopped "$CLOUDFLARED_LABEL" || fail "the tunnel did not stop (20 s)"
-  cp "$1" "$plist.new"
-  chown "$ROOT_OWNER:$ROOT_GROUP" "$plist.new"
-  chmod 0644 "$plist.new"
-  mv "$plist.new" "$plist"
-  launchctl enable "system/$CLOUDFLARED_LABEL" || true
-  launchctl bootstrap system "$plist" || fail "launchd did not take $plist"
+  armed=1
+  put "$1" || fail "the tunnel did not stop, or launchd did not take $plist"
 }
 
 connected() {
@@ -69,13 +95,13 @@ connected() {
 
 if [[ $want == deployed ]]; then
   start "$source_plist"
+  armed=0
   connected || fail "the tunnel is back under the Deployed files and has not connected yet: look at $LAB_HOME/log/cloudflared.log"
   say "the tunnel runs under the Deployed files again (${written:-no transport written})"
   exit 0
 fi
 
 made="$(mktemp "${TMPDIR:-/tmp}/transport.XXXXXX")"
-trap 'rm -f "$made"' EXIT
 awk -v p="$want" '
   /<string>--protocol<\/string>/ { next }
   /^ *<string>run<\/string>$/ { print "    <string>--protocol</string><string>" p "</string>" }
@@ -84,6 +110,8 @@ awk -v p="$want" '
 start "$made"
 if ! connected; then
   start "$source_plist"
+  armed=0
   fail "the tunnel did not connect under $want: it is back under the Deployed files"
 fi
+armed=0
 say "the tunnel runs under $want until \"transport deployed\" or the next set-up"

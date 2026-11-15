@@ -220,3 +220,20 @@ func TestHoldStartsTheDaemonAgainWhenLaunchdRefusesOnce(t *testing.T) {
 		}
 	}
 }
+
+// A bootstrap that fails after transport stopped the tunnel puts the tunnel
+// back under the file it ran under.
+func TestTransportLeavesTheTunnelStartedWhenLaunchdRefuses(t *testing.T) {
+	m := tunnelUp(t)
+	m.transport("quic")
+	m.ready(true)
+	daemon := m.path("Library/LaunchDaemons/" + cloudflaredLabel + ".plist")
+	before := read(t, daemon)
+	m.bootstrapFails(cloudflaredLabel, "<string>http2</string>")
+
+	out := m.refused("transport", "http2")
+
+	if !m.tunnelLoaded() || read(t, daemon) != before {
+		t.Errorf("the tunnel is loaded %v, under its file as before %v:\n%s\n%s", m.tunnelLoaded(), read(t, daemon) == before, out, m.calls())
+	}
+}
