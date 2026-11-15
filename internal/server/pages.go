@@ -108,8 +108,11 @@ func (s *Server) fleet() *web.Fleet {
 }
 
 // pendingRequests is the count People carries in the navigation: the
-// Requests to lend no Maintainer has answered.
-func (s *Server) pendingRequests() int { return s.requestsToLendWaiting() }
+// Requests to lend no Maintainer has answered, and the requests to be
+// Forgotten not yet carried out.
+func (s *Server) pendingRequests() int {
+	return s.requestsToLendWaiting() + s.forgetRequestsWaiting()
+}
 
 // sure reports whether the person asked twice for an action that takes
 // something away. The lab's script asks in place: the first click turns the

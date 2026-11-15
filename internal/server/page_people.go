@@ -88,7 +88,9 @@ type personOpen struct {
 	// EndAll is the sentence of "End all access", "" when the viewer may
 	// not use it on this person.
 	EndAll string
-	Record []recordShownLine
+	// Forget is the sentence of Forget, ForgetWhy why the viewer may not.
+	Forget, ForgetWhy string
+	Record            []recordShownLine
 	// Leases is the person's part of the Lease record: their Leases, and
 	// those they ended.
 	Leases []recordShownLine
@@ -113,10 +115,12 @@ type peopleData struct {
 	Admin    bool
 	Refused  string
 	Requests []peopleRequest
-	Chips    []peopleChip
-	Rows     []personRow
-	Record   []recordShownLine
-	Kind     string
+	// Forgets are the requests to be Forgotten.
+	Forgets []forgetRequest
+	Chips   []peopleChip
+	Rows    []personRow
+	Record  []recordShownLine
+	Kind    string
 }
 
 // utcMinute is a time as People shows it.
@@ -148,12 +152,13 @@ func (s *Server) showPeople(w http.ResponseWriter, r *http.Request, status int, 
 	lines, lerr := s.store.recordLines(recordShown)
 	signIns, serr := s.reports.SignIns()
 	waiting, werr := s.store.waitingRequests()
-	if err = errors.Join(err, lerr, serr, werr); err != nil {
+	forgets, ferr := s.forgetRequestsFor(me)
+	if err = errors.Join(err, lerr, serr, werr, ferr); err != nil {
 		s.log.Printf("People: %v", err)
 		httpErr(w, 500, "The lab couldn't read its people.")
 		return
 	}
-	page := peopleData{Admin: me.Admin, Refused: refused, Record: shown(lines), Kind: kind}
+	page := peopleData{Admin: me.Admin, Refused: refused, Record: shown(lines), Kind: kind, Forgets: forgets}
 	for _, q := range waiting {
 		page.Requests = append(page.Requests, peopleRequest{AccountID: q.AccountID, Handle: q.Handle, Model: q.ModelName(), Note: q.Note, Contact: q.Contact, Asked: utcMinute(q.Asked)})
 	}
@@ -225,6 +230,7 @@ func (s *Server) openPerson(me *Person, k knownPerson, handles map[int64]string,
 			o.EndAll = endAllSentence(browsers, len(tokens)) + " for @" + k.Handle + "; they can sign in again"
 		}
 	}
+	o.Forget, o.ForgetWhy = s.forgetControl(me, k)
 	if macs, err := s.macsSignedInAs(k.AccountID); err == nil {
 		o.MacsSignedIn = macs
 	} else {

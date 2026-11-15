@@ -54,6 +54,10 @@ type mePage struct {
 	Shown *meShown
 	// Refused says why no token was made.
 	Refused string
+	// ForgetAsked is the day the person asked to be forgotten, "" if they
+	// did not, and ForgetBy the day it is carried out by. ForgetRefused
+	// says why asking again was refused.
+	ForgetAsked, ForgetBy, ForgetRefused string
 }
 
 type meToken struct {
@@ -125,6 +129,11 @@ func (s *Server) me(r *http.Request) (*mePage, error) {
 	kind := s.viewerOf(r).Kind
 	page := &mePage{Macs: macs, Counted: p.OnMTeam(), Handle: p.Handle, Kind: kind.String(), Allows: kindAllows[kind], Tokens: tokenRows(tokens, now), Count: len(tokens), Cap: labTokenCap,
 		Browsers: counted(browsers, "browser", "browsers"), EndAll: endAllSentence(browsers, len(tokens))}
+	if asked, err := s.store.forgetAsked(p.AccountID); err != nil {
+		return nil, err
+	} else if !asked.IsZero() {
+		page.ForgetAsked, page.ForgetBy = asked.UTC().Format(pageDate), asked.Add(forgetWithin).UTC().Format(pageDate)
+	}
 	for _, days := range labTokenPeriods {
 		page.Periods = append(page.Periods, mePeriod{Value: map[bool]string{true: "never", false: strconv.Itoa(days)}[days == 0], Label: periodLabel(days), Default: days == labTokenDefaultPeriod})
 	}

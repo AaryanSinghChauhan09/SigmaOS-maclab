@@ -58,4 +58,11 @@
 </table></div>
 {{else}}<p class="dim">No Mac is signed in as you.</p>
 {{end}}</section>
+<section class="card" id="forget">
+<h2 class="card-title">ask to be forgotten</h2>
+{{with .ForgetRefused}}<p class="flash flash-alert" role="alert">{{.}}</p>
+{{end}}{{if .ForgetAsked}}<p>You asked to be forgotten on {{.ForgetAsked}}. A Maintainer carries it out by {{.ForgetBy}}.</p>
+{{else}}<p>{{template "take" ($.Take "/me/forget" "Ask to be forgotten" "Ask to be forgotten: a Maintainer erases what the lab keeps of you within 30 days. It cannot be undone")}}</p>
+<p class="dim">Your record, sessions, Lab tokens, Leases and Mac sign-ins go, and your Macs leave the lab; your reports stay without your name. The <a href="{{href "/privacy"}}">privacy statement</a> says what is kept.</p>
+{{end}}</section>
 {{end}}{{end}}

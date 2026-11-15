@@ -11,13 +11,17 @@
 <div>
 <section class="card">
 <h2 class="card-title">requests{{if .Requests}} ({{len .Requests}}){{end}}</h2>
-{{if .Requests}}<ul class="requests">
+{{if .Forgets}}<ul class="requests">
+{{range .Forgets}}<li id="forget-{{.AccountID}}"><b>@{{.Handle}}</b> asks to be forgotten <span class="dim">{{.Asked}}, to be carried out by {{.By}}</span>
+{{if .Sentence}}{{template "take" ($.Take (printf "/people/%d/forget" .AccountID) "Forget" .Sentence)}}{{else}}<span class="dim">{{.Why}}</span>{{end}}</li>
+{{end}}</ul>
+{{end}}{{if .Requests}}<ul class="requests">
 {{range .Requests}}<li id="request-{{.AccountID}}"><b>@{{.Handle}}</b> asks to lend a {{.Model}} <span class="dim">{{.Asked}}</span>{{if .Note}}<br>Note: {{.Note}}{{end}}{{if .Contact}}<br>Contact: {{.Contact}}{{end}}
 <form class="form form-inline" method="post" action="{{href (printf "/people/%d/request/approve" .AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Approve</button></form>
 <form class="form form-inline" method="post" action="{{href (printf "/people/%d/request/decline" .AccountID)}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="text" name="reason" maxlength="200" placeholder="reason (optional, one line)" aria-label="Reason (optional)" autocomplete="off"> <button class="button button-small button-plain" type="submit">Decline</button></form></li>
 {{end}}</ul>
 <p class="dim">Approval is of the person: it stands when their last Mac leaves. The lab sends them nothing; "Lend a Mac" shows your answer, and a reason you type.</p>
-{{else}}<p class="dim">No request is waiting.</p>
+{{else if not .Forgets}}<p class="dim">No request is waiting.</p>
 {{end}}</section>
 <section class="card">
 <h2 class="card-title">people ({{len .Rows}})</h2>
@@ -27,7 +31,7 @@
 <thead><tr><th>Person</th><th>Kind</th><th>Their Macs</th><th>Leases held</th><th>Signed in for Verified runs</th><th>Last seen</th></tr></thead>
 <tbody>
 {{range $row := .Rows}}<tr class="person-row{{if .Open}} open{{end}}" id="person-{{.AccountID}}">
-<td data-label="Person" class="nowrap"><a class="person-toggle" href="{{href .Path}}" aria-expanded="{{if .Open}}true{{else}}false{{end}}">{{if .Open}}▾{{else}}▸{{end}} <b>@{{.Handle}}</b></a>{{if .You}} <span class="you">you</span>{{end}}{{if .Twin}} <span class="dim" title="Two accounts go by this handle here: one was renamed and has not signed in since">account {{.AccountID}}</span>{{end}}</td>
+<td data-label="Person" class="nowrap"><a class="person-toggle" href="{{href .Path}}" aria-expanded="{{if .Open}}true{{else}}false{{end}}">{{if .Open}}▾{{else}}▸{{end}} {{if .Handle}}<b>@{{.Handle}}</b>{{else}}<b>account {{.AccountID}}</b> <span class="dim">forgotten, kept as Blocked</span>{{end}}</a>{{if .You}} <span class="you">you</span>{{end}}{{if .Twin}} <span class="dim" title="Two accounts go by this handle here: one was renamed and has not signed in since">account {{.AccountID}}</span>{{end}}</td>
 <td data-label="Kind"><span class="badge {{.BadgeClass}}">{{.Badge}}</span></td>
 <td data-label="Their Macs">{{template "names" .Macs}}{{if .LeaveNoMac}} <span class="dim">has leave to lend, no Mac yet</span>{{end}}</td>
 <td data-label="Leases held">{{template "names" .Leases}}</td>
@@ -85,6 +89,12 @@
 {{else if $row.Admin}}<p class="dim">An Admin cannot be Blocked.</p>
 {{else if $row.You}}<p class="dim">Nobody blocks themselves.</p>
 {{else}}<p class="dim">Only an Admin blocks a Maintainer.</p>
+{{end}}</div>
+<div>
+<h3>Forget</h3>
+{{if .Forget}}<p>{{template "take" ($.Take (printf "/people/%d/forget" $row.AccountID) "Forget" .Forget)}}</p>
+<p class="dim">On their request, on their own page or by mail, within 30 days. It cannot be undone.</p>
+{{else}}<p class="dim">{{.ForgetWhy}}</p>
 {{end}}</div>
 <div class="wide">
 <h3>Record</h3>
