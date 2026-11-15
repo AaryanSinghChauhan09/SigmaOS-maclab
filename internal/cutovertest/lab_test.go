@@ -154,6 +154,47 @@ echo "$sha"
 	}
 }
 
+// A part labd holds whole already and receives again, a retry, is no part
+// cut mid-way when the retry is cut: its file of its own goes, the counts
+// match, and nothing is resent. FD 4 knows a file labd receives by its part,
+// from its first bytes, and fails.
+func TestFD04ARetryOfAPartHeldWholeDoesNotPass(t *testing.T) {
+	real := bins(t)
+	dir := t.TempDir()
+	for _, tool := range []string{"labd", "lab-agent"} {
+		if err := os.Symlink(filepath.Join(real, tool), filepath.Join(dir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wrapper := `#!/bin/bash
+[[ $1 == upload ]] || exec "` + real + `/lab" "$@"
+sha="$(shasum -a 256 "$2" | cut -d' ' -f1)"
+folder="$(dirname "$HOME")/root/var/lab/data/artifacts/.upload-$sha"
+if [[ ${MACLAB_UPLOAD_PROGRESS:-} == 1 ]]; then
+  mkdir -p "$folder"
+  dd if="$2" of="$folder/1" bs=1048576 count=32 2> /dev/null
+  dd if="$2" of="$folder/2" bs=1048576 skip=32 count=32 2> /dev/null
+  # Part 2 sent again and cut after 1000 bytes: labd drops its file once
+  # lab is gone.
+  dd if="$2" bs=1048576 skip=32 count=1 2> /dev/null | head -c 1000 > "$folder/.part-r2"
+  me=$$
+  ( while kill -0 "$me" 2> /dev/null; do sleep 0.05; done; rm -f "$folder/.part-r2" ) > /dev/null 2>&1 &
+  echo "lab: labd holds 2 of 7 parts" >&2
+  sleep 30
+  exit 1
+fi
+echo "lab: resuming: labd holds 2 of 7 parts" >&2
+echo "$sha"
+`
+	if err := os.WriteFile(filepath.Join(dir, "lab"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code := run(t, nil, "", frontDoor(t, "fd04-upload-resume"), "--local", "--bin", dir, "--size", fmt.Sprint(200*mib))
+	if code != 1 || !strings.Contains(out, ": fail") || !strings.Contains(out, "part 2, which it held whole already") || strings.Contains(out, "checksum") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
 // A stop while lab is stopped for the cut (here, while labd's folder is
 // read) ends the run: the stopped lab is killed, not waited for.
 func TestFD04StoppedWhileLabIsStoppedEnds(t *testing.T) {

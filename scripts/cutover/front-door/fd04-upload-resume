@@ -76,21 +76,44 @@ rec "file: $SIZE bytes, $parts parts of 32 MiB"
 held_now() { sed -n 's/^lab: labd holds \([0-9]*\) of [0-9]* parts$/\1/p' "$err" | tail -n 1; }
 
 # labd_folder [SCRIPT]: labd's upload folder, one line for each file:
-# "whole INODE BYTES" for a part labd holds, "under INODE BYTES" for one it
-# is receiving. Through the Lab address it is read on the mini. With SCRIPT,
-# the folder is read once SCRIPT, run in it, has ended.
+# "whole INODE BYTES N" for part N, which labd holds, "under INODE BYTES
+# HEAD" for one it is receiving, HEAD its first 64 bytes in hex: labd's name
+# for such a file says no part, its bytes do. Through the Lab address it is
+# read on the mini. With SCRIPT, the folder is read once SCRIPT, run in it,
+# has ended.
 last_part=$(( SIZE - (parts - 1) * PART_BYTES ))
+# shellcheck disable=SC2016
+heads='for f in .part-*; do [ -f "$f" ] && printf "head %s %s\n" "$f" "$(head -c 64 "$f" 2> /dev/null | od -An -tx1 | tr -d " \n")"; done; true'
 labd_folder() {
   local dir="artifacts/.upload-$want" first="${1:-:}"
   {
     if [[ $MODE == local ]]; then
-      (cd "$LOCAL_DATA/$dir" 2> /dev/null && eval "$first" && find . -maxdepth 1 -type f -exec ls -lin {} + 2> /dev/null)
+      (cd "$LOCAL_DATA/$dir" 2> /dev/null && eval "$first" && find . -maxdepth 1 -type f -exec ls -lin {} + 2> /dev/null && sh -c "$heads")
     else
       # shellcheck disable=SC2029
-      ssh -t "$MINI" sudo -u lab sh -c "'cd $MINI_DATA/$dir 2> /dev/null || exit 0; $first; find . -maxdepth 1 -type f -exec ls -lin {} +'" | tee /dev/stderr | tr -d '\r'
+      ssh -t "$MINI" sudo -u lab sh -c "'cd $MINI_DATA/$dir 2> /dev/null || exit 0; $first; find . -maxdepth 1 -type f -exec ls -lin {} +; $heads'" | tee /dev/stderr | tr -d '\r'
     fi
-  } | awk '$NF ~ /\/[0-9]+$/ { print "whole", $1, $6 } $NF ~ /\/\.part-[^\/]*$/ { print "under", $1, $6 }' || true
+  } | awk '$1 == "head" { head[$2] = $3; next }
+      $NF ~ /\/[0-9]+$/ { n = $NF; sub(/.*\//, "", n); print "whole", $1, $6, n; next }
+      $NF ~ /\/\.part-[^\/]*$/ { name = $NF; sub(/.*\//, "", name); under[name] = $1 " " $6 }
+      END { for (name in under) print "under", under[name], head[name] }' || true
 }
+
+# part_of HEAD: the part whose first bytes begin with HEAD (16 bytes or
+# more, in hex), or nothing.
+part_heads=""
+part_of() {
+  local n
+  (( ${#1} >= 32 )) || return 0
+  if [[ -z $part_heads ]]; then
+    for (( n = 1; n <= parts; n++ )); do
+      part_heads+="$n $(dd if="$file" bs=64 skip=$(( (n - 1) * PART_BYTES / 64 )) count=1 2> /dev/null | od -An -tx1 | tr -d ' \n')"$'\n'
+    done
+  fi
+  awk -v h="$1" 'index($2, h) == 1 { print $1; exit }' <<<"$part_heads"
+}
+# whole_in LISTING N: the listing shows part N whole.
+whole_in() { awk -v n="$2" '$1 == "whole" && $4 == n { found = 1 } END { exit !found }' <<<"$1"; }
 
 # partly_held LISTING: the most bytes labd holds of a part it does not hold
 # whole, or nothing. A whole part not yet renamed is no part partly received.
@@ -98,9 +121,9 @@ partly_held() {
   awk -v whole="$PART_BYTES" -v last="$last_part" '$1 == "under" && $3 > 0 && $3 != whole && $3 != last && $3 > most { most = $3 } END { if (most > 0) print most }' <<<"$1"
 }
 
-# cut_inodes LISTING: the inodes of the parts partly received.
-cut_inodes() {
-  awk -v whole="$PART_BYTES" -v last="$last_part" '$1 == "under" && $3 > 0 && $3 != whole && $3 != last { print $2 }' <<<"$1"
+# cut_files LISTING: "INODE HEAD" of each file of a part partly received.
+cut_files() {
+  awk -v whole="$PART_BYTES" -v last="$last_part" '$1 == "under" && $3 > 0 && $3 != whole && $3 != last { print $2, $4 }' <<<"$1"
 }
 
 # Until labd receives no part: at most a minute.
@@ -148,13 +171,27 @@ rec "cut: lab upload killed while it sent, with $before of $parts parts taken by
 # What lab sent before the kill, once labd has it all.
 after="$(labd_folder "$no_part_under_way")"
 ! grep -q '^under ' <<<"$after" || give_up "labd still received parts a minute after the kill: whether the cut part stayed cut is not known"
-kept=0
-for inode in $(cut_inodes "$look"); do
-  awk -v i="$inode" '$1 == "whole" && $2 == i { found = 1 } END { exit !found }' <<<"$after" || kept=$((kept + 1))
-done
-(( kept > 0 )) || give_up "what lab sent before the kill made the part labd held $cut bytes of whole: no part was cut mid-way"
+# A cut part is one labd did not hold whole at the cut, nor after: a part
+# it held whole already and was sent again, a retry, is no cut of a part.
+kept="" retried=""
+while read -r inode head; do
+  [[ -n $inode ]] || continue
+  n="$(part_of "$head")"
+  [[ -n $n ]] || continue
+  if whole_in "$look" "$n"; then
+    retried="$n"
+    continue
+  fi
+  ! awk -v i="$inode" '$1 == "whole" && $2 == i { found = 1 } END { exit !found }' <<<"$after" || continue
+  ! whole_in "$after" "$n" || continue
+  kept+="${kept:+, }$n"
+done <<<"$(cut_files "$look")"
+if [[ -z $kept && -n $retried ]]; then
+  give_up "the part labd held $cut bytes of at the cut was part $retried, which it held whole already: a retry was cut, and no part was cut mid-way"
+fi
+[[ -n $kept ]] || give_up "what lab sent before the kill made the part labd held $cut bytes of whole: no part was cut mid-way"
 whole_after="$(grep -c '^whole ' <<<"$after" || true)"
-rec "after the kill: labd holds $whole_after parts whole, and $kept it was receiving at the cut stays cut"
+rec "after the kill: labd holds $whole_after parts whole, and part $kept, which it was receiving at the cut, stays cut"
 
 # The same command again.
 start="$(now)"
