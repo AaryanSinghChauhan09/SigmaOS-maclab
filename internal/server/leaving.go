@@ -118,6 +118,15 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 	if err != nil {
 		s.log.Printf("%s: its unfinished jobs: %v", name, err)
 	}
+	for _, j := range jobs {
+		if j.ID != active {
+			s.updateJobByID(j.ID, func(j *api.Job) {
+				j.State, j.Outcome, j.Summary = api.JobDone, api.OutcomeCanceled, "canceled: "+reason
+			})
+		}
+	}
+	// After the marking: the Mac's loop may have read one as queued just
+	// before it (see cancelJob), and its cancel is set by now.
 	s.mu.Lock()
 	cancels := []context.CancelFunc{s.cancels[active]}
 	for _, j := range jobs {
@@ -129,13 +138,6 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 	for _, cancel := range cancels {
 		if cancel != nil {
 			cancel()
-		}
-	}
-	for _, j := range jobs {
-		if j.ID != active {
-			s.updateJobByID(j.ID, func(j *api.Job) {
-				j.State, j.Outcome, j.Summary = api.JobDone, api.OutcomeCanceled, "canceled: "+reason
-			})
 		}
 	}
 
