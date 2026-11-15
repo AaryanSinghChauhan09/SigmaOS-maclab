@@ -129,7 +129,7 @@ show_link() {
 link() {
   local q
   set +x
-  q="$(qrencode)" || fail "no qrencode here, and the link is shown only as a QR code: install it as the account /opt/homebrew belongs to (brew install qrencode) and run link again. Nothing was changed"
+  q="$(qrencode)" || fail "no qrencode here, and the link is shown only as a QR code: install Homebrew's qrencode, as the account /opt/homebrew belongs to, and run link again. Nothing was changed"
   alone
   cli link -n "$DEVICE_NAME" | show_link "$q" || fail "signal-cli did not link: run link again for a new QR code"
   say "linked as \"$DEVICE_NAME\", a device of your number: lines come from your own number. Then: scripts/mini/signal groups"
