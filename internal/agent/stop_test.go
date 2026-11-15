@@ -1,0 +1,175 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/omacom/omarchy-maclab/internal/api"
+)
+
+// execSystem is a simulated Mac whose lab exec runs for real, with bash, as
+// a Mac's does.
+type execSystem struct{ *Sim }
+
+func (s execSystem) Exec(ctx context.Context, a api.ExecArgs) api.ExecResult {
+	return (&Linux{}).Exec(ctx, a)
+}
+
+// stopHelperEnv makes the test binary a lab-agent: it runs an Agent on
+// execSystem against the labd at its value, until SIGTERM.
+const stopHelperEnv = "MACLAB_STOP_HELPER_LABD"
+
+// SIGTERM stops lab-agent within a bounded time, even while a command it
+// runs ignores SIGTERM and has children that keep its output pipe open, and
+// nothing that command started is left running.
+func TestSIGTERMStopsLabAgentAndEveryProcessItsCommandStarted(t *testing.T) {
+	if url := os.Getenv(stopHelperEnv); url != "" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+		defer stop()
+		a := New(&Config{Server: url, Secret: "test", WorkDir: t.TempDir()}, execSystem{NewSim(t.TempDir())}, log.New(os.Stderr, "", 0))
+		a.Run(ctx)
+		return
+	}
+	dir := t.TempDir()
+	pids := filepath.Join(dir, "pids")
+	script := "trap '' TERM; sleep 600 & echo $! >> " + pids + "; sleep 600 & echo $! >> " + pids +
+		"; echo $$ >> " + pids + "; touch " + filepath.Join(dir, "ready") + "; wait"
+	args, _ := json.Marshal(api.ExecArgs{Command: script, TimeoutSec: 600})
+	var sent atomic.Bool
+	labd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/checkin" {
+			io.WriteString(w, "ok")
+			return
+		}
+		var resp api.CheckinResponse
+		if !sent.Swap(true) {
+			resp.Commands = []api.Command{{ID: "c1", Kind: api.CmdExec, Args: args}}
+		} else {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer labd.Close()
+
+	agent := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	agent.Env = append(os.Environ(), stopHelperEnv+"="+labd.URL)
+	var out logBuf
+	agent.Stdout, agent.Stderr = &out, &out
+	if err := agent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- agent.Wait() }()
+	t.Cleanup(func() {
+		agent.Process.Kill()
+		for _, pid := range readPids(t, pids) {
+			syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(dir, "ready")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the exec never started:\n%s", out.String())
+		}
+	}
+	started := readPids(t, pids)
+	if len(started) != 3 {
+		t.Fatalf("the exec wrote pids %v", started)
+	}
+
+	stopped := time.Now()
+	agent.Process.Signal(syscall.SIGTERM)
+	bound := stopGrace + 5*time.Second
+	select {
+	case <-exited:
+	case <-time.After(bound):
+		t.Fatalf("lab-agent had not ended %v after SIGTERM:\n%s", bound, out.String())
+	}
+	t.Logf("lab-agent ended %v after SIGTERM", time.Since(stopped).Round(time.Millisecond))
+	for _, pid := range started {
+		if !ended(pid) {
+			t.Errorf("process %d, started by the exec, still runs after lab-agent ended", pid)
+		}
+	}
+}
+
+// A command's group ends with its program: a child that honours SIGTERM goes
+// at once when the command is stopped, and one left behind by a program that
+// ended on its own goes too.
+func TestACommandsProcessGroupEndsWithIt(t *testing.T) {
+	for _, c := range []struct {
+		name, script string
+		stop         bool
+		within       time.Duration
+	}{
+		{"stopped", "sleep 600 & echo $! > PIDS; wait", true, 2 * time.Second},
+		{"ended, a child left", "sleep 600 > /dev/null 2>&1 & echo $! > PIDS", false, 2 * time.Second},
+		{"ended, a child ignoring SIGTERM left", "(trap '' TERM; exec sleep 600) > /dev/null 2>&1 & echo $! > PIDS; sleep 0.2", false, stopGrace + 2*time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pids := filepath.Join(t.TempDir(), "pids")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", "-c", strings.ReplaceAll(c.script, "PIDS", pids))
+			if c.stop {
+				go func() {
+					for len(readPids(t, pids)) == 0 {
+						time.Sleep(10 * time.Millisecond)
+					}
+					cancel()
+				}()
+			}
+			start := time.Now()
+			runGroup(cmd)
+			if took := time.Since(start); took > c.within {
+				t.Errorf("runGroup took %v", took)
+			}
+			for _, pid := range readPids(t, pids) {
+				if !ended(pid) {
+					syscall.Kill(pid, syscall.SIGKILL)
+					t.Errorf("process %d outlived its command", pid)
+				}
+			}
+		})
+	}
+}
+
+// ended is whether process pid is gone, given a moment to be reaped.
+func ended(pid int) bool {
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if syscall.Kill(pid, 0) == syscall.ESRCH {
+			return true
+		}
+	}
+	return false
+}
+
+func readPids(t *testing.T, path string) []int {
+	b, _ := os.ReadFile(path)
+	var pids []int
+	for _, f := range strings.Fields(string(b)) {
+		if n, err := strconv.Atoi(f); err == nil && n > 1 {
+			pids = append(pids, n)
+		}
+	}
+	return pids
+}

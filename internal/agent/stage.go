@@ -430,7 +430,7 @@ func grubBootFiles(ctx context.Context, krel, image, bootDir string) error {
 	} else {
 		cmd = exec.CommandContext(ictx, "dracut", "--force", "--kver", krel, initrd)
 	}
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := combinedGroup(cmd); err != nil {
 		return fmt.Errorf("initramfs: %v: %s", err, lastLines(string(out), 15))
 	}
 	return nil

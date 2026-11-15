@@ -331,7 +331,7 @@ func (l *Linux) Collect(ctx context.Context, boot, outDir string) error {
 		}
 	}
 	run := func(name string, args ...string) {
-		out, err := exec.CommandContext(ctx, "journalctl", args...).CombinedOutput()
+		out, err := combinedGroup(exec.CommandContext(ctx, "journalctl", args...))
 		save(name, out, err, "journalctl")
 	}
 	// boot is dashed, as /proc/sys/kernel/random/boot_id is, but journalctl
@@ -349,7 +349,7 @@ func (l *Linux) Collect(ctx context.Context, boot, outDir string) error {
 			"systemd-blame.txt":          {"blame", "--no-pager"},
 			"systemd-critical-chain.txt": {"critical-chain", "--no-pager"},
 		} {
-			out, err := exec.CommandContext(ctx, "systemd-analyze", args...).CombinedOutput()
+			out, err := combinedGroup(exec.CommandContext(ctx, "systemd-analyze", args...))
 			save(name, out, err, "systemd-analyze")
 		}
 	}
@@ -577,9 +577,9 @@ func kmsgrab(ctx context.Context, path string) error {
 	var last error = fmt.Errorf("no DRM card")
 	for _, card := range displayCards() {
 		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		out, err := exec.CommandContext(cctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+		out, err := combinedGroup(exec.CommandContext(cctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
 			"-device", card, "-f", "kmsgrab", "-i", "-", "-frames:v", "1",
-			"-vf", "hwdownload,format=bgr0", "-q:v", "4", path).CombinedOutput()
+			"-vf", "hwdownload,format=bgr0", "-q:v", "4", path))
 		cancel()
 		if err == nil {
 			if st, serr := os.Stat(path); serr == nil && st.Size() > 0 {
@@ -618,7 +618,7 @@ func (l *Linux) grim(ctx context.Context, path string, wait time.Duration) (int,
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	args := append([]string{"-u", u.Username, "--", "env"}, append(env, "grim", "-t", "jpeg", "-q", "80", tmp)...)
-	if out, err := exec.CommandContext(cctx, "runuser", args...).CombinedOutput(); err != nil {
+	if out, err := combinedGroup(exec.CommandContext(cctx, "runuser", args...)); err != nil {
 		return 0, 0, fmt.Errorf("grim: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	b, err := os.ReadFile(tmp)
@@ -661,7 +661,7 @@ func (l *Linux) Logs(ctx context.Context, a api.LogsArgs) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown log source %q", a.Source)
 	}
-	out, err := exec.CommandContext(ctx, "journalctl", args...).CombinedOutput()
+	out, err := combinedGroup(exec.CommandContext(ctx, "journalctl", args...))
 	if err != nil {
 		return string(out), fmt.Errorf("journalctl: %v", err)
 	}
@@ -713,7 +713,7 @@ func (l *Linux) Exec(ctx context.Context, a api.ExecArgs) api.ExecResult {
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	cmd.WaitDelay = 3 * time.Second
 	t0 := time.Now()
-	err := cmd.Run()
+	err := runGroup(cmd)
 	res := api.ExecResult{Stdout: out.String(), Stderr: errb.String(), Seconds: time.Since(t0).Seconds(), Via: "agent"}
 	if cctx.Err() == context.DeadlineExceeded {
 		res.ExitCode = 124
