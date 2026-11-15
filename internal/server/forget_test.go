@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/agent"
 	"github.com/omacom/omarchy-maclab/internal/api"
@@ -227,5 +228,21 @@ func TestPublishForgottenMacsReport(t *testing.T) {
 	}
 	if j, _ := s.store.job("j-omt"); j.Result.OMT.PublishNote == "" {
 		t.Error("the job doesn't say why it wasn't published")
+	}
+}
+
+// A forgotten Mac's loop ends: it takes nothing more off its queue, where
+// it would spin on its closed channel until labd stops.
+func TestAForgottenMacsLoopEnds(t *testing.T) {
+	l := newLab(t, false)
+	v := l.s.dev(l.name)
+	if code := l.adminDo("DELETE", "/api/devices/"+l.name+"?force=1"); code != http.StatusOK {
+		t.Fatalf("forget: %d", code)
+	}
+	time.Sleep(200 * time.Millisecond)
+	v.queue <- "j-after-forget"
+	time.Sleep(500 * time.Millisecond)
+	if len(v.queue) != 1 {
+		t.Fatal("the forgotten Mac's loop still runs")
 	}
 }

@@ -70,6 +70,7 @@ func (s *Server) deviceLoop(v *dev) {
 		case <-s.ctx.Done():
 			return
 		case <-v.gone:
+			return
 		case <-v.stop:
 			return
 		case id := <-v.queue:
