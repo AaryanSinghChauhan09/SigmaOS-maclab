@@ -63,6 +63,9 @@ type dev struct {
 	resetting bool
 	// updating: lab agent-update holds the Mac (agent_software.go).
 	updating *agentUpdating
+	// agentStart is the api.Checkin.AgentStart labd last heard, and
+	// factsStart the one its d.Facts came with.
+	agentStart, factsStart string
 	// beforeSend, which only a test sets (under mu), runs once a job's wait
 	// is over and before labd gives it the Mac.
 	beforeSend func()
@@ -353,10 +356,11 @@ func (v *dev) heartbeat(ci api.Checkin) {
 		v.d.JobNotices = *ci.JobNotices
 		persist = true
 	}
+	v.agentStart = ci.AgentStart
 	if ci.Facts != nil {
-		v.d.Facts = *ci.Facts
-		v.heardAgentLocked()
+		v.d.Facts, v.factsStart = *ci.Facts, ci.AgentStart
 	}
+	v.heardAgentLocked()
 	if v.noticeUpdateLocked() {
 		persist = true
 	}

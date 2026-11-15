@@ -5,6 +5,8 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -115,6 +117,7 @@ type Agent struct {
 	http *http.Client
 	log  *log.Logger
 
+	runID             string     // this run's api.Checkin.AgentStart
 	repMu             sync.Mutex // one report in flight at a time
 	mu                sync.Mutex
 	seen              map[string]bool
@@ -162,9 +165,12 @@ func New(cfg *Config, sys System, logger *log.Logger) *Agent {
 	if _, legacy := cfg.transportPolicy(); legacy {
 		logger.Print(legacyPlainWarning(cfg.Server))
 	}
+	start := make([]byte, 8)
+	rand.Read(start)
 	return &Agent{
 		cfg:       cfg,
 		sys:       sys,
+		runID:     hex.EncodeToString(start),
 		rt:        rt,
 		http:      labhttp.Client(rt, cfg.httpTimeout()),
 		log:       logger,
@@ -461,7 +467,7 @@ func (a *Agent) poke() {
 func (a *Agent) poll(ctx context.Context) error {
 	bootID, kernel, cmdline := a.sys.Identity()
 	ci := api.Checkin{BootID: bootID, Kernel: kernel, Cmdline: cmdline, Health: a.sys.Health(),
-		SnapshotEligible: a.sys.SnapshotEligible() == nil}
+		SnapshotEligible: a.sys.SnapshotEligible() == nil, AgentStart: a.runID}
 	a.mu.Lock()
 	factsRevision := a.factsRevision
 	refreshFacts := a.lastFacts.IsZero() || a.sentFactsRevision != factsRevision || a.clock().Now().Sub(a.lastFacts) >= time.Minute

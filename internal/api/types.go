@@ -370,6 +370,9 @@ type Checkin struct {
 	// publishing opt-in; a Lab-owned Mac sends no AccessLevel.
 	AccessLevel string `json:"access_level,omitempty"`
 	Publish     bool   `json:"publish,omitempty"`
+	// AgentStart is a number this run of lab-agent picked as it started: a
+	// new one says the agent was started again, whatever its version.
+	AgentStart string `json:"agent_start,omitempty"`
 }
 
 // Report carries command results and kernel events as soon as they exist.

@@ -404,6 +404,45 @@ func TestAgentUpdateReservesTheMacUntilTheNewAgentIsBack(t *testing.T) {
 	}
 }
 
+// The usual update hands out new bytes of the same lab-agent number: the
+// Mac stays reserved until the restarted lab-agent checks in, not from the
+// moment the answer comes, when the number labd holds already matches.
+func TestASameVersionUpdateHoldsTheMacUntilTheRestartedAgentChecksIn(t *testing.T) {
+	k := sshsigtest.NewKey(t)
+	handed := signedAgent(t, k, agentUpdateMinAgent)
+	sl := newSoftwareLab(t, k, false, agentUpdateMinAgent, func(c *Config) { c.AgentBinary, c.LabAgent = handed, agentUpdateMinAgent })
+	restarting, restart := make(chan struct{}), make(chan struct{})
+	sl.beforeRestart = func() { close(restarting); <-restart }
+	sl.baseline()
+	sl.waitAgent(agentUpdateMinAgent)
+	leasePath := "/api/devices/" + sl.name + "/lease"
+
+	resp, body := sl.post("/api/devices/"+sl.name+"/agent-update", nil)
+	var res api.AgentUpdate
+	if resp.StatusCode != 200 || json.Unmarshal([]byte(body), &res) != nil || !res.Changed || res.To != agentUpdateMinAgent {
+		t.Fatalf("agent-update: %d %s", resp.StatusCode, body)
+	}
+	select {
+	case <-restarting:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the Mac's lab-agent never restarted")
+	}
+	time.Sleep(500 * time.Millisecond) // the old agent's check-ins go on meanwhile
+	if resp, body := sl.post(leasePath, api.LeaseRequest{Holder: "t"}); resp.StatusCode != http.StatusConflict || !strings.Contains(body, agentBeingUpdated) {
+		t.Fatalf("a Lease before the restarted lab-agent is back: %d %s", resp.StatusCode, body)
+	}
+	close(restart)
+	for end := time.Now().Add(15 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		resp, body := sl.post(leasePath, api.LeaseRequest{Holder: "t"})
+		if resp.StatusCode == 200 {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatalf("the Mac stayed reserved after its restarted lab-agent checked in: %d %s", resp.StatusCode, body)
+		}
+	}
+}
+
 func TestAgentUpdateRefusesWhatItCannotDo(t *testing.T) {
 	k := sshsigtest.NewKey(t)
 

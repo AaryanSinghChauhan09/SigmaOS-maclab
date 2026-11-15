@@ -110,8 +110,11 @@ func (s *Server) releaseKey() string {
 
 // agentUpdating marks a Mac that `lab agent-update` holds: no job is sent,
 // no Lease taken and no exec run on it until its lab-agent is back as to
-// (once the Mac has answered), or agentUpdateWait after that.
-type agentUpdating struct{ to string }
+// (once the Mac has answered), or agentUpdateWait after that. Back means
+// started again: a check-in from another run than start, the one asked,
+// whose facts say to. The same number in new bytes is the usual update, so
+// the number alone, which labd already holds, says nothing.
+type agentUpdating struct{ to, start string }
 
 const agentBeingUpdated = "lab-agent is being updated"
 
@@ -128,6 +131,7 @@ func (s *Server) hAgentUpdate(w http.ResponseWriter, r *http.Request) {
 	d := v.d
 	why := v.notUpdatableLocked(signed)
 	if why == "" {
+		mark.start = v.agentStart
 		v.updating = mark
 	}
 	v.mu.Unlock()
@@ -141,14 +145,17 @@ func (s *Server) hAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 502, "%s did not update its lab-agent: %v", d.Name, err)
 		return
 	}
+	if !res.Changed {
+		v.endUpdating(mark) // nothing restarts
+		writeJSON(w, res)
+		return
+	}
 	v.mu.Lock()
 	mark.to = res.To
 	v.heardAgentLocked()
 	v.mu.Unlock()
 	time.AfterFunc(agentUpdateWait, func() { v.endUpdating(mark) })
-	if res.Changed {
-		s.log.Printf("%s: lab-agent %s -> %s by %s", d.Name, res.From, res.To, callerOf(r).maintainer)
-	}
+	s.log.Printf("%s: lab-agent %s -> %s by %s", d.Name, res.From, res.To, callerOf(r).maintainer)
 	writeJSON(w, res)
 }
 
@@ -179,10 +186,10 @@ func (v *dev) notUpdatableLocked(signed bool) string {
 	return ""
 }
 
-// heardAgentLocked lets the Mac go once its lab-agent says it is the one
-// lab agent-update installed. Caller holds v.mu.
+// heardAgentLocked lets the Mac go once its lab-agent, started again, says
+// it is the one lab agent-update installed. Caller holds v.mu.
 func (v *dev) heardAgentLocked() {
-	if u := v.updating; u != nil && u.to != "" && v.d.Facts.AgentVersion == u.to {
+	if u := v.updating; u != nil && u.to != "" && v.agentStart != u.start && v.factsStart == v.agentStart && v.d.Facts.AgentVersion == u.to {
 		v.updating = nil
 		v.bump()
 	}
