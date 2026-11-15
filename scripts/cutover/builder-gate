@@ -224,23 +224,26 @@ said() { grep -E "^[0-9]+ $1" "$STREAM" | tail -n 1 | tr ' ' '\n' | sed -n "s/^$
 
 # pages K [FROM TO]: labd's page times while build K's VM was up, or only
 # the readings that began after FROM and ended before TO: how many, how many
-# of them gave no time, the slowest 95th percentile and the slowest request.
+# of them gave no time, the slowest 95th percentile, the slowest request, and
+# how many had a page that did not answer (page-times then gives no time).
 pages() {
   awk -v k="$1" -v from="${2:-0}" -v to="${3:-99999999999}" '
     $2 == "build" && $4 == "begin" { cur = $3 }
     $2 == "build" && $4 == "end" { cur = "" }
     $2 == "probe" && $4 == "begin" { began = $1 }
     $2 == "probe" && $4 == "end" && cur == k && began > from && $1 < to {
-      n++; p = ""; m = 0
+      n++; p = ""; m = 0; f = 0
       for (i = 5; i <= NF; i++) {
         if ($i ~ /^probe_p95_ms=/) p = substr($i, 14)
         if ($i ~ /^probe_max_ms=/) m = substr($i, 14)
+        if ($i ~ /^probe_failed=/) f = substr($i, 14)
       }
+      if (f + 0 > 0) { failed++; next }
       if (p == "") { bad++; next }
       if (p + 0 > worst) worst = p + 0
       if (m + 0 > slow) slow = m + 0
     }
-    END { print n + 0, bad + 0, worst + 0, slow + 0 }' "$STREAM"
+    END { print n + 0, bad + 0, worst + 0, slow + 0, failed + 0 }' "$STREAM"
 }
 
 gb() { awk -v kb="${1:-0}" 'BEGIN { printf "%.1f", kb / 1048576 }'; }
@@ -274,7 +277,7 @@ network_stop() {
 STATE=("" "" "" "")
 build() {
   local k="$1" title="$2" transfer="$3" id state="" t0 seconds stage file from to proved=0 tries=0 silent=0 row labd_time up=""
-  local readings unread worst slow inflight peak
+  local readings unread worst slow failed inflight peak
   shift 3
   t0="$(date +%s)"
   "$LAB_CMD" "$@" --force --no-wait > "$WORK/ask.$k" 2> "$WORK/ask.$k.err" \
@@ -300,7 +303,7 @@ build() {
       to="$(date +%s)"
       rm -f "$file"
       up="$UP_MBIT"
-      read -r readings unread worst slow <<<"$(pages "$k" "$from" "$to")"
+      read -r readings unread worst slow failed <<<"$(pages "$k" "$from" "$to")"
       if (( readings > unread )); then proved=1 inflight="$worst"; fi
       continue
     fi
@@ -342,7 +345,7 @@ build() {
   fi
   rec "$title (build $id): done in $seconds s by this Mac's clock$labd_time; its VM was up $(said "build $k end " seconds) s with $CORES cores and $(said "build $k begin " memory); $peak, and the whole mini had $(gb "$(said "build $k end " machine_peak_kb)") GB in use at most"
 
-  read -r readings unread worst slow <<<"$(pages "$k")"
+  read -r readings unread worst slow failed <<<"$(pages "$k")"
   if [[ $transfer != yes ]]; then
     if (( readings > unread )); then
       rec "labd's pages during $title: $worst ms at the 95th percentile at the slowest of $readings readings (told, not judged)"
@@ -354,7 +357,10 @@ build() {
   (( readings > unread )) || give_up "labd's page times could not be read while $title ran: $unread of $readings readings gave none. Run scripts/mini/page-times on the mini as the lab account to see why"
   (( proved )) || give_up "labd's page times were not read with a transfer in flight during $title: $tries transfer(s) and the build ended first"
   rec "labd's pages during $title: $worst ms at the 95th percentile at the slowest of $readings readings, the slowest request $slow ms; with ${SIZE} bytes going up at $up Mbit/s, $inflight ms"
-  if (( unread )); then
+  if (( failed )); then
+    rec "$failed of those readings had a page that did not answer: labd did not answer its pages. That misses the target"
+    PAGE[k]=fail
+  elif (( unread )); then
     rec "$unread of those readings gave no time at all: labd did not answer its pages. That misses the target"
     PAGE[k]=fail
   else

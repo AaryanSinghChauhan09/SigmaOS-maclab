@@ -229,20 +229,25 @@ func TestPageTimesReadsLabdsOwnTimesAndPrintsNumbersOnly(t *testing.T) {
 {"time":"t","addr":"203.0.113.9","method":"GET","path":"/nowhere","status":404,"ms":9000,"agent":"Mozilla/5.0"}
 `, 0o600)
 	var mu sync.Mutex
-	asked := 0
+	asked, failing := 0, false
 	labd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		status, ms := 200, 7
 		switch r.URL.Path {
 		case "/status":
-			status = 404
+			if failing {
+				status = 404
+			}
 		case "/matrix":
 			ms = 40
 		}
 		asked++
 		if asked == 3 {
 			ms = 333
+		}
+		if failing && asked == 30 {
+			status = 502
 		}
 		// The fields in the order labd's caller log writes them.
 		agent, _ := json.Marshal(r.UserAgent())
@@ -260,11 +265,21 @@ func TestPageTimesReadsLabdsOwnTimesAndPrintsNumbersOnly(t *testing.T) {
 	m.env = append(m.env, "LAB_LOOPBACK="+strings.TrimPrefix(labd.URL, "http://"))
 
 	out := m.ok("page-times")
-	// Twelve pages answer, twenty requests each: 240, of which twenty take
-	// 40 ms and one 333, so the 95th percentile is the 228th: 40.
-	want := "probe_pages=12\nprobe_requests=240\nprobe_p95_ms=40\nprobe_max_ms=333\nday_requests=241\nday_p95_ms=40\n"
+	// Thirteen pages answer, twenty requests each: 260, of which twenty take
+	// 40 ms and one 333, so the 95th percentile is the 247th: 40.
+	want := "probe_pages=13\nprobe_requests=260\nprobe_failed=0\nprobe_p95_ms=40\nprobe_max_ms=333\nday_requests=261\nday_p95_ms=40\n"
 	if out != want {
 		t.Fatalf("page-times printed:\n%s\nwant:\n%s", out, want)
+	}
+
+	// A page that does not answer, and a request that fails among the
+	// twenty: no 95th percentile is said, which leaves a page out.
+	mu.Lock()
+	asked, failing = 0, true
+	mu.Unlock()
+	out = m.ok("page-times")
+	if !strings.Contains(out, "probe_failed=2\n") || strings.Contains(out, "probe_p95_ms=") || strings.Contains(out, "probe_max_ms=") {
+		t.Fatalf("with failing pages page-times printed:\n%s", out)
 	}
 	if strings.Contains(m.calls(), "launchctl") {
 		t.Errorf("page-times changed something:\n%s", m.calls())

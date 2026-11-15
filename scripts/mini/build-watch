@@ -105,7 +105,7 @@ held() {
 
 # times: labd's own times for its pages, now, as page-times says them.
 times() {
-  as_lab "$here/page-times" 2>/dev/null | grep -E '^probe_(p95_ms|max_ms|requests|pages)=[0-9]+$' | tr '\n' ' ' | sed 's/ $//' || true
+  as_lab "$here/page-times" 2>/dev/null | grep -E '^probe_(p95_ms|max_ms|requests|pages|failed)=[0-9]+$' | tr '\n' ' ' | sed 's/ $//' || true
 }
 
 [[ -z "$(seen)" ]] || fail "a build is running on the Builder: nothing was changed. Run it again when lab builds shows none queued or running"

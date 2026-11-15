@@ -154,6 +154,15 @@ if [[ -f $GATE/pages.break ]]; then
 fi
 cores="$(sed -n 's/.*<string>--cpus<\/string><string>\([0-9]*\)<.*/\1/p' "$LAB_SYSROOT/Library/LaunchDaemons/org.omarchy-mac.lab.builder.plist")"
 p95="$(cat "$GATE/p95.$cores" 2>/dev/null || echo 12)"
+# failing.<cores>: a page fails at every reading after the first: page-times
+# says no 95th percentile then.
+if [[ -f $GATE/failing.$cores ]]; then
+  if [[ -f $GATE/failing.seen ]]; then
+    printf 'probe_pages=12\nprobe_requests=240\nprobe_failed=1\nday_requests=9000\nday_p95_ms=20\n'
+    exit 0
+  fi
+  touch "$GATE/failing.seen"
+fi
 if [[ -f $GATE/silent.$cores ]]; then
   n=$(( $(cat "$GATE/readings" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$GATE/readings"
   (( n % 3 )) || exit 1
@@ -471,6 +480,20 @@ func TestPagesThatDoNotAnswerMissTheTarget(t *testing.T) {
 		t.Fatalf("exit %d, deploy/builder-cpus %s\n%s", code, g.cores(), out)
 	}
 	wants(t, "the record", g.record(), "of those readings gave no time at all: labd did not answer its pages. That misses the target",
+		"missed at 10 (failed: see the record). It runs again at 8 cores a build.", "At 8 cores a build:", "Result: pass")
+}
+
+// A page that fails is no fast page: with one failing at every reading the
+// target is missed, and the run goes again at 8 cores.
+func TestAFailingPageFailsTheGate(t *testing.T) {
+	t.Parallel()
+	g := newGate(t)
+	g.set("failing.10", "")
+	out, code := g.run()
+	if code != 0 || g.cores() != "8" {
+		t.Fatalf("exit %d, deploy/builder-cpus %s\n%s", code, g.cores(), out)
+	}
+	wants(t, "the record", g.record(), "labd did not answer its pages. That misses the target",
 		"missed at 10 (failed: see the record). It runs again at 8 cores a build.", "At 8 cores a build:", "Result: pass")
 }
 

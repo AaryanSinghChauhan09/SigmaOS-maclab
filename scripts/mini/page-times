@@ -10,8 +10,10 @@
 #
 #   probe_pages=N       pages that answered
 #   probe_requests=N    requests it made to them
-#   probe_p95_ms=N      the 95th percentile of labd's time for those
-#   probe_max_ms=N      the slowest
+#   probe_failed=N      requests that did not answer 200
+#   probe_p95_ms=N      the 95th percentile of labd's time for those, said
+#                       only when every request answered
+#   probe_max_ms=N      the slowest, likewise
 #   day_requests=N      every page labd served today, to anyone, signed in or not
 #   day_p95_ms=N        the 95th percentile of those
 #
@@ -22,7 +24,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/lib.sh
 . "$here/lib.sh"
-[[ $# == 0 ]] || { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+[[ $# == 0 ]] || { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 PAGES="/ /matrix /models /features /gaps /aurora /benchmarks /candidates /reports /data /terms /privacy /status"
 TRIES=20
@@ -32,13 +34,24 @@ log_dir="$LAB_DATA/callers"
 tag="lab-page-times/$$.$(date +%s)"
 first="$(date -u +%Y-%m-%d)"
 pages=0
+failed=0
+failing=()
 again=()
 for (( n = 1; n < TRIES; n++ )); do again+=(-o /dev/null URL); done
 for page in $PAGES; do
   url="http://$LABD_LISTEN$page"
-  [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -A "$tag" "$url" || true)" == 200 ]] || continue
+  if [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -A "$tag" "$url" || true)" != 200 ]]; then
+    failed=$((failed + 1))
+    failing+=("$page")
+    continue
+  fi
   pages=$((pages + 1))
-  curl -s --max-time 120 -A "$tag" "${again[@]//URL/$url}" || true
+  # One status a request; one that never answered says 000.
+  bad="$( { curl -s --max-time 120 -A "$tag" -w '%{http_code}\n' "${again[@]//URL/$url}" || true; } | grep -cvx 200 || true)"
+  if (( bad > 0 )); then
+    failed=$((failed + bad))
+    failing+=("$page")
+  fi
 done
 (( pages > 0 )) || fail "labd answered no page at $LABD_LISTEN"
 last="$(date -u +%Y-%m-%d)"
@@ -59,7 +72,14 @@ probe="$(cat "${logs[@]}" 2>/dev/null | grep -F "\"agent\":\"$tag\"" | times || 
 day="$(cat "${logs[@]}" 2>/dev/null | times || true)"
 echo "probe_pages=$pages"
 echo "probe_requests=$(wc -l <<<"$probe" | tr -d ' ')"
-echo "probe_p95_ms=$(p95 <<<"$probe")"
-echo "probe_max_ms=$(tail -n 1 <<<"$probe")"
+echo "probe_failed=$failed"
+# A page left out would make the percentile a lie: with any request that
+# did not answer, none is said.
+if (( failed == 0 )); then
+  echo "probe_p95_ms=$(p95 <<<"$probe")"
+  echo "probe_max_ms=$(tail -n 1 <<<"$probe")"
+else
+  echo "page-times: $failed request(s) to labd's pages did not answer 200 (${failing[*]}): no 95th percentile without every page" >&2
+fi
 echo "day_requests=$(wc -l <<<"$day" | tr -d ' ')"
 echo "day_p95_ms=$(p95 <<<"$day")"
