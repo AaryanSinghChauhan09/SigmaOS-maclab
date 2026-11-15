@@ -1054,3 +1054,52 @@ func TestAJobSavedDuringAForgettingBringsNobodyBack(t *testing.T) {
 		}
 	}
 }
+
+// An Audit entry that reaches labd while a forgetting sweeps labd's copy
+// waits for the sweep, and the sweep for it: the entry is neither lost nor
+// kept with the handle, though it was matched to the person before the
+// forgetting.
+func TestAnAuditEntryArrivingDuringAForgettingIsKeptWithoutTheHandle(t *testing.T) {
+	l := rolesLab(t, nil)
+	l.signedIn(edithID)
+	mini := l.addMac("ravi-mini", maintainerID)
+	mini.copyAudit([]api.AuditEntry{{Time: l.clock.Now(), Maintainer: "edith", Action: "screenshot", End: 40}})
+	k, err := l.s.store.knownPerson(edithID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The Mac's report is being copied: its entry was matched to her already.
+	mini.auditMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- l.s.forgetHeld(Person{AccountID: maintainerID, Handle: "ravi", Maintainer: true}, k, newForgetting(edithID, k.Handle))
+	}()
+	select {
+	case err := <-done:
+		done <- err
+	case <-time.After(time.Second):
+	}
+	line, _ := json.Marshal(api.AuditEntry{Time: l.clock.Now(), Maintainer: "edith", AccountID: edithID, Action: "reboot", End: 80})
+	f, err := os.OpenFile(l.s.auditPath("ravi-mini"), os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write(append(line, '\n'))
+	f.Close()
+	mini.auditHave = 80
+	mini.auditMu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	es, err := l.s.readAuditCopy("ravi-mini")
+	if err != nil || len(es) != 2 || es[1].Action != "reboot" {
+		t.Fatalf("labd's copy of the Audit log: %+v %v", es, err)
+	}
+	for _, e := range es {
+		if e.Maintainer != "" || e.AccountID != 0 {
+			t.Errorf("an entry still names her: %+v", e)
+		}
+	}
+}

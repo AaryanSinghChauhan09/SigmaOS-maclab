@@ -381,7 +381,7 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 // databases: its copies of Audit logs, what the frozen Releases keep but
 // their pinned files, and the caller log.
 func (s *Server) forgetInFilesOf(f forgetting) error {
-	if err := forgetInFiles(filepath.Join(s.cfg.DataDir, "audit"), f); err != nil {
+	if err := s.forgetInAudit(f); err != nil {
 		return fmt.Errorf("the Audit log copies: %w", err)
 	}
 	if err := forgetInFrozen(filepath.Join(s.cfg.DataDir, "frozen"), filepath.Join(s.cfg.DataDir, "jobs"), f); err != nil {
@@ -391,6 +391,20 @@ func (s *Server) forgetInFilesOf(f forgetting) error {
 		return fmt.Errorf("the caller log: %w", err)
 	}
 	return nil
+}
+
+// forgetInAudit takes the person off labd's copies of Audit logs while no
+// Mac's entries are being added: an entry added between the sweep's read
+// and its write would be lost, and one matched to the person before the
+// forgetting and added after it would keep their handle.
+func (s *Server) forgetInAudit(f forgetting) error {
+	devs := s.allDevs()
+	slices.SortFunc(devs, func(a, b *dev) int { return strings.Compare(a.snapshot().Name, b.snapshot().Name) })
+	for _, v := range devs {
+		v.auditMu.Lock()
+		defer v.auditMu.Unlock()
+	}
+	return forgetInFiles(filepath.Join(s.cfg.DataDir, "audit"), f)
 }
 
 // forgetInFleet takes the person off the Macs enrolled now, as labd holds
