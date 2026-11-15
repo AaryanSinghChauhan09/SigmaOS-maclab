@@ -460,8 +460,11 @@ func TestLabWideTopicStillGetsMaintainersNoticesAboutAVolunteerMac(t *testing.T)
 
 func TestLabOwnedMacNeedsHandsStillGoesToTheLabWideTopicAndNotifyCmd(t *testing.T) {
 	n := newNoticeLab(t, labConfig{})
+	start := n.clock.Now()
 	n.hang()
-	n.waitDevice(func(d api.Device) bool { return d.State == api.StateNeedsHands })
+	// The ladder runs on the lab's clock: moved by the test, not left to the
+	// harness's wall-speed pump, which load slows.
+	n.step(start, 2*time.Second, time.Hour, func() bool { return n.state() == api.StateNeedsHands })
 	if !n.waitPosts(labWideTopic, 10*time.Second, anyPost(ntfyPost.asksForHands)) {
 		t.Fatalf("a Lab-owned Mac's needs hands did not reach the lab-wide topic: %+v", n.ntfy.all())
 	}
