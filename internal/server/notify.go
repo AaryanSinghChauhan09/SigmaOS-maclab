@@ -11,8 +11,11 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -192,7 +195,7 @@ func (s *Server) postNotice(n Notification) {
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", n.MacTopic, strings.NewReader(body))
 	if err != nil {
-		s.log.Printf("notice for %s dropped: %v", n.Device, err)
+		s.log.Printf("notice for %s dropped: its topic is not an address", n.Device)
 		return
 	}
 	req.Header.Set("Title", n.Title)
@@ -218,7 +221,7 @@ func (s *Server) postNotice(n Notification) {
 			s.topicRefused(n.Device, n.MacTopic, refused)
 			return
 		}
-		s.log.Printf("notice for %s dropped: %v", n.Device, err)
+		s.log.Printf("notice for %s dropped: %s", n.Device, sendFailure(err))
 		return
 	}
 	resp.Body.Close()
@@ -230,6 +233,36 @@ func (s *Server) postNotice(n Notification) {
 	case n.Own:
 		s.topicRefused(n.Device, n.MacTopic, nil)
 	}
+}
+
+// sendFailure is what kind of failure err is, in words that never carry
+// the topic: the error itself names the whole URL, and a topic is its own
+// secret.
+func sendFailure(err error) string {
+	var (
+		cert    *tls.CertificateVerificationError
+		unknown x509.UnknownAuthorityError
+		host    x509.HostnameError
+		invalid x509.CertificateInvalidError
+		dns     *net.DNSError
+		op      *net.OpError
+		netErr  net.Error
+	)
+	switch {
+	case errors.As(err, &cert), errors.As(err, &unknown), errors.As(err, &host), errors.As(err, &invalid):
+		return "the notice server's certificate is not trusted"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return "the notice server did not answer in time"
+	case errors.As(err, &dns):
+		return "the notice server's host does not resolve"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "the notice server refused the connection"
+	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "the notice server closed the connection"
+	case errors.As(err, &op):
+		return "labd could not reach the notice server (" + op.Op + ")"
+	}
+	return "labd could not reach the notice server"
 }
 
 // noticeClient is the client a Notice goes out with. It follows no

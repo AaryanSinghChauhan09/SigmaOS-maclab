@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -841,5 +842,33 @@ func TestTheNoticeServerIsAnAddressWithNoTopic(t *testing.T) {
 		if err := CheckNoticeServer(raw); (err == nil) != ok {
 			t.Errorf("--ntfy %s: %v", raw, err)
 		}
+	}
+}
+
+// A topic is its only secret: a send that fails before any answer (here a
+// certificate labd does not trust) logs the Mac and what went wrong, never
+// the topic.
+func TestASendThatFailsLogsNoTopic(t *testing.T) {
+	bad := newNtfyCatcherTLS(t)
+	var logs strings.Builder
+	s := &Server{log: log.New(&logs, "", 0)}
+	trusting()(&s.cfg)
+	s.cfg.noticeAllow = func(netip.AddrPort) bool { return true }
+	for _, own := range []bool{true, false} {
+		logs.Reset()
+		topic := bad.URL + "/s3cret-topic-name"
+		s.postNotice(Notification{Device: "mac-1", Title: "t", Body: "b", MacTopic: topic, Volunteer: true, Own: own})
+		got := logs.String()
+		if strings.Contains(got, "s3cret") || strings.Contains(got, bad.Listener.Addr().String()) {
+			t.Errorf("own %v: the log names the topic:\n%s", own, got)
+		}
+		if !strings.Contains(got, "notice for mac-1 dropped") || !strings.Contains(got, "certificate") {
+			t.Errorf("own %v: the log does not say which Mac and why:\n%s", own, got)
+		}
+	}
+	logs.Reset()
+	s.postNotice(Notification{Device: "mac-1", MacTopic: "https://ntfy.example/s3cret\x7f", Volunteer: true})
+	if got := logs.String(); strings.Contains(got, "s3cret") || !strings.Contains(got, "notice for mac-1 dropped") {
+		t.Errorf("a topic that is no address: %s", got)
 	}
 }
