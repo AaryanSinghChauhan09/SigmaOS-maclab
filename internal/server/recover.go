@@ -82,11 +82,14 @@ func (v *dev) ladder(ctx context.Context, reason string, bootTimeout time.Durati
 }
 
 // sentReset is a Hard reset a person asked for, which went out before the
-// ladder began: through which port, when, and the state the Mac was in.
+// ladder began: through which port, when, and the state and boot the Mac
+// was in.
 type sentReset struct {
 	port string
 	at   time.Time
 	prev api.DeviceState
+	// boot is the Mac's boot id before the reset went out.
+	boot string
 }
 
 // climb is the ladder. With sent, its first Hard reset is that one.
@@ -102,7 +105,7 @@ func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duratio
 	prev := v.d.State
 	v.mu.Unlock()
 	if sent != nil {
-		noReset, prev = "", sent.prev
+		noReset, prev, stuck = "", sent.prev, sent.boot
 	}
 	v.setState(api.StateRecovering, reason)
 	v.s.log.Printf("%s: recovering: %s", v.d.Name, reason)

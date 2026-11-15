@@ -729,3 +729,21 @@ func TestAHardResetIsByWhoeverAskedNotByAName(t *testing.T) {
 		t.Fatalf("the reset's attribution, in labd's log:\n%s", log)
 	}
 }
+
+// The ladder after a person's Hard reset waits for a boot other than the
+// one the Mac had before the reset went out: a Mac back on its new boot
+// before the ladder starts is not taken as stuck and reset again.
+func TestTheLadderAfterAPersonsResetKnowsTheBootBeforeIt(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	v := l.s.dev(l.name)
+	boot, at := l.bootOf(l.name), time.Now()
+	l.sim.PowerCycle()
+	l.waitDevice(func(d api.Device) bool { return d.BootID != boot && d.State == api.StateReady })
+	steps, ok := v.climb(l.ctx, "Hard reset by "+harnessMaintainer, l.s.cfg.BootTimeout, false,
+		&sentReset{port: "right", at: at, prev: api.StateReady, boot: boot})
+	if !ok || len(steps) != 2 {
+		t.Fatalf("the ladder of a Mac back already: ok=%v steps=%q", ok, steps)
+	}
+	l.wantResets("the Mac was back before the ladder began")
+}

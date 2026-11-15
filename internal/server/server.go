@@ -1520,7 +1520,7 @@ func (s *Server) hardResetBy(ctx context.Context, v *dev, p Person) (said string
 	v.mu.Unlock()
 	rctx, cancel := context.WithTimeout(ctx, s.cfg.ResetWait)
 	go s.fenceWhileWaiting(rctx, cancel, v, p)
-	sent := sentReset{at: s.now(), prev: prev}
+	sent := sentReset{at: s.now(), prev: prev, boot: v.snapshot().BootID}
 	sent.port, err = v.resetOOB(rctx)
 	cancel()
 	v.mu.Lock()
