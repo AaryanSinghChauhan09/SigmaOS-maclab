@@ -752,3 +752,16 @@ func TestBlockedEndsLeasesMacSignInsAndEnrollments(t *testing.T) {
 		t.Error("the Mac of a Blocked person is still enrolled")
 	}
 }
+
+// A file whose lines run past any buffer is swept whole: a changed line
+// before a long one never leaves the file cut short at it.
+func TestForgettingSweepsAFileWithALongLineWhole(t *testing.T) {
+	f := newForgetting(edithID, "edith")
+	long := `{"maintainer":"edith","action":"` + strings.Repeat("x", 2<<20) + `"}`
+	in := `{"maintainer":"edith","action":"screenshot"}` + "\n" + long + "\n" + `{"action":"reboot"}`
+	out, changed := forgetInLines([]byte(in), f.stored)
+	lines := strings.Split(string(out), "\n")
+	if !changed || len(lines) != 3 || len(lines[1]) < 2<<20 || strings.Contains(string(out), "edith") || lines[2] != `{"action":"reboot"}` {
+		t.Errorf("swept: changed %v, %d lines, the long one %d bytes, last %q", changed, len(lines), len(lines[1]), lines[len(lines)-1])
+	}
+}

@@ -14,7 +14,6 @@ package server
 // it out.
 
 import (
-	"bufio"
 	"bytes"
 	"database/sql"
 	"encoding/json"
@@ -702,21 +701,17 @@ func forgetInFile(path string, change func(string) string) error {
 }
 
 // forgetInLines is b with each line passed through change, and whether any
-// line changed.
+// line changed. A line is as long as it is: the file is in memory already,
+// and a buffer's limit would cut it short there.
 func forgetInLines(b []byte, change func(string) string) ([]byte, bool) {
-	var out bytes.Buffer
+	lines := strings.Split(string(b), "\n")
 	changed := false
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	sc.Buffer(nil, 1<<20)
-	for sc.Scan() {
-		line := sc.Text()
+	for i, line := range lines {
 		if c := change(line); c != line {
-			line, changed = c, true
+			lines[i], changed = c, true
 		}
-		out.WriteString(line)
-		out.WriteByte('\n')
 	}
-	return out.Bytes(), changed
+	return []byte(strings.Join(lines, "\n")), changed
 }
 
 // replaceFile puts b in path's place with this mode, all at once.
