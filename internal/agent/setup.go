@@ -206,23 +206,35 @@ func (l *Linux) JoinFacts(token string) JoinFacts {
 		boot, _ := findMount("/boot")
 		_, grub := b.(*grubLayout)
 		f.Passphrase = encryptedRoot("/", root.Source, boot.Source, grub)
-		if lim, ok := b.(*limineLayout); ok {
-			if why := lim.enrollment("/etc/default/limine"); why != "" {
-				f.Bootloader = append(f.Bootloader, why)
-			}
-			// What setup itself puts right is no reason to stop before it.
-			for _, why := range lim.problems() {
-				if !strings.Contains(why, "run lab-agent setup") {
-					f.Bootloader = append(f.Bootloader, why)
-				}
-			}
-		}
+		f.Bootloader = bootloaderStops(b)
 	}
 	f.Missing = missingTools(b)
 	f.Space = stageRoom(b)
 	f.Snapshot = l.SnapshotEligible()
 	f.OnBattery = onBattery("/sys/class/power_supply")
 	return f
+}
+
+// bootloaderStops is why b cannot restart the Mac unattended, read before
+// setup changes anything. What setup itself puts right is no reason to stop
+// before it.
+func bootloaderStops(b bootloader) []string {
+	var stops, problems []string
+	switch l := b.(type) {
+	case *limineLayout:
+		if why := l.enrollment("/etc/default/limine"); why != "" {
+			stops = append(stops, why)
+		}
+		problems = l.problems()
+	case *grubLayout:
+		problems = l.hookProblems()
+	}
+	for _, why := range problems {
+		if !strings.Contains(why, "run lab-agent setup") {
+			stops = append(stops, why)
+		}
+	}
+	return stops
 }
 
 // LeaveOther leaves the lab cfg names as `lab-agent leave` does, that lab

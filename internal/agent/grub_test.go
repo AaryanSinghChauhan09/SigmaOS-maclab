@@ -126,3 +126,19 @@ func TestGrubArmedLeavesMissingEnvFile(t *testing.T) {
 		t.Error("the env file was created")
 	}
 }
+
+// GRUB's hook problems are a pre-check, as Limine's are: a grub.cfg that does
+// not source custom.cfg stops the Join command, while what setup puts right
+// itself (the hook, the env file) does not.
+func TestAGrubThatDoesNotSourceCustomCfgStopsTheJoin(t *testing.T) {
+	dir := t.TempDir()
+	g := &grubLayout{Dir: dir, EnvFile: filepath.Join(t.TempDir(), envName)}
+	os.WriteFile(filepath.Join(dir, "grub.cfg"), []byte("menuentry 'Omarchy' {\n  linux /vmlinuz-linux-asahi\n}\n"), 0o644)
+	if got := bootloaderStops(g); len(got) != 1 || !strings.Contains(got[0], "does not source custom.cfg") {
+		t.Errorf("a grub.cfg without custom.cfg: %q", got)
+	}
+	os.WriteFile(filepath.Join(dir, "grub.cfg"), []byte("### BEGIN /etc/grub.d/41_custom ###\nif [ -f  ${config_directory}/custom.cfg ]; then\n  source ${config_directory}/custom.cfg\nfi\n"), 0o644)
+	if got := bootloaderStops(g); len(got) != 0 {
+		t.Errorf("a GRUB setup puts right itself: %q", got)
+	}
+}
