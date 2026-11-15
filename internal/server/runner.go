@@ -213,6 +213,10 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			if v.leaving() != "" {
 				break
 			}
+			if gone := v.goneReason(); gone != "" {
+				r.finish(api.OutcomeCanceled, "canceled: "+gone)
+				return false
+			}
 			if err != nil {
 				r.finish(api.OutcomeCanceled, "canceled while waiting for the device")
 				return false

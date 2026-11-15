@@ -645,7 +645,8 @@ func (v *dev) sendIf(c caller, boot, kind, job string, args any, may func() erro
 }
 
 // waitFor blocks until cond (called with mu held) returns true, the timeout
-// passes, or ctx ends. Conditions are also re-checked every second.
+// passes, ctx ends or the Mac's enrollment ends (errMacGone). Conditions are
+// also re-checked every second.
 func (v *dev) waitFor(ctx context.Context, timeout time.Duration, cond func() bool) error {
 	var deadline <-chan time.Time
 	if timeout > 0 {
@@ -664,6 +665,8 @@ func (v *dev) waitFor(ctx context.Context, timeout time.Duration, cond func() bo
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-v.stop:
+			return errMacGone
 		case <-deadline:
 			return context.DeadlineExceeded
 		case <-ch:

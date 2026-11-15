@@ -9,6 +9,7 @@ package server
 // secret learns it was ended, not just revoked, and cleans up.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -104,20 +105,29 @@ func (s *Server) endEnrollment(v *dev, l leaving) bool {
 	s.log.Printf("%s: enrollment ended: %s", name, reason)
 
 	// The job holding the Mac ends incomplete (see runJob); the ones queued
-	// behind it have no Mac to run on.
-	s.mu.Lock()
-	cancel := s.cancels[active]
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	// behind it, or waiting for the Mac or its window, have no Mac to run on.
+	jobs, err := s.store.jobs(name, 1000, true)
+	if err != nil {
+		s.log.Printf("%s: its unfinished jobs: %v", name, err)
 	}
-	if jobs, err := s.store.jobs(name, 1000, true); err == nil {
-		for _, j := range jobs {
-			if j.ID != active {
-				s.updateJobByID(j.ID, func(j *api.Job) {
-					j.State, j.Outcome, j.Summary = api.JobDone, api.OutcomeCanceled, "canceled: "+reason
-				})
-			}
+	s.mu.Lock()
+	cancels := []context.CancelFunc{s.cancels[active]}
+	for _, j := range jobs {
+		if j.ID != active {
+			cancels = append(cancels, s.cancels[j.ID])
+		}
+	}
+	s.mu.Unlock()
+	for _, cancel := range cancels {
+		if cancel != nil {
+			cancel()
+		}
+	}
+	for _, j := range jobs {
+		if j.ID != active {
+			s.updateJobByID(j.ID, func(j *api.Job) {
+				j.State, j.Outcome, j.Summary = api.JobDone, api.OutcomeCanceled, "canceled: "+reason
+			})
 		}
 	}
 

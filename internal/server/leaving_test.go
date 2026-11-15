@@ -812,3 +812,36 @@ func TestLeavingNamesWhatStaysAndTheOneCommandThatRemovesIt(t *testing.T) {
 		t.Errorf("the secret of a Mac that left by itself: %s, ended by %q", r.Status, r.Header.Get(api.EndedHeader))
 	}
 }
+
+// A Mac that Joined, opened no window and left: the first baseline that
+// waited for a window ends with the enrollment, nothing of it is left
+// waiting in labd, and no drain waits for it.
+func TestLeavingEndsAJobThatWaitedForAWindow(t *testing.T) {
+	l, _ := lendLab(t)
+	l.signedIn(maintainerID).did("/people/mark", "handle", "grace", "as", "invite")
+	grace := l.signedIn(graceID)
+	v, secret := grace.lent("shelf-mac")
+	first := v.snapshot().FirstBaseline.Job
+	l.checkin(secret, api.Checkin{AccessLevel: api.AccessQualification})
+	jobSaid(t, l.s, first, "no Availability window")
+
+	if w := grace.post("/my-macs/shelf-mac/leave", "sure", "yes"); w.Code != http.StatusSeeOther {
+		t.Fatalf("Leave: %d %s", w.Code, w.Body)
+	}
+	waiting := func() bool {
+		l.s.mu.Lock()
+		defer l.s.mu.Unlock()
+		return l.s.cancels[first] != nil
+	}
+	for deadline := time.Now().Add(10 * time.Second); waiting(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the job that waited for a window still waits after its Mac left")
+		}
+	}
+	if w := opsOf(l.s, "POST", "/drain"); w.Body.String() != "0 0\n" {
+		t.Errorf("a drain after the Mac left: %q", w.Body)
+	}
+	if j, _ := l.s.store.job(first); j.State != api.JobDone || j.Outcome != api.OutcomeCanceled || !strings.Contains(j.Summary, "its Volunteer left the lab") {
+		t.Errorf("the job that waited ended %s %s: %s", j.State, j.Outcome, j.Summary)
+	}
+}
