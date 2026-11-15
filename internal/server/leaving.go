@@ -173,8 +173,10 @@ func statusOr500(err error) int {
 // copied as the Mac leaves is in the renamed copy, and a report for it still
 // on its way adds to the renamed copy too, never to a new one under the name
 // the next Mac may take. A forgetting's sweep of the copies waits for those
-// reports as it does for an enrolled Mac's (auditDevs).
+// reports as it does for an enrolled Mac's (auditWrite).
 func (s *Server) retireAudit(v *dev, name, id string) {
+	s.auditWrite.RLock()
+	defer s.auditWrite.RUnlock()
 	v.auditMu.Lock()
 	defer v.auditMu.Unlock()
 	a := s.auditPath(name)

@@ -232,6 +232,10 @@ type Server struct {
 	// forgetting is held by a forgetting's sweep, and read by an Installed
 	// run's seal (installed.go).
 	forgetting sync.RWMutex
+	// auditWrite is read by every write to labd's copies of Audit logs, each
+	// under its Mac's auditMu, and held by a forgetting's sweep of them: a
+	// Mac that Joins during the sweep waits as an enrolled one does.
+	auditWrite sync.RWMutex
 	// retiredAudit is where labd's copy of each Mac retired since it started
 	// keeps its Audit log, under mu (access.go).
 	retiredAudit map[*dev]string

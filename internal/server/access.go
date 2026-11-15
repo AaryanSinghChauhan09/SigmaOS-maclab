@@ -181,22 +181,6 @@ func (s *Server) auditFile(v *dev) string {
 	return s.auditPath(v.d.Name)
 }
 
-// auditDevs are the Macs whose Audit log copies a report may be adding to:
-// the enrolled ones, and those retired since labd started, whose reports
-// may still be on their way.
-func (s *Server) auditDevs() []*dev {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]*dev, 0, len(s.devs)+len(s.retiredAudit))
-	for _, v := range s.devs {
-		out = append(out, v)
-	}
-	for v := range s.retiredAudit {
-		out = append(out, v)
-	}
-	return out
-}
-
 // readAuditCopy reads labd's copy of a Mac's Audit log.
 func (s *Server) readAuditCopy(name string) ([]api.AuditEntry, error) {
 	return readAuditFile(s.auditPath(name))
@@ -246,6 +230,8 @@ func (v *dev) copyAudit(es []api.AuditEntry) {
 	if len(es) == 0 {
 		return
 	}
+	v.s.auditWrite.RLock()
+	defer v.s.auditWrite.RUnlock()
 	v.auditMu.Lock()
 	defer v.auditMu.Unlock()
 	have := v.auditHaveLocked()

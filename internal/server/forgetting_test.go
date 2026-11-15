@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1077,6 +1078,7 @@ func TestAnAuditEntryArrivingDuringAForgettingIsKeptWithoutTheHandle(t *testing.
 	}
 
 	// The Mac's report is being copied: its entry was matched to her already.
+	l.s.auditWrite.RLock()
 	mini.auditMu.Lock()
 	done := make(chan error, 1)
 	go func() {
@@ -1096,6 +1098,7 @@ func TestAnAuditEntryArrivingDuringAForgettingIsKeptWithoutTheHandle(t *testing.
 	f.Close()
 	mini.auditHave = 80
 	mini.auditMu.Unlock()
+	l.s.auditWrite.RUnlock()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -1284,5 +1287,70 @@ func TestAFinishedJobReadBeforeAForgettingAndSavedAfterNamesNobody(t *testing.T)
 	l.s.updateJob(second, func(j *api.Job) { j.Result.Logs = append(j.Result.Logs, "serial.log") })
 	if data := names(); data != "" {
 		t.Errorf("a second copy read before the forgetting wrote her back:\n%s", data)
+	}
+}
+
+// A Mac that Joins while a forgetting sweeps labd's copies of Audit logs
+// adds its entries once the sweep is done, not during it: an append between
+// the sweep's read of a copy and its replacing would be lost. The entry is
+// kept, without the handle.
+func TestAnAuditEntryFromAMacJoinedDuringAForgettingWaitsForTheSweepAndIsKept(t *testing.T) {
+	l := rolesLab(t, nil)
+	l.signedIn(edithID)
+	mini := l.addMac("ravi-mini", maintainerID)
+	mini.copyAudit([]api.AuditEntry{{Time: l.clock.Now(), Maintainer: "edith", Action: "screenshot", End: 40}})
+	k, err := l.s.store.knownPerson(edithID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The sweep reads this first, and waits there until it is written.
+	held := filepath.Join(l.s.cfg.DataDir, "audit", "0-held.jsonl")
+	if err := syscall.Mkfifo(held, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- l.s.forgetHeld(Person{AccountID: maintainerID, Handle: "ravi", Maintainer: true}, k, newForgetting(edithID, k.Handle))
+	}()
+	opened := make(chan *os.File, 1)
+	go func() {
+		f, err := os.OpenFile(held, os.O_WRONLY, 0)
+		if err == nil {
+			opened <- f
+		}
+	}()
+	var w *os.File
+	select {
+	case w = <-opened:
+	case err := <-done:
+		t.Fatalf("the forgetting ended without sweeping the Audit log copies: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the forgetting never reached the Audit log copies")
+	}
+
+	newcomer := l.addMac("zed-air", maintainerID)
+	copied := make(chan struct{})
+	go func() {
+		defer close(copied)
+		newcomer.copyAudit([]api.AuditEntry{{Time: l.clock.Now(), Maintainer: "edith", Action: "reboot", End: 30}})
+	}()
+	select {
+	case <-copied:
+		t.Error("a Mac Joined during the sweep added to its Audit log copy while the sweep ran")
+	case <-time.After(300 * time.Millisecond):
+	}
+	os.Remove(held)
+	w.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	<-copied
+
+	es, err := l.s.readAuditCopy("zed-air")
+	if err != nil || len(es) != 1 || es[0].Action != "reboot" {
+		t.Fatalf("the newcomer's copy of its Audit log: %+v %v", es, err)
+	}
+	if es[0].Maintainer != "" || es[0].AccountID != 0 {
+		t.Errorf("the newcomer's entry still names her: %+v", es[0])
 	}
 }

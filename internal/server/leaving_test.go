@@ -1142,6 +1142,7 @@ func TestAForgettingWaitsForARetiredMacsAuditCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	l.s.auditWrite.RLock()
 	mini.auditMu.Lock()
 	done := make(chan error, 1)
 	go func() {
@@ -1162,6 +1163,7 @@ func TestAForgettingWaitsForARetiredMacsAuditCopy(t *testing.T) {
 	f.Close()
 	mini.auditHave = 80
 	mini.auditMu.Unlock()
+	l.s.auditWrite.RUnlock()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
