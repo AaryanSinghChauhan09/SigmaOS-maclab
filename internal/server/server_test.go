@@ -209,7 +209,24 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 		hs.Start()
 	}
 	l.url = hs.URL + c.prefix
-	t.Cleanup(func() { cancel(); hs.Close() })
+	t.Cleanup(func() {
+		cancel()
+		hs.Close()
+		// A job's run writes how it ended in the data dir after the cancel:
+		// the dir is removed only once no run is left.
+		for end := time.Now().Add(time.Minute); ; time.Sleep(10 * time.Millisecond) {
+			s.mu.Lock()
+			running := len(s.cancels)
+			s.mu.Unlock()
+			if running == 0 {
+				break
+			}
+			if time.Now().After(end) {
+				t.Errorf("%d job runs did not end within a minute of their lab", running)
+				break
+			}
+		}
+	})
 
 	// Enroll the simulated Mac exactly as lab-agent setup would: its owner
 	// accepts the terms, and the token is used up by its activation.
