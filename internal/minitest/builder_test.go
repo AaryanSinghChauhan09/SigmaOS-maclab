@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -299,6 +300,31 @@ func TestTheWatchStartsContainerAgainAndTellsEachChangeOnce(t *testing.T) {
 	m.touch("broken")
 	m.env = append(m.env, "LAB_BOOT=3")
 	look(false, false, stopped, again, stopped, failed, again, stopped, failed, back, failed)
+}
+
+// The set-up runs a watch just as launchd runs the LaunchDaemon's first one:
+// two watches at once both save the state and neither fails on the other's file.
+func TestTwoWatchesAtOnceBothSaveTheState(t *testing.T) {
+	m := builderMini(t)
+	user := account(t)
+	for round := 0; round < 10; round++ {
+		var wg sync.WaitGroup
+		outs := make([]string, 6)
+		codes := make([]int, 6)
+		for i := range outs {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				outs[i], codes[i] = m.run("container", "watch", user)
+			}(i)
+		}
+		wg.Wait()
+		for i, code := range codes {
+			if code != 0 {
+				t.Fatalf("round %d, watch %d: exit %d\n%s", round, i, code, outs[i])
+			}
+		}
+	}
 }
 
 // The Builder's LaunchDaemon waits until the server answers and starts
