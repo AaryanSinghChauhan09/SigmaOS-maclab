@@ -204,6 +204,23 @@ func (m *mini) bootstrapFails(label, what string) {
 	write(m.t, filepath.Join(filepath.Dir(m.root), "state", "bootstrap.fails."+label), what, 0o644)
 }
 
+// A bootstrap that fails after transport stopped the tunnel puts the tunnel
+// back under the file it ran under.
+func TestTransportLeavesTheTunnelStartedWhenLaunchdRefuses(t *testing.T) {
+	m := tunnelUp(t)
+	m.transport("quic")
+	m.ready(true)
+	daemon := m.path("Library/LaunchDaemons/" + cloudflaredLabel + ".plist")
+	before := read(t, daemon)
+	m.bootstrapFails(cloudflaredLabel, "<string>http2</string>")
+
+	out := m.refused("transport", "http2")
+
+	if !m.tunnelLoaded() || read(t, daemon) != before {
+		t.Errorf("the tunnel is loaded %v, under its file as before %v:\n%s\n%s", m.tunnelLoaded(), read(t, daemon) == before, out, m.calls())
+	}
+}
+
 // A bootstrap that fails once while hold starts the daemon again is asked
 // again: the daemon is not left stopped.
 func TestHoldStartsTheDaemonAgainWhenLaunchdRefusesOnce(t *testing.T) {
@@ -221,19 +238,25 @@ func TestHoldStartsTheDaemonAgainWhenLaunchdRefusesOnce(t *testing.T) {
 	}
 }
 
-// A bootstrap that fails after transport stopped the tunnel puts the tunnel
-// back under the file it ran under.
-func TestTransportLeavesTheTunnelStartedWhenLaunchdRefuses(t *testing.T) {
-	m := tunnelUp(t)
-	m.transport("quic")
-	m.ready(true)
-	daemon := m.path("Library/LaunchDaemons/" + cloudflaredLabel + ".plist")
-	before := read(t, daemon)
-	m.bootstrapFails(cloudflaredLabel, "<string>http2</string>")
+// A bootstrap that fails part-way through the rehearsal's switch puts both
+// daemons back under the Deployed files, and going back puts labd back
+// even when the tunnel cannot be started.
+func TestRehearsalAliasLeavesBothStartedWhenLaunchdRefuses(t *testing.T) {
+	m, labd, tunnel := rehearsalReady(t)
+	deployedLabd, deployedTunnel := read(t, labd), read(t, tunnel)
+	m.bootstrapFails(labdLabel, rehearsalName)
 
-	out := m.refused("transport", "http2")
+	out := m.refused("rehearsal-alias", rehearsalName)
 
-	if !m.tunnelLoaded() || read(t, daemon) != before {
-		t.Errorf("the tunnel is loaded %v, under its file as before %v:\n%s\n%s", m.tunnelLoaded(), read(t, daemon) == before, out, m.calls())
+	if read(t, labd) != deployedLabd || read(t, tunnel) != deployedTunnel || !m.loaded() || !m.tunnelLoaded() || exists(m.path(rehearsalRoutes)) {
+		t.Errorf("want the Deployed files back and both loaded:\n%s\n%s", out, m.calls())
+	}
+
+	m.bootstrapFails(labdLabel, "0")
+	m.ok("rehearsal-alias", rehearsalName)
+	m.bootstrapFails(cloudflaredLabel, "9")
+	out = m.refused("rehearsal-alias", "deployed")
+	if read(t, labd) != deployedLabd || !m.loaded() {
+		t.Errorf("a tunnel that would not start kept labd from going back:\n%s\n%s", out, m.calls())
 	}
 }

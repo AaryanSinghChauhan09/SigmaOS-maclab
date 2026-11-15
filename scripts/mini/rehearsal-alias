@@ -53,17 +53,20 @@ if [[ -z $want ]]; then
 fi
 need_root
 
-# start LABEL FILE: the daemon under a copy of FILE.
-start() {
+# put LABEL FILE: the daemon under a copy of FILE. 1 when it did not stop or
+# launchd did not take it.
+put() {
   local plist="$LAUNCHD_DIR/$1.plist"
-  stopped "$1" || fail "$1 did not stop (20 s)"
-  cp "$2" "$plist.new"
-  chown "$ROOT_OWNER:$ROOT_GROUP" "$plist.new"
-  chmod 0644 "$plist.new"
-  mv "$plist.new" "$plist"
-  launchctl enable "system/$1" || true
-  launchctl bootstrap system "$plist" || fail "launchd did not take $plist"
+  stopped "$1" || return 1
+  cp "$2" "$plist.new" || return 1
+  chown "$ROOT_OWNER:$ROOT_GROUP" "$plist.new" || return 1
+  chmod 0644 "$plist.new" || return 1
+  mv "$plist.new" "$plist" || return 1
+  boot_in "$1" "$plist"
 }
+
+# start LABEL FILE: put, or the run ends, and the EXIT trap puts both back.
+start() { put "$1" "$2" || fail "$1 did not stop, or launchd did not take its LaunchDaemon file"; }
 
 # up WHAT: the tunnel holds a connection, or labd answers on its socket.
 up() {
@@ -79,14 +82,28 @@ up() {
   return 1
 }
 
+# back: each daemon under its Deployed file, the one apart from the other:
+# a tunnel that does not start keeps nothing from labd. 1 when either did
+# not start; what to run by hand is said.
 back() {
-  start "$CLOUDFLARED_LABEL" "$tunnel_source"
-  start "$LABD_LABEL" "$labd_source"
+  local ok=0
+  armed=0
+  put "$CLOUDFLARED_LABEL" "$tunnel_source" || { say "the tunnel could not be started under its Deployed file: sudo launchctl bootstrap system $tunnel_plist"; ok=1; }
+  put "$LABD_LABEL" "$labd_source" || { say "labd could not be started under its Deployed file: sudo launchctl bootstrap system $labd_plist"; ok=1; }
   rm -rf "$rehearsal"
+  return "$ok"
 }
 
+# The way back is armed before the first change: however the run ends
+# before both are up under NAME, both go back under the Deployed files.
+armed=0
+made=""
+trap '(( ! armed )) || back || true; [[ -z $made ]] || rm -rf "$made"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT TERM
+
 if [[ $want == deployed ]]; then
-  back
+  back || fail "not both were put back under the Deployed files: see above"
   up tunnel || fail "the tunnel is back under the Deployed files and has not connected yet: look at $LAB_HOME/log/cloudflared.log"
   up labd || fail "labd is back under the Deployed files and does not answer yet: look at $LABD_LOG"
   say "labd and the tunnel run under the Deployed files again: the Alias is $alias_deployed"
@@ -94,7 +111,6 @@ if [[ $want == deployed ]]; then
 fi
 
 made="$(mktemp -d "${TMPDIR:-/tmp}/rehearsal-alias.XXXXXX")"
-trap 'rm -rf "$made"' EXIT
 sed "s/^\\( *- hostname: \\)${alias_deployed//./\\.}\$/\\1$want/" "$routes" > "$made/cloudflared.yml"
 [[ "$(grep -c "^ *- hostname: $want\$" "$made/cloudflared.yml")" == 1 ]] ||
   fail "the Deployed route file does not route $alias_deployed once: nothing was changed"
@@ -105,6 +121,7 @@ sed "s|<string>--alias</string><string>$alias_deployed</string>|<string>--alias<
 [[ "$(arg "$made/tunnel.plist" --config)" == "$rehearsal/cloudflared.yml" && "$(arg "$made/labd.plist" --alias)" == "$want" ]] ||
   fail "the Deployed LaunchDaemon files are not written as this script reads them: nothing was changed"
 
+armed=1
 mkdir -p "$rehearsal"
 cp "$made/cloudflared.yml" "$rehearsal/cloudflared.yml"
 chown -R "$ROOT_OWNER:$ROOT_GROUP" "$rehearsal"
@@ -113,12 +130,14 @@ chmod 0644 "$rehearsal/cloudflared.yml"
 # The tunnel first: labd looks at its Alias from outside as it starts.
 start "$CLOUDFLARED_LABEL" "$made/tunnel.plist"
 if ! up tunnel; then
-  back
+  back || true
   fail "the tunnel did not connect with $want routed: both are back under the Deployed files"
 fi
 start "$LABD_LABEL" "$made/labd.plist"
 if ! up labd; then
-  back
+  back || true
   fail "labd did not answer with $want as its Alias: both are back under the Deployed files"
 fi
+# shellcheck disable=SC2034 # read by the EXIT trap
+armed=0
 say "labd forwards $want and the tunnel routes it, until \"rehearsal-alias deployed\""
