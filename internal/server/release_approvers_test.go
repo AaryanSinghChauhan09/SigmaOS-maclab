@@ -1,14 +1,17 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/installed"
 )
 
@@ -154,4 +157,18 @@ func (st *store) addApprovals(release string, ids []int64) error {
 		}
 	}
 	return nil
+}
+
+// labd's log, which a forgetting does not reach, names who recorded a
+// verdict by account id, never by handle.
+func TestTheLogNamesAVerdictsPersonByAccountID(t *testing.T) {
+	l, _, _, _ := twoReleases(t)
+	logs := &lockedBuffer{b: &bytes.Buffer{}}
+	l.s.log.SetOutput(logs)
+	ravi := l.who(maintainerID)
+	relVerdict(t, l.s, ravi, "9.8", api.ReleaseNotQualified, "m2-max panics at boot")
+	got := logs.String()
+	if strings.Contains(got, ravi.Handle) || !strings.Contains(got, "account "+strconv.FormatInt(maintainerID, 10)) {
+		t.Errorf("the log of a verdict:\n%s", got)
+	}
 }

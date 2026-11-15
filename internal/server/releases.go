@@ -533,7 +533,7 @@ func (s *Server) verdict(by Person, release string, req api.VerdictRequest) (api
 	if err := s.store.addVerdict(r.Name, api.ReleaseVerdict{Time: s.now(), State: req.State, Note: note, AccountID: by.AccountID, Handle: by.Handle, Warnings: warnings}); err != nil {
 		return a, err
 	}
-	s.log.Printf("Release %s: %s recorded by %s", r.Name, stateWords(req.State), by.Handle)
+	s.log.Printf("Release %s: %s recorded by %s", r.Name, stateWords(req.State), accountOr(by.AccountID, "someone"))
 	if a.Release, err = s.releaseNow(r.Name); err != nil {
 		return a, err
 	}

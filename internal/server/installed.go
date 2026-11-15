@@ -1014,7 +1014,7 @@ func (s *Server) hFreezeEntry(w http.ResponseWriter, r *http.Request) {
 			return nil, refuse(409, "%v", err)
 		}
 		if err := s.store.addEntryFrozen(release, device, esha, at, by); err != nil {
-			s.log.Printf("who froze %s's installer entry for Release %s (%s) was not recorded: %v", device, release, by.Handle, err)
+			s.log.Printf("who froze %s's installer entry for Release %s (%s) was not recorded: %v", device, release, accountOr(by.AccountID, "someone"), err)
 		}
 		return map[string]any{"device": device, "release": release, "entry": e, "entry_sha256": esha, "pins": pins, "frozen_by": by.Handle, "frozen_at": at}, nil
 	})
@@ -1173,7 +1173,7 @@ func (s *Server) promotion(ctx context.Context, by Person, release string, req p
 	}
 	p := api.ReleasePromotion{Time: s.now(), Mac: d.Name, Job: j.ID, Kernel: j.Result.BootKernel, AccountID: by.AccountID, Handle: by.Handle}
 	if err := s.store.addPromotion(release, d.ID, p); err != nil {
-		s.log.Printf("the Promotion of %s from Release %s by %s is in its ledger but not in the Release's record: %v", d.Name, release, by.Handle, err)
+		s.log.Printf("the Promotion of %s from Release %s by %s is in its ledger but not in the Release's record: %v", d.Name, release, accountOr(by.AccountID, "someone"), err)
 	}
 	return map[string]any{"promoted": req.Device, "job": j.ID, "known_good": j.Result.BootKernel, "log": strings.TrimSpace(line), "warnings": warnings}, nil
 }

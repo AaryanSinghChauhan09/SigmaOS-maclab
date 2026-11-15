@@ -2089,7 +2089,7 @@ func (s *Server) hCancel(w http.ResponseWriter, r *http.Request) {
 	why := ""
 	if j.AccountID != p.AccountID || j.AccountID == 0 && j.Maintainer != p.Handle {
 		why = "by @" + p.Handle
-		s.log.Printf("job %s (%s) of %s: canceled by @%s", j.ID, j.Spec.Device, orStr(j.Maintainer, "labd"), p.Handle)
+		s.log.Printf("job %s (%s) of %s: canceled by %s", j.ID, j.Spec.Device, accountOr(j.AccountID, orStr(j.Maintainer, "labd")), accountOr(p.AccountID, "someone"))
 	}
 	s.mu.Lock()
 	running := s.cancels[id] != nil
