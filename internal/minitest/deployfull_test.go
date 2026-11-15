@@ -942,3 +942,67 @@ func TestAFirstDeployWhoseControllerDoesNotStopKeepsItsBuild(t *testing.T) {
 		t.Errorf("no word of the controller left running:\n%s", out)
 	}
 }
+
+// marked is a mini that ran old, then the marked release, with Litestream
+// running beside labd; labd.db holds a row the marked release wrote.
+func marked(t *testing.T) (m *mini, o *ops, r *release, old, mark string) {
+	t.Helper()
+	var k key
+	m, k, r = deployed(t)
+	o = m.ops()
+	m.databases()
+	old, mark = "v0.2.0", "v0.3.0"
+	bundle(t, k, filepath.Join(r.dir, old), old, true)
+	bundle(t, k, filepath.Join(r.dir, mark), mark, true)
+	noWayBack(t, k, filepath.Join(r.dir, mark), mark, true)
+	m.ok("deploy", "--from", r.from(old), old)
+	m.ok("deploy", "--from", r.from(mark), mark)
+	m.load(litestreamLabel)
+	write(t, m.path("Library/LaunchDaemons/"+litestreamLabel+".plist"), "<plist/>\n", 0o644)
+	m.sql("labd.db", "INSERT INTO seen VALUES('after')")
+	o.set(func(o *ops) { o.lines = nil })
+	os.Remove(m.log)
+	return m, o, r, old, mark
+}
+
+// theMarkedReleasesDatabases fails unless the marked release runs on what it
+// had: labd.db with the row it wrote, reports.db as before.
+func theMarkedReleasesDatabases(t *testing.T, m *mini, mark, out string) {
+	t.Helper()
+	if m.current() != mark || !m.loaded() {
+		t.Fatalf("the mini runs %q (loaded %v)\n%s", m.current(), m.loaded(), out)
+	}
+	if got := m.sql("labd.db", "SELECT group_concat(what, ', ') FROM seen"); got != "before, after" {
+		t.Errorf("labd.db holds %q, want what %s had\n%s", got, mark, out)
+	}
+	if got := m.sql("reports.db", "SELECT group_concat(what, ', ') FROM seen"); got != "before" {
+		t.Errorf("reports.db holds %q\n%s", got, out)
+	}
+	for _, f := range []string{"labd.db.restored", "reports.db.restored"} {
+		if exists(m.path("var/lab/data/" + f)) {
+			t.Errorf("%s is left beside the databases", f)
+		}
+	}
+}
+
+// With no copy of the databases from before the marked release, an older
+// Deploy cannot go back to them: it is refused while labd still runs.
+func TestAnOlderDeployOverAMarkedReleaseWithNoCopyIsRefusedWithLabdRunning(t *testing.T) {
+	m, o, r, old, mark := marked(t)
+	if err := os.RemoveAll(m.path("var/lab/before-deploy/" + mark)); err != nil {
+		t.Fatal(err)
+	}
+
+	out := m.refused("deploy", "--from", r.from(old), old)
+
+	theMarkedReleasesDatabases(t, m, mark, out)
+	if strings.Contains(m.calls(), "launchctl bootout") || strings.Contains(m.calls(), "ops POST /drain") {
+		t.Errorf("labd was drained or stopped:\n%s", m.calls())
+	}
+	if !strings.Contains(out, mark+` says "No way back."`) || !strings.Contains(out, "no copy") {
+		t.Errorf("no word of why:\n%s", out)
+	}
+	if len(o.told()) != 0 {
+		t.Errorf("\"Agents\" was told %q", o.told())
+	}
+}
