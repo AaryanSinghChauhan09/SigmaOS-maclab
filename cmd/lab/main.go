@@ -318,12 +318,11 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Join command for %s, a Lab-owned Mac (one Mac, once; expires %s). Keep it private.\n\n", pos[0], t.Expires.Format(time.DateTime))
-		if t.JoinCommand != "" {
-			fmt.Printf("Run this in a terminal on the Mac, as yourself; it checks the Mac, shows the lab's terms, and joins once you type yes:\n\n  %s\n\n", t.JoinCommand)
-		} else {
-			fmt.Printf("labd has no lab-agent to hand out: copy lab-agent to the Mac and run\n\n  printf '%%s\\n' '%s' | sudo ./lab-agent setup --server %s --token-stdin --gui-user \"$USER\"\n\n", t.Token, c.URL)
+		if t.JoinCommand == "" {
+			return noJoinCommand(ctx, c, pos[0])
 		}
+		fmt.Printf("Join command for %s, a Lab-owned Mac (one Mac, once; expires %s). Keep it private.\n\n", pos[0], t.Expires.Format(time.DateTime))
+		fmt.Printf("Run this in a terminal on the Mac, as yourself; it checks the Mac, shows the lab's terms, and joins once you type yes:\n\n  %s\n\n", t.JoinCommand)
 		fmt.Printf("Cancel it unused: lab enroll %s --revoke. Then: lab baseline %s\n", pos[0], pos[0])
 		return nil
 
@@ -1913,4 +1912,16 @@ func printReleases(w io.Writer, all []api.Release) {
 			fmt.Fprintln(w, "  warning: "+warn)
 		}
 	}
+}
+
+// noJoinCommand cancels the enrollment token labd made for name when it made
+// no Join command with it: labd had no signed lab-agent to hand out, and an
+// agent copied to the Mac by hand would be installed with no signature
+// checked.
+func noJoinCommand(ctx context.Context, c *client.Client, name string) error {
+	why := "labd has no signed lab-agent to hand out, so it made no Join command for " + name
+	if _, err := c.RevokeEnrollTokens(ctx, name); err != nil {
+		return fmt.Errorf("%s, and canceling its enrollment token failed (%v): cancel it with lab enroll %s --revoke", why, err, name)
+	}
+	return errors.New(why + " and its enrollment token was canceled. A labd of a Lab release hands out lab-agent with its signature")
 }

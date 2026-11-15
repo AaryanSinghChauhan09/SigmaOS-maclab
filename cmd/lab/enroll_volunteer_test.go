@@ -16,12 +16,24 @@ import (
 	"github.com/omacom/omarchy-maclab/internal/client"
 )
 
-// enrollTokenLab is a labd that only answers POST /api/enroll-tokens, and
-// remembers what the Maintainer asked for.
+// enrollTokenLab is a labd that only answers POST /api/enroll-tokens, with a
+// Join command, and remembers what the Maintainer asked for.
 func enrollTokenLab(t *testing.T) (*client.Client, *[]map[string]any) {
+	return joinCommandLab(t, " T='enr_fixture_token' U='https://lab.example' sudo lab-agent setup", nil)
+}
+
+// joinCommandLab is enrollTokenLab answering with line as the Join command
+// ("" is a labd with no signed lab-agent to hand out); revoked counts the
+// Join commands canceled.
+func joinCommandLab(t *testing.T, line string, revoked *int) (*client.Client, *[]map[string]any) {
 	t.Helper()
 	var asked []map[string]any
 	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" && r.URL.Path == "/api/enroll-tokens/rack-mac" && revoked != nil {
+			*revoked++
+			io.WriteString(w, `{"revoked":1}`)
+			return
+		}
 		if r.Method != "POST" || r.URL.Path != "/api/enroll-tokens" {
 			http.NotFound(w, r)
 			return
@@ -30,7 +42,7 @@ func enrollTokenLab(t *testing.T) (*client.Client, *[]map[string]any) {
 		b, _ := io.ReadAll(r.Body)
 		json.Unmarshal(b, &m)
 		asked = append(asked, m)
-		json.NewEncoder(w).Encode(map[string]any{"token": "enr_fixture_token", "expires": time.Now().Add(time.Hour)})
+		json.NewEncoder(w).Encode(map[string]any{"token": "enr_fixture_token", "expires": time.Now().Add(time.Hour), "join_command": line})
 	}))
 	t.Cleanup(hs.Close)
 	t.Setenv("HOME", t.TempDir())
@@ -106,6 +118,18 @@ func TestEnrollMakesAJoinCommandForALabOwnedMac(t *testing.T) {
 	}
 	if !strings.Contains(out, "enr_fixture_token") || !strings.Contains(out, "a Lab-owned Mac") {
 		t.Fatalf("the token or the Mac's kind is not printed:\n%s", out)
+	}
+}
+
+// With no signed lab-agent to hand out labd makes no Join command, and lab
+// enroll prints no line to copy an agent and run it unchecked: the token is
+// canceled and the Maintainer told why.
+func TestEnrollPrintsNoUncheckedLineWhenLabdHasNoSignedAgent(t *testing.T) {
+	revoked := 0
+	c, _ := joinCommandLab(t, "", &revoked)
+	out, err := runLab(t, c, "enroll", "rack-mac")
+	if err == nil || !strings.Contains(err.Error(), "no signed lab-agent") || strings.Contains(out, "lab-agent setup") || strings.Contains(out+err.Error(), "enr_fixture_token") || revoked != 1 {
+		t.Fatalf("lab enroll with no Join command: %v, %d canceled\n%s", err, revoked, out)
 	}
 }
 

@@ -579,10 +579,17 @@ kernel on labd and takes no other job. The baseline passes only if a plain reboo
 comes back on that kernel, so it must be the bootloader's default entry.
 
 lab-agent itself comes from the lab server only, signed, and never from GitHub.
-The Join command checks the first one against the release key written into the
-line. An update checks the new agent's signature against the release key pinned
-in the lab-agent already running and refuses an agent older than the one
-installed; a refusal says "Nothing was changed."
+What each install checks:
+
+- **The Join command** checks the agent's signature against the release key
+  written into the line, and setup stops at its pre-checks when the lab-agent
+  installed on the Mac is newer than the one it brings.
+- **`sudo lab-agent update`** and **`lab agent-update`** check the new agent's
+  signature against the release key pinned in the lab-agent already running,
+  and refuse an agent older than the one installed; a refusal says "Nothing was
+  changed."
+- **A labd with no signed lab-agent** to hand out makes no Join command:
+  `lab enroll` cancels the token it made and prints no line to run.
 
 ```sh
 sudo lab-agent update      # at the Mac: take the lab's lab-agent

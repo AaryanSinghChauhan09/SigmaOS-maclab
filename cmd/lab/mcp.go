@@ -105,7 +105,9 @@ func newMCP(c *client.Client) *mcp.Server {
 			}
 			line := t.JoinCommand
 			if line == "" {
-				line = fmt.Sprintf("printf '%%s\\n' '%s' | sudo ./lab-agent setup --server %s --token-stdin --gui-user \"$USER\"", t.Token, c.URL)
+				f.Close()
+				os.Remove(a.Out)
+				return nil, nil, noJoinCommand(ctx, c, a.Name)
 			}
 			_, err = f.WriteString(line + "\n")
 			if err == nil {
