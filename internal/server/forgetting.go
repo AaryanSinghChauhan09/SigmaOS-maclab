@@ -332,7 +332,7 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 	if err := s.reports.Forget(k.AccountID, k.Handle); err != nil {
 		return fmt.Errorf("reports.db: %w", err)
 	}
-	if err := s.store.forget(f, k.Blocked); err != nil {
+	if err := s.store.forget(f); err != nil {
 		return fmt.Errorf("labd.db: %w", err)
 	}
 	s.forgetInFleet(f)
@@ -443,8 +443,9 @@ var unscrubbed = map[string]bool{"exec_record": true}
 
 // forget erases the person's record, or for a Blocked person keeps only the
 // Blocked state, and takes their handle and account id off every other
-// table but the Exec record, in one transaction.
-func (st *store) forget(f forgetting, blocked bool) error {
+// table but the Exec record, in one transaction. Whether they are Blocked is
+// read inside it: a Block that landed since the person was read holds.
+func (st *store) forget(f forgetting) error {
 	tx, err := st.db.Begin()
 	if err != nil {
 		return err
@@ -456,6 +457,14 @@ func (st *store) forget(f forgetting, blocked bool) error {
 		}
 	}
 	exec(`DELETE FROM browser_sessions WHERE account_id = ?`, f.id)
+	var blocked bool
+	if err == nil {
+		// After a write: no Block commits between this read and the rest.
+		err = tx.QueryRow(`SELECT blocked_at IS NOT NULL FROM people WHERE account_id = ?`, f.id).Scan(&blocked)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+	}
 	exec(`DELETE FROM lab_tokens WHERE account_id = ?`, f.id)
 	exec(`DELETE FROM requests_to_lend WHERE account_id = ?`, f.id)
 	exec(`DELETE FROM tokens WHERE token_hash IN (SELECT token_hash FROM join_commands WHERE volunteer_id = ?)`, f.id)

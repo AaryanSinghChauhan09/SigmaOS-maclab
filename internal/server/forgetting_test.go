@@ -699,6 +699,32 @@ func TestAJobRunningThroughAForgettingWritesNoHandleBack(t *testing.T) {
 	}
 }
 
+// A Block that lands while a forgetting is under way holds: the forgetting
+// read the person before it, and still keeps the Blocked state.
+func TestABlockDuringAForgettingStaysBlocked(t *testing.T) {
+	l := rolesLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	before, err := l.s.store.knownPerson(edithID)
+	if err != nil || before.Blocked {
+		t.Fatalf("edith before: %+v %v", before, err)
+	}
+	ravi.did(personPath(edithID, "block"), "reason", "spam", "sure", "yes")
+
+	by := Person{AccountID: maintainerID, Handle: "ravi", Maintainer: true}
+	if err := l.s.forgetHeld(by, before, newForgetting(edithID, before.Handle)); err != nil {
+		t.Fatal(err)
+	}
+	var handle string
+	var at sql.NullInt64
+	if err := l.s.store.db.QueryRow(`SELECT handle, blocked_at FROM people WHERE account_id = ?`, edithID).Scan(&handle, &at); err != nil || !at.Valid || handle != "" {
+		t.Errorf("the Blocked state after the forgetting: %q %v %v", handle, at, err)
+	}
+	if again := l.browser().signIn(edithID, ""); again.Code != http.StatusForbidden {
+		t.Errorf("the account signing in again: %d %q", again.Code, again.Body)
+	}
+}
+
 // Blocked ends the person's Leases, Mac sign-ins and enrollments, along with
 // the rest: their Macs Leave, and the Block says so before it is pressed.
 func TestBlockedEndsLeasesMacSignInsAndEnrollments(t *testing.T) {
