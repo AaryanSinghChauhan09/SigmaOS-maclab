@@ -33,12 +33,13 @@ plist="$LAUNCHD_DIR/$label.plist"
 need_root
 loaded "$label" || fail "$1 is not running: nothing was stopped"
 
+# held stays set until launchd has taken the daemon back, so that the EXIT
+# trap asks again after a start that failed.
 held=0
 start() {
   (( held )) || return 0
+  boot_in "$label" "$plist" || { echo "$ME: launchd did not take $plist: start $1 by hand with sudo launchctl bootstrap system $plist" >&2; return 1; }
   held=0
-  launchctl enable "system/$label" || true
-  launchctl bootstrap system "$plist" || { echo "$ME: launchd did not take $plist: start $1 by hand with sudo launchctl bootstrap system $plist" >&2; return 1; }
   echo "started $(date +%s)"
 }
 trap 'start "$1"' EXIT

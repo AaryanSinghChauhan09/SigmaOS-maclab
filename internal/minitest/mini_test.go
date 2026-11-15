@@ -104,6 +104,8 @@ type mini struct {
 // launchctl keeps one file for each loaded daemon: "loaded" for labd,
 // "loaded.<label>" for any other. The daemon is what the last argument names.
 // A test may write beside it the state and the count of starts print shows.
+// bootstrap.fails.<label> makes a bootstrap fail: a number is how many times,
+// anything else a text whose LaunchDaemon file is refused.
 const launchctlStub = `#!/bin/bash
 echo "launchctl $*" >> "$STUB_LOG"
 label="$(basename "${!#}" .plist)"
@@ -116,7 +118,18 @@ case "$1" in
     echo "runs = $(cat "$state.runs" 2>/dev/null || echo 1)"
     [[ ! -f $STUB_STATE/pid.$label ]] || echo "	pid = $(<"$STUB_STATE/pid.$label")" ;;
   bootout) rm -f "$state" ;;
-  bootstrap) [[ -f $3 ]] || exit 5; cp "$3" "$state" ;;
+  bootstrap)
+    [[ -f $3 ]] || exit 5
+    f="$STUB_STATE/bootstrap.fails.$label"
+    if [[ -s $f ]]; then
+      n="$(<"$f")"
+      if [[ $n =~ ^[0-9]+$ ]]; then
+        (( n == 0 )) || { echo $((n - 1)) > "$f"; exit 5; }
+      elif grep -qF -- "$n" "$3"; then
+        exit 5
+      fi
+    fi
+    cp "$3" "$state" ;;
   kickstart) [[ -f $state && ! -f $STUB_STATE/kickstart.fails ]] || exit 113 ;;
 esac
 `

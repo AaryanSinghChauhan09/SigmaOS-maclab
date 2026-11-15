@@ -195,3 +195,28 @@ func TestHoldStartsTheDaemonAgainWhenItIsCut(t *testing.T) {
 		t.Errorf("cut while it held the tunnel: exit %d\n%s\n%s", code, out, m.calls())
 	}
 }
+
+// bootstrapFails has the made-up launchctl refuse to start label: a number
+// is how many times, anything else a text of the LaunchDaemon files it
+// refuses.
+func (m *mini) bootstrapFails(label, what string) {
+	m.t.Helper()
+	write(m.t, filepath.Join(filepath.Dir(m.root), "state", "bootstrap.fails."+label), what, 0o644)
+}
+
+// A bootstrap that fails once while hold starts the daemon again is asked
+// again: the daemon is not left stopped.
+func TestHoldStartsTheDaemonAgainWhenLaunchdRefusesOnce(t *testing.T) {
+	for _, part := range []string{"cloudflared", "labd"} {
+		m, _, _ := rehearsalReady(t)
+		label := cloudflaredLabel
+		if part == "labd" {
+			label = labdLabel
+		}
+		m.bootstrapFails(label, "1")
+		out, code := m.run("hold", part, "1")
+		if !m.loaded() || !m.tunnelLoaded() {
+			t.Errorf("hold %s: exit %d, labd loaded %v, tunnel loaded %v\n%s\n%s", part, code, m.loaded(), m.tunnelLoaded(), out, m.calls())
+		}
+	}
+}

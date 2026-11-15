@@ -304,6 +304,19 @@ stopped() {
 }
 
 # owner_of PATH: the account PATH belongs to.
+# boot_in LABEL PLIST: launchd takes the daemon from PLIST, asked up to three
+# times; 1 when it is still not loaded.
+boot_in() {
+  local n
+  launchctl enable "system/$1" 2>/dev/null || true
+  for n in 1 2 3; do
+    launchctl bootstrap system "$2" 2>/dev/null || true
+    ! loaded "$1" || return 0
+    (( n == 3 )) || sleep 1
+  done
+  return 1
+}
+
 owner_of() {
   # shellcheck disable=SC2012
   ls -ld "$1" | awk '{ print $3 }'
