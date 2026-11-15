@@ -460,12 +460,14 @@ func (s *Server) forgetInFleet(f forgetting) {
 }
 
 // jobsInFlight are the jobs labd holds in memory while they run: the copies
-// saved through updateJob, and the forgettings carried out since each job
-// was stored, which every later save of any copy of it applies again. A job
-// leaves both once it is saved done. under are the forgettings under way:
-// every whole job saved meanwhile, done or not, loses their person too, as
-// one read before the forgetting swept the jobs table would bring them back.
-// Under jobMu.
+// saved through updateJob, which a job leaves once it is saved done; and the
+// forgettings carried out since each job was stored, which every later save
+// of any copy of it applies again. Those stay for as long as labd runs, on a
+// finished job too: a copy read before the forgetting, a cancel's or a
+// publishing's, can be saved at any time after it, and a restart leaves no
+// such copy. under are the forgettings under way: every whole job saved
+// meanwhile, done or not, loses their person too, as one read before the
+// forgetting swept the jobs table would bring them back. Under jobMu.
 type jobsInFlight struct {
 	held   map[string]map[*api.Job]bool
 	forgot map[string][]forgetting
@@ -491,7 +493,6 @@ func (s *Server) inFlightLocked(j *api.Job) {
 	fl := &s.inFlight
 	if j.State == api.JobDone {
 		delete(fl.held, j.ID)
-		delete(fl.forgot, j.ID)
 		return
 	}
 	if fl.held == nil {
@@ -510,14 +511,15 @@ func (s *Server) saveJobLocked(j *api.Job) error {
 	return s.store.saveJob(j)
 }
 
-// forgetInJobs takes the person off the jobs not done yet: the copies runs
-// hold now, and every copy saved from now on, which would otherwise write
-// them back whole; and off every job saved until end is called, once the
-// forgetting is done with the jobs table and the files.
+// forgetInJobs takes the person off the jobs not done yet and the finished
+// jobs that name them: the copies runs hold now, and every copy saved from
+// now on, which would otherwise write them back whole; and off every job
+// saved until end is called, once the forgetting is done with the jobs table
+// and the files.
 func (s *Server) forgetInJobs(f forgetting) (end func(), err error) {
 	jobMu.Lock()
 	defer jobMu.Unlock()
-	jobs, err := s.store.jobs("", -1, true)
+	jobs, err := s.store.jobs("", -1, false)
 	if err != nil {
 		return func() {}, err
 	}
@@ -526,7 +528,9 @@ func (s *Server) forgetInJobs(f forgetting) (end func(), err error) {
 		fl.forgot = map[string][]forgetting{}
 	}
 	for _, j := range jobs {
-		fl.forgot[j.ID] = append(fl.forgot[j.ID], f)
+		if j.State != api.JobDone || f.names(j) {
+			fl.forgot[j.ID] = append(fl.forgot[j.ID], f)
+		}
 	}
 	for _, copies := range fl.held {
 		for j := range copies {
@@ -540,6 +544,17 @@ func (s *Server) forgetInJobs(f forgetting) (end func(), err error) {
 		defer jobMu.Unlock()
 		fl.under = slices.DeleteFunc(fl.under, func(u *forgetting) bool { return u == under })
 	}, nil
+}
+
+// names is whether j names the person. It takes them off j to find out.
+func (f forgetting) names(j *api.Job) bool {
+	before, err := json.Marshal(j)
+	if err != nil {
+		return true
+	}
+	f.job(j)
+	after, err := json.Marshal(j)
+	return err != nil || !bytes.Equal(before, after)
 }
 
 // job takes the person off j, in place. An Installed run's result is left

@@ -1243,3 +1243,39 @@ func TestForgettingSomeoneTheKernelLogNamesLeavesTheRunPromotable(t *testing.T) 
 		t.Errorf("a Promotion after the forgetting: %v", err)
 	}
 }
+
+// A finished job read before a forgetting and saved after it, as a cancel
+// that finds it done saves it, brings nobody back, however many such copies
+// were read.
+func TestAFinishedJobReadBeforeAForgettingAndSavedAfterNamesNobody(t *testing.T) {
+	l := macLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	l.lrMac("m1", "j293", nil)
+	l.pjJob("j-41", "m1", edithID, "edith", l.clock.Now(), func(j *api.Job) { j.Summary = "booted for @edith" })
+	first, _ := l.s.store.job("j-41")
+	second, _ := l.s.store.job("j-41")
+
+	ravi.did(personPath(edithID, "forget"), "sure", "yes")
+
+	names := func() string {
+		var data string
+		l.s.store.db.QueryRow(`SELECT data FROM jobs WHERE id = 'j-41'`).Scan(&data)
+		if strings.Contains(data, "edith") || strings.Contains(data, `"account_id":`+strconv.Itoa(edithID)) {
+			return data
+		}
+		return ""
+	}
+	if data := names(); data != "" {
+		t.Fatalf("the forgetting left her on the job:\n%s", data)
+	}
+	// cancelJob's save of a job it finds done changes nothing in it.
+	l.s.updateJob(first, func(j *api.Job) {})
+	if data := names(); data != "" {
+		t.Errorf("a cancel's copy read before the forgetting wrote her back:\n%s", data)
+	}
+	l.s.updateJob(second, func(j *api.Job) { j.Result.Logs = append(j.Result.Logs, "serial.log") })
+	if data := names(); data != "" {
+		t.Errorf("a second copy read before the forgetting wrote her back:\n%s", data)
+	}
+}
