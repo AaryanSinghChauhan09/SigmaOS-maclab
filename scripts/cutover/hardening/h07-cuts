@@ -70,6 +70,11 @@ held() {
 }
 # shellcheck disable=SC2329
 ended() { grep -q '^ended=' "$WORK/$1.out"; }
+# closed NAME WHOSE: the stream ended because labd closed it, not because the
+# hold ran out or broke.
+closed() {
+  grep -qx 'ended=closed' "$WORK/$1.out" || give_up "$2 stream $(grep '^ended=' "$WORK/$1.out" | head -n 1), not closed by labd"
+}
 # cut WHAT PATH: the cut, as a browser on the lab's own page sends it.
 cut() {
   form cut --session "$OWNER_SESSION" --page "$page" "$2" sure=yes
@@ -119,6 +124,7 @@ ask after --token-file "$WORK/one.token" GET /api/devices
 [[ "$(status_of after)" == 401 ]] || give_up "the revoked token's next request: $(status_of after) $(said_of after)"
 rec "the revoked token's next request: 401, $(said_of after)"
 wait_until 15 ended one || give_up "the revoked token's stream is still open 15 s after"
+closed one "the revoked token's"
 rec "its stream ended: $(grep -E '^(ended|seconds)=' "$WORK/one.out" | tr '\n' ' ')"
 
 # The second credential, its Lease and its stream; "End all access".
@@ -150,6 +156,7 @@ ask after-all ${second[@]+"${second[@]}"} GET /api/devices
 [[ "$(status_of after-all)" == 401 ]] || give_up "the next request after \"End all access\": $(status_of after-all) $(said_of after-all)"
 rec "the next request after \"End all access\": 401, $(said_of after-all)"
 wait_until 15 ended two || give_up "the stream is still open 15 s after \"End all access\""
+closed two "after \"End all access\", the"
 rec "the stream ended: $(grep -E '^(ended|seconds)=' "$WORK/two.out" | tr '\n' ' ')"
 "$PROBE" page --session "$session" /me > "$WORK/me-after.out" 2>&1 || true
 ! grep -qx 'status=200' "$WORK/me-after.out" || give_up "@$who's browser still opens their page after \"End all access\""

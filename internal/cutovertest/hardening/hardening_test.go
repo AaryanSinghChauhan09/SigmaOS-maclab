@@ -407,6 +407,24 @@ func TestH07UndoesItsTokenAndLeaseWhenItEndsFirst(t *testing.T) {
 	}
 }
 
+// A stream counts as ended by the cut only when labd closed it: a hold that
+// ran out or broke proves nothing.
+func TestH07WantsTheStreamClosedByTheCut(t *testing.T) {
+	t.Parallel()
+	for ended, want := range map[string]int{"closed": 0, "timeout": 1, "error": 1} {
+		t.Run(ended, func(t *testing.T) {
+			t.Parallel()
+			out, code, record, _ := labRun(t, "h07-cuts", h07Lab, h07Probe, "session\n\n", []string{"H07_ENDED=" + ended})
+			if code != want {
+				t.Fatalf("exit %d, want %d\n%s\n%s", code, want, out, record)
+			}
+			if want == 1 && !strings.Contains(record, "FAILED: the revoked token's stream ended="+ended+", not closed by labd") {
+				t.Errorf("the record:\n%s", record)
+			}
+		})
+	}
+}
+
 // Through the Lab address a step that needs the owner waits for them: with
 // nobody there the test ends as stopped, exit 3, and asked for nothing.
 func TestAStepForTheOwnerWithNobodyThereStopsTheTest(t *testing.T) {
