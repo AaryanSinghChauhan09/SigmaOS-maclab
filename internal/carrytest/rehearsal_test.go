@@ -191,3 +191,43 @@ func TestTheRehearsalStopsAtTheFirstCheckThatFails(t *testing.T) {
 		t.Errorf("with a Machine public key of no report: exit %d\n%s", code, out)
 	}
 }
+
+// openingAsLab plays the lab account and, as the import writes the Machine
+// public key down, opens the lab from a second terminal.
+const openingAsLab = `#!/bin/bash
+echo "as-lab $*" >> "$STUB_LOG"
+if [[ "$*" == *machine.pub* && ! -f $STUB_STATE/opened ]]; then
+  : > "$STUB_STATE/opened"
+  curl -sS --unix-socket "$LAB_SYSROOT/var/lab/run/ops.sock" -X POST "http://labd/open?m-team=14" >> "$STUB_LOG" 2>&1
+fi
+exec "$@"
+`
+
+// An opening between the import's first check and its stop of labd: the
+// import asks again, and the open lab's reports stay where they are.
+func TestAnOpeningDuringTheImportLeavesTheReports(t *testing.T) {
+	m, dump, public := rehearsal(t)
+	if out, code := m.run(hex.EncodeToString(machineIDKey())+"\n", "rehearsal-import", "key"); code != 0 {
+		t.Fatalf("the key: exit %d, %s", code, out)
+	}
+	s := openingOn(t, m, 14)
+	stub := filepath.Join(m.base, "opening-as-lab")
+	write(t, stub, openingAsLab, 0o755)
+	for i, e := range m.env {
+		if strings.HasPrefix(e, "LAB_AS_LAB=") {
+			m.env[i] = "LAB_AS_LAB=" + stub
+		}
+	}
+	reports := everyFile(t, m.path("var/lab/data"))["reports.db"]
+	os.Remove(m.log)
+	out, code := m.run(oldLink+"\n", "rehearsal-import", "run", "--public-key", public, "--dumped", dump)
+	if _, live := s.Live(); !live {
+		t.Fatalf("the stand-in did not open the lab: %s", m.calls())
+	}
+	if code == 0 || !strings.Contains(out, "the lab is open (live ") {
+		t.Errorf("the import on a lab opened meanwhile: exit %d, %s", code, out)
+	}
+	if strings.Contains(m.calls(), "launchctl bootout") || everyFile(t, m.path("var/lab/data"))["reports.db"] != reports || exists(m.path("var/lab/import/reports-before/reports.db")) {
+		t.Errorf("the open lab's labd was stopped or its reports.db moved:\n%s", m.calls())
+	}
+}

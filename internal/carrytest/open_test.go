@@ -32,6 +32,12 @@ func brisbaneDay(t time.Time) string {
 func opening(t *testing.T, marked int) (*mini, *server.Server) {
 	t.Helper()
 	m := newMini(t, oldlabtest.OnOmarchyGPU)
+	return m, openingOn(t, m, marked)
+}
+
+// openingOn starts that labd on the mini m.
+func openingOn(t *testing.T, m *mini, marked int) *server.Server {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	s, err := server.New(ctx, server.Config{DataDir: m.path("var/lab/data"), Preview: true, MachineIDKey: machineIDKey(), Release: "v0.2.0-rc.9",
@@ -57,7 +63,7 @@ func opening(t *testing.T, marked int) (*mini, *server.Server) {
 		}
 	}
 	write(t, m.path("var/lab/import/imported"), brisbaneDay(time.Now())+"\n", 0o600)
-	return m, s
+	return s
 }
 
 func asked(t *testing.T, s *server.Server) string {
