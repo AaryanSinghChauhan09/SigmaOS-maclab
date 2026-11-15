@@ -168,7 +168,7 @@ func TestEveryPagesFooterLinksTheTwoTexts(t *testing.T) {
 
 func TestATextShowsItsDateAndIsTheShippedFile(t *testing.T) {
 	s := site(t, "")
-	dates := map[string]string{"terms.txt": "2026-11-14", "privacy.txt": "2026-11-15"}
+	dates := map[string]string{"terms.txt": "2026-11-14", "privacy.txt": "2026-11-16"}
 	for file, text := range map[string]Text{"terms.txt": Terms(), "privacy.txt": Privacy()} {
 		date := dates[file]
 		shipped, err := os.ReadFile("texts/" + file)
@@ -193,7 +193,7 @@ func TestATextShowsItsDateAndIsTheShippedFile(t *testing.T) {
 			}
 		}
 	}
-	if !strings.HasPrefix(Terms().Body, "OMARCHY MAC LAB: LENDING A MAC\nTerms of 2026-11-14\n") || !strings.HasPrefix(Privacy().Body, "PRIVACY\nStatement of 2026-11-15\n") {
+	if !strings.HasPrefix(Terms().Body, "OMARCHY MAC LAB: LENDING A MAC\nTerms of 2026-11-14\n") || !strings.HasPrefix(Privacy().Body, "PRIVACY\nStatement of 2026-11-16\n") {
 		t.Error("the two texts do not open as the spec's do")
 	}
 	// What a forgetting leaves, as the spec's Forgetting table has it.

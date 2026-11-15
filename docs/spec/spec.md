@@ -816,6 +816,7 @@ The person asks on their own page or by mail; the request shows on People; a Mai
 | Verdict history entries; who froze a Release or an entry; who promoted | Kept with the time and the note, the handle removed |
 | Who approved a Release's manifest | From 2026-11-16 a manifest names each approver by account id and the pages show the handle: the lab stops showing them, and the frozen manifest keeps its bytes. The approver's handle in a Release frozen before 2026-11-16 is kept: the manifest is pinned, byte for byte |
 | A lab-published report's "who asked" | The handle removed |
+| A run's kernel error log that holds the handle | Kept as it was: a Promotion compares it byte for byte, so it is evidence |
 | The Blocked state | Kept: the account id, "Blocked", the date and who blocked. The handle and the typed reason are erased |
 | Lines already posted to the Lab group or "Agents" | Kept on the members' phones |
 | Backups | Kept until they age out, 6 months at most |
