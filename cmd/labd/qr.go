@@ -17,9 +17,13 @@ argument, so no command line holds the line. scripts/mini/signal link shows
 signal-cli's device link with it, for the owner's phone to scan.
 `
 
+// Level L and a quiet zone of two modules: a device link (about 112 bytes)
+// is then version 6, 23 lines of text, which an 80x24 terminal shows whole
+// with a line above it. At M with four modules it was 27 lines. A screen
+// loses no modules to dirt, and the code is drawn on its own light zone.
 const (
-	qrLevel = qr.M
-	qrQuiet = 4 // light modules around the code, as scanners expect
+	qrLevel = qr.L
+	qrQuiet = 2
 )
 
 // qrCode is `labd qr`. It returns the command's exit status.

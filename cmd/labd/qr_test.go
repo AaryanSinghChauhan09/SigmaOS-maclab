@@ -93,6 +93,27 @@ func TestLabdQRDrawsTheLineItReads(t *testing.T) {
 	}
 }
 
+// A real device link, a uuid and a 33-byte key in base64, URL-encoded or
+// not, draws whole in an ordinary 80x24 terminal: at most 23 lines, so the
+// line above it still fits, and at most 45 columns.
+func TestLabdQRDrawsARealLinkInAnOrdinaryTerminal(t *testing.T) {
+	key := strings.Repeat("A", 43) + "="
+	for _, link := range []string{
+		"sgnl://linkdevice?uuid=0b9e7f3a-1c2d-4e5f-8a9b-0c1d2e3f4a5b&pub_key=" + key,
+		"sgnl://linkdevice?uuid=0b9e7f3a-1c2d-4e5f-8a9b-0c1d2e3f4a5b&pub_key=" + strings.Repeat("A%2B", 6) + strings.Repeat("A", 31) + "%3D",
+	} {
+		out, errw, code := drawQR(t, link+"\n")
+		if code != 0 || errw != "" {
+			t.Fatalf("a link of %d bytes: status %d, %q", len(link), code, errw)
+		}
+		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		rows := modules(t, out)
+		if len(lines) > 23 || len(rows[0]) > 45 {
+			t.Errorf("a link of %d bytes draws %d lines of %d columns, want at most 23 of 45", len(link), len(lines), len(rows[0]))
+		}
+	}
+}
+
 // labd qr refuses an argument (the line is never one), an empty line and a
 // line too long for a code, and says so without the line.
 func TestLabdQRRefusesWithoutTheLine(t *testing.T) {
