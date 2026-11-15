@@ -76,11 +76,22 @@ cut() {
   [[ "$(status_of cut)" == 303 ]] || give_up "$1 was not done: $(status_of cut) $(said_of cut)"
 }
 
+# undo_lease: the Lease taken under the saved login, released.
+# shellcheck disable=SC2329
+undo_lease() {
+  if "$LAB_CMD" release "$MAC" > "$WORK/undo-lease.out" 2>&1; then
+    rec "undone: the Lease on $MAC was released"
+  else
+    rec "NOT UNDONE: the Lease on $MAC may still be held: run $LAB_CMD release $MAC ($(plain "$WORK/undo-lease.out"))"
+  fi
+}
+
 # The first token, its stream, its revocation.
 if playing; then
   token_for "$who" "$tag-one"
   mv "$WORK/$who.token" "$WORK/one.token"
 else
+  arm token undo_own_token "$tag-one"
   form token-own --session "$OWNER_SESSION" /me/tokens "name=$tag-one" period=30
   ( umask 077; grep -oE 'lab_[0-9a-f]{40}' "$WORK/token-own.body" | head -n 1 > "$WORK/one.token" )
   rm -f "$WORK/token-own.body"
@@ -101,6 +112,7 @@ else
   id="$(sed -n 's/^found=//p' "$WORK/tid.out" | head -n 1)"
   [[ -n $id ]] || give_up "$ADDRESS/me shows no Lab token $tag-one"
   cut "revoking the token" "/me/tokens/$id/revoke"
+  disarm token
   rec "the owner revoked the token $tag-one on their own page"
 fi
 ask after --token-file "$WORK/one.token" GET /api/devices
@@ -119,6 +131,7 @@ else
   second=()
   "$LAB_CMD" status "$MAC" > "$WORK/mac.out" 2>&1 || give_up "lab status $MAC: $(plain "$WORK/mac.out")"
   ! grep -q '^  lease:' "$WORK/mac.out" || stopped "somebody holds a Lease on $MAC now: run this when $MAC is free"
+  arm lease undo_lease
   "$LAB_CMD" lease "$MAC" > "$WORK/lease.out" 2>&1 || give_up "no Lease on $MAC: $(plain "$WORK/lease.out")"
 fi
 rec "@$who holds a Lease on $MAC"
@@ -130,6 +143,7 @@ if playing; then
   rec "a Maintainer used \"End all access\" on @$who, on People"
 else
   cut "\"End all access\"" /me/end-all-access
+  disarm lease
   rec "the owner used \"End all access\" on their own page"
 fi
 ask after-all ${second[@]+"${second[@]}"} GET /api/devices

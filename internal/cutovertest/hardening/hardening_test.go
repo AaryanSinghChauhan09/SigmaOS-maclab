@@ -295,13 +295,15 @@ const probeArgs = `out=""; prev=""; for a in "$@"; do [[ $prev != --out ]] || ou
 // in, the probe answers as probe (a case on "$*") says, and stdin is what
 // the owner types. It returns what the test said, its exit status, its
 // record and how the probe and lab were called.
-func labRun(t *testing.T, name, probe, stdin string, args ...string) (out string, code int, record, calls string) {
+func labRun(t *testing.T, name, lab, probe, stdin string, env []string, args ...string) (out string, code int, record, calls string) {
 	t.Helper()
-	lab := `case "$1" in status) echo "NAME STATE" ;; *) exit 9 ;; esac`
+	if lab == "" {
+		lab = `case "$1" in status) echo "NAME STATE" ;; *) exit 9 ;; esac`
+	}
 	dir, callsFile := stubs(t, map[string]string{"lab": lab, "hardening-probe": probeArgs + probe})
 	records := t.TempDir()
 	cmd := exec.Command(script(t, name), append([]string{"--lab", "--bin", dir, "--records", records}, args...)...)
-	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example")
+	cmd.Env = append(append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example"), env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	b, err := cmd.CombinedOutput()
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -332,12 +334,12 @@ esac`
 func TestANoAtH08sQuestionLeavesTheLabAsItWas(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct{ stdin, undone, record string }{
-		"the token's line":   {"session\nno\n", "/me/tokens/7/revoke sure=yes", "undone: the Lab token h08-"},
+		"the token's line":  {"session\nno\n", "/me/tokens/7/revoke sure=yes", "undone: the Lab token h08-"},
 		"the M team mark's": {"session\nyes\nno\n", "/people/42/m-team/remove sure=yes", "undone: the M team mark was taken off someone"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			out, code, record, calls := labRun(t, "h08-agents-lines", h08Probe, c.stdin, "--other", "someone")
+			out, code, record, calls := labRun(t, "h08-agents-lines", "", h08Probe, c.stdin, nil, "--other", "someone")
 			if code != 1 || !strings.Contains(record, "Result: fail") {
 				t.Fatalf("exit %d\n%s\n%s", code, out, record)
 			}
@@ -346,6 +348,60 @@ func TestANoAtH08sQuestionLeavesTheLabAsItWas(t *testing.T) {
 			}
 			if !strings.Contains(record, c.record) || strings.Index(record, c.record) > strings.Index(record, "Result: fail") {
 				t.Errorf("the record does not say it was undone before its result:\n%s", record)
+			}
+		})
+	}
+}
+
+// H 7 through the Lab address: the owner's token and the Lease on the Mac.
+// A hold ends when the cut it waits for (cut.1, then cut.2) is made.
+const h07Lab = `case "$1" in
+  status) echo "NAME STATE" ;;
+  lease | release) exit 0 ;;
+  *) exit 9 ;;
+esac`
+
+const h07Probe = `S="$(dirname "$0")"
+case "$*" in
+  "hold "*)
+    echo opened=200
+    n="$(grep -c '^hardening-probe hold' "$S/calls")"
+    until [ -f "$S/cut.$n" ]; do sleep 0.1; done
+    echo seconds=1
+    echo "ended=${H07_ENDED:-closed}" ;;
+  "page "*"--find /me/tokens/"*) echo status=200; echo found=7 ;;
+  "page "*" /me") if [ -f "$S/cut.2" ]; then echo status=303; else echo status=200; fi ;;
+  "form "*" /me/tokens name="*) echo lab_0123456789012345678901234567890123456789 > "$out"; echo status=200 ;;
+  "form "*" /me/tokens/7/revoke sure=yes") touch "$S/cut.1"; echo status=303 ;;
+  "form "*" /me/end-all-access sure=yes") [ -z "${H07_CUT_FAILS:-}" ] || { echo status=500; exit 0; }; touch "$S/cut.2"; echo status=303 ;;
+  "ask "*" GET /api/devices")
+    if [ -n "${H07_REFUSED:-}" ]; then echo status=500; elif [ -f "$S/cut.1" ]; then echo status=401; else echo status=200; fi ;;
+  *) echo status=500 ;;
+esac`
+
+func TestH07UndoesItsTokenAndLeaseWhenItEndsFirst(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		env    string
+		undone string
+	}{
+		"a failure before the token is revoked": {"H07_REFUSED=1", "hardening-probe form --out"},
+		"a failure before \"End all access\"":   {"H07_CUT_FAILS=1", "lab release m1-pro"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out, code, record, calls := labRun(t, "h07-cuts", h07Lab, h07Probe, "session\n", []string{c.env})
+			if code != 1 || !strings.Contains(record, "Result: fail") {
+				t.Fatalf("exit %d\n%s\n%s", code, out, record)
+			}
+			if name == "a failure before the token is revoked" {
+				if !strings.Contains(calls, "/me/tokens/7/revoke sure=yes") || !strings.Contains(record, "undone: the Lab token h07-") {
+					t.Errorf("the token was not revoked:\n%s\n%s", calls, record)
+				}
+				return
+			}
+			if !strings.Contains(calls, c.undone) || !strings.Contains(record, "undone: the Lease on m1-pro was released") {
+				t.Errorf("the Lease was not released:\n%s\n%s", calls, record)
 			}
 		})
 	}
