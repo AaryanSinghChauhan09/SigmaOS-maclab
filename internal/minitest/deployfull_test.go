@@ -351,6 +351,45 @@ func TestDeployStopsWhenTheDrainFails(t *testing.T) {
 	}
 }
 
+// withOpsSocket rewrites a bundle already written so that its labd's
+// LaunchDaemon file starts it with an ops socket, as every build since
+// Deploy in full does.
+func withOpsSocket(t *testing.T, k key, dir, tag string) {
+	t.Helper()
+	work := t.TempDir()
+	if out, err := exec.Command("tar", "-xzf", filepath.Join(dir, bundleName), "-C", work).CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+	write(t, work+"/lab-server/deploy/"+labdLabel+".plist", "<plist><!-- "+tag+" --><string>--ops-socket</string><string>/var/lab/run/ops.sock</string></plist>\n", 0o664)
+	if out, err := exec.Command("tar", "-czf", filepath.Join(dir, bundleName), "-C", work, "lab-server").CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+	k.sign(t, filepath.Join(dir, bundleName))
+}
+
+// A labd started with an ops socket that has none is not taken for one too
+// old to have it: its parts fail Deploy's check.
+func TestALabdThatShouldHaveAnOpsSocketAndHasNoneFailsDeploy(t *testing.T) {
+	t.Run("the check after the switch", func(t *testing.T) {
+		m, k, r := deployed(t)
+		m.env = append(m.env, "LAB_PARTS_TRIES=2")
+		first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+		bundle(t, k, filepath.Join(r.dir, first), first, true)
+		bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+		withOpsSocket(t, k, filepath.Join(r.dir, tag), tag)
+		m.ok("deploy", "--from", r.from(first), first)
+
+		out := m.refused("deploy", "--from", r.from(tag), tag)
+
+		if m.current() != first || !m.loaded() {
+			t.Fatalf("the mini runs %q (loaded %v)\n%s", m.current(), m.loaded(), out)
+		}
+		if !strings.Contains(out, "no ops socket") || !strings.Contains(out, first+" is back and answers") {
+			t.Errorf("no word of the ops socket:\n%s", out)
+		}
+	})
+}
+
 func TestDeployGoesBackWhenTheBuilderOrTheControllerIsNotWell(t *testing.T) {
 	for _, c := range []struct{ parts, word string }{
 		{"builder silent\ncontroller ok\n", "the Builder has not asked labd for work"},

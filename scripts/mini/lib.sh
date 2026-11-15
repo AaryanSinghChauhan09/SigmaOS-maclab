@@ -459,6 +459,13 @@ ops_status() {
 
 DRAINING=0
 
+# ops_socket_missing: labd's LaunchDaemon file starts it with an ops socket,
+# and there is none. Only a labd whose file names none is too old to have it.
+# Deploy's check of the parts asks it.
+ops_socket_missing() {
+  [[ ! -S $OPS_SOCKET ]] && grep -qF -- '--ops-socket' "$LAUNCHD_DIR/$LABD_LABEL.plist" 2>/dev/null
+}
+
 # drain_jobs MINUTES: labd starts no further job, and this waits until the
 # jobs and builds that run have ended. A job that waits stays queued and
 # starts after the restart. Only a labd too old to drain (404) is gone on
@@ -517,10 +524,15 @@ lift_drain() {
 
 # parts_bad: what labd says is wrong with the Builder or the Out-of-band
 # controller, or nothing. A part the mini does not have yet is not wrong,
-# and a labd too old to say (no ops socket, or 404) is not asked. An answer
-# that fails or does not read as the two parts is wrong.
+# and a labd too old to say (a LaunchDaemon file with no ops socket, or 404)
+# is not asked. No ops socket where the file names one, or an answer that
+# fails or does not read as the two parts, is wrong.
 parts_bad() {
   local builder controller
+  if ops_socket_missing; then
+    echo "labd has no ops socket at $OPS_SOCKET, though its LaunchDaemon file names one"
+    return 0
+  fi
   [[ -S $OPS_SOCKET ]] || return 0
   ops_status GET /parts
   [[ $OPS_STATUS != 404 ]] || return 0
