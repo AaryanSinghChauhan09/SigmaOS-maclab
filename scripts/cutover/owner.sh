@@ -31,6 +31,18 @@ RUNNER="$CUTOVER/front-door/run"
 SMOKE="$REPO/release/smoke.sh"
 
 say() { echo "$ME: $*"; }
+
+# set_mode MODE: the script's mode, from --MODE. A second, different one is
+# refused: which was meant is not guessed.
+mode_given=""
+set_mode() {
+  if [[ -n $mode_given && $mode_given != "$1" ]]; then
+    echo "$ME: --$mode_given and --$1 are two modes: give one. Nothing was done." >&2
+    exit 2
+  fi
+  mode_given="$1"
+  mode="$1"
+}
 fail() { echo "$ME: $*" >&2; exit 1; }
 # stop: the script goes no further by itself: the next move is the owner's.
 stop() { echo "$ME: $*"; exit 3; }

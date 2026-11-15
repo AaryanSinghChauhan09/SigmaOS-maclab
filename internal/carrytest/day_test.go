@@ -1057,3 +1057,35 @@ func TestTheWayBackAsksTheMiniWhetherTheLabOpened(t *testing.T) {
 		t.Errorf("the record changed: %q", d.done())
 	}
 }
+
+// Two modes are refused before anything is asked: which was meant is not
+// guessed, and the last one no longer wins.
+func TestTheDaysScriptsRefuseTwoModes(t *testing.T) {
+	m := newMini(t, oldlabtest.OnOmarchyGPU)
+	d := newDay(t, m)
+	d.o.set(func() { d.o.app = existingApp })
+	d.days(strings.Fields("18 19 20 21 22a 22 23 24 24a")...)
+	common := []string{"--state", d.state, "--mini", "owner@mini.test"}
+	for _, c := range []struct {
+		script string
+		args   []string
+	}{
+		{"day", []string{"--dry-run", "--run", "--go"}},
+		{"day", []string{"--run", "--dry-run"}},
+		{"day", []string{"--where", "--run"}},
+		{"back", []string{"--dry-run", "--run"}},
+		{"back", []string{"--run", "--dry-run"}},
+		{"confirmed", []string{"--dry-run", "--run"}},
+	} {
+		args := append(append([]string{}, c.args...), "--mini", "owner@mini.test")
+		if c.script != "confirmed" {
+			args = append(c.args, common...)
+		}
+		if out, code := d.script("", c.script, args...); code != 2 || !strings.Contains(out, "two modes") {
+			t.Errorf("%s %q: exit %d\n%s", c.script, c.args, code, out)
+		}
+	}
+	if d.o.asked != 0 || exists(d.sshLog) || d.done() != "18 19 20 21 22a 22 23 24 24a" {
+		t.Errorf("a refused run asked %d things, went to the mini or wrote the record (%q)", d.o.asked, d.done())
+	}
+}

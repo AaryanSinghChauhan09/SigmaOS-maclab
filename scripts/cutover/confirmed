@@ -42,8 +42,8 @@ mode=dry
 links=""
 while (( $# )); do
   case "$1" in
-    --dry-run) mode=dry ;;
-    --run) mode=run ;;
+    --dry-run) set_mode dry-run; mode=dry ;;
+    --run) set_mode run ;;
     --old-links) (( $# >= 2 )) || usage; links="$2"; shift ;;
     --mini) (( $# >= 2 )) || usage; MINI="$2"; shift ;;
     --token-file) (( $# >= 2 )) || usage; TOKEN_FILE="$2"; shift ;;

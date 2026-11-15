@@ -55,9 +55,9 @@ no_alias=0
 
 while (( $# )); do
   case "$1" in
-    --dry-run) mode=dry ;;
-    --run) mode=run ;;
-    --where) where=1 ;;
+    --dry-run) set_mode dry-run; mode=dry ;;
+    --run) set_mode run ;;
+    --where) set_mode where; mode=dry; where=1 ;;
     --go) go=1 ;;
     --done) (( $# >= 2 )) || usage; done_step="$2"; shift ;;
     --mini) (( $# >= 2 )) || usage; MINI="$2"; shift ;;

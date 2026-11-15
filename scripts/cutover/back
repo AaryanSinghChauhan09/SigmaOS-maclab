@@ -30,8 +30,8 @@ mode=dry
 finished=0
 while (( $# )); do
   case "$1" in
-    --dry-run) mode=dry ;;
-    --run) mode=run ;;
+    --dry-run) set_mode dry-run; mode=dry ;;
+    --run) set_mode run ;;
     --done) finished=1 ;;
     --mini) (( $# >= 2 )) || usage; MINI="$2"; shift ;;
     --state) (( $# >= 2 )) || usage; STATE="$2"; shift ;;
