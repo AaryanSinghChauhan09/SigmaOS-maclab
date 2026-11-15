@@ -883,3 +883,9 @@ func TestANoticeKeepsNoConnectionOpen(t *testing.T) {
 		}
 	}
 }
+
+func TestTeredoIsNotPublic(t *testing.T) {
+	if isPublic(netip.MustParseAddr("2001:0:4136:e378:8000:63bf:3fff:fdd2")) {
+		t.Error("a Teredo address is taken as public")
+	}
+}

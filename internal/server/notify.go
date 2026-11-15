@@ -331,8 +331,8 @@ func (s *Server) checkNoticeTopic(ctx context.Context, raw string) error {
 
 // notPublic are the ranges that are not the public internet beyond what
 // netip names: this network, the tailnet's and carrier NAT's, the IETF's,
-// the documentation and benchmarking ranges, the reserved block, NAT64 and
-// 6to4.
+// the documentation and benchmarking ranges, the reserved block, NAT64,
+// Teredo and 6to4.
 var notPublic = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
@@ -344,6 +344,7 @@ var notPublic = []netip.Prefix{
 	netip.MustParsePrefix("240.0.0.0/4"),
 	netip.MustParsePrefix("64:ff9b::/96"),
 	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2001::/32"),
 	netip.MustParsePrefix("2001:db8::/32"),
 	netip.MustParsePrefix("2002::/16"),
 }
