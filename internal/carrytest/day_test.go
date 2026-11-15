@@ -623,7 +623,7 @@ func TestTheDressRunOfTheDay(t *testing.T) {
 
 	// The rest of the day is the owner's, a step at a time.
 	d.stops(3, "", []string{"--done", "26"}, "step 27 is yours", "omarchy-m-testing.org moved to lab.omarchy-mac.org today.")
-	d.stops(3, "", []string{"--done", "27"}, "step 28 is yours", "scripts/cutover/confirmed --mini owner@mini.test --old-links")
+	d.stops(3, "", []string{"--done", "27"}, "step 28 is yours", "scripts/cutover/confirmed --run --mini owner@mini.test --old-links <FILE> --acceptance "+d.acceptance+"\n")
 	d.stops(1, "", []string{"--done", "29"}, "the day is at step 28, not 29")
 	d.stops(1, "", []string{"--done", "28"}, "step 28 is not done yet: no record DATE-confirmed.md")
 	d.record(today+"-confirmed.md", "# The Confirmed checklist\n\nResult: pass, what a script can check\n\nConfirmed: "+today+", the owner\n")

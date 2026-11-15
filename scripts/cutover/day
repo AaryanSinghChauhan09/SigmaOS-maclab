@@ -347,7 +347,7 @@ EOF
     28)
       cat <<EOF
   Type, with an old report's link and an old deletion link in a file only you read (one a line):
-       scripts/cutover/confirmed --mini ${MINI:-USER@HOST} --old-links <FILE>
+       scripts/cutover/confirmed --run --mini ${MINI:-<the mini>} --old-links <FILE> --acceptance $ACCEPTANCE
   It runs what a script can of the five points and lists what is yours to look at.
   See that no copy of the lab's data is kept longer than 6 months (the backup's own rule; its last run says so).
   When the lab passed, write the dated line as the last line of the record it names, and commit it:
