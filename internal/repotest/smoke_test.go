@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -143,5 +144,25 @@ func TestAFailedSmokeTestDeletesItsReport(t *testing.T) {
 	}
 	if !strings.Contains(said, link) {
 		t.Errorf("the report is left on the lab and its deletion link is not said:\n%s", said)
+	}
+}
+
+// The local smoke run says nothing leaves the machine: the CLI it installs
+// must not ask GitHub for its latest version. Every smoke run there goes
+// through a proxy that answers nothing, and the lab on the loopback is
+// reached directly.
+func TestTheLocalSmokeRunsCLIAsksNoUpdate(t *testing.T) {
+	text := read(t, root(t), "release/smoke-local.sh")
+	runs := regexp.MustCompile(`(?m)^.*"\$repo/release/smoke\.sh".*$`).FindAllString(text, -1)
+	if len(runs) != 2 {
+		t.Fatalf("release/smoke-local.sh runs smoke.sh %d times, want 2: %q", len(runs), runs)
+	}
+	for _, line := range runs {
+		if !strings.HasPrefix(line, "offline ") {
+			t.Errorf("release/smoke-local.sh runs smoke.sh with the way to GitHub open: %s", line)
+		}
+	}
+	if !strings.Contains(text, `offline() { https_proxy=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost "$@"; }`) {
+		t.Error("release/smoke-local.sh has no offline helper that closes https and keeps the loopback")
 	}
 }

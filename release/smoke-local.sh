@@ -33,6 +33,10 @@ stop() {
   pid=
 }
 trap 'stop; rm -rf "$t"' EXIT
+# offline COMMAND...: COMMAND with https sent to a loopback port that
+# answers nothing, and the lab on the loopback reached directly: the test
+# tool it installs does not ask GitHub for its latest version.
+offline() { https_proxy=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost "$@"; }
 
 echo "== a Release candidate $tag signed with a key made here"
 ssh-keygen -q -t ed25519 -N '' -C "throwaway key for the local smoke test" -f "$t/key"
@@ -76,7 +80,7 @@ grep -qF "$key'" "$t/install.sh" || fail "/install does not pin the key this lab
 grep -qF "$(release_key "$repo/release/allowed_signers")" "$t/install.sh" && fail "/install pins a second key"
 grep -qF 'releases/latest/download' "$t/install.sh" || fail "an open lab's /install does not take the latest Lab release"
 
-SITE="$site" OMARCHY_M_TEST_RELEASES="file://$t/release" "$repo/release/smoke.sh"
+offline env SITE="$site" OMARCHY_M_TEST_RELEASES="file://$t/release" "$repo/release/smoke.sh"
 
 curl -fsS -D "$t/install-lab.head" -o "$t/install-lab.sh" "$site/install/lab"
 tr -d '\r' < "$t/install-lab.head" | grep -qix 'cache-control: public, max-age=300' || fail "/install/lab is not public for five minutes"
@@ -119,6 +123,6 @@ curl -sS -D - -o /dev/null "$site/healthz" | tr -d '\r' | grep -qi '^x-robots-ta
 curl -fsS "$site/" | grep -qF 'omarchy-m-testing.org is now here' || fail "an opened lab's home page does not say the old site is now here"
 curl -fsS "$site/install" | grep -qF 'releases/latest/download' || fail "an opened lab's /install does not take the latest Lab release"
 curl -fsS "$site/install/lab" | grep -qF 'releases/latest/download' || fail "an opened lab's /install/lab does not take the latest Lab release"
-SITE="$site" OMARCHY_M_TEST_RELEASES="file://$t/release" "$repo/release/smoke.sh"
+offline env SITE="$site" OMARCHY_M_TEST_RELEASES="file://$t/release" "$repo/release/smoke.sh"
 
 echo "local smoke ok: $tag installed from labd's /install with the key made here; uploaded, seen, refused the second time and deleted; lab installed from /install/lab; in Preview both install lines name $tag; opened from Preview, the same again"
