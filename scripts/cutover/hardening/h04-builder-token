@@ -1,0 +1,102 @@
+#!/bin/bash
+# Hardening's test 4: the shared builder token is refused; a named builder
+# cannot fetch an artifact that is not its running build's input (spec
+# section 16, Ready item 8; section 12 "The Builder"; section 8).
+#
+#   h04-builder-token [--dry-run | --local | --lab] [--records DIR]
+#
+# A made-up builder token, and a Maintainer's Lab token, are refused on the
+# builder's routes. A named builder made for the test, holding no build,
+# cannot fetch an artifact uploaded for it. Locally a build is then queued
+# with one config: the builder claims it, fetches that config, and is
+# refused another artifact; an old shared builder.token in labd's data
+# folder opens nothing. Through the Lab address no build is queued and the
+# test builder never polls, so it takes nothing of the mini's Builder; it is
+# removed at the end however the run ends.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
+  1. ask POST /api/builder/poll and GET /api/builder/artifacts/SHA with a made-up builder token
+     expects: 401 each
+  2. ask the same under the Maintainer's own Lab token
+     expects: refused (401 or 403): a person's token is no builder's
+  3. run: lab builder add h04-...; lab upload two small files
+  4. ask GET /api/builder/artifacts/SHA of each with the test builder's token, which holds no build
+     expects: 404 each, "no artifact ... for this builder now"
+  5. locally only: queue a build with the first file as its config; the test builder claims it
+     expects: the first file served to it, the second refused (404); labd's old builder.token opens nothing (401)
+  6. run: lab builder remove h04-...
+  7. write docs/acceptance/$(today)-hardening-04.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+begin 04 "no shared builder token; a builder fetches only its running build's input"
+name="h04-$(nonce)"
+ADDED=0
+# shellcheck disable=SC2317,SC2329
+let_go() { (( ADDED == 0 )) || "$LAB_CMD" builder remove "$name" > /dev/null 2>&1 || echo "$ME: the test builder $name was not removed: run $LAB_CMD builder remove $name" >&2; cleanup; }
+trap let_go EXIT
+
+( umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$WORK/made-up.token" )
+ask poll --timeout 40s --token-file "$WORK/made-up.token" POST /api/builder/poll
+answered poll 401 || give_up "a made-up builder token on POST /api/builder/poll: $(status_of poll) $(said_of poll)"
+rec "a made-up builder token, POST /api/builder/poll: 401, $(said_of poll)"
+ask fetch --token-file "$WORK/made-up.token" GET "/api/builder/artifacts/$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+answered fetch 401 || give_up "a made-up builder token on an artifact: $(status_of fetch) $(said_of fetch)"
+rec "a made-up builder token, GET /api/builder/artifacts/...: 401"
+ask person --timeout 40s POST /api/builder/poll
+[[ "$(status_of person)" == 40[13] ]] || give_up "a Maintainer's Lab token on POST /api/builder/poll: $(status_of person) $(said_of person)"
+rec "a Maintainer's Lab token, POST /api/builder/poll: $(status_of person), $(said_of person)"
+
+"$LAB_CMD" builder add "$name" -o "$WORK/builder.token" > "$WORK/add.out" 2>&1 || give_up "lab builder add $name: $(plain "$WORK/add.out")"
+ADDED=1
+rec "a test builder $name was added; its token is kept in the run's own folder alone"
+upload() {
+  printf 'CONFIG_HARDENING_%s=y\n# %s\n' "$1" "$name" > "$WORK/$1.config"
+  "$LAB_CMD" upload "$WORK/$1.config" > "$WORK/upload-$1.out" 2>&1 || give_up "lab upload: $(plain "$WORK/upload-$1.out")"
+  grep -oE '[0-9a-f]{64}' "$WORK/upload-$1.out" | head -n 1
+}
+a="$(upload A)"
+b="$(upload B)"
+[[ -n $a && -n $b ]] || give_up "lab upload printed no sha256"
+for sha in "$a" "$b"; do
+  ask idle --token-file "$WORK/builder.token" GET "/api/builder/artifacts/$sha"
+  answered idle 404 "for this builder now" || give_up "the test builder, holding no build, fetched an artifact: $(status_of idle) $(said_of idle)"
+done
+rec "the test builder, holding no build, was refused both uploaded artifacts: 404, $(said_of idle)"
+
+if playing; then
+  ask build --json "{\"source\":\"https://github.com/labtest/linux#$(printf '%040d' 1)\",\"config\":\"$a\"}" POST /api/builds
+  [[ "$(status_of build)" == 20[01] ]] || give_up "the build was not queued: $(status_of build) $(said_of build)"
+  ask claim --timeout 40s --token-file "$WORK/builder.token" POST /api/builder/poll
+  [[ "$(status_of claim)" == 200 ]] || give_up "the test builder claimed no build: $(status_of claim) $(said_of claim)"
+  rec "a build was queued with the first file as its config, and the test builder claimed it"
+  ask own --token-file "$WORK/builder.token" GET "/api/builder/artifacts/$a"
+  answered own 200 || give_up "the running build's own config was not served to its builder: $(status_of own) $(said_of own)"
+  ask other --token-file "$WORK/builder.token" GET "/api/builder/artifacts/$b"
+  answered other 404 "for this builder now" || give_up "a builder fetched an artifact that is not its running build's input: $(status_of other) $(said_of other)"
+  rec "the running build's config was served to its builder (200); the other artifact was refused (404, $(said_of other))"
+  ( umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$LOCAL_DATA/builder.token" )
+  restart_labd
+  ask shared --timeout 40s --token-file "$LOCAL_DATA/builder.token" POST /api/builder/poll
+  answered shared 401 || give_up "an old shared builder.token in labd's data folder opened the builder's routes: $(status_of shared) $(said_of shared)"
+  [[ ! -s $WORK/labd.log ]] || ! grep -q 'builder.token' "$WORK/labd.log" || rec "labd says of it: $(grep 'builder.token' "$WORK/labd.log" | head -n 1 | cut -c1-200)"
+  rec "a shared builder.token in labd's data folder, after a restart: 401"
+fi
+
+"$LAB_CMD" builder remove "$name" > "$WORK/remove.out" 2>&1 || give_up "lab builder remove $name: $(plain "$WORK/remove.out")"
+ADDED=0
+ask gone --token-file "$WORK/builder.token" GET "/api/builder/artifacts/$a"
+answered gone 401 || give_up "the removed builder's token still opens the builder's routes: $(status_of gone)"
+rec "the test builder was removed, and its token is refused (401)"
+passed

@@ -1,0 +1,119 @@
+#!/bin/bash
+# Hardening's test 13: an upload from the internet that claims to be the
+# lab's own is counted and treated as anyone's (spec section 16, Ready item
+# 8; section 9 "Publishing a lab run").
+#
+#   h13-lab-own-upload [--dry-run | --local | --lab] [--records DIR]
+#
+# The lab's own publishing goes inside labd and skips the per-address
+# limit; nothing from outside can select it. Locally a signed report is
+# uploaded with every claim a caller could make: a job in the query, in
+# headers, in the User-Agent. It is stored as the Mac's own tool's, its page
+# does not say "run by the lab", and Reports says it arrived by the Mac's
+# own tool. A report carrying a lab_job key is refused. Then claimed
+# uploads go on until the address's limit: the 31st in the hour gets 429.
+#
+# Through the Lab address in Preview every upload is refused before any
+# count: the claimed one must get the very answer an unclaimed one gets.
+# After the lab opens it would use up the owner's address's uploads for an
+# hour, so the count is shown by the local run.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, signed out, it would:
+  1. post an empty report to /api/v1/reports, once as anyone, once claiming a lab job
+     (?lab_job=J&source=lab, X-Lab-Job: J, X-Maclab-Publish: lab, User-Agent: maclab-omt/... job J)
+     expects: the same refusal for both, nothing stored
+  2. write docs/acceptance/$(today)-hardening-13.md and its line in docs/acceptance/$RESULTS_NAME
+Locally: a signed report uploaded with those claims,
+     expects: stored as the Mac's own tool's, its page without "run by the lab"; a lab_job key in a report refused;
+     the 31st claimed upload of the hour from the address: 429
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+begin 13 "an upload that claims to be the lab's own is counted and treated as anyone's"
+CLAIMS=(-H "X-Lab-Job: j-h13" -H "X-Maclab-Publish: lab" -H "User-Agent: maclab-omt/0.2.0 (job j-h13, the lab's own publishing)")
+# upload NAME FILE [claimed]: a POST of FILE as a report; status in WORK/NAME.status.
+upload() {
+  local url="$ADDRESS/api/v1/reports" more=()
+  if [[ ${3:-} == claimed ]]; then url="$url?lab_job=j-h13&source=lab&publish=lab"; more=("${CLAIMS[@]}"); fi
+  curl -sS -o "$WORK/$1.body" -w '%{http_code}' --max-time 60 -X POST -H 'Content-Type: application/json' ${more[@]+"${more[@]}"} \
+    --data-binary "@$2" "$url" > "$WORK/$1.status" 2> /dev/null || echo 000 > "$WORK/$1.status"
+}
+code() { cat "$WORK/$1.status"; }
+echo '{}' > "$WORK/empty.json"
+
+if ! playing; then
+  upload plain "$WORK/empty.json"
+  upload claimed "$WORK/empty.json" claimed
+  [[ "$(code claimed)" != 2* ]] || give_up "an empty report claiming a lab job was taken: $(code claimed)"
+  { [[ "$(code claimed)" == "$(code plain)" ]] && cmp -s "$WORK/claimed.body" "$WORK/plain.body"; } \
+    || give_up "the claimed upload was answered otherwise than anyone's: $(code claimed) $(plain "$WORK/claimed.body") against $(code plain) $(plain "$WORK/plain.body")"
+  rec "an upload claiming a lab job got the very answer anyone's gets: $(code claimed), $(plain "$WORK/claimed.body")"
+  if grep -q 'not open yet' "$WORK/plain.body"; then
+    rec "the lab is in Preview, which refuses every upload before counting it; the count is shown by the local run"
+  else
+    rec "the count is shown by the local run: through the Lab address it would use up this address's uploads for an hour"
+  fi
+  passed
+fi
+
+owner_session
+python3 - "$REPO/cli" "$REPO/schema/golden/signed/m2-max-image2.json" "$WORK/signed.json" "$WORK/with-lab-job.json" 2> "$WORK/sign.err" <<'PY' || give_up "a report could not be signed here: $(plain "$WORK/sign.err")"
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from omarchy_m_test import report, signing
+from omarchy_m_test.host import RealHost
+with open(sys.argv[2], encoding="utf-8") as f:
+    unsigned = {name: value for name, value in json.load(f).items() if name != "signature"}
+for out, extra in ((sys.argv[3], {}), (sys.argv[4], {"lab_job": "j-h13"})):
+    signed, unsigned_because = signing.sign(RealHost(), dict(unsigned, **extra))
+    if unsigned_because:
+        sys.exit(unsigned_because)
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(report.to_text(signed))
+PY
+upload stored "$WORK/signed.json" claimed
+[[ "$(code stored)" == 201 ]] || give_up "a signed report with the claims was not stored: $(code stored) $(plain "$WORK/stored.body")"
+report_url="$(grep -oE '"report_url": *"[^"]+"' "$WORK/stored.body" | sed 's/.*"\(http[^"]*\)"$/\1/')"
+id="${report_url##*/}"
+[[ -n $id ]] || give_up "the answer named no report"
+rec "a signed report uploaded with a lab job in the query, the headers and the User-Agent: 201, stored"
+grep -q '"tester": *false' "$WORK/stored.body" || give_up "the claimed upload was stored as a Verified run: $(plain "$WORK/stored.body")"
+curl -sS -o "$WORK/page.html" --max-time 30 "$report_url"
+! grep -q 'run-by-the-lab' "$WORK/page.html" || give_up "the report's page says it was run by the lab"
+rec "its page does not say \"run by the lab\""
+"$PROBE" page --session "$OWNER_SESSION" --out "$WORK/reports.html" /reports > /dev/null 2>&1
+python3 - "$WORK/reports.html" "$id" <<'PY' || give_up "Reports does not say the report arrived by the Mac's own tool"
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+for row in re.findall(r"<tr[^>]*>.*?</tr>", page, re.S):
+    if sys.argv[2] in row:
+        sys.exit(0 if re.search(r'class="arrived"[^>]*>the Mac.s own tool<', row) else 1)
+sys.exit(1)
+PY
+rec "Reports, for a Maintainer, says it arrived by the Mac's own tool"
+upload lab-job "$WORK/with-lab-job.json" claimed
+[[ "$(code lab-job)" == 4* ]] || give_up "a report carrying a lab_job key: $(code lab-job) $(plain "$WORK/lab-job.body")"
+rec "a report carrying a lab_job key: $(code lab-job), $(plain "$WORK/lab-job.body")"
+
+# The address's limit: 30 an hour, refused uploads counted too. Two so far.
+n=2
+while (( n < 30 )); do
+  upload junk "$WORK/empty.json" claimed
+  [[ "$(code junk)" != 429 ]] || give_up "the limit came at upload $(( n + 1 )), before the 31st"
+  n=$(( n + 1 ))
+done
+upload last "$WORK/empty.json" claimed
+[[ "$(code last)" == 429 ]] || give_up "the 31st claimed upload of the hour: $(code last) $(plain "$WORK/last.body"): the claims were not counted"
+rec "28 more claimed uploads were refused, each counted; the 31st of the hour: 429, $(plain "$WORK/last.body")"
+passed

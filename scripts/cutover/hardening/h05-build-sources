@@ -1,0 +1,88 @@
+#!/bin/bash
+# Hardening's test 5: a build source off the list, or carrying credentials,
+# is refused and labd contacts nothing (spec section 16, Ready item 8;
+# section 12 "The Builder"; section 8).
+#
+#   h05-build-sources [--dry-run | --local | --lab] [--records DIR]
+#
+# Five sources are asked for as builds: another host, this machine's own
+# loopback, a GitHub address with a user and password, the same at the
+# loopback, and GitHub over plain http. Each must be
+# refused by the rule, saying back no password or token. Locally labd runs with
+# every proxy variable pointing at a port that counts who connects, and the
+# loopback sources name that port too: nothing may connect, and labd's log
+# names no git ls-remote. Through the Lab address the refusal must be the
+# rule's own sentence, which labd says before it resolves anything.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
+  1. run: lab upload a small config
+  2. ask POST /api/builds for each source: https://gitlab.com/..., https://127.0.0.1:PORT/...,
+     https://USER:PASSWORD@github.com/..., https://USER:PASSWORD@127.0.0.1:PORT/..., http://github.com/...
+     expects: each refused (400) by the source rule, no password or token said back, no build made
+  3. locally also: nothing connected to the counting port that the proxies and the loopback sources name; no git ls-remote in labd's log
+  4. write docs/acceptance/$(today)-hardening-05.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+# before_lab: the counting port, and labd's proxies pointed at it.
+# shellcheck disable=SC2329
+before_lab() {
+  "$PROBE" listen > "$WORK/listen.out" 2>&1 &
+  PIDS+=($!)
+  for _ in $(seq 50); do grep -q '^port=' "$WORK/listen.out" && break; sleep 0.1; done
+  port="$(sed -n 's/^port=//p' "$WORK/listen.out")"
+  [[ -n $port ]] || fail "the counting port did not start"
+  local proxy="http://127.0.0.1:$port"
+  LABD_ENV=("HTTPS_PROXY=$proxy" "HTTP_PROXY=$proxy" "ALL_PROXY=$proxy" "https_proxy=$proxy" "http_proxy=$proxy" "all_proxy=$proxy" "NO_PROXY=" "no_proxy=")
+}
+port=1
+begin 05 "a build source off the list, or carrying credentials, is refused, and labd contacts nothing"
+if ! playing; then before_lab; fi
+
+printf 'CONFIG_HARDENING=y\n' > "$WORK/h05.config"
+"$LAB_CMD" upload "$WORK/h05.config" > "$WORK/upload.out" 2>&1 || give_up "lab upload: $(plain "$WORK/upload.out")"
+config="$(grep -oE '[0-9a-f]{64}' "$WORK/upload.out" | head -n 1)"
+[[ -n $config ]] || give_up "lab upload printed no sha256"
+
+ask builds-before --rows id GET /api/builds
+before="$(rows builds-before | wc -l | tr -d ' ')"
+secret="h05secret$(nonce)"
+for source in "https://gitlab.com/hardening/linux" "https://127.0.0.1:$port/hardening/linux.git" \
+  "https://hardening:$secret@github.com/hardening/linux" "https://hardening:$secret@127.0.0.1:$port/hardening/linux.git" \
+  "http://github.com/hardening/linux"; do
+  shown="${source//$secret/PASSWORD}"
+  ask source --timeout 60s --json "{\"source\":\"$source\",\"config\":\"$config\"}" POST /api/builds
+  [[ "$(status_of source)" == 400 ]] || give_up "the source $shown: $(status_of source) $(said_of source)"
+  said_of source | grep -qiE "a build's source|source" || give_up "the source $shown was refused, but not by the source rule: $(said_of source)"
+  ! grep -qF "$secret" "$WORK/source.body" || give_up "the refusal of $shown said its secret back"
+  ! said_of source | grep -q 'ls-remote' || give_up "labd tried the source $shown: $(said_of source)"
+  rec "$shown: 400, $(said_of source)"
+done
+ask builds-after --rows id GET /api/builds
+[[ "$(rows builds-after | wc -l | tr -d ' ')" == "$before" ]] || give_up "a build was made for a refused source"
+rec "no build was made for any of them"
+if playing; then
+  sleep 2
+  connections="$(grep -c '^connection=' "$WORK/listen.out" || true)"
+  [[ $connections == 0 ]] || give_up "labd connected $connections time(s) to the port the proxies and the loopback sources name"
+  ! grep -q 'ls-remote' "$WORK/labd.log" || give_up "labd's log names git ls-remote: $(grep 'ls-remote' "$WORK/labd.log" | head -n 1 | cut -c1-200)"
+  rec "nothing connected to the port that every proxy variable of labd and the loopback sources named, and labd's log names no git ls-remote: labd contacted nothing"
+  # The port does count: a source the rule allows, asked after, reaches it.
+  ask allowed --timeout 90s --json "{\"source\":\"https://github.com/hardening/linux\",\"config\":\"$config\"}" POST /api/builds
+  wait_until 20 grep -q '^connection=' "$WORK/listen.out" || give_up "a source the rule allows did not reach the counting port either: the port proves nothing"
+  rec "and the port does count: a source the rule allows, https://github.com/hardening/linux, asked after, reached it through labd's proxy ($(status_of allowed))"
+else
+  rec "that labd contacts nothing is shown by the local run, where every proxy points at a port that counts; here each refusal is the rule's own sentence, which labd says before resolving anything"
+fi
+passed

@@ -1,0 +1,119 @@
+#!/bin/bash
+# Hardening's fourteen tests, one after another, or what they have said so
+# far (spec section 16, Ready item 8).
+#
+#   run [--dry-run | --local | --lab] [--only N,N...] [--skip N,N...] [--for N "OPTIONS"]...
+#       [--mac NAME] [--mini USER@HOST] [--records DIR] [--bin DIR]
+#   run --results [--records DIR]
+#
+# With no option every test says its steps and nothing is sent. Every test
+# chosen runs, whatever the one before it said, and the run ends with one
+# line for each. Its exit status is the worst: 1 if one failed, else 3 if
+# one stopped for the owner, else 4 if one waits for another slice, else 0.
+#
+#   --only N,N...   just these tests, such as --only 2 or --only 3,6
+#   --skip N,N...   all but these
+#   --for N "OPTS"  options for test N alone, such as --for 3 "--release R"
+#   --results       read docs/acceptance/hardening.results (or the one in
+#                   --records DIR): one line for each of the fourteen, and
+#                   exit 0 only when all fourteen say pass. This is what the
+#                   Ready list reads
+#
+# Test 14 runs in step 14a (decision S12); with --lab and no options of its
+# own it takes that run's result and does not repeat it.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ME="$(basename "$0")"
+usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+names=(- h01-console h02-exec-lease h03-freeze-entry h04-builder-token h05-build-sources h06-no-secret-shown h07-cuts
+  h08-agents-lines h09-notice-topic h10-browser h11-exec-record-readers h12-agent-signature h13-lab-own-upload h14-volunteers-mac)
+titles=(- "the console routes and serial exec are refused"
+  "exec needs the caller's own Lease, and every attempt is recorded"
+  "freeze-entry needs the caller's own Lease and writes no Exec record"
+  "no shared builder token; a builder fetches only its running build's input"
+  "a build source off the list, or with credentials, is refused; labd contacts nothing"
+  "no secret in the process list or a service definition on the mini"
+  "revoking a token and \"End all access\" stop the next request and an open stream"
+  "a people change, a new Lab token and a cut each appear in \"Agents\""
+  "a Notice topic at a private address, or behind a redirect, is refused"
+  "cross-site writes, the return address, /api/themes, the deletion link"
+  "the Exec record's three kinds of readers, and its 12 months"
+  "a lab-agent with a bad signature, and an older one, are refused"
+  "an upload that claims to be the lab's own is counted as anyone's"
+  "an Installed run and a Promotion on a Volunteer's Mac are refused")
+all="1,2,3,4,5,6,7,8,9,10,11,12,13,14"
+only="$all"
+skip=""
+results=0
+mode=dry-run
+records=""
+pass=()
+fors=()
+args=("$@")
+i=0
+while (( i < ${#args[@]} )); do
+  case "${args[i]}" in
+    --only) only="${args[i + 1]:-}"; i=$((i + 1)) ;;
+    --skip) skip="${args[i + 1]:-}"; i=$((i + 1)) ;;
+    --for)
+      [[ ${args[i + 1]:-} =~ ^([1-9]|1[0-4])$ ]] || { echo "$ME: --for takes a test's number, 1 to 14" >&2; exit 2; }
+      fors+=("${args[i + 1]}" "${args[i + 2]:-}")
+      i=$((i + 2)) ;;
+    --results) results=1 ;;
+    --records) records="${args[i + 1]:-}"; pass+=(--records "$records"); i=$((i + 1)) ;;
+    --mac|--mini|--bin) pass+=("${args[i]}" "${args[i + 1]:-}"); i=$((i + 1)) ;;
+    --dry-run|--local|--lab) pass+=("${args[i]}"); mode="${args[i]#--}" ;;
+    -h|--help) usage ;;
+    *) echo "$ME: an option it does not take: ${args[i]}" >&2; exit 2 ;;
+  esac
+  i=$((i + 1))
+done
+numbers='^([1-9]|1[0-4])(,([1-9]|1[0-4]))*$'
+[[ $only =~ $numbers ]] || { echo "$ME: --only takes numbers from 1 to 14, such as 3,6" >&2; exit 2; }
+[[ -z $skip || $skip =~ $numbers ]] || { echo "$ME: --skip takes numbers from 1 to 14, such as 3,6" >&2; exit 2; }
+
+if (( results )); then
+  file="${records:-$here/../../../docs/acceptance}/hardening.results"
+  green=1
+  for n in $(seq 14); do
+    line="$(grep "^$(printf '%02d' "$n") " "$file" 2>/dev/null | tail -n 1 || true)"
+    if [[ -z $line ]]; then
+      printf 'H %2d: not run        %s\n' "$n" "${titles[n]}"
+      green=0
+      continue
+    fi
+    read -r _ result day record <<<"$line"
+    printf 'H %2d: %-7s %s  %s (%s)\n' "$n" "$result" "$day" "${titles[n]}" "$record"
+    [[ $result == pass ]] || green=0
+  done
+  if (( green )); then
+    echo "$ME: Ready item 8 is green: all fourteen passed"
+    exit 0
+  fi
+  echo "$ME: Ready item 8 is not green"
+  exit 1
+fi
+
+worst=0
+summary=()
+for n in ${only//,/ }; do
+  [[ ",$skip," != *",$n,"* ]] || continue
+  own=()
+  for (( k = 0; k < ${#fors[@]}; k += 2 )); do
+    # shellcheck disable=SC2206
+    [[ ${fors[k]} != "$n" ]] || own+=(${fors[k + 1]})
+  done
+  code=0
+  "$here/${names[n]}" ${pass[@]+"${pass[@]}"} ${own[@]+"${own[@]}"} || code=$?
+  case $code in
+    0) if [[ $mode == dry-run ]]; then word=said; else word=pass; fi ;;
+    3) word=stopped; (( worst == 1 )) || worst=3 ;;
+    4) word=waits; (( worst == 1 || worst == 3 )) || worst=4 ;;
+    *) word=fail; worst=1 ;;
+  esac
+  summary+=("$(printf 'H %2d: %-7s %s' "$n" "$word" "${titles[n]}")")
+done
+echo
+(( ${#summary[@]} == 0 )) || printf '%s\n' "${summary[@]}"
+exit "$worst"

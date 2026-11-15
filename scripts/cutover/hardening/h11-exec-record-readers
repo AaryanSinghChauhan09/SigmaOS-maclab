@@ -1,0 +1,114 @@
+#!/bin/bash
+# Hardening's test 11: an Exec record is seen only by its three kinds of
+# people, and a record past 12 months is deleted (spec section 16, Ready
+# item 8; section 12 "The Exec record").
+#
+#   h11-exec-record-readers [--dry-run | --local | --lab] [--mac NAME] [--records DIR]
+#
+# The three are the Maintainers, the person who ran the command and the
+# Mac's Volunteer. Locally a Volunteer's simulated Mac gets two lines, one
+# a Maintainer's and one an M team member's, and the Exec record is read as
+# each kind of person: a Maintainer and the Volunteer see both, the member
+# their own, another member none; a person with no role, a stranger to the
+# Mac and a signed-out browser are refused. Then a line dated 366 days back
+# is written into labd's database, and labd, started again, deletes it and
+# keeps the rest.
+#
+# Through the Lab address Preview has nobody but the owner: the test reads
+# the record as the owner, and signed out, and says that the others' rule is
+# shown by the local run; a line past 12 months cannot be made there
+# without writing into the lab's database, so the test reads the oldest
+# line and says how old it is.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
+  1. ask GET /api/devices/$MAC/execs under the saved login, and signed out
+     expects: 200 with the lines, and 401
+  2. read the oldest line's time
+     expects: under 12 months old
+  3. write docs/acceptance/$(today)-hardening-11.md and its line in docs/acceptance/$RESULTS_NAME
+Locally: the record of a Volunteer's Mac read by a Maintainer, its Volunteer, the member who ran a line,
+another member, a person with no role, the Volunteer on another Mac and a signed-out browser,
+     expects: both lines, both lines, their own line, none, 403, 404, 401
+then a line 366 days old written in labd's database and labd started again,
+     expects: that line gone, the others kept
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+begin 11 "the Exec record is seen only by its three kinds of people, and is deleted at 12 months"
+: > "$WORK/out.session"
+if ! playing; then
+  ask owner-reads --rows time,handle,command,state GET "/api/devices/$MAC/execs"
+  [[ "$(status_of owner-reads)" == 200 ]] || give_up "the owner reading the Exec record of $MAC: $(status_of owner-reads) $(said_of owner-reads)"
+  rec "the owner, a Maintainer, reads the Exec record of $MAC: $(rows owner-reads | wc -l | tr -d ' ') lines"
+  ask out-reads --session "$WORK/out.session" GET "/api/devices/$MAC/execs"
+  [[ "$(status_of out-reads)" == 401 ]] || give_up "a signed-out browser reading the Exec record: $(status_of out-reads)"
+  rec "a signed-out browser: 401"
+  oldest="$(rows owner-reads | cut -d'|' -f1 | sort | head -n 1)"
+  if [[ -n $oldest ]]; then
+    age=$(( ( $(date +%s) - $(date -j -u -f '%Y-%m-%dT%H:%M:%S' "${oldest:0:19}" +%s 2>/dev/null || date -u -d "${oldest:0:19}" +%s) ) / 86400 ))
+    (( age <= 366 )) || give_up "the oldest line of the Exec record of $MAC is $age days old"
+    rec "the oldest line is $age days old"
+  fi
+  rec "the rule for the other two kinds and for everyone else, and the deletion at 12 months, are shown by the local run: Preview has nobody but the owner, and a line past 12 months cannot be made here without writing into the lab's database"
+  passed
+fi
+
+people
+local_mac "$MAC"
+volunteers=loaner
+volunteer_mac "$volunteers"
+token_for member h11-member
+cp "$WORK/member.token" "$WORK/m.token"
+token_for other h11-other
+cp "$WORK/other.token" "$WORK/o.token"
+rec "@lender lends $volunteers; @member and @other are on the M team; $MAC is Lab-owned"
+tag="h11-$(nonce)"
+ask a --json "{\"command\":\"echo $tag-maintainer\"}" POST "/api/devices/$volunteers/exec"
+ask b --token-file "$WORK/m.token" --json "{\"command\":\"echo $tag-member\"}" POST "/api/devices/$volunteers/exec"
+[[ "$(status_of a)" == 409 && "$(status_of b)" == 40[39] ]] || give_up "the two attempts on $volunteers were not refused for the Lease: $(status_of a) $(status_of b)"
+rec "a Maintainer and @member each asked lab exec on $volunteers with no Lease: refused, and recorded"
+
+# reads WHO STATUS WANT CREDENTIAL...: the Exec record of a Mac as one person.
+reads() {
+  local who="$1" status="$2" want="$3" mac="$4"
+  shift 4
+  ask reads --rows command "$@" GET "/api/devices/$mac/execs"
+  [[ "$(status_of reads)" == "$status" ]] || give_up "$who reading the Exec record of $mac: $(status_of reads) $(said_of reads), not $status"
+  got="$( { rows reads | grep "$tag" || true; } | sed "s/echo $tag-//" | sort | tr '\n' ' ' | sed 's/ $//')"
+  [[ $got == "$want" ]] || give_up "$who sees of the Exec record of $mac: \"$got\", not \"$want\""
+  rec "$who reading the Exec record of $mac: $status${want:+, sees: $want}"
+}
+reads "a Maintainer" 200 "maintainer member" "$volunteers"
+reads "the Mac's Volunteer (@lender)" 200 "maintainer member" "$volunteers" --session "$WORK/lender.session"
+reads "the member who ran one (@member)" 200 "member" "$volunteers" --token-file "$WORK/m.token"
+reads "a member who ran none (@other)" 200 "" "$volunteers" --token-file "$WORK/o.token"
+reads "a person with no role (@nobody)" 403 "" "$volunteers" --session "$WORK/nobody.session"
+reads "the Volunteer, on a Mac that is not theirs" 404 "" "$MAC" --session "$WORK/lender.session"
+reads "a signed-out browser" 401 "" "$volunteers" --session "$WORK/out.session"
+
+# Twelve months.
+kill "$LABD_PID" 2>/dev/null || true
+wait "$LABD_PID" 2>/dev/null || true
+old=$(( ( $(date +%s) - 366 * 86400 ) * 1000000 ))
+sqlite3 "$LOCAL_DATA/labd.db" "INSERT INTO exec_record (at, mac, device_id, account_id, handle, command, state, exit_code, seconds, why)
+  SELECT $old, mac, device_id, account_id, handle, 'echo $tag-a-year-ago', 'ran', 0, 0.1, '' FROM exec_record WHERE command = 'echo $tag-maintainer'" \
+  || give_up "no line could be written into labd's database"
+[[ "$(sqlite3 "file:$LOCAL_DATA/labd.db?mode=ro" "SELECT count(*) FROM exec_record WHERE command LIKE '%$tag-a-year-ago'")" == 1 ]] || give_up "the line dated 366 days back is not in labd's database"
+rec "a line dated 366 days back was written into labd's database, and labd started again"
+start_labd "$LOCAL_PORT"
+wait_until 30 eval "[[ \"\$(sqlite3 \"file:$LOCAL_DATA/labd.db?mode=ro\" \"SELECT count(*) FROM exec_record WHERE command LIKE '%$tag-a-year-ago'\")\" == 0 ]]" \
+  || give_up "labd started again and kept the line dated 366 days back"
+reads "a Maintainer, after" 200 "maintainer member" "$volunteers"
+rec "labd deleted the line past 12 months at its start, and kept the two of this run"
+passed

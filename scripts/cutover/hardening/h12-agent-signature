@@ -1,0 +1,119 @@
+#!/bin/bash
+# Hardening's test 12: a lab-agent with a bad signature, and an older one,
+# are each refused (spec section 16, Ready item 8; section 12 "The lab's own
+# software"; section 4 "A Volunteer's Mac and the lab's own software").
+#
+#   h12-agent-signature [--dry-run | --local | --lab] [--mac NAME] [--records DIR]
+#
+# Locally a labd hands out, one after another, a lab-agent whose signature
+# does not match it, one signed by another key, and one with a lower number
+# than the agent running on a simulated Lab-owned Mac; the running agent
+# pins a release key made for the run. A Maintainer's lab agent-update must
+# be refused by the Mac each time, saying why, and leave the installed agent
+# as it was. Then a good one, signed and newer, is installed: the refusals
+# were the checks', not the update's.
+#
+# Through the Lab address the Deployed lab hands out its own signed agent
+# only; making it hand out a bad one would mean changing the Release on the
+# mini. The test runs lab agent-update on an idle Lab-owned Mac and wants the
+# Mac's own check to pass; the refusals are shown by the local run, which
+# runs the same code on the Mac's side.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+no_rest
+NAMESPACE=omarchy-m-test-release
+MODULE=github.com/omacom/omarchy-maclab
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
+  1. see that $MAC is idle (no job, no Lease), then run: lab agent-update $MAC
+     expects: the Mac checked the lab's agent's signature itself: "its signature checked on the Mac", or already the lab's
+  2. write docs/acceptance/$(today)-hardening-12.md and its line in docs/acceptance/$RESULTS_NAME
+Locally: a simulated Lab-owned Mac whose agent pins a key made for the run is handed a lab-agent with a bad signature,
+one signed by another key and an older one, and asked lab agent-update each time,
+     expects: each refused by the Mac, the installed agent unchanged; then a good newer one installed
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+# before_lab: the run's own release key, a lab-agent that pins it, and a
+# labd that hands out whatever lies beside it.
+# shellcheck disable=SC2329
+before_lab() {
+  command -v go >/dev/null 2>&1 || fail "the local run builds a lab-agent that pins a key made for it, and needs go"
+  mkdir -p "$WORK/keys" "$WORK/pinned" "$WORK/srv"
+  ssh-keygen -q -t ed25519 -N '' -C "throwaway key for $ME" -f "$WORK/keys/release"
+  ssh-keygen -q -t ed25519 -N '' -C "another key for $ME" -f "$WORK/keys/other"
+  local pub
+  pub="$(cut -d' ' -f1,2 "$WORK/keys/release.pub")"
+  (cd "$REPO" && CGO_ENABLED=0 go build -ldflags="-X '$MODULE/internal/agent.ReleaseKey=$pub'" -o "$WORK/pinned/lab-agent" ./cmd/lab-agent) \
+    || fail "the lab-agent that pins the run's key did not build"
+  SIM_AGENT="$WORK/pinned/lab-agent"
+  cp "$BIN/labd" "$WORK/srv/labd"
+  LABD_BIN="$WORK/srv/labd"
+  serve 0.10.1 release
+}
+
+# serve NUMBER KEY [tampered]: what labd hands out: a lab-agent that says
+# NUMBER, signed by KEY; tampered changes it after it was signed.
+serve() {
+  local agent="$WORK/srv/lab-agent-linux-arm64"
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\n[ "$1" = version ] && { echo %s; echo "Lab release v0.0.0-h12"; }\nexit 0\n' "$1" > "$agent"
+  chmod 755 "$agent"
+  rm -f "$agent.sig"
+  ssh-keygen -q -Y sign -n "$NAMESPACE" -f "$WORK/keys/$2" "$agent" > /dev/null 2>&1 || fail "ssh-keygen could not sign"
+  [[ ${3:-} != tampered ]] || echo "# changed after it was signed" >> "$agent"
+}
+
+begin 12 "a lab-agent with a bad signature, and an older one, are refused"
+if ! playing; then
+  "$LAB_CMD" status "$MAC" > "$WORK/mac.out" 2>&1 || give_up "lab status $MAC: $(plain "$WORK/mac.out")"
+  { grep -q "^$MAC .*READY" "$WORK/mac.out" && ! grep -q '^  lease:' "$WORK/mac.out"; } || stopped "$MAC is not idle now: run this when it is READY with no Lease"
+  code=0
+  "$LAB_CMD" agent-update "$MAC" > "$WORK/update.out" 2>&1 || code=$?
+  if (( code == 0 )) && grep -qE 'signature checked on the Mac|already the lab' "$WORK/update.out"; then
+    rec "lab agent-update $MAC: $(plain "$WORK/update.out")"
+  else
+    give_up "lab agent-update $MAC: exit $code: $(plain "$WORK/update.out")"
+  fi
+  rec "a bad signature and an older agent cannot be handed out by the Deployed lab without changing its Release on the mini; the local run shows the Mac refusing both"
+  passed
+fi
+
+local_mac "$MAC"
+dir="$(sim_dir "$MAC")" || fail "no folder for the simulated $MAC"
+installed="$dir/lab-agent"
+[[ ! -e $installed ]] || cp "$installed" "$WORK/installed.before"
+rec "$MAC is a simulated Lab-owned Mac whose lab-agent 0.10.0 pins a release key made for this run"
+
+# refused WHAT WORDS: lab agent-update must fail, the Mac saying WORDS, and
+# leave the installed agent as it was.
+refused() {
+  local code=0
+  "$LAB_CMD" agent-update "$MAC" > "$WORK/update.out" 2>&1 || code=$?
+  { (( code != 0 )) && grep -qF "$2" "$WORK/update.out"; } || give_up "$1: lab agent-update exit $code: $(plain "$WORK/update.out")"
+  if [[ -e $WORK/installed.before ]]; then cmp -s "$installed" "$WORK/installed.before" || give_up "$1: the installed agent was changed"
+  else [[ ! -e $installed ]] || give_up "$1: an agent was installed"; fi
+  rec "$1: refused by the Mac, and the installed agent left as it was: $(plain "$WORK/update.out")"
+}
+serve 0.10.1 release tampered
+refused "a lab-agent changed after it was signed" "is not signed by the release key this lab-agent pins"
+serve 0.10.1 other
+refused "a lab-agent signed by another key" "is not signed by the release key this lab-agent pins"
+serve 0.9.0 release
+refused "an older lab-agent, 0.9.0, rightly signed" "older than the 0.10.0 installed"
+
+serve 0.10.1 release
+code=0
+"$LAB_CMD" agent-update "$MAC" > "$WORK/update.out" 2>&1 || code=$?
+{ (( code == 0 )) && grep -q '0.10.0 -> 0.10.1' "$WORK/update.out"; } || give_up "a good, newer lab-agent was not installed: exit $code: $(plain "$WORK/update.out")"
+cmp -s "$installed" "$WORK/srv/lab-agent-linux-arm64" || give_up "lab agent-update said it updated, and the Mac's agent is not the one handed out"
+rec "a lab-agent signed by the pinned key and newer was installed: $(plain "$WORK/update.out")"
+passed

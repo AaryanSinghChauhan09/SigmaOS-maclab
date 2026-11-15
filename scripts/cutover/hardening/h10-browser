@@ -1,0 +1,130 @@
+#!/bin/bash
+# Hardening's test 10: a cross-site write is refused; a return address
+# outside the lab lands on the home page; /api/themes* is gone; the
+# deletion link asks before deleting (spec section 16, Ready item 8;
+# section 12 "The browser"; section 5 "The interface").
+#
+#   h10-browser [--dry-run | --local | --lab] [--records DIR]
+#
+# A signed-in browser's form from another site's page, by Origin and by
+# Sec-Fetch-Site, and a signed-out one's upload from another site, are
+# refused. Sign-in asked to return to another site, or to a path a browser
+# could read as one, lands on the home page; to the lab's own path, there.
+# /api/themes and what was under it answer as gone. Opening a report's
+# deletion link shows a confirmation and deletes nothing.
+#
+# Through the Lab address the script acts as the owner's browser with the
+# session cookie typed at a prompt that shows nothing; the sign-in through
+# GitHub is the owner's, by hand, and the deletion link is typed at a
+# hidden prompt: one the old site gave for a report of the owner's own,
+# carried by the import.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+no_rest
+ELSEWHERE="https://elsewhere.example"
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, as the owner's browser (the session cookie typed at a hidden prompt), it would:
+  1. post the form that makes a Lab token with Origin: $ELSEWHERE, then with no Origin and Sec-Fetch-Site: cross-site
+     expects: 403 each, "refused: a page from $ELSEWHERE ..." and "refused: a cross-site page ..."; no token made
+  2. signed out, post an upload with Origin: $ELSEWHERE
+     expects: 403, "refused: a page from $ELSEWHERE asked labd"
+  3. STOP, by hand: in a private window open $ADDRESS/sign-in?return=$ELSEWHERE/ and sign in
+     expects: the owner lands on the lab's home page
+  4. ask GET /api/themes, /api/themes/default, /api/themes/default/theme.css, signed in and out
+     expects: 404 each
+  5. open a report's deletion link (typed at a hidden prompt), then the report's page
+     expects: a confirmation page (no-store, no referrer) with a form; the report still there
+  6. write docs/acceptance/$(today)-hardening-10.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+begin 10 "cross-site writes, the return address, /api/themes, the deletion link"
+owner_session
+: > "$WORK/out.session"
+
+# A cross-site write, signed in and signed out.
+tokens() { "$PROBE" page --session "$OWNER_SESSION" --find '(h10-[0-9a-f]+)' /me > "$WORK/tokens.out" 2>&1; grep -c '^found=' "$WORK/tokens.out" || true; }
+before="$(tokens)"
+tag="h10-$(nonce)"
+form cross --session "$OWNER_SESSION" --origin "$ELSEWHERE" /me/tokens "name=$tag" period=30
+answered cross 403 "refused: a page from $ELSEWHERE" || give_up "a signed-in form from $ELSEWHERE: $(status_of cross) $(said_of cross)"
+rec "a signed-in browser's form from a page at $ELSEWHERE: 403, $(said_of cross)"
+form fetch-site --session "$OWNER_SESSION" --no-origin --fetch-site cross-site /me/tokens "name=$tag" period=30
+answered fetch-site 403 "refused: a cross-site page" || give_up "a signed-in form saying Sec-Fetch-Site: cross-site: $(status_of fetch-site) $(said_of fetch-site)"
+rec "the same with no Origin and Sec-Fetch-Site: cross-site: 403"
+[[ "$(tokens)" == "$before" ]] || give_up "a refused cross-site form made a Lab token all the same"
+rec "no Lab token was made by either"
+ask out-upload --session "$WORK/out.session" --header "Origin: $ELSEWHERE" --json '{}' POST /api/v1/reports
+answered out-upload 403 "refused: a page from $ELSEWHERE asked labd" || give_up "a signed-out upload from $ELSEWHERE: $(status_of out-upload) $(said_of out-upload)"
+rec "a signed-out browser's upload from a page at $ELSEWHERE: 403, $(said_of out-upload)"
+
+# The return address after sign-in.
+if playing; then
+  for back in "$ELSEWHERE/" "//elsewhere.example/" '/\elsewhere.example/' "/%2F%2Felsewhere.example/" "javascript:alert(1)"; do
+    "$PROBE" sign-in --session "$WORK/back.session" --as "$OWNER_ID" --return "$back" > "$WORK/back.out" 2>&1 || give_up "sign-in asked to return to $back: $(plain "$WORK/back.out")"
+    landed="$(sed -n 's/^landed=//p' "$WORK/back.out")"
+    [[ $landed == "$ADDRESS/" ]] || give_up "sign-in asked to return to $back landed on $landed"
+    rec "sign-in asked to return to $back landed on the home page"
+  done
+  "$PROBE" sign-in --session "$WORK/back.session" --as "$OWNER_ID" --return "/macs?x=1" > "$WORK/back.out" 2>&1
+  [[ "$(sed -n 's/^landed=//p' "$WORK/back.out")" == "$ADDRESS/macs?x=1" ]] || give_up "sign-in asked to return to /macs?x=1 did not land there: $(plain "$WORK/back.out")"
+  rec "and asked to return to the lab's own /macs?x=1, it landed there"
+else
+  hands "In a private window of your browser, open $ADDRESS/sign-in?return=$ELSEWHERE/ and sign in with GitHub"
+  confirm "Did you land on the lab's own home page ($ADDRESS/), and not at $ELSEWHERE?" || give_up "after sign-in the browser was sent outside the lab"
+  rec "sign-in asked to return to $ELSEWHERE/ landed on the home page (the owner saw it)"
+fi
+
+# /api/themes is gone.
+for path in /api/themes /api/themes/default /api/themes/default/theme.css; do
+  ask themes GET "$path"
+  [[ "$(status_of themes)" == 404 ]] || give_up "GET $path under the saved login: $(status_of themes)"
+  ask themes-out --session "$WORK/out.session" GET "$path"
+  [[ "$(status_of themes-out)" == 404 ]] || give_up "GET $path signed out: $(status_of themes-out)"
+done
+rec "/api/themes, /api/themes/default and /api/themes/default/theme.css: 404 under a Lab token and signed out"
+
+# The deletion link.
+if playing; then
+  python3 - "$REPO/cli" "$REPO/schema/golden/signed/m2-max-image2.json" > "$WORK/saved.json" 2> "$WORK/sign.err" <<'PY' || give_up "a report could not be signed here: $(plain "$WORK/sign.err")"
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from omarchy_m_test import report, signing
+from omarchy_m_test.host import RealHost
+with open(sys.argv[2], encoding="utf-8") as f:
+    unsigned = {name: value for name, value in json.load(f).items() if name != "signature"}
+signed, unsigned_because = signing.sign(RealHost(), unsigned)
+if unsigned_because:
+    sys.exit(unsigned_because)
+sys.stdout.write(report.to_text(signed))
+PY
+  (cd "$REPO/cli" && python3 -m omarchy_m_test --upload "$WORK/saved.json" --site "$ADDRESS") > "$WORK/upload.log" 2>&1 || give_up "the upload: $(plain "$WORK/upload.log")"
+  report_url="$(sed -n 's/^Uploaded\. Your report: //p' "$WORK/upload.log")"
+  ( umask 077; sed -n 's/^Keep this link to delete it later: //p' "$WORK/upload.log" > "$WORK/deletion" )
+  rm -f "$WORK/upload.log"
+  [[ -n $report_url && -s $WORK/deletion ]] || give_up "the upload gave no report and deletion link"
+  rec "a report was uploaded here, signed by a key made for the run"
+else
+  hidden "$WORK/deletion" "the deletion link of a report on the lab, one the old site gave you for a report of your own"
+  report_url="$(sed -e 's/\/deletion?.*//' "$WORK/deletion")"
+fi
+link="$(cat "$WORK/deletion")"
+[[ $link == "$ADDRESS"/reports/*/deletion\?token=* ]] || give_up "that is not a deletion link at $ADDRESS"
+code="$(curl -sS -o "$WORK/deletion.html" -D "$WORK/deletion.headers" -w '%{http_code}' --max-time 30 "$link")" || code=000
+[[ $code == 200 ]] || give_up "the deletion link answered $code"
+grep -qi '^cache-control:.*no-store' "$WORK/deletion.headers" || give_up "the deletion page may be kept: no no-store"
+grep -qi '^referrer-policy: *no-referrer' "$WORK/deletion.headers" || give_up "the deletion page sends a referrer"
+grep -qiE '<form[^>]*method="post"' "$WORK/deletion.html" || give_up "the deletion page has no form to confirm with"
+rec "opening the deletion link: 200, no-store, no referrer, a confirmation form"
+code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$report_url")" || code=000
+[[ $code == 200 ]] || give_up "after the deletion link was opened, the report's page answers $code: it was deleted"
+rec "the report's page still answers 200: opening the link deleted nothing"
+passed

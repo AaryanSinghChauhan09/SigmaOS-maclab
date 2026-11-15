@@ -1,0 +1,87 @@
+#!/bin/bash
+# Hardening's test 3: freeze-entry on a Lab-owned Mac is refused without the
+# caller's own Lease, and a freeze writes no Exec record (spec section 16,
+# Ready item 8; section 12 "freeze-entry is not an exec"; section 9).
+#
+#   h03-freeze-entry [--dry-run | --local | --lab --release R] [--mac NAME] [--records DIR]
+#
+#   --release R   a Release whose manifest names the Mac and whose installer
+#                 entry for it is not frozen yet: an entry is frozen once
+#
+# Locally the simulated Mac has no installer entry, so the freeze under the
+# Lease reads the Mac and fails there: what is proved is that it is let in
+# and sends no exec.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+release=""
+if (( ${#REST[@]} )); then
+  [[ ${REST[0]} == --release && ${#REST[@]} == 2 && ${REST[1]} =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ ]] || fail "an option it does not take: ${REST[0]}. Nothing was done."
+  release="${REST[1]}"
+fi
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
+  1. with no Lease on $MAC, ask: lab installed freeze-entry $MAC --release ${release:-R}
+     expects: refused, "needs your own Lease on it, a Maintainer's too"
+  2. read the Exec record of $MAC
+  3. run: lab lease $MAC; lab installed freeze-entry $MAC --release ${release:-R}; lab release $MAC
+     expects: the entry frozen (locally: the simulated Mac read, and no entry found)
+  4. read the Exec record of $MAC again
+     expects: not one line more: the freeze sent no exec
+  5. write docs/acceptance/$(today)-hardening-03.md and its line in docs/acceptance/$RESULTS_NAME
+An entry is frozen once: each run needs a Release whose entry for $MAC is not frozen yet. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+[[ $MODE != lab || -n $release ]] || fail "--lab needs --release R: a Release whose manifest names $MAC and whose installer entry for it is not frozen yet. Nothing was done."
+
+begin 03 "freeze-entry needs the caller's own Lease and writes no Exec record"
+if playing; then
+  release="0.0.0-hardening"
+  local_mac "$MAC"
+  made_up_release "$release" "$MAC"
+fi
+LEASED=0
+# shellcheck disable=SC2317,SC2329
+let_go() { (( LEASED == 0 )) || "$LAB_CMD" release "$MAC" > /dev/null 2>&1 || echo "$ME: the Lease on $MAC was not released: run $LAB_CMD release $MAC" >&2; cleanup; }
+trap let_go EXIT
+
+"$LAB_CMD" status "$MAC" > "$WORK/mac.out" 2>&1 || give_up "lab status $MAC: $(plain "$WORK/mac.out")"
+! grep -q '^  lease:' "$WORK/mac.out" || stopped "somebody holds a Lease on $MAC now: run this when $MAC is free"
+ask free --timeout 60s POST "/api/installed/$release/entry/$MAC"
+answered free 409 "needs your own Lease on it, a Maintainer's too" || give_up "freeze-entry with no Lease: $(status_of free) $(said_of free)"
+rec "freeze-entry on $MAC, Release $release, with no Lease: $(status_of free), $(said_of free)"
+
+count() {
+  ask execs --rows command GET "/api/devices/$MAC/execs"
+  [[ "$(status_of execs)" == 200 ]] || give_up "the Exec record of $MAC: $(status_of execs) $(said_of execs)"
+  rows execs | wc -l | tr -d ' '
+}
+before="$(count)"
+rec "the Exec record of $MAC holds $before lines"
+
+"$LAB_CMD" lease "$MAC" > "$WORK/lease.out" 2>&1 || give_up "no Lease on $MAC: $(plain "$WORK/lease.out")"
+LEASED=1
+code=0
+"$LAB_CMD" installed freeze-entry "$MAC" --release "$release" > "$WORK/freeze.out" 2>&1 || code=$?
+! grep -q "needs your own Lease" "$WORK/freeze.out" || give_up "freeze-entry under the caller's own Lease was refused for the Lease: $(plain "$WORK/freeze.out")"
+if playing; then
+  rec "freeze-entry under the caller's own Lease was let in and read the simulated Mac, which has no installer entry: exit $code, $(plain "$WORK/freeze.out")"
+else
+  if grep -q "already frozen" "$WORK/freeze.out"; then
+    stopped "$MAC's installer entry for Release $release is already frozen, and an entry is frozen once: run this with a Release whose entry for $MAC is not frozen yet"
+  fi
+  (( code == 0 )) || give_up "freeze-entry under the caller's own Lease: exit $code: $(plain "$WORK/freeze.out")"
+  rec "freeze-entry under the caller's own Lease froze the entry: $(plain "$WORK/freeze.out")"
+fi
+"$LAB_CMD" release "$MAC" > /dev/null 2>&1 && LEASED=0
+after="$(count)"
+[[ $after == "$before" ]] || give_up "the freeze wrote to the Exec record: $before lines before, $after after"
+rec "the Exec record of $MAC still holds $after lines: the freeze sent no exec"
+passed

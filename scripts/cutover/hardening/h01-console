@@ -1,0 +1,82 @@
+#!/bin/bash
+# Hardening's test 1: the console routes and serial exec are refused (spec
+# section 16, Ready item 8; section 12 "The console is off"; section 7).
+#
+#   h01-console [--dry-run | --local | --lab] [--mac NAME] [--records DIR]
+#
+# The three console routes and the serial log answer 410 with one plain
+# line, the serial-assisted recovery mode the same, and lab's own console
+# commands say it without asking the lab. Locally the Mac is then taken off
+# the network under the caller's Lease: lab exec must refuse to reach it
+# any other way than lab-agent, and the attempt is in the Exec record.
+# Through the Lab address that last part is not run: it needs a Mac off the
+# network.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+no_rest
+LINE="The serial console is not part of Omarchy Mac Lab."
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
+  1. ask GET and POST /api/devices/$MAC/console, POST /api/devices/$MAC/console/arm, GET /api/devices/$MAC/serial
+     expects: each 410, saying: $LINE
+  2. ask POST /api/devices/$MAC/recovery-mode with the serial-assisted mode
+     expects: 410, the same line
+  3. run: lab shell $MAC, lab console $MAC, lab serial $MAC
+     expects: each says the line and fails
+  4. locally only: take a Lease, take the simulated $MAC off the network, ask lab exec
+     expects: 409, "reaches a Mac only through lab-agent", and the refused attempt in the Exec record
+  5. write docs/acceptance/$(today)-hardening-01.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+if playing; then
+  begin 01 "the console routes and serial exec are refused" --alive-window=8s
+  local_mac "$MAC"
+else
+  begin 01 "the console routes and serial exec are refused"
+fi
+
+for route in "GET /api/devices/$MAC/console" "POST /api/devices/$MAC/console" "POST /api/devices/$MAC/console/arm" "GET /api/devices/$MAC/serial"; do
+  # shellcheck disable=SC2086
+  ask console $route
+  answered console 410 "$LINE" || give_up "$route: $(status_of console) $(said_of console)"
+  rec "$route: 410, $(said_of console)"
+done
+ask recovery --json '{"mode":"serial-assisted","holder":"hardening-tests"}' POST "/api/devices/$MAC/recovery-mode"
+answered recovery 410 "$LINE" || give_up "the serial-assisted recovery mode: $(status_of recovery) $(said_of recovery)"
+rec "POST /api/devices/$MAC/recovery-mode, serial-assisted: 410, $(said_of recovery)"
+for command in shell console serial; do
+  code=0
+  "$LAB_CMD" "$command" "$MAC" > "$WORK/cli.out" 2>&1 || code=$?
+  { (( code != 0 )) && grep -qF "$LINE" "$WORK/cli.out"; } || give_up "lab $command $MAC: exit $code: $(plain "$WORK/cli.out")"
+  rec "lab $command $MAC: exit $code, $(plain "$WORK/cli.out")"
+done
+
+if ! playing; then
+  rec "lab exec on a Mac off the network: not run through the Lab address, since it needs a Mac taken off the network; the local run shows it"
+  passed
+fi
+
+"$LAB_CMD" lease "$MAC" > "$WORK/lease.out" 2>&1 || give_up "no Lease on $MAC: $(plain "$WORK/lease.out")"
+kill "$(cat "$WORK/sim-$MAC.pid")"
+# Past the alive window labd counts the Mac off the network.
+sleep 10
+# shellcheck disable=SC2329
+offline() {
+  ask offline --timeout 20s --json '{"command":"echo through-the-console"}' POST "/api/devices/$MAC/exec"
+  answered offline 409 "reaches a Mac only through lab-agent"
+}
+wait_until 40 offline || give_up "with $MAC off the network lab exec said: $(status_of offline) $(said_of offline)"
+rec "lab exec on $MAC, off the network, under the caller's Lease: 409, $(said_of offline)"
+ask execs --rows handle,command,state,why GET "/api/devices/$MAC/execs"
+rows execs | grep -q '^owner|echo through-the-console|refused|' || give_up "the refused attempt is not in the Exec record: $(rows execs | tr '\n' ';')"
+rec "the Exec record holds it: $(rows execs | grep 'through-the-console' | head -n 1)"
+passed

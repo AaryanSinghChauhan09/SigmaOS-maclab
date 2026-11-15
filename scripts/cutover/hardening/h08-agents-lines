@@ -1,0 +1,107 @@
+#!/bin/bash
+# Hardening's test 8: a people change, a new Lab token and a cut each appear
+# in "Agents" (spec section 16, Ready item 8; section 3 "What the owner is
+# told"; section 12).
+#
+#   h08-agents-lines [--dry-run | --local | --lab --other HANDLE] [--records DIR]
+#
+#   --other HANDLE  through the Lab address: a GitHub account that is not
+#                   the owner's, signed in or not, to be marked M team, cut
+#                   and unmarked again. The owner names it; without it the
+#                   test stops after the token's line
+#
+# The owner's browser (the session cookie typed at a prompt that shows
+# nothing) marks HANDLE as M team, makes a Lab token on their own page and
+# revokes it again, and uses "End all access" on HANDLE; then the mark is
+# taken off. The owner says, for each, whether "Agents" got its line.
+# Locally the lab's own record of its lines says it, and the cut is the
+# revocation of an M team member's token by a Maintainer as well.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+other=""
+if (( ${#REST[@]} )); then
+  [[ ${REST[0]} == --other && ${#REST[@]} == 2 && ${REST[1]} =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]] || fail "an option it does not take: ${REST[0]}. Nothing was done."
+  other="${REST[1]}"
+fi
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, as the owner's browser (the session cookie typed at a hidden prompt), it would:
+  1. make the Lab token h08-... on $ADDRESS/me, then revoke it there
+     expects: "Agents" gets: <you> made the Lab token "h08-...", which expires on ...
+  2. mark ${other:-HANDLE} as M team on People
+     expects: "Agents" gets: <you> marked ${other:-HANDLE} as M team.
+  3. use "End all access" on ${other:-HANDLE} on People
+     expects: "Agents" gets: <you> used "End all access" on ${other:-HANDLE}.
+  4. take the M team mark off ${other:-HANDLE} again
+     expects: "Agents" gets: <you> removed the M team mark from ${other:-HANDLE}.
+  5. after each, ask the owner whether "Agents" (Signal) got the line
+  6. write docs/acceptance/$(today)-hardening-08.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+begin 08 "a people change, a new Lab token and a cut each appear in \"Agents\""
+if playing; then
+  people
+  other=member
+  rec "the owner marked @member and @other as M team"
+  told_agents "member as M team." "a people change (the M team mark)"
+else
+  owner_session
+fi
+tag="h08-$(nonce)"
+
+# A new Lab token, then revoked by its own person (no line for that).
+form token --session "$OWNER_SESSION" /me/tokens "name=$tag" period=30
+{ [[ "$(status_of token)" == 200 ]] && grep -qE 'lab_[0-9a-f]{40}' "$WORK/token.body"; } || give_up "no Lab token was made on $ADDRESS/me: $(status_of token) $(said_of token)"
+rm -f "$WORK/token.body"
+rec "the owner made the Lab token $tag on their own page"
+told_agents "made the Lab token \"$tag\"" "a new Lab token"
+"$PROBE" page --session "$OWNER_SESSION" --find "/me/tokens/([0-9]+)/revoke\"[^<]*<input[^>]*>[^<]*<button[^>]*data-sentence=\"[^\"]*$tag" /me > "$WORK/tid.out" 2>&1
+id="$(sed -n 's/^found=//p' "$WORK/tid.out" | head -n 1)"
+[[ -n $id ]] || give_up "$ADDRESS/me shows no Lab token $tag"
+form revoke --session "$OWNER_SESSION" "/me/tokens/$id/revoke" sure=yes
+[[ "$(status_of revoke)" == 303 ]] || give_up "the token $tag was not revoked: $(status_of revoke) $(said_of revoke)"
+rec "and revoked it again on their own page"
+
+if [[ -z $other ]]; then
+  stopped "a people change and a cut need a person who is not the owner: run it again with --other HANDLE, a GitHub account the owner names"
+fi
+if ! playing; then
+  form mark --session "$OWNER_SESSION" --page /people /people/mark "handle=$other" as=m-team
+  [[ "$(status_of mark)" == 303 ]] || give_up "$other was not marked M team: $(status_of mark) $(said_of mark)"
+  rec "the owner marked $other as M team on People"
+  told_agents "marked $other as M team." "a people change (the M team mark)"
+fi
+"$PROBE" page --session "$OWNER_SESSION" --find "/people/([0-9]+)/end-all-access\"[^<]*<input[^>]*>[^<]*<button[^>]*data-sentence=\"[^\"]*@$other\\b" /people > "$WORK/pid.out" 2>&1
+account="$(sed -n 's/^found=//p' "$WORK/pid.out" | head -n 1)"
+if [[ -z $account ]]; then
+  "$PROBE" page --session "$OWNER_SESSION" --find "id=\"person-([0-9]+)\"[^<]*<td[^>]*><a[^>]*>[^<]*<b>@$other</b>" /people > "$WORK/pid.out" 2>&1
+  account="$(sed -n 's/^found=//p' "$WORK/pid.out" | head -n 1)"
+fi
+[[ -n $account ]] || give_up "People shows no row for @$other"
+
+if playing; then
+  token_for member "$tag-member"
+  tid="$(token_id "$account" "$tag-member")"
+  [[ -n $tid ]] || give_up "People shows no Lab token $tag-member of @member"
+  form cut-token --session "$OWNER_SESSION" --page /people "/people/$account/tokens/$tid/revoke" sure=yes
+  [[ "$(status_of cut-token)" == 303 ]] || give_up "@member's token was not revoked: $(status_of cut-token) $(said_of cut-token)"
+  rec "the owner revoked @member's Lab token $tag-member on People"
+  told_agents "revoked member's Lab token \"$tag-member\"" "a cut (another person's Lab token revoked)"
+fi
+form cut --session "$OWNER_SESSION" --page /people "/people/$account/end-all-access" sure=yes
+[[ "$(status_of cut)" == 303 ]] || give_up "\"End all access\" on $other was not done: $(status_of cut) $(said_of cut)"
+rec "the owner used \"End all access\" on $other on People"
+told_agents "used \"End all access\" on $other." "a cut (\"End all access\" on another person)"
+form unmark --session "$OWNER_SESSION" --page /people "/people/$account/m-team/remove" sure=yes
+[[ "$(status_of unmark)" == 303 ]] || give_up "the M team mark was not taken off $other: $(status_of unmark) $(said_of unmark)"
+rec "the owner took the M team mark off $other again"
+told_agents "removed the M team mark from $other." "a people change (the mark taken off)"
+passed

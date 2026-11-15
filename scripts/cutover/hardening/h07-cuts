@@ -1,0 +1,151 @@
+#!/bin/bash
+# Hardening's test 7: revoking a token and "End all access" each stop the
+# next request and end an open stream; the second also ends the Leases
+# (spec section 16, Ready item 8; section 12; section 3 "Blocked, cuts and
+# Forgotten").
+#
+#   h07-cuts [--dry-run | --local | --lab] [--mac NAME] [--records DIR]
+#
+# A Lab token made for the test holds the lab's event stream open; the
+# token is revoked; the next request with it must be refused and the stream
+# must end. Then under a second token a Lease is taken and a stream held,
+# and "End all access" is used: the next request is refused, the stream
+# ends, the Lease ends, the browser is signed out.
+#
+# Locally a Maintainer cuts an M team member, from People. Through the Lab
+# address the owner cuts themselves, from their own page: the script acts
+# as the owner's browser with the session cookie typed at a prompt that
+# shows nothing, and the saved login is the second credential. After "End
+# all access" the owner signs in again and logs lab in again, by hand.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, as the owner's browser (the session cookie typed at a hidden prompt) and under the saved login, it would:
+  1. make the Lab token h07-... on $ADDRESS/me; hold GET /api/stream with it; ask GET /api/devices with it
+     expects: the stream open, the request answered (200)
+  2. revoke that token on $ADDRESS/me
+     expects: the next request with it 401; the stream ended within 15 s
+  3. run: lab lease $MAC; hold GET /api/stream under the saved login
+  4. use "End all access" on $ADDRESS/me
+     expects: the saved login 401 at its next request; the stream ended within 15 s; the browser signed out
+  5. STOP, by hand: sign in again at $ADDRESS, make a Lab token, and run lab login $ADDRESS
+  6. run: lab status $MAC
+     expects: the Lease ended by "End all access"
+  7. write docs/acceptance/$(today)-hardening-07.md and its line in docs/acceptance/$RESULTS_NAME
+Locally a Maintainer does the same to an M team member from People. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+begin 07 "revoking a token and \"End all access\" stop the next request and end an open stream"
+if playing; then
+  local_mac "$MAC"
+  people
+  who=member who_id="$MEMBER_ID" session="$WORK/member.session" page=/people
+else
+  owner_session
+  who=owner who_id="" session="$OWNER_SESSION" page=/me
+fi
+tag="h07-$(nonce)"
+
+# held NAME CREDENTIAL...: GET /api/stream held in the background; waits
+# until it is open.
+held() {
+  local name="$1"
+  shift
+  "$PROBE" hold --for 90 "$@" /api/stream > "$WORK/$name.out" 2>&1 &
+  PIDS+=($!)
+  echo $! > "$WORK/$name.pid"
+  wait_until 20 grep -q '^opened=' "$WORK/$name.out" || give_up "the stream did not open"
+  grep -qx 'opened=200' "$WORK/$name.out" || give_up "the stream was refused: $(tr '\n' ' ' < "$WORK/$name.out")"
+  sleep 2
+  ! grep -q '^ended=' "$WORK/$name.out" || give_up "the stream ended by itself, before any cut: $(tr '\n' ' ' < "$WORK/$name.out")"
+}
+# shellcheck disable=SC2329
+ended() { grep -q '^ended=' "$WORK/$1.out"; }
+# cut WHAT PATH: the cut, as a browser on the lab's own page sends it.
+cut() {
+  form cut --session "$OWNER_SESSION" --page "$page" "$2" sure=yes
+  [[ "$(status_of cut)" == 303 ]] || give_up "$1 was not done: $(status_of cut) $(said_of cut)"
+}
+
+# The first token, its stream, its revocation.
+if playing; then
+  token_for "$who" "$tag-one"
+  mv "$WORK/$who.token" "$WORK/one.token"
+else
+  form token-own --session "$OWNER_SESSION" /me/tokens "name=$tag-one" period=30
+  ( umask 077; grep -oE 'lab_[0-9a-f]{40}' "$WORK/token-own.body" | head -n 1 > "$WORK/one.token" )
+  rm -f "$WORK/token-own.body"
+  [[ -s $WORK/one.token ]] || give_up "$ADDRESS/me made no Lab token: $(status_of token-own) $(said_of token-own)"
+fi
+rec "a Lab token $tag-one was made for $who; it is kept in the run's own folder alone"
+held one --token-file "$WORK/one.token"
+ask before --token-file "$WORK/one.token" GET /api/devices
+[[ "$(status_of before)" == 200 ]] || give_up "the new token was not let in: $(status_of before) $(said_of before)"
+rec "with it the event stream is open and GET /api/devices answers 200"
+if playing; then
+  id="$(token_id "$who_id" "$tag-one")"
+  [[ -n $id ]] || give_up "People shows no Lab token $tag-one of @$who"
+  cut "revoking @$who's token" "/people/$who_id/tokens/$id/revoke"
+  rec "a Maintainer revoked @$who's token $tag-one on People"
+else
+  "$PROBE" page --session "$OWNER_SESSION" --find "/me/tokens/([0-9]+)/revoke\"[^<]*<input[^>]*>[^<]*<button[^>]*data-sentence=\"[^\"]*$tag-one" /me > "$WORK/tid.out" 2>&1
+  id="$(sed -n 's/^found=//p' "$WORK/tid.out" | head -n 1)"
+  [[ -n $id ]] || give_up "$ADDRESS/me shows no Lab token $tag-one"
+  cut "revoking the token" "/me/tokens/$id/revoke"
+  rec "the owner revoked the token $tag-one on their own page"
+fi
+ask after --token-file "$WORK/one.token" GET /api/devices
+[[ "$(status_of after)" == 401 ]] || give_up "the revoked token's next request: $(status_of after) $(said_of after)"
+rec "the revoked token's next request: 401, $(said_of after)"
+wait_until 15 ended one || give_up "the revoked token's stream is still open 15 s after"
+rec "its stream ended: $(grep -E '^(ended|seconds)=' "$WORK/one.out" | tr '\n' ' ')"
+
+# The second credential, its Lease and its stream; "End all access".
+if playing; then
+  token_for "$who" "$tag-two"
+  second=(--token-file "$WORK/$who.token")
+  ask lease "${second[@]}" --json '{"holder":"member@laptop","ttl_sec":600}' POST "/api/devices/$MAC/lease"
+  [[ "$(status_of lease)" == 200 ]] || give_up "@$who's Lease on $MAC: $(status_of lease) $(said_of lease)"
+else
+  second=()
+  "$LAB_CMD" status "$MAC" > "$WORK/mac.out" 2>&1 || give_up "lab status $MAC: $(plain "$WORK/mac.out")"
+  ! grep -q '^  lease:' "$WORK/mac.out" || stopped "somebody holds a Lease on $MAC now: run this when $MAC is free"
+  "$LAB_CMD" lease "$MAC" > "$WORK/lease.out" 2>&1 || give_up "no Lease on $MAC: $(plain "$WORK/lease.out")"
+fi
+rec "@$who holds a Lease on $MAC"
+held two ${second[@]+"${second[@]}"}
+"$PROBE" page --session "$session" /me > "$WORK/me-before.out" 2>&1
+grep -qx 'status=200' "$WORK/me-before.out" || give_up "@$who's browser does not open their page before the cut"
+if playing; then
+  cut "\"End all access\" on @$who" "/people/$who_id/end-all-access"
+  rec "a Maintainer used \"End all access\" on @$who, on People"
+else
+  cut "\"End all access\"" /me/end-all-access
+  rec "the owner used \"End all access\" on their own page"
+fi
+ask after-all ${second[@]+"${second[@]}"} GET /api/devices
+[[ "$(status_of after-all)" == 401 ]] || give_up "the next request after \"End all access\": $(status_of after-all) $(said_of after-all)"
+rec "the next request after \"End all access\": 401, $(said_of after-all)"
+wait_until 15 ended two || give_up "the stream is still open 15 s after \"End all access\""
+rec "the stream ended: $(grep -E '^(ended|seconds)=' "$WORK/two.out" | tr '\n' ' ')"
+"$PROBE" page --session "$session" /me > "$WORK/me-after.out" 2>&1 || true
+! grep -qx 'status=200' "$WORK/me-after.out" || give_up "@$who's browser still opens their page after \"End all access\""
+rec "@$who's browser is signed out: $ADDRESS/me answers $(sed -n 's/^status=//p' "$WORK/me-after.out")"
+
+if ! playing; then
+  hands "Sign in again at $ADDRESS, make a Lab token on your page, and run: lab login $ADDRESS"
+  logged_in
+fi
+"$LAB_CMD" status "$MAC" > "$WORK/mac-after.out" 2>&1 || give_up "lab status $MAC: $(plain "$WORK/mac-after.out")"
+! grep -q '^  lease:' "$WORK/mac-after.out" || give_up "the Lease on $MAC did not end with \"End all access\": $(grep '^  lease:' "$WORK/mac-after.out" | head -n 1)"
+rec "the Lease on $MAC ended with it: lab status $MAC shows none"
+passed

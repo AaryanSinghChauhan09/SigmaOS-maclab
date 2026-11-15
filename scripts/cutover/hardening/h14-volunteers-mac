@@ -1,0 +1,131 @@
+#!/bin/bash
+# Hardening's test 14: an Installed run and a Promotion on a Volunteer's
+# Mac are refused through lab, the site and a direct request (spec section
+# 16, Ready item 8 and step 14a; section 9 "Promotion"; decision S12).
+#
+#   h14-volunteers-mac [--dry-run | --local | --lab [--volunteers-mac NAME --release R]] [--records DIR]
+#
+#   --volunteers-mac NAME  a Volunteer's Mac of the lab: the M2 Max, while
+#                          it is the owner's own Volunteer's Mac in step 14a
+#   --release R            a Release whose manifest names that Mac
+#
+# Through lab: lab run NAME --installed and lab installed promote NAME. On
+# the site: Promote on the Release's page, as the owner's browser (the
+# session cookie typed at a prompt that shows nothing); the site has no
+# form that asks an Installed run. As a direct request: POST /api/jobs with
+# the manifest, and POST /api/installed/R/promote. Each must be refused with
+# the lab's sentence, and no job made.
+#
+# It runs on real hardware once, in step 14a (slice 50, decision S12). Run
+# later with --lab and no Mac, it takes that dated output from the results
+# file and does not repeat it.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+volunteers="" release=""
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --volunteers-mac) (( $# >= 2 )) && [[ $2 =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail "--volunteers-mac needs a Mac's name"; volunteers="$2"; shift ;;
+    --release) (( $# >= 2 )) && [[ $2 =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ ]] || fail "--release needs a Release's name"; release="$2"; shift ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+[[ ( -z $volunteers && -z $release ) || ( -n $volunteers && -n $release ) ]] || fail "--volunteers-mac and --release go together. Nothing was done."
+REFUSED="it is a Volunteer's Mac, and until Rollback exists"
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer and as the owner's browser, with ${volunteers:-NAME} a Volunteer's Mac (step 14a), it would:
+  1. run: lab run ${volunteers:-NAME} --installed <the manifest of Release ${release:-R}> --no-wait
+  2. run: lab installed promote ${volunteers:-NAME} --release ${release:-R} --job J --yes
+  3. post Promote for ${volunteers:-NAME} on $ADDRESS/releases (the site has no form that asks an Installed run)
+  4. ask POST /api/jobs with the manifest, and POST /api/installed/${release:-R}/promote
+     expects: each refused, saying "$REFUSED"; no job made on ${volunteers:-NAME}
+  5. write docs/acceptance/$(today)-hardening-14.md and its line in docs/acceptance/$RESULTS_NAME
+With --lab and no Mac, it takes the result of step 14a's run from docs/acceptance/$RESULTS_NAME. Nothing was sent.
+PLAN
+  exit 0
+fi
+
+if [[ $MODE == lab && -z $volunteers ]]; then
+  dir="${RECORDS:-$REPO/docs/acceptance}"
+  line="$(grep '^14 ' "$dir/$RESULTS_NAME" 2>/dev/null | tail -n 1 || true)"
+  read -r _ result day record <<<"${line:-- - - -}"
+  if [[ $result == pass && -f $dir/$record ]] && grep -qx 'Result: pass' "$dir/$record"; then
+    say "taken from the run of $day in step 14a, while the M2 Max was the owner's own Volunteer's Mac (decision S12): $dir/$record. Not repeated."
+    exit 0
+  fi
+  say "STOPPED: test 14 runs in step 14a (decision S12), while the M2 Max is the owner's own Volunteer's Mac: $ME --lab --volunteers-mac NAME --release R. No pass of it is in $dir/$RESULTS_NAME yet."
+  exit 3
+fi
+
+title="an Installed run and a Promotion on a Volunteer's Mac are refused through lab, the site and a direct request"
+# A Volunteer's Mac is warned before a job's first reboot: locally, briefly.
+if playing; then begin 14 "$title" --reboot-warning=1s; else begin 14 "$title"; fi
+owner_session
+if playing; then
+  people
+  volunteers=loaner release=0.0.0-hardening-14
+  volunteer_mac "$volunteers"
+  # Its Volunteer opens its window for two hours, as Open now does at the
+  # Mac; the lab then runs its first baseline by itself.
+  dir="$(sim_dir "$volunteers")" || fail "no folder for the simulated $volunteers"
+  printf '{"rules": [], "open_until": "%s"}\n' "$(date -u -v+2H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+2 hours' +%Y-%m-%dT%H:%M:%SZ)" > "$dir/availability.json"
+  first() { sed -n "s/.*$volunteers: the lab queued its first baseline, job \([^ ]*\).*/\1/p" "$WORK/labd.log" | head -n 1; }
+  # shellcheck disable=SC2329
+  queued() { [[ -n "$(first)" ]]; }
+  wait_until 30 queued || fail "the lab queued no first baseline for $volunteers"
+  "$LAB_CMD" wait "$(first)" > "$WORK/baseline.log" 2>&1 || fail "the simulated $volunteers's first baseline: $(plain "$WORK/baseline.log")"
+  made_up_release "$release" "$volunteers"
+  manifest="$WORK/release-$release/manifest.json"
+  rec "@lender lends $volunteers, a Volunteer's simulated Mac, its baseline passed; a Release $release names it"
+else
+  "$LAB_CMD" installed status --release "$release" > "$WORK/release.out" 2>&1 || give_up "lab installed status --release $release: $(plain "$WORK/release.out")"
+  manifest="$(grep -oE '[0-9a-f]{64}' "$WORK/release.out" | head -n 1 || true)"
+  [[ -n $manifest ]] || give_up "lab installed status names no frozen manifest of Release $release"
+  "$LAB_CMD" oob "$volunteers" 2>/dev/null | grep -q "a Volunteer's Mac" || give_up "$volunteers is not a Volunteer's Mac of this lab"
+fi
+jobs_of() { "$LAB_CMD" jobs "$volunteers" 2>/dev/null | wc -l | tr -d ' '; }
+before="$(jobs_of)"
+
+# refused_said HOW FILE: what lab or a request said is the refusal.
+refused_said() {
+  grep -qF "$REFUSED" "$2" || give_up "$1 was not refused with the lab's sentence: $(plain "$2")"
+  rec "$1: refused, \"$(grep -oE "[^.:\"]*${REFUSED}[^.\"]*" "$2" | head -n 1 | sed 's/^ *//')\""
+}
+
+code=0
+"$LAB_CMD" run "$volunteers" --installed "$manifest" --no-wait > "$WORK/run.out" 2>&1 || code=$?
+(( code != 0 )) || give_up "lab run $volunteers --installed was taken: $(plain "$WORK/run.out")"
+refused_said "lab run $volunteers --installed" "$WORK/run.out"
+code=0
+"$LAB_CMD" installed promote "$volunteers" --release "$release" --job j-h14 --yes > "$WORK/promote.out" 2>&1 || code=$?
+(( code != 0 )) || give_up "lab installed promote $volunteers was taken: $(plain "$WORK/promote.out")"
+refused_said "lab installed promote $volunteers" "$WORK/promote.out"
+
+form site-promote --session "$OWNER_SESSION" --page /releases "/releases/$release/macs/$volunteers/promote" sure=yes
+[[ "$(status_of site-promote)" != 303 ]] || give_up "Promote on the site was taken for $volunteers"
+python3 - "$WORK/site-promote.body" > "$WORK/site-promote.text" <<'PY'
+import html, re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+print(" ".join(html.unescape(re.sub(r"<[^>]+>", " ", page)).split()))
+PY
+refused_said "Promote on the Release's page" "$WORK/site-promote.text"
+"$PROBE" page --session "$OWNER_SESSION" --out "$WORK/boot.html" "/boot?mac=$volunteers" > /dev/null 2>&1 || true
+! grep -qiE 'name="(installed|installed_manifest)"' "$WORK/boot.html" || give_up "the site's boot form asks an Installed run"
+rec "the site's boot form has no field for an Installed run"
+
+ask api-job --json "{\"device\":\"$volunteers\",\"installed_manifest\":\"$(if [[ -f $manifest ]]; then file_sha "$manifest"; else echo "$manifest"; fi)\"}" POST /api/jobs
+[[ "$(status_of api-job)" == 403 ]] || give_up "POST /api/jobs with the manifest: $(status_of api-job) $(said_of api-job)"
+refused_said "POST /api/jobs, an Installed run" "$WORK/api-job.body"
+ask api-promote --json "{\"device\":\"$volunteers\",\"job\":\"j-h14\",\"confirm\":true}" POST "/api/installed/$release/promote"
+[[ "$(status_of api-promote)" == 403 ]] || give_up "POST /api/installed/$release/promote: $(status_of api-promote) $(said_of api-promote)"
+refused_said "POST /api/installed/$release/promote" "$WORK/api-promote.body"
+[[ "$(jobs_of)" == "$before" ]] || give_up "a job was made on $volunteers"
+rec "no job was made on $volunteers"
+passed

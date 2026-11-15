@@ -1,0 +1,106 @@
+#!/bin/bash
+# Hardening's test 9: a Notice topic at a private address, or behind a
+# redirect, is refused (spec section 16, Ready item 8; section 12 "Notices";
+# section 13 "Notices").
+#
+#   h09-notice-topic [--dry-run | --local | --lab --volunteers-mac NAME --redirect URL] [--records DIR]
+#
+#   --volunteers-mac NAME  through the Lab address: a Volunteer's Mac of the
+#                          lab whose Volunteer is at it (the M2 Max in step
+#                          14a, decision S12): there is none other in Preview
+#   --redirect URL         an https address on the public internet that
+#                          answers with a redirect to a private address
+#
+# labd checks a Volunteer's own topic when the Mac reports it and each time
+# it sends: https only, a public address, judged on the address it connects
+# to, no redirect followed. A refused topic is shown on My Macs and the
+# Notice is dropped. Locally a Volunteer's simulated Mac reports a topic on
+# this machine's loopback, where a port counts who connects; a Maintainer
+# then ends the Mac's enrollment, which sends its Volunteer a Notice: nothing
+# may connect. The redirect needs a public address, so it is tried through
+# the Lab address only, where the owner sets each topic at the Mac and reads
+# My Macs.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+# What this test checks is slice 40's (Notices); until it lands on build a
+# failure of the rule is "waits", not "fail". Delete this line when it does.
+WAITS_FOR=40
+
+hd_options "$@"
+volunteers="" redirect=""
+set -- ${REST[@]+"${REST[@]}"}
+while (( $# )); do
+  case "$1" in
+    --volunteers-mac) (( $# >= 2 )) && [[ $2 =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail "--volunteers-mac needs a Mac's name"; volunteers="$2"; shift ;;
+    --redirect) (( $# >= 2 )) && [[ $2 =~ ^https://[A-Za-z0-9.-]+(/[^[:space:]]*)?$ ]] || fail "--redirect needs an https address"; redirect="$2"; shift ;;
+    *) fail "an option it does not take: $1. Nothing was done." ;;
+  esac
+  shift
+done
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, with the Volunteer of ${volunteers:-NAME} at the Mac and the owner's browser (the session cookie typed at a hidden prompt), it would:
+  1. STOP, by hand: at ${volunteers:-NAME}, run: sudo lab-agent notify --topic https://192.168.0.1/h09
+  2. read My Macs at $ADDRESS/my-macs as the Volunteer
+     expects: the topic shown as refused (a private address)
+  3. STOP, by hand: at ${volunteers:-NAME}, run: sudo lab-agent notify --topic ${redirect:-URL}
+  4. read My Macs again
+     expects: the topic shown as refused (a redirect is not followed)
+  5. write docs/acceptance/$(today)-hardening-09.md and its line in docs/acceptance/$RESULTS_NAME
+Locally: a Volunteer's simulated Mac reports a topic on this machine's loopback, a Maintainer ends its enrollment,
+     expects: nothing connects to the topic's port; the Notice is dropped
+Nothing was sent.
+PLAN
+  exit 0
+fi
+[[ $MODE != lab || ( -n $volunteers && -n $redirect ) ]] || fail "--lab needs --volunteers-mac NAME and --redirect URL: the test sets topics at a Volunteer's Mac, and Preview has one only in step 14a. Nothing was done."
+
+# rule_broken WHY: the rule did not hold.
+rule_broken() {
+  if [[ -n ${WAITS_FOR:-} ]]; then waits_for "$WAITS_FOR" "$1"; fi
+  give_up "$1"
+}
+
+begin 09 "a Notice topic at a private address, or behind a redirect, is refused"
+if playing; then
+  people
+  volunteers=loaner
+  volunteer_mac "$volunteers"
+  rec "@lender lends $volunteers, a Volunteer's simulated Mac that Joined by the Join command"
+  "$PROBE" listen > "$WORK/listen.out" 2>&1 &
+  PIDS+=($!)
+  wait_until 10 grep -q '^port=' "$WORK/listen.out" || fail "the counting port did not start"
+  port="$(sed -n 's/^port=//p' "$WORK/listen.out")"
+  dir="$(sim_dir "$volunteers")" || fail "no folder for the simulated $volunteers"
+  # What sudo lab-agent notify --topic writes at the Mac.
+  echo "https://127.0.0.1:$port/h09" > "$dir/ntfy-topic"
+  sleep 8
+  rec "$volunteers reports its own topic, https://127.0.0.1:PORT/h09, on this machine's loopback"
+  "$LAB_CMD" remove "$volunteers" > "$WORK/remove.out" 2>&1 || give_up "lab remove $volunteers: $(plain "$WORK/remove.out")"
+  rec "a Maintainer ended $volunteers's enrollment, which sends its Volunteer a Notice"
+  sleep 5
+  connections="$(grep -c '^connection=' "$WORK/listen.out" || true)"
+  [[ $connections == 0 ]] || rule_broken "labd connected $connections time(s) to the Volunteer's topic at a private address (this machine's loopback)"
+  rec "nothing connected to the topic's port: the Notice was dropped"
+  rec "the redirect is tried through the Lab address only: it needs a public address"
+  passed
+fi
+
+form_volunteer() {
+  hands "At $volunteers, run: sudo lab-agent notify --topic $1"
+  sleep 60
+  owner_session
+  "$PROBE" page --session "$OWNER_SESSION" --out "$WORK/my-macs.html" /my-macs > "$WORK/my-macs.out" 2>&1 || true
+  grep -qx 'status=200' "$WORK/my-macs.out" || give_up "My Macs did not open: $(tr '\n' ' ' < "$WORK/my-macs.out")"
+  grep -qi 'refused' "$WORK/my-macs.html" || rule_broken "My Macs does not show the topic $2 as refused"
+  rec "the topic $2: My Macs shows it refused"
+  confirm "Did that topic get no Notice from the lab?" || rule_broken "the topic $2 got a Notice"
+}
+form_volunteer "https://192.168.0.1/h09" "at a private address"
+form_volunteer "$redirect" "behind a redirect"
+hands "At $volunteers, put the topic back: sudo lab-agent notify --topic <the one it had>"
+passed

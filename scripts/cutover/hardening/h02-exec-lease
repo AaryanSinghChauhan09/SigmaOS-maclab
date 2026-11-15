@@ -1,0 +1,94 @@
+#!/bin/bash
+# Hardening's test 2: exec without the caller's own Lease is refused, a
+# Maintainer included; with one it is recorded, as is a refused attempt
+# (spec section 16, Ready item 8; section 12 "lab exec: Lease first, for
+# everyone", "The Exec record").
+#
+#   h02-exec-lease [--dry-run | --local | --lab] [--mac NAME] [--records DIR]
+#
+# The Maintainer who runs it asks lab exec on a Lab-owned Mac with no Lease:
+# refused. Under their own Lease a command runs and is recorded with its
+# exit code; the refused attempt is recorded too. Locally an M team member
+# is refused the same way, runs under their own Lease, and the Maintainer is
+# refused under the member's Lease.
+set -euo pipefail
+# shellcheck source=scripts/cutover/hardening/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+usage() { sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+hd_options "$@"
+no_rest
+
+if [[ $MODE == dry ]]; then
+  cat <<PLAN
+$ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
+  1. see that nobody holds a Lease on $MAC, then ask lab exec $MAC with no Lease
+     expects: refused, "needs your own Lease on $MAC, a Maintainer's too"
+  2. run: lab lease $MAC; lab exec $MAC 'exit 3 # h02-...'; lab release $MAC
+     expects: the command runs and ends with exit code 3
+  3. read the Exec record of $MAC (GET /api/devices/$MAC/execs)
+     expects: the refused attempt with why, and the command with exit code 3, each with the caller's handle
+  4. locally also: an M team member refused with no Lease, recorded under their own; the Maintainer refused under the member's Lease
+  5. write docs/acceptance/$(today)-hardening-02.md and its line in docs/acceptance/$RESULTS_NAME
+Nothing was sent.
+PLAN
+  exit 0
+fi
+
+begin 02 "exec needs the caller's own Lease, and every attempt is recorded"
+if playing; then
+  local_mac "$MAC"
+  people
+  token_for member h02
+fi
+tag="h02-$(nonce)"
+LEASED=0
+# shellcheck disable=SC2317,SC2329
+let_go() { (( LEASED == 0 )) || "$LAB_CMD" release "$MAC" > /dev/null 2>&1 || echo "$ME: the Lease on $MAC was not released: run $LAB_CMD release $MAC" >&2; cleanup; }
+trap let_go EXIT
+
+"$LAB_CMD" status "$MAC" > "$WORK/mac.out" 2>&1 || give_up "lab status $MAC: $(plain "$WORK/mac.out")"
+! grep -q '^  lease:' "$WORK/mac.out" || stopped "somebody holds a Lease on $MAC now: run this when $MAC is free"
+ask free --json "{\"command\":\"echo $tag-free\"}" POST "/api/devices/$MAC/exec"
+answered free 409 "needs your own Lease on $MAC, a Maintainer's too" || give_up "a Maintainer's lab exec with no Lease: $(status_of free) $(said_of free)"
+rec "a Maintainer's lab exec on $MAC with no Lease: $(status_of free), $(said_of free)"
+
+"$LAB_CMD" lease "$MAC" > "$WORK/lease.out" 2>&1 || give_up "no Lease on $MAC: $(plain "$WORK/lease.out")"
+LEASED=1
+code=0
+"$LAB_CMD" exec "$MAC" "exit 3 # $tag-ran" > "$WORK/exec.out" 2>&1 || code=$?
+(( code == 3 )) || give_up "lab exec under the Maintainer's own Lease: exit $code: $(plain "$WORK/exec.out")"
+rec "under the Maintainer's own Lease lab exec ran, exit code 3"
+"$LAB_CMD" release "$MAC" > /dev/null 2>&1 && LEASED=0
+
+if playing; then
+  ask m-free --token-file "$WORK/member.token" --json "{\"command\":\"echo $tag-member-free\"}" POST "/api/devices/$MAC/exec"
+  { [[ "$(status_of m-free)" == 40[39] ]] && said_of m-free | grep -q Lease; } || give_up "an M team member's lab exec with no Lease: $(status_of m-free) $(said_of m-free)"
+  rec "an M team member's lab exec with no Lease: $(status_of m-free), $(said_of m-free)"
+  ask m-lease --token-file "$WORK/member.token" --json '{"holder":"member@laptop","ttl_sec":600}' POST "/api/devices/$MAC/lease"
+  [[ "$(status_of m-lease)" == 200 ]] || give_up "the member's Lease: $(status_of m-lease) $(said_of m-lease)"
+  ask m-ran --token-file "$WORK/member.token" --json "{\"command\":\"echo $tag-member-ran\"}" POST "/api/devices/$MAC/exec"
+  [[ "$(status_of m-ran)" == 200 ]] || give_up "the member's lab exec under their own Lease: $(status_of m-ran) $(said_of m-ran)"
+  rec "under their own Lease the member's lab exec ran"
+  ask other-lease --json "{\"command\":\"echo $tag-under-another\"}" POST "/api/devices/$MAC/exec"
+  [[ "$(status_of other-lease)" == 40[39] ]] || give_up "a Maintainer's lab exec under the member's Lease: $(status_of other-lease) $(said_of other-lease)"
+  rec "a Maintainer's lab exec under the member's Lease: $(status_of other-lease), $(said_of other-lease)"
+fi
+
+ask execs --rows handle,command,state,exit_code,why GET "/api/devices/$MAC/execs"
+[[ "$(status_of execs)" == 200 ]] || give_up "the Exec record of $MAC: $(status_of execs) $(said_of execs)"
+rows execs | grep "$tag" > "$WORK/lines" || true
+me="$( { rows execs | grep -- "$tag-ran" || true; } | cut -d'|' -f1)"
+[[ -n $me ]] || give_up "the command that ran is not in the Exec record"
+grep -q "^$me|echo $tag-free|refused||.*Lease" "$WORK/lines" || give_up "the refused attempt is not in the Exec record as refused, with why: $(tr '\n' ';' < "$WORK/lines")"
+grep -q "^$me|exit 3 # $tag-ran|ran|3|" "$WORK/lines" || give_up "the command that ran is not in the Exec record with exit code 3: $(tr '\n' ';' < "$WORK/lines")"
+want=2
+if playing; then
+  grep -q "^member|echo $tag-member-free|refused|" "$WORK/lines" || give_up "the member's refused attempt is not recorded under the member"
+  grep -q "^member|echo $tag-member-ran|ran|0|" "$WORK/lines" || give_up "the member's command is not recorded under the member"
+  grep -q "^$me|echo $tag-under-another|refused|" "$WORK/lines" || give_up "the Maintainer's attempt under the member's Lease is not recorded"
+  want=5
+fi
+[[ "$(wc -l < "$WORK/lines" | tr -d ' ')" == "$want" ]] || give_up "the Exec record has $(wc -l < "$WORK/lines" | tr -d ' ') lines of this run, not $want"
+while IFS= read -r line; do rec "Exec record: $line"; done < "$WORK/lines"
+passed
