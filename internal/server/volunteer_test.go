@@ -746,3 +746,39 @@ func TestALimitFromTheSiteEndsALeaseAndStopsAJobThatNeedsFull(t *testing.T) {
 		t.Errorf("the Lease record does not say why the Lease ended:\n%s", got)
 	}
 }
+
+// A Pause taken on the site after a job's wait is over, and before labd
+// gives it the Mac, still holds it: the job is not sent, and says why.
+func TestAPauseJustBeforeAJobIsSentHoldsIt(t *testing.T) {
+	l, _ := lendLab(t)
+	l.signedIn(maintainerID).did("/people/mark", "handle", "grace", "as", "invite")
+	v, secret := l.signedIn(graceID).lent("shelf-mac")
+	first := v.snapshot().FirstBaseline.Job
+	grace, err := l.s.person(graceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused := make(chan error, 1)
+	v.mu.Lock()
+	v.beforeSend = func() {
+		v.mu.Lock()
+		v.beforeSend = nil
+		v.mu.Unlock()
+		paused <- l.s.pauseMac(v, grace, time.Time{})
+	}
+	v.mu.Unlock()
+
+	l.checkin(secret, api.Checkin{AccessLevel: api.AccessQualification, Window: &window.Settings{OpenUntil: l.clock.Now().Add(6 * time.Hour)}})
+	select {
+	case err := <-paused:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the job's wait never ended")
+	}
+	if heldWithin(v, first, 1500*time.Millisecond) {
+		t.Fatal("the job was sent to a Mac its Volunteer had just Paused")
+	}
+	jobSaid(t, l.s, first, "Paused by its Volunteer")
+}

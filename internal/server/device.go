@@ -58,6 +58,9 @@ type dev struct {
 	oobCallCancel context.CancelFunc
 	// resetting: a person's Hard reset is on its way to the controller.
 	resetting bool
+	// beforeSend, which only a test sets (under mu), runs once a job's wait
+	// is over and before labd gives it the Mac.
+	beforeSend func()
 
 	// forgotten: lab forget deleted the device's row. Set under mu, which
 	// every save holds, so nothing still holding the device writes it back.

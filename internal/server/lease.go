@@ -428,7 +428,18 @@ func (r *jobRun) withoutItsLease() string {
 		return ""
 	}
 	p := r.s.submitter(r.j)
-	if p.isMaintainer() || r.s.holdsLease(r.v, p) {
+	r.v.mu.Lock()
+	defer r.v.mu.Unlock()
+	return r.withoutItsLeaseLocked(p)
+}
+
+// withoutItsLeaseLocked is withoutItsLease for p, the job's submitter.
+// Caller holds r.v.mu.
+func (r *jobRun) withoutItsLeaseLocked(p Person) string {
+	if r.j.AccountID == 0 || p.isMaintainer() {
+		return ""
+	}
+	if l := r.v.liveLeaseLocked(); l != nil && leaseIsOf(l, p) {
 		return ""
 	}
 	return "@" + r.j.Maintainer + " holds no Lease on " + r.j.Spec.Device + " any more"

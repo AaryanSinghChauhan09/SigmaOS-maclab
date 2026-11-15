@@ -256,9 +256,19 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			return
 		}
 		v.mu.Lock()
-		// Counted in the step that gives it the Mac: a drain that began
-		// since the wait sends it back to waiting.
-		if sent = s.sendJob(); sent {
+		hook := v.beforeSend
+		v.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		// What the wait found is asked again in the step that gives the job
+		// the Mac: a Pause, a Limit, a Lease, a drain or a Hard reset that
+		// came since sends it back to waiting, and a Lease of its person's
+		// that ended since ends it.
+		p := s.submitter(j)
+		v.mu.Lock()
+		lost := r.withoutItsLeaseLocked(p)
+		if lost == "" && holdLocked() == "" && s.sendJob() {
 			if l := v.liveLeaseLocked(); l != nil && leaseCovers(l, ownerOf(j)) {
 				held := *l
 				held.Job = j.ID
@@ -266,8 +276,13 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			}
 			v.d.ActiveJob = j.ID
 			v.setStateLocked(api.StateBusy, "job "+j.ID)
+			sent = true
 		}
 		v.mu.Unlock()
+		if lost != "" {
+			r.finish(api.OutcomeCanceled, "not run: "+lost)
+			return
+		}
 	}
 	if under {
 		s.updateJob(j, func(j *api.Job) { j.UnderLease = true })
