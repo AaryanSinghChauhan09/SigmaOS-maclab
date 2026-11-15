@@ -18,10 +18,12 @@ const stopGrace = 5 * time.Second
 // its own, and ends it as one. When cmd's context ends, the group gets
 // SIGTERM; cmd.WaitDelay (stopGrace if unset) later its program is killed
 // and its pipes are closed, so a child that keeps them open holds nothing
-// up. Once the program has ended, whatever is left in its group gets
-// SIGTERM (unless it already had one) and, stopGrace after it, SIGKILL. So
-// a command never leaves a process behind, and lab-agent's Run, which waits
-// for its commands, ends in a bounded time.
+// up. Once the program has ended, and before it is reaped, whatever is left
+// in its group gets SIGTERM (unless it already had one) and, stopGrace after
+// it, SIGKILL. So lab-agent's Run, which waits for its commands, ends in a
+// bounded time, and a command leaves no process behind in its group. A
+// child that calls setsid leaves the group, and outlives the command: only
+// a cgroup per command would hold it.
 func runGroup(cmd *exec.Cmd) error {
 	wait, err := startGroup(cmd)
 	if err != nil {
@@ -52,11 +54,22 @@ func startGroup(cmd *exec.Cmd) (wait func() error, err error) {
 		return nil, err
 	}
 	return func() error {
+		// The group is signalled while its leader is a zombie, which keeps
+		// the group's number from going to another process.
+		pg := cmd.Process.Pid
+		if exited(pg) {
+			mu.Lock()
+			if termed.IsZero() {
+				syscall.Kill(-pg, syscall.SIGTERM)
+				termed = time.Now()
+			}
+			mu.Unlock()
+		}
 		err := cmd.Wait()
 		mu.Lock()
 		t := termed
 		mu.Unlock()
-		endGroup(cmd.Process.Pid, t)
+		endGroup(pg, t)
 		return err
 	}, nil
 }

@@ -338,3 +338,25 @@ func TestAStoppedExecsLeaderHasTheWholeGrace(t *testing.T) {
 		t.Errorf("the exec's leader was killed within %v of SIGTERM, before its four seconds of clean-up", stopGrace)
 	}
 }
+
+// When a command's program ends on its own, its group is signalled while the
+// program is not yet reaped, so the group's number cannot have gone to
+// another process: a child left holding the output pipe gets SIGTERM at
+// once, and the command ends without waiting out the pipe's grace.
+func TestAGroupIsSignalledBeforeItsLeaderIsReaped(t *testing.T) {
+	pids := filepath.Join(t.TempDir(), "pids")
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", "sleep 600 & echo $! > "+pids)
+	var out strings.Builder
+	cmd.Stdout = &out
+	start := time.Now()
+	runGroup(cmd)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("a command whose child held its output took %v to end", took)
+	}
+	for _, pid := range readPids(t, pids) {
+		if !ended(pid) {
+			syscall.Kill(pid, syscall.SIGKILL)
+			t.Errorf("process %d outlived its command", pid)
+		}
+	}
+}
