@@ -148,14 +148,14 @@ func parityCorpus(t testing.TB) []parityCase {
 	armored("schema-armor-trailing-line", at(sign(t, g(), "a"), "signature", "signature").(string)+"\n")
 	sig("schema-armor-too-long", nil, func(s *sshsig) { s.tail = make([]byte, 600) })
 	text("schema-then-signature-float", strings.Replace(sent(g()), `"consent_version":6`, `"consent_version":6.0`, 1))
-	text("schema-then-signature-exponent", strings.Replace(sent(g()), `"catalogue_version":18`, `"catalogue_version":1.8e1`, 1))
+	text("schema-then-signature-exponent", strings.Replace(sent(g()), `"catalogue_version":19`, `"catalogue_version":1.9e1`, 1))
 	text("schema-version-float", strings.Replace(sent(g()), `"schema_version":1`, `"schema_version":1.0`, 1))
 
 	// The signature.
 	first := goldenPaths(t, "signed/*.json")[0]
 	add("reports", "signature-status-changed", encode(t, put(parse(t, read(t, first)), "fail", "checks", 0, "status")))
 	add("reports", "signature-kernel-changed", encode(t, put(parse(t, read(t, first)), "7.1.13-1-ARCH", "machine", "kernel")))
-	add("reports", "signature-catalogue-changed", encode(t, put(sign(t, g(), "a"), integer(19), "catalogue_version")))
+	add("reports", "signature-catalogue-changed", encode(t, put(sign(t, g(), "a"), integer(20), "catalogue_version")))
 	add("reports", "signature-member-added", encode(t, sign(t, g(), "a").set("unattended", true)))
 	add("reports", "signature-other-key", encode(t, put(sign(t, g(), "mallory"), testPublicKey("a"), "signature", "public_key")))
 	blob := unarmor(t, at(sign(t, g(), "a"), "signature", "signature").(string))

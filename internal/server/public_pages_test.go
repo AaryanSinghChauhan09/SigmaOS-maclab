@@ -664,7 +664,7 @@ func TestAModelPageShowsWhatItsChipIsExpectedToDoAndEachStacksResults(t *testing
 	if page.count(t, "tr.report-row") != 2 || !page.says(t, ".credit", "CC BY 3.0") {
 		t.Errorf("%d reports listed", page.count(t, "tr.report-row"))
 	}
-	if page.count(t, "tr.report-row .badge-community") != 2 || !page.says(t, "tr.report-row td.nowrap", "37 pass 2 fail 2 gap 45 skip") ||
+	if page.count(t, "tr.report-row .badge-community") != 2 || !page.says(t, "tr.report-row td.nowrap", "37 pass 2 fail 2 gap 48 skip") ||
 		page.count(t, `tr.report-row td.build-cell[data-build="99ace40.361571887310001"]`) != 2 {
 		t.Errorf("the report list: %s", page.sole(t, "table.list tr.report-row td.build-cell").words())
 	}

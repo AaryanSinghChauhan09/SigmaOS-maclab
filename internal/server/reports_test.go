@@ -270,7 +270,7 @@ func TestAReportsOldLinkShowsTheMachineAndEachCheck(t *testing.T) {
 		`kernel: 7.1.12-2-2-ARCH`,
 		`<span class="badge badge-works outcome outcome-works">works</span>`,
 		`<span class="feature">Device tree, asahi layer</span>`,
-		`<dd>feature catalogue v18</dd>`,
+		`<dd>feature catalogue v19</dd>`,
 		`CC BY 3.0`,
 	} {
 		if !strings.Contains(page, want) {
