@@ -841,3 +841,29 @@ func TestAForgettingFindsTheHandlesThePersonHadBefore(t *testing.T) {
 		t.Errorf("another person's handle of today went:\n%s", got)
 	}
 }
+
+// An Audit entry that reaches labd after the person it names was Forgotten,
+// from a Mac that was out of reach, is kept without the handle.
+func TestALateAuditEntryOfAForgottenPersonIsKeptWithoutTheHandle(t *testing.T) {
+	l := rolesLab(t, nil)
+	ravi := l.signedIn(maintainerID)
+	l.signedIn(edithID)
+	mini := l.addMac("ravi-mini", maintainerID)
+	ravi.did(personPath(edithID, "forget"), "sure", "yes")
+
+	mini.copyAudit([]api.AuditEntry{
+		{Time: l.clock.Now(), Maintainer: "edith", Action: "screenshot", End: 40},
+		{Time: l.clock.Now(), Maintainer: "ravi", Action: "reboot", End: 80},
+		{Time: l.clock.Now(), Action: "kernel errors baseline", End: 120},
+	})
+	es, err := l.s.readAuditCopy("ravi-mini")
+	if err != nil || len(es) != 3 {
+		t.Fatalf("labd's copy: %+v %v", es, err)
+	}
+	if es[0].Maintainer != "" || es[0].Action != "screenshot" {
+		t.Errorf("the late entry of the forgotten person: %+v", es[0])
+	}
+	if es[1].Maintainer != "ravi" || es[1].AccountID != maintainerID {
+		t.Errorf("an entry of a person the lab knows: %+v", es[1])
+	}
+}

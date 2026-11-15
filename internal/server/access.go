@@ -224,6 +224,11 @@ func (v *dev) copyAudit(es []api.AuditEntry) {
 			continue
 		}
 		e.AccountID = v.s.auditAccount(e)
+		if e.AccountID == 0 {
+			// A handle that is nobody's now may be a forgotten person's,
+			// named by a Mac that was out of reach at the forgetting.
+			e.Maintainer = ""
+		}
 		line, _ := json.Marshal(e)
 		b.Write(append(line, '\n'))
 		have = e.End
