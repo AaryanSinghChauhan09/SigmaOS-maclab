@@ -14,7 +14,8 @@
 #   --only N,N...  just these tests, such as --only 2 or --only 3,6
 #   --results      read docs/acceptance/out-of-band.results (or the one in
 #                  --records DIR): one line for each of the eight, and exit 0
-#                  only when all eight say pass. This is what the Ready
+#                  only when all eight say pass, each with its record beside
+#                  the file ending "Result: pass". This is what the Ready
 #                  list reads
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,6 +53,13 @@ if (( results )); then
       continue
     fi
     read -r _ result day record <<<"$line"
+    # A pass counts only with its record beside the file, ending in a pass.
+    if [[ $result == pass ]] && { [[ ! ${record:-} =~ ^[A-Za-z0-9._-]+$ || ! -f $(dirname "$file")/$record ]] ||
+      [[ "$(tail -n 1 "$(dirname "$file")/$record")" != "Result: pass" ]]; }; then
+      echo "OOB $n: no record   ${titles[n]}: the line says pass, and ${record:-its record} is not beside it ending \"Result: pass\""
+      green=0
+      continue
+    fi
     printf 'OOB %s: %-7s %s  %s (%s)\n' "$n" "$result" "$day" "${titles[n]}" "$record"
     [[ $result == pass ]] || green=0
   done

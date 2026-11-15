@@ -348,7 +348,7 @@ esac`,
 }
 
 // run --results is what the Ready list reads: green only when all eight
-// say pass.
+// say pass, each with its record beside it ending "Result: pass".
 func TestTheResultsAreGreenOnlyWhenAllEightPassed(t *testing.T) {
 	records := t.TempDir()
 	write := func(lines ...string) {
@@ -356,10 +356,36 @@ func TestTheResultsAreGreenOnlyWhenAllEightPassed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	record := func(n int, result string) {
+		text := fmt.Sprintf("# Out-of-band wiring's test %d\n\n- a line\n\nResult: %s\n", n, result)
+		if err := os.WriteFile(filepath.Join(records, fmt.Sprintf("2026-11-20-out-of-band-0%d.md", n)), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var all []string
 	for n := 1; n <= 8; n++ {
 		all = append(all, fmt.Sprintf("0%d pass 2026-11-20 2026-11-20-out-of-band-0%d.md", n, n))
 	}
+	// Eight pass lines and no record: not green.
+	write(all...)
+	if out, code := run(t, nil, script(t, "run"), "--results", "--records", records); code != 1 || !strings.Contains(out, "Ready item 2 is not green") || !strings.Contains(out, "OOB 4: no record") {
+		t.Errorf("pass lines with no records: exit %d\n%s", code, out)
+	}
+	for n := 1; n <= 8; n++ {
+		record(n, "pass")
+	}
+	// A record that does not end in a pass, under a pass line: not green.
+	record(4, "fail")
+	if out, code := run(t, nil, script(t, "run"), "--results", "--records", records); code != 1 || !strings.Contains(out, "OOB 4: no record") || strings.Contains(out, "OOB 3: no record") {
+		t.Errorf("test 4's record says fail: exit %d\n%s", code, out)
+	}
+	record(4, "pass")
+	// A record named outside the folder: not green.
+	write(append(append(append([]string{}, all[:3]...), "04 pass 2026-11-20 ../2026-11-20-out-of-band-04.md"), all[4:]...)...)
+	if out, code := run(t, nil, script(t, "run"), "--results", "--records", records); code != 1 || !strings.Contains(out, "OOB 4: no record") {
+		t.Errorf("test 4's record named outside the folder: exit %d\n%s", code, out)
+	}
+	os.Remove(filepath.Join(records, "out-of-band.results"))
 	if out, code := run(t, nil, script(t, "run"), "--results", "--records", records); code != 1 || strings.Count(out, ": not run") != 8 {
 		t.Errorf("no results yet: exit %d\n%s", code, out)
 	}
