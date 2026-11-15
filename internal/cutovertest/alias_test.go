@@ -195,6 +195,7 @@ while (( $# )); do
   case "$1" in
     --check) mode=check ;; --apply) mode=apply ;; --remove) want=absent ;;
     --name) name="$2"; shift ;; --token-file) [[ -f $2 ]] || { echo "no token file"; exit 1; }; shift ;;
+    --porkbun-keys) [[ $me == rehearsal-record.sh && -f $2 ]] || { echo "no keys file, or not Porkbun's script"; exit 1; }; shift ;;
   esac
   shift
 done
@@ -295,6 +296,9 @@ esac
 	p.write(filepath.Join(p.stubs, "fd13"), "#!/bin/bash\necho \"fd13 $*\" >> \"$STATE/calls\"\n[[ ! -e $STATE/fd13-fails ]] || { echo 'fd13-cache: fail'; exit 1; }\necho 'fd13-cache: pass'\n")
 	p.write(filepath.Join(p.state, "nameservers"), "curitiba.ns.porkbun.com.\nfortaleza.ns.porkbun.com.\nmaceio.ns.porkbun.com.\nsalvador.ns.porkbun.com.\n")
 	p.write(filepath.Join(p.state, "token"), "not-a-token\n")
+	if err := os.WriteFile(filepath.Join(p.state, "porkbun.keys"), []byte("pk1_not-a-key\nsk1_not-a-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	p.env = []string{"PATH=" + p.stubs + ":" + os.Getenv("PATH"), "STATE=" + p.state, "LAB_CUTOVER_EDGE=" + p.edge.URL, "LAB_COMMAND=" + filepath.Join(bins(t), "lab")}
 	return p
 }
@@ -323,7 +327,7 @@ func (p *played) calls() string { return read(p.t, filepath.Join(p.state, "calls
 // rehearse runs the rehearsal with --lab in the made-up world.
 func (p *played) rehearse(args ...string) (out string, code int, record string) {
 	p.t.Helper()
-	all := append([]string{"--lab", "--mini", "owner@mini.example", "--token-file", filepath.Join(p.state, "token"), "--cloud", p.cloud,
+	all := append([]string{"--lab", "--mini", "owner@mini.example", "--token-file", filepath.Join(p.state, "token"), "--porkbun-keys", filepath.Join(p.state, "porkbun.keys"), "--cloud", p.cloud,
 		"--fd13", filepath.Join(p.stubs, "fd13"), "--records", p.records, "--every", "1", "--alert-minutes", "0", "--issue-minutes", "1", "--settle-minutes", "0", "--lapse-minutes", "1"}, args...)
 	done := make(chan struct{})
 	go func() {
@@ -387,6 +391,9 @@ func TestTheRehearsalRunsFromMakingToDeleting(t *testing.T) {
 		t.Errorf("after the run these are still there: %v", left)
 	}
 	calls := p.calls()
+	if keys := "rehearsal-record.sh --apply --name " + rehearsal + " --token-file " + filepath.Join(p.state, "token") + " --porkbun-keys " + filepath.Join(p.state, "porkbun.keys"); !strings.Contains(calls, keys) {
+		t.Errorf("the record's script was not given the Porkbun keys file:\n%s", calls)
+	}
 	order := []string{
 		"dig +short NS omarchy-m-testing.org",
 		"alias.sh --apply --name " + rehearsal, "rehearsal-record.sh --apply --name " + rehearsal,
@@ -468,6 +475,10 @@ func TestTheRehearsalMakesNothingWhenItCannotRun(t *testing.T) {
 		t.Errorf("with the domain moved: exit %d\n%s", code, out)
 	}
 	p.write(filepath.Join(p.state, "nameservers"), "curitiba.ns.porkbun.com.\n")
+	shared := filepath.Join(p.state, "shared.keys")
+	if err := os.WriteFile(shared, []byte("pk1_x\nsk1_x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	for what, args := range map[string][]string{
 		"no mini":           {"--lab", "--token-file", filepath.Join(p.state, "token"), "--cloud", p.cloud},
 		"no token file":     {"--lab", "--mini", "owner@mini.example", "--cloud", p.cloud},
@@ -475,6 +486,8 @@ func TestTheRehearsalMakesNothingWhenItCannotRun(t *testing.T) {
 		"shell in the name": {"--lab", "--mini", "owner@mini.example", "--token-file", filepath.Join(p.state, "token"), "--cloud", p.cloud, "--name", "x;id"},
 		"the site's name":   {"--lab", "--mini", "owner@mini.example", "--token-file", filepath.Join(p.state, "token"), "--cloud", p.cloud, "--name", "www"},
 		"a mini with shell": {"--lab", "--mini", "owner@mini;id", "--token-file", filepath.Join(p.state, "token"), "--cloud", p.cloud},
+		"no Porkbun keys":   {"--lab", "--mini", "owner@mini.example", "--token-file", filepath.Join(p.state, "token"), "--porkbun-keys", filepath.Join(p.state, "none"), "--cloud", p.cloud},
+		"keys others read":  {"--lab", "--mini", "owner@mini.example", "--token-file", filepath.Join(p.state, "token"), "--porkbun-keys", shared, "--cloud", p.cloud},
 	} {
 		if out, code := run(t, p.env, "", cutover(t, "alias-rehearsal"), args...); code == 0 {
 			t.Errorf("%s: it ran\n%s", what, out)
