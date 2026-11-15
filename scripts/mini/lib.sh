@@ -515,10 +515,11 @@ lift_drain() {
 
 # parts_bad: what labd says is wrong with the Builder or the Out-of-band
 # controller, or nothing. A part the mini does not have yet is not wrong,
-# and a labd too old to say (404) is not asked. An answer that fails or
-# does not read as the two parts is wrong.
+# and a labd too old to say (no ops socket, or 404) is not asked. An answer
+# that fails or does not read as the two parts is wrong.
 parts_bad() {
   local builder controller
+  [[ -S $OPS_SOCKET ]] || return 0
   ops_status GET /parts
   [[ $OPS_STATUS != 404 ]] || return 0
   builder="$(awk '$1 == "builder" && NF == 2 { print $2 }' <<<"$OPS_ANSWER")"
