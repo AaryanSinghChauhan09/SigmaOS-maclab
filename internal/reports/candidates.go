@@ -101,18 +101,20 @@ func (s *CandidateSet) VerifiedRuns() []*Run {
 }
 
 // Carries reports whether a Release with these packages (name to version)
-// is this set's. It is when the lab knows the set by exactly the Release's
-// omarchy package, or when a Verified run on the set lists every package of
-// the Release at the Release's version. Community runs link nothing.
+// is this set's: a Verified run on the set names every package of the
+// Release at the Release's version, and the Release every package the run
+// names. A package alone, the omarchy package the lab knows the set by
+// included, links nothing. Community runs link nothing.
 func (s *CandidateSet) Carries(packages map[string]string) bool {
 	if len(packages) == 0 {
 		return false
 	}
-	if knownSetFor(packages["omarchy"]) == s.Name {
-		return true
-	}
 	for _, run := range s.VerifiedRuns() {
-		on := true
+		named := map[string]bool{}
+		for _, pkg := range run.packages() {
+			named[text(member(asObject(pkg), "name"))] = true
+		}
+		on := len(named) == len(packages)
 		for name, version := range packages {
 			on = on && version != "" && run.PackageVersion(name) == version
 		}

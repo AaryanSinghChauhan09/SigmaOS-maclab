@@ -64,6 +64,18 @@ func kernelPackage(version string) []api.ReleasePackage {
 	return []api.ReleasePackage{{Name: "linux-aurora", Version: version}}
 }
 
+// setsPackages are every package the run names, at its versions: a Release
+// of exactly these matches the run's set.
+func setsPackages(t *testing.T, body doc) []api.ReleasePackage {
+	t.Helper()
+	var packages []api.ReleasePackage
+	for _, item := range at(body, "system", "packages").([]any) {
+		pkg := item.(doc)
+		packages = append(packages, api.ReleasePackage{Name: pkg["name"].(string), Version: pkg["version"].(string)})
+	}
+	return packages
+}
+
 func (b *browser) releases(query string) *node {
 	b.l.t.Helper()
 	w := b.do("GET", "/releases"+query, "")
@@ -157,7 +169,9 @@ func TestReleasesOpensToTheMTeamAndMaintainersAndIsNowherePublic(t *testing.T) {
 
 func TestReleasesListsOneRowPerReleaseNewestFirst(t *testing.T) {
 	l, grace, _, _ := twoReleases(t)
-	relReport(t, l.dir, "run-edge-1", onSet(goldenDoc(t, "m2-max-image2"), "edge-1"), l.s.now().Add(-72*time.Hour), true)
+	run := onSet(goldenDoc(t, "m2-max-image2"), "edge-1")
+	run["system"].(doc)["packages"] = []any{doc{"name": "linux-aurora", "version": "7.1.12.aurora2-2"}, doc{"name": "omarchy-mac-boot", "version": "20260925-3"}}
+	relReport(t, l.dir, "run-edge-1", run, l.s.now().Add(-72*time.Hour), true)
 	relVerdict(t, l.s, l.who(lrLinus), "9.9", api.ReleaseQualified, "both laptops boot it")
 	if err := l.s.store.addPromotion("9.9", "d-m1-pro", api.ReleasePromotion{Time: l.s.now(), Mac: "m1-pro", Job: "job-a2", Kernel: "7.1.12-aurora-9.9", AccountID: maintainerID, Handle: "ravi"}); err != nil {
 		t.Fatal(err)
@@ -673,9 +687,11 @@ func TestCandidatesShowsTheLabsVerdictBesideTheMatchingSet(t *testing.T) {
 	}
 	same(t, "with no Release", lines(), map[string]string{"edge-1": "", "edge-2": ""})
 
-	// A Release with no verdict says nothing; one matching no set shows nowhere.
-	relFreeze(t, l.s, "rel-2026.11", frozen, linus, kernelPackage(kernel), mac)
+	// A Release with no verdict says nothing; one matching no set shows
+	// nowhere, the one of the set's kernel package alone included.
+	relFreeze(t, l.s, "rel-2026.11", frozen, linus, setsPackages(t, goldenDoc(t, "m2-max-image2")), mac)
 	relFreeze(t, l.s, "rel-unmatched", frozen, linus, kernelPackage("0.0.1-1"), mac)
+	relFreeze(t, l.s, "rel-kernel-only", frozen, linus, kernelPackage(kernel), mac)
 	relRun(t, l.s, "job-secret-1", "rel-2026.11", "secret-mac-name", frozen.Add(time.Hour), api.OutcomePass)
 	relRun(t, l.s, "job-secret-2", "rel-unmatched", "secret-mac-name", frozen.Add(time.Hour), api.OutcomePass)
 	same(t, "with no verdict", lines(), map[string]string{"edge-1": "", "edge-2": ""})
@@ -688,6 +704,7 @@ func TestCandidatesShowsTheLabsVerdictBesideTheMatchingSet(t *testing.T) {
 	}
 	at := judge(linus, "rel-2026.11", api.ReleaseQualified, "a note nobody outside reads")
 	judge(linus, "rel-unmatched", api.ReleaseQualified, "another private note")
+	judge(linus, "rel-kernel-only", api.ReleaseNotQualified, "a kernel alone")
 	same(t, "qualified", lines(), map[string]string{"edge-1": "Qualified by the lab, " + day(at), "edge-2": ""})
 	at = judge(ravi, "rel-2026.11", api.ReleaseNotQualified, "a second private note")
 	same(t, "not qualified", lines(), map[string]string{"edge-1": "Not qualified, " + day(at), "edge-2": ""})
@@ -697,7 +714,7 @@ func TestCandidatesShowsTheLabsVerdictBesideTheMatchingSet(t *testing.T) {
 	// No handle, note, Mac, job or Release name reaches a visitor, on any public page.
 	for _, target := range []string{"/", "/candidates", "/candidates/edge-1", "/candidates/edge-2", "/reports", "/matrix", "/data"} {
 		body := l.do("GET", target, "").Body.String()
-		for _, never := range []string{"linus-the-judge", "ravi-the-maintainer", "private note", "secret-mac-name", "job-secret", "rel-2026.11", "rel-unmatched", "j414c, 12 CPU", "/releases"} {
+		for _, never := range []string{"linus-the-judge", "ravi-the-maintainer", "private note", "secret-mac-name", "job-secret", "rel-2026.11", "rel-unmatched", "rel-kernel-only", "j414c, 12 CPU", "/releases"} {
 			if strings.Contains(body, never) {
 				t.Errorf("%s says %q", target, never)
 			}
@@ -714,10 +731,10 @@ func TestCandidatesShowsTheLabsVerdictBesideTheMatchingSet(t *testing.T) {
 func TestASetMatchedByTwoReleasesShowsTheVerdictRecordedLast(t *testing.T) {
 	l := newPublicLab(t, nil)
 	l.add(onSet(working(t, "m2-max-image2"), "edge-1"), "verified:t")
-	kernel := checkedPackage(t, goldenDoc(t, "m2-max-image2"), "linux-aurora")
+	packages := setsPackages(t, goldenDoc(t, "m2-max-image2"))
 	ravi := Person{AccountID: 3003, Handle: "ravi", Maintainer: true}
-	relFreeze(t, l.s, "first", time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), ravi, kernelPackage(kernel))
-	relFreeze(t, l.s, "second", time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC), ravi, kernelPackage(kernel))
+	relFreeze(t, l.s, "first", time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), ravi, packages)
+	relFreeze(t, l.s, "second", time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC), ravi, packages)
 	relVerdict(t, l.s, ravi, "second", api.ReleaseNotQualified, "no")
 	time.Sleep(2 * time.Millisecond)
 	relVerdict(t, l.s, ravi, "first", api.ReleaseNotQualified, "no")
@@ -745,7 +762,7 @@ func TestCandidatesStillShowsWhenTheReleasesCannotBeRead(t *testing.T) {
 	l := newPublicLab(t, nil)
 	l.add(onSet(working(t, "m2-max-image2"), "edge-1"), "verified:t")
 	relFreeze(t, l.s, "rel-1", time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), Person{AccountID: 3003, Handle: "ravi", Maintainer: true},
-		kernelPackage(checkedPackage(t, goldenDoc(t, "m2-max-image2"), "linux-aurora")))
+		setsPackages(t, goldenDoc(t, "m2-max-image2")))
 	relVerdict(t, l.s, Person{AccountID: 3003, Handle: "ravi", Maintainer: true}, "rel-1", api.ReleaseNotQualified, "no")
 	if l.page("/candidates").count(t, ".lab-verdict") != 1 {
 		t.Fatal("the lab's line is not on the page")

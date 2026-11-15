@@ -520,7 +520,7 @@ Recorded in the acceptance run, measured without a script in the page. ("The fro
 ### What a visitor sees
 
 - No public Releases page; Promotion is never public.
-- A Release and a Candidate set stay two records, linked when the Release's packages match the set's.
+- A Release and a Candidate set stay two records, linked when the Release's packages match the set's: every package a Verified run of the set names, at its version, and no other. One package alone, the `omarchy` package the lab knows a set by included, links nothing.
 - The verdict shows on Candidates, beside the Candidate set the Release matches: "Qualified by the lab, date", "Not qualified, date" or "Qualification revoked, date". No handle, note or Mac. A Release matching no set shows nowhere public.
 - The Candidates page's own line is "Passing: Verified runs on N models, nothing failing", "Failing: N failures, M regressions" or "Waiting".
 
