@@ -75,6 +75,14 @@ alone() {
   trap back EXIT
 }
 back() {
+  if [[ -n $LINK_PID ]]; then
+    local pids
+    pids="$(family "$LINK_PID")"
+    # shellcheck disable=SC2086 # one pid a word
+    kill $pids 2>/dev/null || true
+    wait "$LINK_PID" 2>/dev/null || true
+  fi
+  [[ -z $LINK_DIR ]] || rm -rf "$LINK_DIR"
   if (( WAS_LOADED )); then
     say "starting $SIGNAL_LABEL again"
     start_sender
@@ -101,15 +109,28 @@ register() {
 
 DEVICE_NAME="Omarchy Mac Lab"
 
+# signal-cli link, run in the background with its output on a pipe in
+# LINK_DIR: it waits for a scan, with the sender stopped, until it is ended.
+LINK_PID=""
+LINK_DIR=""
+
+# family PID: PID and every process under it (sudo, signal-cli).
+family() {
+  local child
+  echo "$1"
+  for child in $(pgrep -P "$1" 2>/dev/null || true); do family "$child"; done
+}
+
 # show_link LABD: signal-cli link's output, with the link shown only as a QR
 # code that labd draws from its input, so the link is on the terminal as text
-# nowhere and no command line holds it. printf is bash's own.
+# nowhere and no command line holds it. printf is bash's own. It fails when
+# labd draws nothing.
 show_link() {
   local line
   while IFS= read -r line; do
     if [[ $line == sgnl://* ]]; then
       echo "In Signal on your phone: Settings, Linked devices, Link a new device, and scan this (good for a few minutes):" >&2
-      printf '%s\n' "$line" | as_lab "$1" qr >&2 || echo "(labd did not draw the QR code, and the link is not shown: stop with Ctrl-C and run link again)" >&2
+      printf '%s\n' "$line" | as_lab "$1" qr >&2 || return 1
     else
       printf '%s\n' "$line"
     fi
@@ -153,7 +174,13 @@ link() {
   draws "$version" || fail "the Deployed build is ${version:-of no version}, whose labd cannot draw the QR code for your phone. Deploy a Release candidate cut from build at or after e61152eb (v0.2.0-rc.1 or later), then run link again. Nothing was changed"
   fits
   alone
-  cli link -n "$DEVICE_NAME" | show_link "$labd" || fail "signal-cli did not link: run link again for a new link"
+  LINK_DIR="$(mktemp -d)"
+  mkfifo "$LINK_DIR/out"
+  cli link -n "$DEVICE_NAME" >"$LINK_DIR/out" &
+  LINK_PID=$!
+  show_link "$labd" <"$LINK_DIR/out" || fail "labd did not draw the QR code, and the link is not shown: signal-cli link was ended. Run link again for a new link"
+  wait "$LINK_PID" || { LINK_PID=""; fail "signal-cli did not link: run link again for a new link"; }
+  LINK_PID=""
   say "linked as \"$DEVICE_NAME\", a device of your number: lines come from your own number. Then: scripts/mini/signal groups"
 }
 

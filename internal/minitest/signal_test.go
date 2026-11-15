@@ -9,8 +9,11 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const (
@@ -425,7 +428,7 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 	// started again.
 	write(t, labd, "#!/bin/bash\ncat >/dev/null\nexit 1\n", 0o755)
 	stdout, stderr, err = run(script, "link")
-	if !strings.Contains(stderr, "did not draw") || strings.Contains(stdout+stderr, "sgnl://") || !m.senderLoaded() {
+	if err == nil || !strings.Contains(stderr, "did not draw") || strings.Contains(stdout+stderr, "sgnl://") || !m.senderLoaded() {
 		t.Errorf("labd failing to draw: %v, sender up %v\nstdout:\n%s\nstderr:\n%s", err, m.senderLoaded(), stdout, stderr)
 	}
 
@@ -516,5 +519,39 @@ func TestLinkRefusesATerminalTheCodeDoesNotFit(t *testing.T) {
 	m.terminal("24 45")
 	if out, code := m.signal("", "link"); code != 0 {
 		t.Errorf("link in 24 rows of 45 columns: exit %d\n%s", code, out)
+	}
+}
+
+// A code labd fails to draw ends signal-cli link, which would wait for a
+// scan with the sender stopped until Ctrl-C, and link fails; the sender is
+// started again.
+func TestLinkEndsSignalCLIWhenTheCodeIsNotDrawn(t *testing.T) {
+	m, labd := linkReady(t, "v0.2.0-rc.1")
+	pid := filepath.Join(filepath.Dir(m.root), "state", "signal-cli.pid")
+	write(t, m.path(signalCLI), `#!/bin/bash
+echo "signal-cli $*" >> "$STUB_LOG"
+echo $$ > "$STUB_STATE/signal-cli.pid"
+key=dGVzdC1wdWJsaWMta2V5
+echo "sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=$key"
+exec sleep 60
+`, 0o755)
+	write(t, labd, "#!/bin/bash\ncat >/dev/null\nexit 1\n", 0o755)
+	start := time.Now()
+	out, code := m.signal("", "link")
+	if code == 0 || !strings.Contains(out, "did not draw") || strings.Contains(out, "sgnl://") || strings.Contains(out, "linked as") || !m.senderLoaded() {
+		t.Errorf("a failed draw: exit %d, sender up %v\n%s\n%s", code, m.senderLoaded(), out, m.callsOrNone())
+	}
+	if time.Since(start) > 30*time.Second {
+		t.Errorf("link waited %v for signal-cli after the draw failed", time.Since(start))
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(read(t, pid)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; syscall.Kill(n, 0) == nil; i++ {
+		if i == 50 {
+			t.Fatalf("signal-cli link (%d) still runs after link failed", n)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
