@@ -219,6 +219,7 @@ func ownerAtTest8(unplugged, answer string) []struct {
 		do     func()
 		answer string
 	}{
+		{"STOP, by hand: Be at the mini", nil, ""},
 		{"STOP, by hand: Pull the cable", func() { os.WriteFile(unplugged, nil, 0o644) }, ""},
 		{"STOP, by hand: Put the cable", func() { os.Remove(unplugged) }, ""},
 		{"Type yes or no: ", nil, answer},

@@ -28,27 +28,32 @@ fi
 if [[ -z $hang_wait ]]; then
   if [[ $MODE == local ]]; then hang_wait=3; else hang_wait=90; fi
 fi
+# The first step by hand comes before any placing: with nobody there the
+# test stops before a Proving reset could restart a Mac.
+FIRST="Be at the $M1 and stay there: the test first sees that the lab places it, by a Proving reset of its port if it shows no name (that restarts it), and then asks you to hang it."
 HANG="Hang the $M1 with its watchdog off, at the Mac, as root. One way: systemctl stop lab-agent; then sysctl kernel.panic=0; then echo 1 > /proc/sys/kernel/sysrq; echo c > /proc/sysrq-trigger. The screen must freeze and stay frozen."
 
 if [[ $MODE == dry ]]; then
   cat <<PLAN
 $ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, and on the mini over SSH, it would:
-  1. see that the lab places $M1 (lab oob $M1)
+  1. STOP, by hand: $FIRST
+  2. see that the lab places $M1 (lab oob $M1)
      expects: sighted; if it shows no name, placed by a Proving reset of the port --m1-port names
-  2. STOP, by hand: $HANG
-  3. wait $hang_wait s
+  3. STOP, by hand: $HANG
+  4. wait $hang_wait s
      expects: $M1 is on the boot it was on: nothing brought it back by itself
-  4. read what the mini sees on its port ($MINI_SCRIPTS/ports --seen)
+  5. read what the mini sees on its port ($MINI_SCRIPTS/ports --seen)
      expects: still connected; whether the product id is still read is recorded
-  5. ask: lab reset $M1 (a Proving reset of the port if the Sighting did not outlive the hang)
+  6. ask: lab reset $M1 (a Proving reset of the port if the Sighting did not outlive the hang)
      expects: sent; $M1 back on a new boot and ready within $WITHIN s; the time is recorded
-  6. write docs/acceptance/$(today)-out-of-band-05.md and its line in docs/acceptance/$RESULTS_NAME
+  7. write docs/acceptance/$(today)-out-of-band-05.md and its line in docs/acceptance/$RESULTS_NAME
 Nothing was sent and nothing was reset.
 PLAN
   exit 0
 fi
 
 begin 05 "a truly hung M1 Pro (crashed, watchdog off) brought back from the mini"
+hands "$FIRST"
 placed "$M1"; port="$PORT"
 mini_seen "$WORK/before"
 boot="$(boot_of "$M1")"

@@ -29,28 +29,32 @@ if (( ${#REST[@]} )); then
   [[ ${REST[0]} == --volunteers-mac && ${#REST[@]} == 2 && ${REST[1]} =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail "an option it does not take: ${REST[0]}. Nothing was done."
   volunteers="${REST[1]}"
 fi
+# The first step by hand comes before any placing: with nobody there the
+# test stops before a Proving reset could restart a Mac.
+FIRST="Be at the mini and stay there: the test first sees that the lab places the $M1, by a Proving reset of its port if it shows no name (that restarts it), and then asks you to pull its cable."
 TROUBLE="The Out-of-band controller on the mini is not healthy"
 RECOVERED="The Out-of-band controller on the mini answers again."
 
 if [[ $MODE == dry ]]; then
   cat <<PLAN
 $ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, and on the mini over SSH, it would:
-  1. STOP, by hand: pull the cable of $M1 out of the mini
-  2. wait for the lab to drop its Sighting (lab oob $M1), then ask: lab reset $M1
+  1. STOP, by hand: $FIRST
+  2. see that the lab places $M1, then STOP, by hand: pull the cable of $M1 out of the mini
+  3. wait for the lab to drop its Sighting (lab oob $M1), then ask: lab reset $M1
      expects: refused, "no Hard reset was sent" with the reason; $M1 keeps its boot id
-  3. STOP, by hand: put the cable back; wait for the lab to place $M1 again
-  4. with --volunteers-mac NAME, ask: lab reset NAME, and lab reset NAME --prove left
+  4. STOP, by hand: put the cable back; wait for the lab to place $M1 again
+  5. with --volunteers-mac NAME, ask: lab reset NAME, and lab reset NAME --prove left
      expects: both refused: "the lab never sends a Volunteer's Mac a Hard reset"
-  5. see that the lab places $M2, then stop the controller on the mini: sudo launchctl bootout system/$OOBD_LABEL (the owner types the password)
-  6. ask: lab reset $M2
+  6. see that the lab places $M2, then stop the controller on the mini: sudo launchctl bootout system/$OOBD_LABEL (the owner types the password)
+  7. ask: lab reset $M2
      expects: refused, "the Out-of-band controller is not healthy"; $M2 keeps its boot id; lab oob $M2 says it has no Hard reset
-  7. read $ADDRESS/status, for up to 90 s
+  8. read $ADDRESS/status, for up to 90 s
      expects: "Out-of-band controller: not answering since ..."
-  8. wait 4 minutes, then ask the owner whether "Agents" got: $TROUBLE ...
+  9. wait 4 minutes, then ask the owner whether "Agents" got: $TROUBLE ...
      expects: yes
-  9. start the controller again: sudo launchctl bootstrap system $OOBD_PLIST
+ 10. start the controller again: sudo launchctl bootstrap system $OOBD_PLIST
      expects: /status says "answering" within 90 s; lab oob says healthy; "Agents" gets: $RECOVERED
- 10. write docs/acceptance/$(today)-out-of-band-08.md and its line in docs/acceptance/$RESULTS_NAME
+ 11. write docs/acceptance/$(today)-out-of-band-08.md and its line in docs/acceptance/$RESULTS_NAME
 Nothing was sent and nothing was reset.
 PLAN
   exit 0
@@ -80,6 +84,7 @@ never() {
   rec "$what: refused, and $mac kept its boot id: $(plain "$WORK/reset.out")"
 }
 
+hands "$FIRST"
 placed "$M1"; port="$PORT"
 hands "Pull the cable of the $M1 out of the mini's $(echo "$port" | tr '[:lower:]' '[:upper:]') port and leave it out."
 ! playing || fake unplug "port=$port"

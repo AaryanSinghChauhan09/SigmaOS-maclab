@@ -142,7 +142,7 @@ func stubs(t *testing.T, text map[string]string) (dir, calls string) {
 func TestEveryDryRunSaysItsStepsAndSendsNothing(t *testing.T) {
 	dir, calls := stubs(t, nil)
 	env := []string{"PATH=" + dir + ":" + os.Getenv("PATH")}
-	byHand := map[string]int{"oob01-tool": 2, "oob02-bad-rid": 0, "oob03-two-at-once": 0, "oob04-sighting": 4, "oob05-hung": 1, "oob06-auto-unlock": 0, "oob07-restart": 2, "oob08-refusals": 2}
+	byHand := map[string]int{"oob01-tool": 2, "oob02-bad-rid": 0, "oob03-two-at-once": 0, "oob04-sighting": 4, "oob05-hung": 2, "oob06-auto-unlock": 0, "oob07-restart": 2, "oob08-refusals": 3}
 	for _, name := range tests {
 		for _, option := range [][]string{nil, {"--dry-run"}} {
 			out, code := run(t, env, script(t, name), option...)
@@ -297,17 +297,53 @@ esac`,
 		t.Fatalf("records: %v\n%s", files, out)
 	}
 	record := read(t, files[0])
-	for _, want := range []string{"oob05-hung --lab`, through https://lab.example", "m1-pro is placed on the right port, product id 29448, plug count 40", "STOPPED: nobody was there for a step by hand: Hang the m1-pro with its watchdog off", "Result: stopped"} {
+	for _, want := range []string{"oob05-hung --lab`, through https://lab.example", "STOPPED: nobody was there for a step by hand: Be at the m1-pro", "Result: stopped"} {
 		if !strings.Contains(record, want) {
 			t.Errorf("the record lacks %q:\n%s", want, record)
 		}
 	}
-	if !strings.Contains(out, "STOP, by hand: Hang the m1-pro") || !strings.HasPrefix(read(t, filepath.Join(records, "out-of-band.results")), "05 stopped ") {
+	if !strings.Contains(out, "STOP, by hand: Be at the m1-pro") || !strings.HasPrefix(read(t, filepath.Join(records, "out-of-band.results")), "05 stopped ") {
 		t.Errorf("the stop was not said, or not written in the results:\n%s", out)
 	}
-	asked := read(t, calls)
-	if strings.Contains(asked, "lab reset") || !strings.Contains(asked, "ssh owner@mini /usr/local/lab/current/scripts/mini/ports --seen") {
+	if asked, _ := os.ReadFile(calls); strings.Contains(string(asked), "lab reset") {
 		t.Errorf("the calls:\n%s", asked)
+	}
+}
+
+// Tests 5 and 8 may place a Mac that shows no name by a Proving reset,
+// which restarts it: with nobody there they stop at their first step by
+// hand, before any placing, and no reset is asked.
+func TestNobodyThereMeansNoProvingResetToPlaceAMac(t *testing.T) {
+	for _, name := range []string{"oob05-hung", "oob08-refusals"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir, calls := stubs(t, map[string]string{
+				"lab": `case "$1 $2" in
+"status ") echo "NAME STATE" ;;
+"status m1-pro") printf 'm1-pro  READY\n  boot:        b1\n' ;;
+"oob m1-pro") printf 'm1-pro: not sighted: it shows the lab no name\n  right:       connected, product id 29448, plug count 40, shows no name\n' ;;
+*) exit 9 ;;
+esac`,
+			})
+			// The waits for a Sighting pass at once: each look at the clock is
+			// a hundred seconds on.
+			for tool, text := range map[string]string{
+				"sleep": "#!/bin/sh\nexit 0\n",
+				"date":  "#!/bin/sh\nif [ \"$1\" = +%s ]; then n=$(cat " + dir + "/clock 2>/dev/null || echo 1800000000); n=$((n + 100)); echo $n > " + dir + "/clock; echo $n; else exec /bin/date \"$@\"; fi\n",
+			} {
+				if err := os.WriteFile(filepath.Join(dir, tool), []byte(text), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			records := t.TempDir()
+			out, code := run(t, []string{"PATH=" + dir + ":" + os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example"}, script(t, name), "--lab", "--mini", "owner@mini", "--m1-port", "right", "--records", records)
+			if code != 3 {
+				t.Errorf("exit %d\n%s", code, out)
+			}
+			if asked, _ := os.ReadFile(calls); strings.Contains(string(asked), "lab reset") {
+				t.Errorf("a reset was asked with nobody there:\n%s\n%s", out, asked)
+			}
+		})
 	}
 }
 
