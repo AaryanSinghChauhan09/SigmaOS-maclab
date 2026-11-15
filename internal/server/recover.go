@@ -20,8 +20,10 @@ var panicGrace = 60 * time.Second
 // boot's deadlines reboot it), then walks the recovery ladder. It returns the
 // ladder steps used, whether the Mac is back, and whether the ladder found it
 // still up on oldBoot: it never went down by itself, whatever the ladder did
-// after.
-func (v *dev) waitBack(ctx context.Context, oldBoot string, since time.Time, timeout, selfRecovery time.Duration) (steps []string, ok, neverLeft bool, err error) {
+// after. A check-in on oldBoot after upAfter says it is still up: what labd
+// heard over the whole wait, not whether a check-in fell in the last
+// aliveWindow at its end, which a slow check-in can miss.
+func (v *dev) waitBack(ctx context.Context, oldBoot string, since, upAfter time.Time, timeout, selfRecovery time.Duration) (steps []string, ok, neverLeft bool, err error) {
 	var reason string
 	err = v.waitFor(ctx, timeout+selfRecovery, func() bool {
 		if v.d.BootID != oldBoot && v.d.LastSeen.After(since) {
@@ -45,9 +47,7 @@ func (v *dev) waitBack(ctx context.Context, oldBoot string, since time.Time, tim
 	}
 	v.mu.Lock()
 	back := v.d.BootID != oldBoot && v.d.LastSeen.After(since)
-	// A Mac that is going down stops talking within seconds. Only one still
-	// checking in well after the reboot request never went down at all.
-	stillUp := v.d.BootID == oldBoot && v.aliveLocked() && v.d.LastSeen.After(since.Add(v.s.cfg.RebootGrace))
+	stillUp := v.d.BootID == oldBoot && v.d.LastSeen.After(upAfter)
 	v.mu.Unlock()
 	if back {
 		return nil, true, false, nil
@@ -124,7 +124,8 @@ func (v *dev) climb(ctx context.Context, reason string, bootTimeout time.Duratio
 	}
 	v.mu.Lock()
 	stuck := v.d.BootID
-	alive := trySoft && v.aliveLocked()
+	// trySoft is the caller's word that the Mac still checks in on its boot.
+	alive := trySoft
 	volunteers := v.d.IsVolunteer()
 	noReset := v.noHardResetLocked()
 	prev := v.d.State

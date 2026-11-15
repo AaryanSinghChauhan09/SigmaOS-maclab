@@ -79,6 +79,48 @@ func TestRebootFailingAfterTheAckIsAnInfraError(t *testing.T) {
 	}
 }
 
+// A Mac heard on its old boot well after the reboot request never went down,
+// even if a check-in gap falls on the boot timeout's end: labd judges by what
+// it heard after the reboot's grace, not by one look at that moment.
+func TestAMacHeardOnItsOldBootAfterTheGraceNeverLeftThoughSilentAtTheDeadline(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	l.sim.FailReboots(1)
+	boots := l.bootIDs()
+	old := l.s.dev(l.name).snapshot().BootID
+	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-panics behavior=panic")})
+	var armed time.Time
+	l.waitJob(id, func(j *api.Job) bool {
+		for _, e := range j.Events {
+			if strings.HasPrefix(e.Msg, "one-shot armed") {
+				armed = e.Time
+				return true
+			}
+		}
+		return false
+	})
+	l.waitDevice(func(d api.Device) bool {
+		return d.BootID == old && d.LastSeen.After(armed.Add(l.s.cfg.RebootGrace))
+	})
+	l.sim.Sleep()
+	l.waitDevice(ladderBegun)
+	l.sim.Wake()
+	j := l.wait(id, 60*time.Second)
+	l.expect(j, api.OutcomeInfra)
+	if !strings.Contains(j.Summary, "never rebooted") {
+		t.Fatalf("summary: %s", j.Summary)
+	}
+	if ids := boots(); len(ids) != 2 {
+		t.Fatalf("the Mac went through %d boots, want the one it was on and the ladder's soft reboot: %v", len(ids), ids)
+	}
+}
+
+// ladderBegun is whether labd has judged the Mac and begun its recovery
+// ladder; a ladder with no rung to try goes to needs hands at once.
+func ladderBegun(d api.Device) bool {
+	return d.State == api.StateRecovering || d.State == api.StateNeedsHands
+}
+
 // If the one-shot can't be cancelled either, the ladder's reboot runs the
 // test kernel after all: its panic is its own, not the lab's.
 func TestTestKernelTheLadderBootsAfterAFailedRebootIsJudged(t *testing.T) {

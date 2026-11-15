@@ -639,7 +639,9 @@ func (r *jobRun) execute(ctx context.Context) (string, string) {
 		r.armedAt = t0
 	}
 	r.ev("one-shot armed, rebooting into %s", sr.Entry)
-	steps, ok, neverLeft, err := v.waitBack(ctx, oldBoot, t0, r.boot, r.selfRecovery())
+	// A Mac that is going down stops talking within seconds. Only one still
+	// checking in well after the reboot request never went down at all.
+	steps, ok, neverLeft, err := v.waitBack(ctx, oldBoot, t0, t0.Add(r.s.cfg.RebootGrace), r.boot, r.selfRecovery())
 	r.addRecovery(steps)
 	if err != nil {
 		return api.OutcomeCanceled, "canceled while booting"
@@ -1219,7 +1221,9 @@ func (r *jobRun) lostDuringTest(ctx context.Context, test string) (string, strin
 	lost := r.s.now()
 	// A hang has already had quietGrace of silence to show itself.
 	timeout := max(r.boot-r.s.quietGrace(), time.Minute)
-	steps, ok, neverLeft, err := r.v.waitBack(ctx, r.bootID, r.bootedAt, timeout, r.watchdogRecovery(timeout))
+	// Heard again on the same boot after the silence it was lost to: back.
+	lastHeard := r.v.snapshot().LastSeen
+	steps, ok, neverLeft, err := r.v.waitBack(ctx, r.bootID, r.bootedAt, lastHeard, timeout, r.watchdogRecovery(timeout))
 	r.addRecovery(steps)
 	// Only this boot's events: an earlier boot's are not the test kernel's.
 	events := r.v.eventsOnBoot(r.bootedAt.Add(-time.Second), r.bootID)
@@ -1281,7 +1285,7 @@ func (r *jobRun) crashTest(ctx context.Context) (string, string) {
 	t0 := r.s.now()
 	r.ev("triggering a deliberate kernel %s", r.j.Spec.Crash)
 	r.v.send(api.CmdCrash, r.j.ID, api.CrashArgs{Mode: r.j.Spec.Crash})
-	steps, ok, _, err := r.v.waitBack(ctx, old, t0, r.boot, 0)
+	steps, ok, _, err := r.v.waitBack(ctx, old, t0, t0.Add(r.s.cfg.RebootGrace), r.boot, 0)
 	r.addRecovery(steps)
 	if err != nil {
 		return api.OutcomeCanceled, "canceled during crash test"
@@ -1384,7 +1388,7 @@ func (r *jobRun) restore(ctx context.Context) error {
 		v.mu.Unlock()
 		if pending {
 			r.ev("waiting for %s to finish rebooting before restoring", r.j.Spec.Device)
-			steps, _, _, err := v.waitBack(ctx, r.armedBoot, r.armedAt, r.boot, r.selfRecovery())
+			steps, _, _, err := v.waitBack(ctx, r.armedBoot, r.armedAt, r.armedAt.Add(r.s.cfg.RebootGrace), r.boot, r.selfRecovery())
 			r.addRecovery(steps)
 			if err != nil {
 				return err
@@ -1398,7 +1402,7 @@ func (r *jobRun) restore(ctx context.Context) error {
 		v.send(api.CmdReboot, r.j.ID, nil)
 		// A Lab boot that can't hear the reboot (no network) is reset by
 		// lab-agent's watchdog: give it that before asking for hands.
-		steps, ok, _, err := v.waitBack(ctx, d.BootID, t0, r.boot, r.watchdogRecovery(r.boot))
+		steps, ok, _, err := v.waitBack(ctx, d.BootID, t0, t0.Add(r.s.cfg.RebootGrace), r.boot, r.watchdogRecovery(r.boot))
 		r.addRecovery(steps)
 		if err != nil {
 			return err

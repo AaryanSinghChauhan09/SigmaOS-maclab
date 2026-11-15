@@ -1747,6 +1747,41 @@ func TestNetworkBackOnTheSameBootIsLostContact(t *testing.T) {
 	}
 }
 
+// A Mac heard again on the same boot after labd lost it came back, even if a
+// check-in gap falls on the wait's end: labd judges by what it heard, not by
+// one look at that moment.
+func TestNetworkBackOnTheSameBootIsLostContactThoughSilentAtTheDeadline(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	l.sim.SuspendFor = 8 * time.Second
+	l.s.cfg.TestGrace = 2 * time.Second
+	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-ok behavior=ok"), Tests: []api.TestSpec{{Name: "quiet-suspend-wifi", Builtin: "x", TimeoutSec: 10}}})
+	var lost time.Time
+	l.waitJob(id, func(j *api.Job) bool {
+		for _, e := range j.Events {
+			if strings.HasPrefix(e.Msg, "lost the Mac") {
+				lost = e.Time
+				return true
+			}
+		}
+		return false
+	})
+	boot := l.s.dev(l.name).snapshot().BootID
+	l.waitDevice(func(d api.Device) bool { return d.BootID == boot && d.LastSeen.After(lost) })
+	l.sim.Sleep()
+	for end := time.Now().Add(2 * time.Minute); !ladderBegun(l.s.dev(l.name).snapshot()); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("labd never began recovering the Mac")
+		}
+	}
+	l.sim.Wake()
+	j := l.wait(id, 2*time.Minute)
+	l.expect(j, api.OutcomeLostContact)
+	if !strings.Contains(j.Summary, "came back on the same boot") {
+		t.Fatalf("summary: %s", j.Summary)
+	}
+}
+
 func TestCancelKeepsKernelFailure(t *testing.T) {
 	l := newLab(t, true)
 	l.baseline()
