@@ -74,7 +74,11 @@ func showNoticeWithPause(ctx context.Context, sys System, guiUser, text string, 
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.StdoutPipe()
-	if err != nil || cmd.Start() != nil {
+	if err != nil {
+		return false, "notify-send could not start"
+	}
+	wait, err := startGroup(cmd)
+	if err != nil {
 		return false, "notify-send could not start"
 	}
 	read := make(chan struct{})
@@ -88,7 +92,7 @@ func showNoticeWithPause(ctx context.Context, sys System, guiUser, text string, 
 	exited := make(chan error, 1)
 	go func() {
 		<-read
-		exited <- cmd.Wait()
+		exited <- wait()
 	}()
 	select {
 	case err := <-exited:

@@ -21,6 +21,16 @@ const stopGrace = 5 * time.Second
 // a command never leaves a process behind, and lab-agent's Run, which waits
 // for its commands, ends in a bounded time.
 func runGroup(cmd *exec.Cmd) error {
+	wait, err := startGroup(cmd)
+	if err != nil {
+		return err
+	}
+	return wait()
+}
+
+// startGroup is runGroup in two steps, for a caller that reads a pipe while
+// the program runs: it starts cmd, and wait does the rest of runGroup.
+func startGroup(cmd *exec.Cmd) (wait func() error, err error) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
@@ -37,14 +47,16 @@ func runGroup(cmd *exec.Cmd) error {
 		cmd.WaitDelay = stopGrace
 	}
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
-	err := cmd.Wait()
-	mu.Lock()
-	t := termed
-	mu.Unlock()
-	endGroup(cmd.Process.Pid, t)
-	return err
+	return func() error {
+		err := cmd.Wait()
+		mu.Lock()
+		t := termed
+		mu.Unlock()
+		endGroup(cmd.Process.Pid, t)
+		return err
+	}, nil
 }
 
 // combinedGroup is cmd.CombinedOutput through runGroup.

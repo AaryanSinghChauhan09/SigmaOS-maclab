@@ -256,3 +256,28 @@ func TestStagingABootFileEndsWhenItsCommandStops(t *testing.T) {
 		t.Fatal("copying the kernel image did not end when its command stopped")
 	}
 }
+
+// pacman runs as a process group: what it leaves behind (a hook's daemon,
+// say) ends with the install.
+func TestPacmansChildEndsWithTheInstall(t *testing.T) {
+	bin, pids := t.TempDir(), filepath.Join(t.TempDir(), "pids")
+	fake := "#!/bin/sh\nsleep 600 > /dev/null 2>&1 &\necho $! > " + pids + "\n"
+	if err := os.WriteFile(filepath.Join(bin, "pacman"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	l := &Linux{WorkDir: t.TempDir()}
+	a := api.InstallArgs{Release: "r1", Kernel: "6.99.0-labtest", Packages: []api.InstallPackage{{File: "linux-labtest-1-1-aarch64.pkg.tar.zst", SHA256: strings.Repeat("a", 64)}}}
+	fetch := func(_ context.Context, _, dst string) error { return os.WriteFile(dst, []byte("pkg"), 0o644) }
+	if err := l.Install(context.Background(), "j1", a, fetch); err != nil {
+		t.Fatal(err)
+	}
+	started := readPids(t, pids)
+	if len(started) != 1 {
+		t.Fatalf("the fake pacman wrote pids %v", started)
+	}
+	if !ended(started[0]) {
+		syscall.Kill(started[0], syscall.SIGKILL)
+		t.Error("pacman's child outlived the install")
+	}
+}
