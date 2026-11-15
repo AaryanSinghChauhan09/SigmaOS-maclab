@@ -42,19 +42,29 @@ case "$1" in
     took=(0 31m12s 4m3s 11m40s)
     echo "$id  queued  src" > "$GATE/row.$id"
     # meta: who asked and what, as labd lists a build: asked_by, kind,
-    # device, config_name, recipe_dir.
+    # device, config_name, recipe_dir, source.input.
     if [[ $1 == package ]]; then
-      meta="owner|package|||$(cd "$2" && pwd)"
+      meta="owner|package|||$(cd "$2" && pwd)|"
     else
       dev="" cfg="" prev=""
       for a in "$@"; do [[ $prev != --device ]] || dev="$a"; [[ $prev != --config ]] || cfg="$(basename "$a")"; prev="$a"; done
-      meta="owner||$dev|$cfg|"
+      meta="owner||$dev|$cfg||$2"
     fi
     echo "$meta" > "$GATE/meta.$id"
     # another.build: another Maintainer asks for the same build meanwhile.
     if [[ -f $GATE/another.build ]]; then
       echo "b1115-999999-other  queued  src" > "$GATE/row.b1115-999999-other"
       echo "maint|${meta#*|}" > "$GATE/meta.b1115-999999-other"
+    fi
+    # another.mine: the owner asks for the same build by hand meanwhile;
+    # another.source: the same, of another kernel source.
+    if [[ -f $GATE/another.mine ]]; then
+      echo "b1115-999998-mine  queued  src" > "$GATE/row.b1115-999998-mine"
+      echo "$meta" > "$GATE/meta.b1115-999998-mine"
+    fi
+    if [[ -f $GATE/another.source ]]; then
+      echo "b1115-999997-src  queued  src" > "$GATE/row.b1115-999997-src"
+      echo "${meta%|*}|https://github.com/o/linux-aurora/tree/other" > "$GATE/meta.b1115-999997-src"
     fi
     (
       sleep 0.3
@@ -197,13 +207,13 @@ const gateProbeStub = `#!/bin/bash
 echo "probe $*" >> "$GATE/calls"
 case "$*" in
   "ask --out "*" GET /api/auth") echo '{"trusted":true,"login":"owner","kind":"Admin"}' > "$3"; echo status=200 ;;
-  "ask --rows id,state,asked_by,kind,device,config_name,recipe_dir GET /api/builds?limit=100")
+  "ask --rows id,state,asked_by,kind,device,config_name,recipe_dir"*" GET /api/builds?limit=100")
     echo status=200
     for f in "$GATE"/row.*; do
       [ -f "$f" ] || continue
       read -r id state _ < "$f"
-      IFS='|' read -r by kind dev cfg rec < "$GATE/meta.$id"
-      echo "row=$id|${state%:}|$by|$kind|$dev|$cfg|$rec"
+      IFS='|' read -r by kind dev cfg rec src < "$GATE/meta.$id"
+      echo "row=$id|${state%:}|$by|$kind|$dev|$cfg|$rec|$src"
     done ;;
   "ask POST /api/builds/"*"/cancel")
     id="${3#/api/builds/}"; id="${id%/cancel}"
@@ -599,6 +609,40 @@ func TestAGateThatEndsFirstLeavesNoBuild(t *testing.T) {
 		if strings.Contains(calls, "b1115-999999-other/cancel") || strings.Contains(g.record(), "b1115-999999-other") {
 			t.Errorf("another Maintainer's build was canceled:\n%s\n%s", calls, g.record())
 		}
+	})
+	// Nor one the owner started by hand: of another kernel source it is not
+	// the run's, and with two that match the run cannot tell which is its
+	// own, so it cancels neither and names both.
+	t.Run("an answer lost beside the owner's build of another kernel source", func(t *testing.T) {
+		t.Parallel()
+		g := newGate(t)
+		g.set("answer.lost", "")
+		g.set("another.source", "")
+		out, code := g.run()
+		if code != 1 {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		calls := g.calls("calls")
+		if !strings.Contains(calls, "probe ask POST /api/builds/b1115-000001-abcd/cancel\n") {
+			t.Errorf("the run's build was left:\n%s", calls)
+		}
+		if strings.Contains(calls, "b1115-999997-src/cancel") {
+			t.Errorf("the owner's build of another kernel source was canceled:\n%s\n%s", calls, g.record())
+		}
+	})
+	t.Run("an answer lost beside a second build that matches", func(t *testing.T) {
+		t.Parallel()
+		g := newGate(t)
+		g.set("answer.lost", "")
+		g.set("another.mine", "")
+		out, code := g.run()
+		if code != 1 {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		if calls := g.calls("calls"); strings.Contains(calls, "/cancel") {
+			t.Errorf("a build was canceled though two matched:\n%s", calls)
+		}
+		wants(t, "the record", g.record(), "NOT CANCELED", "b1115-000001-abcd", "b1115-999998-mine", "Result: fail")
 	})
 	t.Run("stopped by the owner", func(t *testing.T) {
 		t.Parallel()

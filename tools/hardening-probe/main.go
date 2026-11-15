@@ -37,6 +37,7 @@ const usage = `usage: hardening-probe <command>
       one request: its status and what it said in one line. With no
       --token-file or --session it goes under the saved login. --rows prints
       one row= line for each object of a JSON array, the values of K,K...
+      (a.b is the b inside a)
   hold [--token-file F | --session F] [--for SEC] PATH
       hold a stream (GET): opened=STATUS as soon as it answers, then
       ended=closed|timeout|error and seconds=N
@@ -298,7 +299,7 @@ func askCommand(fs *flag.FlagSet, args []string) error {
 		for _, o := range list {
 			vals := make([]string, len(keys))
 			for i, k := range keys {
-				if v, ok := o[k]; ok && v != nil {
+				if v := field(o, k); v != nil {
 					vals[i] = plain([]byte(fmt.Sprint(v)))
 				}
 			}
@@ -306,6 +307,19 @@ func askCommand(fs *flag.FlagSet, args []string) error {
 		}
 	}
 	return nil
+}
+
+// field is o's value at key, where a.b is b inside a; nil when it has none.
+func field(o map[string]any, key string) any {
+	var v any = o
+	for _, k := range strings.Split(key, ".") {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = m[k]
+	}
+	return v
 }
 
 func holdCommand(fs *flag.FlagSet, args []string) error {

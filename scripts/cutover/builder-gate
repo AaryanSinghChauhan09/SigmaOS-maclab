@@ -175,7 +175,9 @@ fail() {
 }
 
 # cancel_build: the build the run asked for and did not see end, canceled
-# under the saved login.
+# under the saved login. With no id read, it is the one new build of the
+# run's login that matches what it asked for, kernel source included: with
+# two or more it cannot tell its own, and cancels none.
 cancel_build() {
   local ids="$BUILD_ID" id
   BUILD_ID=""
@@ -189,7 +191,12 @@ cancel_build() {
       fi
       ids="$(awk -F'|' -v me="$ASKER" -v want="$ASKED_FOR" '
         NR == FNR { if (sub(/^row=/, "")) seen[$1] = 1; next }
-        sub(/^row=/, "") && $1 ~ /^b[0-9a-z-]+$/ && !seen[$1] && ($2 == "queued" || $2 == "running") && $3 == me && ($4 "|" $5 "|" $6 "|" $7) == want { print $1 }' "$ASKED_BEFORE" "$WORK/builds.after")"
+        sub(/^row=/, "") && $1 ~ /^b[0-9a-z-]+$/ && !seen[$1] && ($2 == "queued" || $2 == "running") && $3 == me && ($4 "|" $5 "|" $6 "|" $7 "|" $8) == want { print $1 }' "$ASKED_BEFORE" "$WORK/builds.after")"
+      if [[ $ids == *$'\n'* ]]; then
+        ASKING=""
+        rec "NOT CANCELED: the run ended while it asked for a build, and these new builds of this login match it: ${ids//$'\n'/, }. Which is the run's is not known, so none was canceled: cancel the run's on $ADDRESS/builds"
+        return 0
+      fi
     fi
   fi
   ASKING=""
@@ -204,9 +211,9 @@ cancel_build() {
 }
 
 # builds_now FILE: labd's newest builds, one row= line each: id, state,
-# who asked, kind, device, config name, recipe folder.
+# who asked, kind, device, config name, recipe folder, source as given.
 builds_now() {
-  "$PROBE" ask --rows id,state,asked_by,kind,device,config_name,recipe_dir GET "/api/builds?limit=100" > "$1" 2>&1 && grep -qx 'status=200' "$1"
+  "$PROBE" ask --rows id,state,asked_by,kind,device,config_name,recipe_dir,source.input GET "/api/builds?limit=100" > "$1" 2>&1 && grep -qx 'status=200' "$1"
 }
 
 # gate_done WORD STATUS: pass, fail or stopped.
@@ -349,11 +356,11 @@ build() {
   ASKED_BEFORE="$WORK/builds.before.$k"
   builds_now "$ASKED_BEFORE" || give_up "labd's builds could not be read before $title was asked for: $(sed -n 's/^said=//p' "$ASKED_BEFORE" | head -n 1)"
   if [[ $1 == package ]]; then
-    ASKED_FOR="package|||$recipe_abs"
+    ASKED_FOR="package|||$recipe_abs|"
   elif [[ -n $config ]]; then
-    ASKED_FOR="||$(basename "$config")|"
+    ASKED_FOR="||$(basename "$config")||$kernel"
   else
-    ASKED_FOR="|$MAC||"
+    ASKED_FOR="|$MAC|||$kernel"
   fi
   ASKING="$WORK/ask.$k"
   "$LAB_CMD" "$@" --force --no-wait > "$WORK/ask.$k" 2> "$WORK/ask.$k.err" \
