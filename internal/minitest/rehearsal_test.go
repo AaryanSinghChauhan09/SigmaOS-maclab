@@ -334,3 +334,20 @@ func TestRehearsalAliasStoppedDuringItsWayBackLeavesTheTunnelStarted(t *testing.
 		t.Errorf("the tunnel is loaded %v, under its Deployed file %v, labd loaded %v:\n%s\n%s", m.tunnelLoaded(), read(t, tunnel) == deployedTunnel, m.loaded(), out, m.calls())
 	}
 }
+
+// A tunnel that does not come up under the throwaway name is put back, and
+// labd, which the run had not touched yet, is left running: its jobs go on.
+func TestRehearsalAliasPutsBackOnlyWhatItChanged(t *testing.T) {
+	m, labd, tunnel := rehearsalReady(t)
+	deployedLabd, deployedTunnel := read(t, labd), read(t, tunnel)
+	m.ready(false)
+
+	out := m.refused("rehearsal-alias", rehearsalName)
+
+	if strings.Contains(m.calls(), "launchctl bootout system/"+labdLabel) || strings.Contains(m.calls(), "launchctl bootstrap system "+labd) {
+		t.Errorf("labd was restarted, though the run had not changed it:\n%s\n%s", out, m.calls())
+	}
+	if read(t, labd) != deployedLabd || read(t, tunnel) != deployedTunnel || !m.loaded() || !m.tunnelLoaded() {
+		t.Errorf("want the Deployed files and both loaded:\n%s", out)
+	}
+}

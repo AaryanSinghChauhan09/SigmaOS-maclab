@@ -15,7 +15,7 @@
 #
 # It rewrites the two installed LaunchDaemon files, each in one argument,
 # and writes the rehearsal's route file where only root writes. When the
-# tunnel or labd does not come up under NAME, both are put back.
+# tunnel or labd does not come up under NAME, what was changed is put back.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -82,30 +82,37 @@ up() {
   return 1
 }
 
-# back: each daemon under its Deployed file, the one apart from the other:
-# a tunnel that does not start keeps nothing from labd. 1 when either did
+# back: each daemon this run changed under its Deployed file, the one apart
+# from the other: a tunnel that does not start keeps nothing from labd, and
+# a daemon the run had not reached yet is not restarted. 1 when either did
 # not start; what to run by hand is said. The way back stays armed until
-# both were tried.
+# each was tried.
 back() {
   local ok=0
-  put "$CLOUDFLARED_LABEL" "$tunnel_source" || { say "the tunnel could not be started under its Deployed file: sudo launchctl bootstrap system $tunnel_plist"; ok=1; }
-  put "$LABD_LABEL" "$labd_source" || { say "labd could not be started under its Deployed file: sudo launchctl bootstrap system $labd_plist"; ok=1; }
+  if (( tunnel_changed )); then
+    put "$CLOUDFLARED_LABEL" "$tunnel_source" || { say "the tunnel could not be started under its Deployed file: sudo launchctl bootstrap system $tunnel_plist"; ok=1; }
+  fi
+  if (( labd_changed )); then
+    put "$LABD_LABEL" "$labd_source" || { say "labd could not be started under its Deployed file: sudo launchctl bootstrap system $labd_plist"; ok=1; }
+  fi
   rm -rf "$rehearsal"
   armed=0
   return "$ok"
 }
 
 # The way back is armed before the first change: however the run ends
-# before both are up under NAME, both go back under the Deployed files. A
-# further stop does not cut the way back short.
+# before both are up under NAME, what it changed goes back under the
+# Deployed files. A further stop does not cut the way back short.
 armed=0
+tunnel_changed=0
+labd_changed=0
 made=""
 trap 'trap "" HUP INT TERM; (( ! armed )) || back || true; [[ -z $made ]] || rm -rf "$made"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT TERM
 
 if [[ $want == deployed ]]; then
-  armed=1
+  armed=1 tunnel_changed=1 labd_changed=1
   back || fail "not both were put back under the Deployed files: see above"
   up tunnel || fail "the tunnel is back under the Deployed files and has not connected yet: look at $LAB_HOME/log/cloudflared.log"
   up labd || fail "labd is back under the Deployed files and does not answer yet: look at $LABD_LOG"
@@ -131,11 +138,13 @@ chown -R "$ROOT_OWNER:$ROOT_GROUP" "$rehearsal"
 chmod 0755 "$rehearsal"
 chmod 0644 "$rehearsal/cloudflared.yml"
 # The tunnel first: labd looks at its Alias from outside as it starts.
+tunnel_changed=1
 start "$CLOUDFLARED_LABEL" "$made/tunnel.plist"
 if ! up tunnel; then
   back || true
-  fail "the tunnel did not connect with $want routed: both are back under the Deployed files"
+  fail "the tunnel did not connect with $want routed: it is back under the Deployed files, and labd was not touched"
 fi
+labd_changed=1
 start "$LABD_LABEL" "$made/labd.plist"
 if ! up labd; then
   back || true
