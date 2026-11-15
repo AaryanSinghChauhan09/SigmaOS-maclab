@@ -770,6 +770,31 @@ func TestASwitchThatStopsPartWayPutsEachFileBackFromWhereItIs(t *testing.T) {
 	}
 }
 
+// A way back whose own move fails leaves labd stopped, and both folders.
+func TestAWayBackThatCannotMoveTheReportsLeavesLabdStopped(t *testing.T) {
+	m := newMini(t, oldlabtest.OnOmarchyGPU)
+	m.ok("old-lab", "stop")
+	m.ok("old-lab", "copy", "--stage", m.stage)
+	reports := read(t, m.path("var/lab/data/reports.db"))
+	asLab := filepath.Join(m.base, "stubs", "as-lab")
+	write(t, asLab, "#!/bin/bash\necho \"as-lab $*\" >> \"$STUB_LOG\"\n"+
+		"[[ \"$1 ${2##*/} ${3##*/}\" != \"mv data.old-lab data\" ]] || exit 1\n"+
+		"[[ \"$1 $2\" != \"mv \"*/data.old-lab/reports.db ]] || exit 1\n"+
+		"exec \"$@\"\n", 0o755)
+
+	out := m.refused("old-lab", "upgrade", "--stage", m.stage, "--account-id", "7", "owner")
+
+	if m.loaded(labdLabel) || m.loaded(litestreamLabel) {
+		t.Errorf("started on a directory with no reports: labd %v, Litestream %v\n%s", m.loaded(labdLabel), m.loaded(litestreamLabel), out)
+	}
+	if !exists(m.path("var/lab/data.before-old-lab/labd.db")) || read(t, m.path("var/lab/data.old-lab/reports.db")) != reports {
+		t.Errorf("a folder of the way back is gone\n%s", out)
+	}
+	if !strings.Contains(out, "labd is left stopped") || !strings.Contains(out, "reports.db") {
+		t.Errorf("no word of the failed move:\n%s", out)
+	}
+}
+
 // Litestream that does not stop leaves labd stopped part-way: the way back
 // is armed before the stop, and labd runs again on the directory it had.
 func TestAStopThatFailsPartWayStartsLabdAgain(t *testing.T) {
