@@ -22,13 +22,25 @@ type recordLine struct {
 	// Note is what the actor typed beside the action, such as the reason
 	// for a Block; "" for none.
 	Note string
+	// aboutForgotten is a line about a person Forgotten since: their
+	// account id and handle are gone, and the line is still about someone.
+	aboutForgotten bool
 }
 
-// String is the line as the record reads: "@actor what @about: note".
+// recordName is a handle as a line says it, "someone" for none kept.
+func recordName(handle string) string {
+	if handle == "" {
+		return forgottenWord
+	}
+	return "@" + handle
+}
+
+// String is the line as the record reads: "@actor what @about: note". A
+// person Forgotten since reads "someone".
 func (l recordLine) String() string {
-	out := "@" + l.Actor + " " + l.What
-	if l.About != "" {
-		out += " @" + l.About
+	out := recordName(l.Actor) + " " + l.What
+	if l.About != "" || l.aboutForgotten {
+		out += " " + recordName(l.About)
 	}
 	if l.Note != "" {
 		out += ": " + l.Note
@@ -65,7 +77,7 @@ func (st *store) addRecord(l recordLine) error {
 	return err
 }
 
-const recordColumns = `at, actor_id, actor, what, COALESCE(about_id, 0), about, note`
+const recordColumns = `at, actor_id, actor, what, COALESCE(about_id, 0), about, note, about_id = 0`
 
 // recordLines are the newest lines of the People record, newest first.
 func (st *store) recordLines(limit int) ([]recordLine, error) {
@@ -86,10 +98,11 @@ func (st *store) scanRecord(rows *sql.Rows, err error) ([]recordLine, error) {
 	for rows.Next() {
 		var l recordLine
 		var at int64
-		if err := rows.Scan(&at, &l.ActorID, &l.Actor, &l.What, &l.AboutID, &l.About, &l.Note); err != nil {
+		var forgotten sql.NullBool
+		if err := rows.Scan(&at, &l.ActorID, &l.Actor, &l.What, &l.AboutID, &l.About, &l.Note, &forgotten); err != nil {
 			return nil, err
 		}
-		l.At = time.UnixMicro(at)
+		l.At, l.aboutForgotten = time.UnixMicro(at), forgotten.Bool
 		out = append(out, l)
 	}
 	return out, rows.Err()

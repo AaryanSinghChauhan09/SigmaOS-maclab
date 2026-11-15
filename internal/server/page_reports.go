@@ -73,6 +73,9 @@ func (s *Server) maintains(r *http.Request) bool {
 
 // uploader is who a report's Mac was signed in as when the report came.
 func uploader(report *reports.Report) string {
+	if report.NameNotKept() {
+		return "a person whose name is not kept"
+	}
 	if report.Handle == "" {
 		return "nobody signed in"
 	}

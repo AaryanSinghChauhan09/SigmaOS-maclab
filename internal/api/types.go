@@ -1351,6 +1351,9 @@ type LeaseEvent struct {
 // Line is the event as the Lease record reads.
 func (e LeaseEvent) Line() string {
 	who := "@" + e.Handle
+	if e.Handle == "" {
+		who = "someone" // a person Forgotten since
+	}
 	var out string
 	switch e.Event {
 	case LeaseTaken:

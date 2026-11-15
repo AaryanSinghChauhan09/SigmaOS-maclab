@@ -448,6 +448,9 @@ func (s *Server) blockEnds(k knownPerson) string {
 	if signIns, _ := s.reports.SignInsOf(k.AccountID); len(signIns) > 0 {
 		ends = append(ends, counted(len(signIns), "Mac", "Macs")+" signed out")
 	}
+	if n := len(s.macsLentBy(k.AccountID)); n > 0 {
+		ends = append(ends, counted(n, "Mac leaves", "Macs leave")+" the lab")
+	}
 	switch {
 	case k.Maintainer:
 		ends = append(ends, "no longer a Maintainer")

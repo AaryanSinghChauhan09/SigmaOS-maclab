@@ -49,6 +49,8 @@ func (l leaving) reason() string {
 		return "the Maintainer " + l.by.Handle + " ended its enrollment"
 	case leftBlocked:
 		return "its Volunteer was Blocked"
+	case leftForgotten:
+		return "its Volunteer was Forgotten"
 	}
 	return "its Volunteer left the lab"
 }
@@ -140,6 +142,9 @@ func (s *Server) retired(d *api.Device, l leaving) {
 	case leftBlocked:
 		line = "left the lab: its Volunteer was Blocked"
 		s.labGroup.MacLeftVolunteerBlocked(d.Name)
+	case leftForgotten:
+		line = "left the lab: a Maintainer ended it"
+		s.labGroup.MacLeftByMaintainer(d.Name)
 	default:
 		s.labGroup.MacLeftByVolunteer(d.Name)
 	}
@@ -173,8 +178,11 @@ func (s *Server) leftOnPeopleRecord(d *api.Device, l leaving) {
 		return
 	default:
 		line.What = "ended the enrollment of " + d.Name
-		if l.how == leftBlocked {
+		switch l.how {
+		case leftBlocked:
 			line.What = "blocked its Volunteer, which ended the enrollment of " + d.Name
+		case leftForgotten:
+			line.What = "forgot its Volunteer, which ended the enrollment of " + d.Name
 		}
 		if whose != nil {
 			line.What += ", a Mac of"

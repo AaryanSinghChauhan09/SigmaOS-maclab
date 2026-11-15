@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/agent"
@@ -51,6 +52,9 @@ type groupLines struct {
 	sender Sender // nil records every line and posts none
 	dir    string
 	wake   chan struct{}
+	// sending is held while a line is picked and sent, and by a forgetting
+	// while it takes a handle off the lines, so none leaves with it.
+	sending sync.Mutex
 }
 
 func newGroupLines(st *store, clock agent.Clock, logger *log.Logger, sender Sender, dir string) *groupLines {
@@ -174,6 +178,8 @@ func (l *groupLines) run(ctx context.Context) {
 // sendNext sends the oldest waiting line. It returns how long to wait before
 // trying that line again, and whether there was a line at all.
 func (l *groupLines) sendNext(ctx context.Context) (wait time.Duration, more bool) {
+	l.sending.Lock()
+	defer l.sending.Unlock()
 	var (
 		id       int64
 		at       int64
