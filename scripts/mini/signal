@@ -121,16 +121,19 @@ family() {
   for child in $(pgrep -P "$1" 2>/dev/null || true); do family "$child"; done
 }
 
-# show_link LABD: signal-cli link's output, with the link shown only as a QR
-# code that labd draws from its input, so the link is on the terminal as text
-# nowhere and no command line holds it. printf is bash's own. It fails when
-# labd draws nothing.
+# show_link LABD: signal-cli link's output and errors, with the link shown
+# only as a QR code that labd draws from its input, so the link is on the
+# terminal as text nowhere and no command line holds it. A line holding the
+# link anywhere is not shown; the link, up to the first space, is drawn.
+# printf is bash's own. It fails when labd draws nothing.
 show_link() {
-  local line
+  local line link
   while IFS= read -r line; do
-    if [[ $line == sgnl://* ]]; then
+    if [[ $line == *sgnl://* ]]; then
+      link="sgnl://${line#*sgnl://}"
+      link="${link%%[[:space:]]*}"
       echo "In Signal on your phone: Settings, Linked devices, Link a new device, and scan this (good for a few minutes):" >&2
-      printf '%s\n' "$line" | as_lab "$1" qr >&2 || return 1
+      printf '%s\n' "$link" | as_lab "$1" qr >&2 || return 1
     else
       printf '%s\n' "$line"
     fi
@@ -176,7 +179,7 @@ link() {
   alone
   LINK_DIR="$(mktemp -d)"
   mkfifo "$LINK_DIR/out"
-  cli link -n "$DEVICE_NAME" >"$LINK_DIR/out" &
+  cli link -n "$DEVICE_NAME" >"$LINK_DIR/out" 2>&1 &
   LINK_PID=$!
   show_link "$labd" <"$LINK_DIR/out" || fail "labd did not draw the QR code, and the link is not shown: signal-cli link was ended. Run link again for a new link"
   wait "$LINK_PID" || { LINK_PID=""; fail "signal-cli did not link: run link again for a new link"; }

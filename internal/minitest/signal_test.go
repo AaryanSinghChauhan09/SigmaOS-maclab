@@ -555,3 +555,26 @@ exec sleep 60
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// A link signal-cli prints after other words, or on its stderr, is drawn
+// and never shown as text either.
+func TestLinkDrawsALinkPrefixedOrOnStderr(t *testing.T) {
+	m, _ := linkReady(t, "v0.2.0-rc.1")
+	drawn := fmt.Sprintf("[QR %x]", sha256.Sum256([]byte(linkURL)))
+	secret := linkURL[strings.Index(linkURL, "pub_key="):]
+	for name, print := range map[string]string{
+		"prefixed":  `echo "Link this device: sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=$key"`,
+		"on stderr": `echo "sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=$key" >&2`,
+		"both":      `echo "INFO LinkCommand - sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=$key" >&2`,
+	} {
+		write(t, m.path(signalCLI), "#!/bin/bash\necho \"signal-cli $*\" >> \"$STUB_LOG\"\nkey=dGVzdC1wdWJsaWMta2V5\n"+print+"\necho 'Associated with: +61491570156'\n", 0o755)
+		out, code := m.signal("", "link")
+		if code != 0 || !strings.Contains(out, drawn) || !strings.Contains(out, "Associated with") {
+			t.Errorf("a link %s: exit %d\n%s", name, code, out)
+		}
+		if strings.Contains(out, "sgnl://") || strings.Contains(out, secret) {
+			t.Errorf("a link %s is shown as text:\n%s", name, out)
+		}
+	}
+	m.nothingHolds(linkURL)
+}
