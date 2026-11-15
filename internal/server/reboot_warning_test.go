@@ -113,8 +113,7 @@ func rwLab(t *testing.T, c labConfig, open bool) (*lab, *agent.FakeClock, int) {
 	}
 	l.removeWindow(w)
 	if open {
-		l.mustVolunteer("open", "--until", clock.Now().Add(2*time.Hour).Format("15:04"))
-		time.Sleep(time.Second) // check-ins carry it to labd
+		l.openUntil(clock.Now().Add(2 * time.Hour))
 	}
 	return l, clock, len(ns)
 }
