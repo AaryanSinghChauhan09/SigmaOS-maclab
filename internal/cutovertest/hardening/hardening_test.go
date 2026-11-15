@@ -223,7 +223,7 @@ func TestTheFourteenRunLocally(t *testing.T) {
 		"h07-cuts": {"the revoked token's next request: 401", "its stream ended: ", "a Maintainer used \"End all access\" on @member, on People",
 			"the next request after \"End all access\": 401", "the stream ended: ", "@member's browser is signed out", "the Lease on m1-pro ended with it"},
 		"h08-agents-lines": {"owner marked member as M team.", "owner made the Lab token \"h08-", "owner revoked member's Lab token \"h08-",
-			"owner used \"End all access\" on member.", "owner removed the M team mark from member."},
+			"owner used \"End all access\" on member.", "owner removed the M team mark from member.", "People's record shows @owner marked @member"},
 		"h10-browser": {"a signed-in browser's form from a page at https://elsewhere.example: 403", "Sec-Fetch-Site: cross-site: 403", "no Lab token was made by either",
 			"a signed-out browser's upload from a page at https://elsewhere.example: 403", "sign-in asked to return to https://elsewhere.example/ landed on the home page",
 			"sign-in asked to return to //elsewhere.example/ landed on the home page", "it landed there", "/api/themes/default/theme.css: 404",
@@ -367,18 +367,91 @@ func (l *labTest) calls() string {
 }
 
 // H 8 through the Lab address: the owner's browser makes a token and marks
-// a person M team. A "no" at a question leaves the lab as it was.
-const h08Probe = `case "$*" in
-  "page "*'data-label="Kind"'*) echo status=200; [ -z "${H08_KIND:-}" ] || echo "found=$H08_KIND" ;;
+// a person M team. A "no" at a question leaves the lab as it was. Once the
+// mark is posted People shows the person as H08_KIND_AFTER (M team), and
+// the newest mark in their record is H08_MARKED_BY's (the owner's).
+const h08Probe = `S="$(dirname "$0")"
+case "$*" in
+  "page "*'data-label="Kind"'*)
+    echo status=200
+    if [ -f "$S/marked" ]; then kind="${H08_KIND_AFTER-M team}"; else kind="${H08_KIND:-}"; fi
+    [ -z "$kind" ] || echo "found=$kind" ;;
+  "page "*"marked as M team"*" /people?open=42") echo status=200; [ -z "${H08_MARKED_BY-owner}" ] || echo "found=${H08_MARKED_BY-owner}" ;;
   "page "*"--find /me/tokens/"*) [ -z "${H08_ME_FAILS:-}" ] || { echo status=500; exit 0; }; echo status=200; echo found=7 ;;
   "page "*"--find /people/"*"end-all-access"*) echo status=200; echo found=42 ;;
+  "page "*"<h1>@"*" /me") echo status=200; echo found=owner ;;
   "page "*" /me") echo status=200 ;;
   "form "*" /me/tokens name="*) echo lab_0123456789012345678901234567890123456789 > "$out"; echo status=200 ;;
   "form "*" /me/tokens/7/revoke sure=yes") echo status=303 ;;
-  "form "*" /people/mark handle=someone as=m-team") echo "status=${H08_MARK:-303}" ;;
+  "form "*" /people/mark handle=someone as=m-team")
+    touch "$S/marked"
+    [ -z "${H08_MARK_HANGS:-}" ] || { touch "$S/posted"; exec sleep 30; }
+    echo "status=${H08_MARK:-303}" ;;
   "form "*" /people/42/m-team/remove sure=yes") echo status=303 ;;
   *) echo status=500 ;;
 esac`
+
+// A mark whose answer was lost is taken off only when People's record shows
+// it is the owner's, whose browser H 8 is: another Maintainer's mark made
+// after H 8's look stays.
+func TestH08TakesOffOnlyAMarkOfItsOwnWhoseAnswerWasLost(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		env     []string
+		removed bool
+		want    string
+	}{
+		"a lost 409 over another Maintainer's mark": {[]string{"H08_MARK=0", "H08_MARKED_BY=maint"}, false, "left: @maint marked someone as M team, not this test"},
+		"no mark made":        {[]string{"H08_MARK=0", "H08_KIND_AFTER=", "H08_MARKED_BY="}, false, "undone: People shows no M team mark on someone"},
+		"the test's own mark": {[]string{"H08_MARK=0"}, true, "undone: the M team mark was taken off someone"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out, code, record, calls := labRun(t, "h08-agents-lines", "", h08Probe, "session\nyes\n", c.env, "--other", "someone")
+			if code != 1 || !strings.Contains(record, "FAILED: someone was not marked M team: 0") {
+				t.Fatalf("exit %d\n%s\n%s", code, out, record)
+			}
+			if got := strings.Contains(calls, "/people/42/m-team/remove"); got != c.removed {
+				t.Errorf("the mark taken off: %v, want %v:\n%s", got, c.removed, calls)
+			}
+			if !strings.Contains(record, c.want) {
+				t.Errorf("the record lacks %q:\n%s", c.want, record)
+			}
+		})
+	}
+}
+
+// A Ctrl-C while the mark's post is out still checks the mark: one of the
+// test's own is taken off.
+func TestACtrlCWhileH08MarksChecksTheMark(t *testing.T) {
+	t.Parallel()
+	l := labCommand(t, "h08-agents-lines", "", h08Probe, "session\nyes\n", []string{"H08_MARK_HANGS=1"}, "--other", "someone")
+	l.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := l.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Kill(-l.cmd.Process.Pid, syscall.SIGKILL)
+	for end := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(l.stubs, "posted")); err == nil {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatalf("the mark was not posted:\n%s\n%s", l.calls(), l.record())
+		}
+	}
+	syscall.Kill(-l.cmd.Process.Pid, syscall.SIGINT)
+	done := make(chan error, 1)
+	go func() { done <- l.cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the run did not end after Ctrl-C")
+	}
+	record := l.record()
+	if !strings.Contains(l.calls(), "/people/42/m-team/remove sure=yes") || !strings.Contains(record, "undone: the M team mark was taken off someone") || !strings.Contains(record, "Result: stopped") {
+		t.Errorf("the mark was not checked and taken off:\n%s\n%s", l.calls(), record)
+	}
+}
 
 func TestANoAtH08sQuestionLeavesTheLabAsItWas(t *testing.T) {
 	t.Parallel()

@@ -55,6 +55,60 @@ kind_of() {
   sed -n 's/^found=//p' "$WORK/kind.out" | head -n 1
 }
 
+# account_of HANDLE: the person's account id, read from their row on People.
+account_of() {
+  "$PROBE" page --session "$OWNER_SESSION" --find "/people/([0-9]+)/end-all-access\"[^<]*<input[^>]*>[^<]*<button[^>]*data-sentence=\"[^\"]*@$1\\b" /people > "$WORK/pid.out" 2>&1
+  if ! grep -q '^found=' "$WORK/pid.out"; then
+    "$PROBE" page --session "$OWNER_SESSION" --find "id=\"person-([0-9]+)\"[^<]*<td[^>]*><a[^>]*>[^<]*<b>@$1</b>" /people > "$WORK/pid.out" 2>&1
+  fi
+  sed -n 's/^found=//p' "$WORK/pid.out" | head -n 1
+}
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+# owner_handle: the handle of the owner's browser, from their own page.
+owner_handle() {
+  "$PROBE" page --session "$OWNER_SESSION" --find "<h1>@([A-Za-z0-9-]+)</h1>" /me > "$WORK/me-handle.out" 2>&1 || true
+  sed -n 's/^found=//p' "$WORK/me-handle.out" | head -n 1
+}
+# marked_by HANDLE ID: who gave the person's newest M team mark, as their
+# record on People says it (newest first), or nothing.
+marked_by() {
+  "$PROBE" page --session "$OWNER_SESSION" --find "(?i)<li><span class=\"when\">[^<]*</span> @([A-Za-z0-9-]+) marked as M team[^<]* @$1</li>" "/people?open=$2" > "$WORK/marked-by.out" 2>&1 || true
+  sed -n 's/^found=//p' "$WORK/marked-by.out" | head -n 1
+}
+# check_mark HANDLE OWNER: a mark the test posted, taken off again only if
+# it is the test's own: People shows HANDLE on the M team and their newest
+# mark in its record is OWNER's, whose browser the test is. A mark another
+# Maintainer gave after the test's look stays theirs.
+# shellcheck disable=SC2329
+check_mark() {
+  local kind id by=""
+  if ! kind="$(kind_of "$1")"; then
+    rec "NOT UNDONE: $1 may still be marked M team: People did not open at $ADDRESS/people; if its record shows @$2 marked $1, take the mark off there"
+    return 0
+  fi
+  case "$kind" in
+    "M team") ;;
+    Maintainer | Admin) rec "left: People shows $1 as $kind, which is not this test's to change"; return 0 ;;
+    *) rec "undone: People shows no M team mark on $1"; return 0 ;;
+  esac
+  id="$(account_of "$1")"
+  [[ -z $id ]] || by="$(marked_by "$1" "$id")"
+  if [[ -z $by ]]; then
+    rec "NOT UNDONE: $1 is marked M team and People's record does not say by whom: if it was @$2, this test, take the mark off on $ADDRESS/people"
+    return 0
+  fi
+  if [[ "$(lower "$by")" != "$(lower "$2")" ]]; then
+    rec "left: @$by marked $1 as M team, not this test"
+    return 0
+  fi
+  form undo-mark --session "$OWNER_SESSION" --page /people "/people/$id/m-team/remove" sure=yes
+  if [[ "$(status_of undo-mark)" == 303 ]]; then
+    rec "undone: the M team mark was taken off $1"
+  else
+    rec "NOT UNDONE: $1 may still be marked M team: take the mark off on $ADDRESS/people"
+  fi
+}
+
 begin 08 "a people change, a new Lab token and a cut each appear in \"Agents\""
 if playing; then
   people
@@ -62,6 +116,10 @@ if playing; then
   rec "the owner marked @member and @other as M team"
   [[ "$(kind_of member)" == "M team" ]] || fail "People does not show @member as M team: the test would not see a member named with --other"
   told_agents "member as M team." "a people change (the M team mark)"
+  # Through the Lab address the undo knows its own mark by the record.
+  me="$(owner_handle)"
+  [[ -n $me && "$(lower "$(marked_by member "$(account_of member)")")" == "$(lower "$me")" ]] || fail "People's record does not show @member marked by @${me:-the owner}: the test would not know its own mark"
+  rec "People's record shows @$me marked @member"
 else
   owner_session
   if [[ -n $other ]]; then
@@ -74,27 +132,6 @@ else
   fi
 fi
 tag="h08-$(nonce)"
-
-# account_of HANDLE: the person's account id, read from their row on People.
-account_of() {
-  "$PROBE" page --session "$OWNER_SESSION" --find "/people/([0-9]+)/end-all-access\"[^<]*<input[^>]*>[^<]*<button[^>]*data-sentence=\"[^\"]*@$1\\b" /people > "$WORK/pid.out" 2>&1
-  if ! grep -q '^found=' "$WORK/pid.out"; then
-    "$PROBE" page --session "$OWNER_SESSION" --find "id=\"person-([0-9]+)\"[^<]*<td[^>]*><a[^>]*>[^<]*<b>@$1</b>" /people > "$WORK/pid.out" 2>&1
-  fi
-  sed -n 's/^found=//p' "$WORK/pid.out" | head -n 1
-}
-# undo_mark HANDLE: the M team mark taken off the person again.
-# shellcheck disable=SC2329
-undo_mark() {
-  local id
-  id="$(account_of "$1")"
-  [[ -n $id ]] && form undo-mark --session "$OWNER_SESSION" --page /people "/people/$id/m-team/remove" sure=yes
-  if [[ -n $id && "$(status_of undo-mark)" == 303 ]]; then
-    rec "undone: the M team mark was taken off $1"
-  else
-    rec "NOT UNDONE: $1 may still be marked M team: take the mark off on $ADDRESS/people"
-  fi
-}
 
 # A new Lab token, then revoked by its own person (no line for that).
 arm token undo_own_token "$tag"
@@ -115,10 +152,14 @@ if [[ -z $other ]]; then
   stopped "a people change and a cut need a person who is not the owner: run it again with --other HANDLE, a GitHub account the owner names"
 fi
 if ! playing; then
+  me="$(owner_handle)"
+  [[ -n $me ]] || give_up "$ADDRESS/me does not say your handle: the test could not tell its own mark from another's. Nothing was marked"
+  # Armed before the post: whatever its answer, or none (a Ctrl-C while it
+  # is out), the mark is looked at in the end, and taken off only if it is
+  # the test's own. A refusal (4xx) changed nothing.
+  arm mark check_mark "$other" "$me"
   form mark --session "$OWNER_SESSION" --page /people /people/mark "handle=$other" as=m-team
-  # A refusal (4xx) changed nothing; any other answer, or none, may have
-  # marked a person People showed with no mark.
-  [[ "$(status_of mark)" == 4?? ]] || arm mark undo_mark "$other"
+  [[ "$(status_of mark)" != 4?? ]] || disarm mark
   [[ "$(status_of mark)" == 303 ]] || give_up "$other was not marked M team: $(status_of mark) $(said_of mark)"
   rec "the owner marked $other as M team on People"
   told_agents "marked $other as M team." "a people change (the M team mark)"
