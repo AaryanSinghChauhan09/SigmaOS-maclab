@@ -782,3 +782,27 @@ func TestAPauseJustBeforeAJobIsSentHoldsIt(t *testing.T) {
 	}
 	jobSaid(t, l.s, first, "Paused by its Volunteer")
 }
+
+// A Limit taken on the site stops a running job and ends a Lease as a Pause
+// does, whatever the Access level: on a Mac at Qualification too.
+func TestALimitAtQualificationEndsTheLeaseAndStopsTheRunningJob(t *testing.T) {
+	l, _ := windowEndLab(t, labConfig{lender: veraID})
+	v := l.s.dev(l.name)
+	l.takeLease("connor (homework)", time.Hour)
+	l.sim.SetTestLength(time.Minute)
+	id := l.submitJob(api.JobSpec{Kernel: l.artifact("krel=7.2-limited-q behavior=ok")})
+	l.waitTesting(id, "7.2-limited-q")
+	labBoot, _, _ := l.sim.Identity()
+	if err := l.s.limitMac(v, l.vera()); err != nil {
+		t.Fatal(err)
+	}
+	if lease := l.leaseNow(); lease != nil {
+		t.Errorf("the Lease outlived a Limit at Qualification: %+v", lease)
+	}
+	l.backOnItsOwnSystem(labBoot, 15*time.Second, "its Volunteer limited the Mac from the site")
+	j := l.jobAPI(id, 60*time.Second)
+	l.expect(j, api.OutcomeIncomplete)
+	if !strings.Contains(j.Summary, siteLimited) {
+		t.Errorf("the job a Limit stopped says %q", j.Summary)
+	}
+}

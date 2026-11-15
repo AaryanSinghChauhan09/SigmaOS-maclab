@@ -90,9 +90,9 @@ const siteLimited = "its Volunteer limited the Mac to Qualification from the sit
 
 // limitMac is the Mac's Volunteer limiting it to Qualification on the
 // site, whatever Access level the Mac has: until "Remove limit" the lab
-// treats it as at Qualification. When that lowers the level, it stops a
-// running job that needs Full, incomplete as a closing window stops one,
-// and ends a Lease, as lowering the level on the Mac does.
+// treats it as at Qualification. As a Pause does, at either level, it stops
+// a running job, incomplete as a closing window stops one, and ends a
+// Lease.
 func (s *Server) limitMac(v *dev, by Person) error {
 	if err := s.lends(v, by); err != nil {
 		return err
@@ -102,15 +102,9 @@ func (s *Server) limitMac(v *dev, by Person) error {
 		v.mu.Unlock()
 		return refuse(http.StatusConflict, "This Mac is limited to Qualification already.")
 	}
-	lowers := v.d.AccessLevel == api.AccessFull
 	v.d.Limited = true
-	active := ""
-	if lowers {
-		if j, err := s.store.job(v.d.ActiveJob); v.d.ActiveJob != "" && err == nil && needsFull(j.Spec) != "" {
-			active = v.cutJobLocked(siteLimited)
-		}
-		v.endLeaseLocked(siteLimited)
-	}
+	active := v.cutJobLocked(siteLimited)
+	v.endLeaseLocked(siteLimited)
 	v.said(macLimited, "its Volunteer limited it to Qualification from the site")
 	name := v.d.Name
 	v.saveLocked()
