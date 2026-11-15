@@ -48,6 +48,30 @@ func advanceTo(clock *agent.FakeClock, t time.Time) {
 	}
 }
 
+// advanceHeardTo is advanceTo for a Mac that keeps checking in: after each
+// step it waits for labd to hear the Mac at the new time, as it would on a
+// real clock. Without that, a check-in slower than a few steps of the clock
+// (quietGrace is 3 s in the tests) has labd count the Mac as lost. Once the
+// Mac goes unheard for two seconds, the steps go on without waiting.
+func (l *lab) advanceHeardTo(clock *agent.FakeClock, t time.Time) {
+	l.t.Helper()
+	heard := true
+	for clock.Now().Before(t) {
+		clock.Advance(time.Second)
+		at := clock.Now()
+		deadline := time.Now().Add(2 * time.Second)
+		for heard && l.s.dev(l.name).snapshot().LastSeen.Before(at) {
+			if time.Now().After(deadline) {
+				heard = false
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if !heard {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
 // longJob submits a kernel job whose test runs for a minute, and returns
 // once the Mac is in the job's Lab boot running it.
 func (l *lab) longJob(krel string) (id, kernel string) {
@@ -104,7 +128,7 @@ func cutByTheWindowEnd(t *testing.T, c labConfig) (l *lab, clock *agent.FakeCloc
 	id, kernel = l.longJob("7.2-cut")
 	labBoot, _, _ = l.sim.Identity()
 	end := l.endOpenNowSoon(clock)
-	advanceTo(clock, end.Add(-3*time.Second))
+	l.advanceHeardTo(clock, end.Add(-3*time.Second))
 	if b, k, _ := l.sim.Identity(); b != labBoot || k != "7.2-cut" {
 		t.Fatalf("the Lab boot ended before its window did: now %s on boot %s", k, b)
 	}
@@ -201,7 +225,7 @@ func TestWindowEndWhileStagingLeavesTheMacOnItsOwnSystem(t *testing.T) {
 		t.Fatal("the Mac never started staging the job's kernel")
 	}
 	end := l.endOpenNowSoon(clock)
-	advanceTo(clock, end.Add(time.Second))
+	l.advanceHeardTo(clock, end.Add(time.Second))
 	l.expect(l.jobAPI(id, 30*time.Second), api.OutcomeIncomplete)
 	if b, k, _ := l.sim.Identity(); b != boot || k != agent.SimKnownGood {
 		t.Fatalf("a job stopped while staging rebooted the Mac: now %s on boot %s", k, b)
