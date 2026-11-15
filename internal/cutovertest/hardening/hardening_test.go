@@ -315,7 +315,7 @@ func TestH06FindsASecretShown(t *testing.T) {
 }
 
 // probeArgs is the start of a stand-in for the probe: out is its --out file.
-const probeArgs = `out=""; prev=""; for a in "$@"; do [[ $prev != --out ]] || out="$a"; prev="$a"; done
+const probeArgs = `out=""; prev=""; for a in "$@"; do [ "$prev" != --out ] || out="$a"; prev="$a"; done
 `
 
 // labRun runs a test through a made-up Lab address: lab says it is logged
