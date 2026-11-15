@@ -436,6 +436,13 @@ func (v *dev) deliver(bootID string) api.CheckinResponse {
 			delete(v.target, c.ID)
 			continue
 		}
+		// The idle clean-up, decided or queued before the Mac came to wait
+		// for its Volunteer, is not delivered while it waits: it stays dirty.
+		if v.termsWait && c.Kind == api.CmdCleanup && c.JobID == "" && v.d.ActiveJob == "" {
+			v.results[c.ID] = api.CommandResult{ID: c.ID, Error: termsWaitingLine(v.d.Name)}
+			delete(v.target, c.ID)
+			continue
+		}
 		v.inflight[c.ID] = now
 		v.sent[c.ID] = c
 		resp.Commands = append(resp.Commands, c)
