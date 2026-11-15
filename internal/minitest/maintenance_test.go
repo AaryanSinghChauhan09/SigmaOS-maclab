@@ -689,6 +689,38 @@ func TestARestartThatDoesNotHappenLeavesTheSecondHalfWaiting(t *testing.T) {
 	r.went("--after-restart")
 }
 
+// What was upgraded is written before the set-up, which selects the new
+// copy before it starts the daemons: a set-up that fails after that, and a
+// run that is started again, keep the version to switch back to.
+func TestASetUpThatFailsKeepsWhatWasUpgraded(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.newer("cloudflared", "2.0", "#!/bin/sh\n# bad\necho cloudflared 2.0\n")
+	write(t, filepath.Join(filepath.Dir(r.root), "state", "bootstrap.fails."+cloudflaredLabel), "1", 0o644)
+
+	if out := r.stopped(); !strings.Contains(out, "the set-up failed") {
+		t.Fatalf("the run did not stop at the set-up:\n%s", out)
+	}
+	if r.version("cloudflared") != "2.0" {
+		t.Fatalf("the set-up did not select the new copy before it failed:\n%s", read(t, r.path("usr/local/lab/tools/current/VERSIONS")))
+	}
+	upgraded := r.path("usr/local/lab/maintenance/upgraded")
+	if !exists(upgraded) || read(t, upgraded) != "cloudflared 1.0 2.0\n" {
+		t.Fatalf("what was upgraded, after a set-up that failed: exists %v", exists(upgraded))
+	}
+
+	// Started again, the run finds the new copy in use and keeps the record.
+	r.went()
+	if got := read(t, upgraded); got != "cloudflared 1.0 2.0\n" {
+		t.Fatalf("what was upgraded, after the run started again: %q", got)
+	}
+	r.ops.set(func(o *ops) { o.lines = nil })
+	out := r.stopped("--after-restart")
+	if r.version("cloudflared") != "1.0" || !strings.Contains(out, "it was switched back to 1.0 from the previous copy, and 1.0 passes") {
+		t.Errorf("the tool was not switched back:\n%s", out)
+	}
+}
+
 // A first half that ends before the restart, here at a restart refused,
 // lifts the drain and tells "Agents": jobs do not wait for a restart that is
 // not coming.

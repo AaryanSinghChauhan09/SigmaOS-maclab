@@ -143,6 +143,39 @@ updates() {
     END { if (label != "") print "0|" label }' <<<"$out"
 }
 
+# kegs: the version Homebrew now has of each tool on the lab's list, as
+# "name version", the way the set-up names the copy's.
+kegs() {
+  local f keg
+  for f in $(formulae); do
+    keg="$(cd "$(brew_as_owner --prefix "$f" 2>/dev/null)" 2>/dev/null && pwd -P)" || continue
+    echo "${f##*/} $(basename "$keg")"
+  done
+}
+
+# record_upgraded BEFORE AFTER: what the second half switches back from, as
+# "name old new", in $MAINTENANCE/upgraded. Written before the set-up as
+# well, which selects the new copy before it starts the daemons. A record
+# left by a run that stopped stays for each tool still at its new version:
+# a run started again finds that version in use already.
+record_upgraded() {
+  local file="$MAINTENANCE/upgraded"
+  { cat "$file" 2>/dev/null || true; } | BEFORE="$1" AFTER="$2" awk '
+    { earlier[$1] = $2 " " $3 }
+    END {
+      n = split(ENVIRON["BEFORE"], b, "\n")
+      for (i = 1; i <= n; i++) { split(b[i], f, " "); if (f[1] != "") was[f[1]] = f[2] }
+      n = split(ENVIRON["AFTER"], a, "\n")
+      for (i = 1; i <= n; i++) {
+        split(a[i], f, " "); name = f[1]; now = f[2]
+        if (name == "") continue
+        if ((name in was) && was[name] != now) { print name, was[name], now; continue }
+        if (name in earlier) { split(earlier[name], e, " "); if (e[2] == now && e[1] != now) print name, e[1], now }
+      }
+    }' > "$file.new"
+  mv -f "$file.new" "$file"
+}
+
 # ---- before the restart ----
 
 # first_half_ended: however the first half ends between the drain and the
@@ -229,11 +262,12 @@ first_half() {
     brew_as_owner upgrade $list 2>&1 | into_report || stopped_early "Homebrew could not upgrade the lab's tools (brew upgrade)"
   fi
 
+  [[ -z $list ]] || record_upgraded "$before" "$(kegs)"
   note "running the set-up: the pins, the tools' new copy, each daemon started from it"
   "$here/setup" 2>&1 | into_report || stopped_early "the set-up failed, so the tools' copy may be the one from before. Read what it said, put it right and start the run again"
 
   after="$(versions)"
-  : > "$MAINTENANCE/upgraded"
+  record_upgraded "$before" "$after"
   while read -r name new; do
     [[ -n $name ]] || continue
     old="$(awk -v n="$name" '$1 == n { print $2 }' <<<"$before")"
@@ -241,7 +275,6 @@ first_half() {
       note "tool $name: new at $new"
     elif [[ $old != "$new" ]]; then
       note "tool $name: $old -> $new"
-      echo "$name $old $new" >> "$MAINTENANCE/upgraded"
     else
       note "tool $name: $new, as before"
     fi
