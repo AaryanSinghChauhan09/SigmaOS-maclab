@@ -47,6 +47,10 @@ type cables struct {
 	down string
 	// proving is held for the length of a Proving reset: one at a time.
 	proving sync.Mutex
+	// looking is held for the length of a look at the ports, from the
+	// first read to the Sightings made of them: a look that read the ports
+	// earlier never lands after one that read them later.
+	looking sync.Mutex
 }
 
 func newCables(c *oob.Client) *cables {
@@ -231,6 +235,8 @@ func (s *Server) sight(ctx context.Context) {
 	if c == nil {
 		return
 	}
+	s.cables.looking.Lock()
+	defer s.cables.looking.Unlock()
 	ports := map[int]oob.Port{}
 	for _, rid := range oob.RIDs {
 		actx, cancel := context.WithTimeout(ctx, 20*time.Second)
