@@ -1941,7 +1941,10 @@ func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...st
 		j.Events = append(j.Events, api.JobEvent{Time: now, Msg: n})
 	}
 	j.EffectiveRecoveryMode = effectiveRecoveryMode(spec.RecoveryMode, d.EffectiveRecoveryMode)
-	if err := s.store.saveJob(j); err != nil {
+	jobMu.Lock()
+	err := s.saveJobLocked(j)
+	jobMu.Unlock()
+	if err != nil {
 		return nil, 500, err
 	}
 	// lab forget may have dropped the Mac since it was looked up, and then

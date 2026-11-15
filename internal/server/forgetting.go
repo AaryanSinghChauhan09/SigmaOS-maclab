@@ -353,9 +353,11 @@ func (s *Server) forgetHeld(by Person, k knownPerson, f forgetting) error {
 		return refuse(http.StatusInternalServerError, "Nothing is forgotten yet: a Mac they lend could not leave the lab (%v). Forget again.", err)
 	}
 
-	if err := s.forgetInJobs(f); err != nil {
+	end, err := s.forgetInJobs(f)
+	if err != nil {
 		return fmt.Errorf("the jobs: %w", err)
 	}
+	defer end()
 	// The files before the record: one that cannot be swept fails the
 	// forgetting while the person is still there to forget again.
 	if err := s.forgetInFilesOf(f); err != nil {
@@ -413,18 +415,33 @@ func (s *Server) forgetInFleet(f forgetting) {
 // jobsInFlight are the jobs labd holds in memory while they run: the copies
 // saved through updateJob, and the forgettings carried out since each job
 // was stored, which every later save of any copy of it applies again. A job
-// leaves both once it is saved done. Under jobMu.
+// leaves both once it is saved done. under are the forgettings under way:
+// every whole job saved meanwhile, done or not, loses their person too, as
+// one read before the forgetting swept the jobs table would bring them back.
+// Under jobMu.
 type jobsInFlight struct {
 	held   map[string]map[*api.Job]bool
 	forgot map[string][]forgetting
+	under  []*forgetting
 }
 
-// inFlightLocked is updateJob's, under jobMu, before j is saved.
-func (s *Server) inFlightLocked(j *api.Job) {
+// forgottenLocked takes off j the people forgotten since it was read: the
+// forgettings carried out since it was stored, and those under way. Under
+// jobMu, before j is saved.
+func (s *Server) forgottenLocked(j *api.Job) {
 	fl := &s.inFlight
 	for _, f := range fl.forgot[j.ID] {
 		f.job(j)
 	}
+	for _, f := range fl.under {
+		f.job(j)
+	}
+}
+
+// inFlightLocked is updateJob's, under jobMu, before j is saved.
+func (s *Server) inFlightLocked(j *api.Job) {
+	s.forgottenLocked(j)
+	fl := &s.inFlight
 	if j.State == api.JobDone {
 		delete(fl.held, j.ID)
 		delete(fl.forgot, j.ID)
@@ -439,15 +456,23 @@ func (s *Server) inFlightLocked(j *api.Job) {
 	fl.held[j.ID][j] = true
 }
 
+// saveJobLocked saves a whole job read outside a run, say to set it aside
+// in lab gate, without the people forgotten since it was read. Under jobMu.
+func (s *Server) saveJobLocked(j *api.Job) error {
+	s.forgottenLocked(j)
+	return s.store.saveJob(j)
+}
+
 // forgetInJobs takes the person off the jobs not done yet: the copies runs
 // hold now, and every copy saved from now on, which would otherwise write
-// them back whole.
-func (s *Server) forgetInJobs(f forgetting) error {
+// them back whole; and off every job saved until end is called, once the
+// forgetting is done with the jobs table and the files.
+func (s *Server) forgetInJobs(f forgetting) (end func(), err error) {
 	jobMu.Lock()
 	defer jobMu.Unlock()
 	jobs, err := s.store.jobs("", -1, true)
 	if err != nil {
-		return err
+		return func() {}, err
 	}
 	fl := &s.inFlight
 	if fl.forgot == nil {
@@ -461,11 +486,21 @@ func (s *Server) forgetInJobs(f forgetting) error {
 			f.job(j)
 		}
 	}
-	return nil
+	under := &f
+	fl.under = append(fl.under, under)
+	return func() {
+		jobMu.Lock()
+		defer jobMu.Unlock()
+		fl.under = slices.DeleteFunc(fl.under, func(u *forgetting) bool { return u == under })
+	}, nil
 }
 
-// job takes the person off j, in place.
+// job takes the person off j, in place. An Installed run's result is left
+// alone: it names nobody, and the run writes it as it goes, outside jobMu.
 func (f forgetting) job(j *api.Job) {
+	installed := j.Result.Installed
+	j.Result.Installed = nil
+	defer func() { j.Result.Installed = installed }()
 	b, err := json.Marshal(j)
 	if err != nil {
 		return

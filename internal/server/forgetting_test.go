@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -942,5 +943,114 @@ func TestForgettingSomeoneWhoRanAnInstalledRunLeavesNoHandleInFrozen(t *testing.
 	}
 	if _, err := l.s.promotion(context.Background(), by, "9.9", promoteReq{Device: "sim-mac", Job: j.ID}); err != nil {
 		t.Errorf("a Promotion after the forgetting: %v", err)
+	}
+}
+
+// A forgetting during an Installed run reads nothing the run writes as it
+// goes: the run's result names nobody, and the scrub leaves it alone, the
+// run's own pointer and all.
+func TestAForgettingDuringAnInstalledRunReadsNothingTheRunWrites(t *testing.T) {
+	l := macLab(t, nil)
+	l.signedIn(edithID)
+	l.lrMac("m1", "j293", nil)
+	l.pjJob("j-41", "m1", edithID, "edith", l.clock.Now(), func(j *api.Job) { j.State, j.Outcome = api.JobQueued, "" })
+	running, _ := l.s.store.job("j-41")
+	res := &api.InstalledResult{Release: "9.9", Verdicts: map[string]string{}}
+	l.s.updateJob(running, func(j *api.Job) { j.State, j.Result.Installed = api.JobTesting, res })
+
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			res.Verdicts[[]string{"before", "booted", "after"}[i%3]] = []string{"MATCH", "MISMATCH"}[i%2]
+		}
+	}()
+	for range 200 {
+		end, err := l.s.forgetInJobs(newForgetting(edithID, "edith"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		end()
+	}
+	close(stop)
+	<-done
+	if running.Maintainer != "" || running.AccountID != 0 {
+		t.Errorf("the run's copy still names her: %q %d", running.Maintainer, running.AccountID)
+	}
+	if running.Result.Installed != res {
+		t.Error("the scrub replaced the run's own Installed result")
+	}
+}
+
+// A whole job saved while a forgetting is under way brings nobody back: an
+// exclusion saved before the forgetting swept the jobs table, and a run's
+// save of its recovery mode, from a copy read before the forgetting, after.
+func TestAJobSavedDuringAForgettingBringsNobodyBack(t *testing.T) {
+	l := macLab(t, nil)
+	l.signedIn(edithID)
+	l.lrMac("m1", "j293", nil)
+	blocker := l.addMac("ravi-mini", maintainerID)
+	l.pjJob("j-done", "m1", edithID, "edith", l.clock.Now(), nil)
+	l.pjJob("j-run", "m1", edithID, "edith", l.clock.Now(), func(j *api.Job) { j.State, j.Outcome = api.JobQueued, "" })
+	stale, _ := l.s.store.job("j-run")
+	names := func(id string) bool {
+		var data string
+		l.s.store.db.QueryRow(`SELECT data FROM jobs WHERE id = ?`, id).Scan(&data)
+		return strings.Contains(data, "edith") || strings.Contains(data, `"account_id":7`)
+	}
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the forgetting never reached %s", what)
+			}
+		}
+	}
+	k, err := l.s.store.knownPerson(edithID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The forgetting waits at the caller log, before the databases, and at
+	// a Mac, after them.
+	l.s.callers.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- l.s.forgetHeld(Person{AccountID: maintainerID, Handle: "ravi", Maintainer: true}, k, newForgetting(edithID, k.Handle))
+	}()
+	waitFor("the jobs", func() bool {
+		jobMu.Lock()
+		defer jobMu.Unlock()
+		return len(l.s.inFlight.forgot["j-run"]) > 0
+	})
+	req := httptest.NewRequest("POST", "/api/jobs/j-done/exclude", strings.NewReader(`{"reason":"the access point went down","by":"ravi"}`))
+	req.SetPathValue("id", "j-done")
+	w := httptest.NewRecorder()
+	l.s.hExclude(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the exclusion: %d %s", w.Code, w.Body)
+	}
+	if names("j-done") {
+		t.Error("an exclusion during the forgetting saved the job with her in it")
+	}
+	blocker.mu.Lock()
+	l.s.callers.mu.Unlock()
+	waitFor("the databases", func() bool { return !l.known(edithID) })
+	if err := l.s.beginJobRecoveryMode(context.Background(), l.s.dev("m1"), stale); err != nil {
+		t.Fatal(err)
+	}
+	blocker.mu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"j-done", "j-run"} {
+		if names(id) {
+			t.Errorf("job %s names her after the forgetting", id)
+		}
 	}
 }
