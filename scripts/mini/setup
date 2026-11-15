@@ -452,8 +452,11 @@ new_copy() {
   new="$(mktemp -d "$LAB_TOOLS/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
   for (( i = 0; i < ${#KEG_NAMES[@]}; i++ )); do
     cp -R "${KEG_PATHS[i]}" "$new/${KEG_NAMES[i]}"
-    # Homebrew's own notes about a keg name its prefix, and no tool reads them.
-    rm -rf "$new/${KEG_NAMES[i]}"/{.brew,INSTALL_RECEIPT.json,sbom.spdx.json} "$new/${KEG_NAMES[i]}"/homebrew.*
+    # Homebrew's own notes about a keg name its prefix, and no tool reads them:
+    # its receipts, and the service files at the keg's top (sh.brew.<name>,
+    # homebrew.mxcl.<name> before, or the formula's own name); the lab's
+    # LaunchDaemon files in deploy/ start the daemons.
+    rm -rf "$new/${KEG_NAMES[i]}"/{.brew,INSTALL_RECEIPT.json,sbom.spdx.json} "$new/${KEG_NAMES[i]}"/{homebrew.*,sh.brew.*,*.plist,*.service,*.timer}
   done
   rewrite_kegs "$new"
   whole "$new"
