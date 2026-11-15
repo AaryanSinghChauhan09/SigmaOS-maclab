@@ -112,8 +112,44 @@ plain() {
   fi
 }
 
+# What a run changes on the lab it undoes itself; until it has, each change
+# is armed here before it is made: a command, run when the run ends first,
+# however it ends (a "no", a failure, Ctrl-C), the last armed first.
+UNDO=()
+RECORD_DONE=""
+
+# arm NAME COMMAND...: how to undo the change about to be made.
+arm() {
+  local name="$1"
+  shift
+  UNDO+=("$name $(printf '%q ' "$@")")
+}
+
+# disarm NAME: the run undid that change itself, or it is gone.
+disarm() {
+  local kept=() u
+  for u in ${UNDO[@]+"${UNDO[@]}"}; do
+    [[ ${u%% *} == "$1" ]] || kept+=("$u")
+  done
+  UNDO=(${kept[@]+"${kept[@]}"})
+}
+
+# undo_all: what is still armed, undone; each says in the record how it went.
+undo_all() {
+  local i
+  for (( i = ${#UNDO[@]} - 1; i >= 0; i-- )); do
+    eval "${UNDO[i]#* }" || true
+  done
+  UNDO=()
+}
+
 cleanup() {
   local pid
+  if [[ -n $RECORD && -z $RECORD_DONE ]]; then
+    RECORD_DONE=1
+    undo_all
+    { echo; echo "Result: stopped"; } >> "$RECORD"
+  fi
   for pid in ${PIDS[@]+"${PIDS[@]}"} $LABD_PID; do
     kill "$pid" 2>/dev/null || true
   done
@@ -191,6 +227,8 @@ rec() {
 # test's line, in place of the one it had.
 record_done() {
   local results kept
+  undo_all
+  RECORD_DONE=1
   { echo; echo "Result: $1"; } >> "$RECORD"
   results="$(dirname "$RECORD")/$RESULTS_NAME"
   kept="$(grep -v "^$NUMBER " "$results" 2>/dev/null || true)"
@@ -474,6 +512,24 @@ volunteer_mac() {
   rm -f "$WORK/join.body"
   [[ -n $token ]] || fail "Lend a Mac showed the lender no Join command: $(status_of join) $(said_of join)"
   sim_mac "$1" "$token"
+}
+
+# undo_own_token TAG: the owner's own Lab token named TAG, revoked on their
+# page, if it is there.
+undo_own_token() {
+  local id
+  "$PROBE" page --session "$OWNER_SESSION" --find "/me/tokens/([0-9]+)/revoke\"[^<]*<input[^>]*>[^<]*<button[^>]*data-sentence=\"[^\"]*$1" /me > "$WORK/undo-token.out" 2>&1 || true
+  id="$(sed -n 's/^found=//p' "$WORK/undo-token.out" | head -n 1)"
+  if [[ -z $id ]]; then
+    rec "undone: no Lab token $1 is left on $ADDRESS/me"
+    return 0
+  fi
+  form undo-token --session "$OWNER_SESSION" "/me/tokens/$id/revoke" sure=yes
+  if [[ "$(status_of undo-token)" == 303 ]]; then
+    rec "undone: the Lab token $1 was revoked"
+  else
+    rec "NOT UNDONE: the Lab token $1 is still live: revoke it on $ADDRESS/me ($(status_of undo-token))"
+  fi
 }
 
 # agents_has TEXT: the local lab's own record of its lines for "Agents".

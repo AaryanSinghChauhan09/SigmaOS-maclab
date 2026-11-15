@@ -57,7 +57,29 @@ else
 fi
 tag="h08-$(nonce)"
 
+# account_of HANDLE: the person's account id, read from their row on People.
+account_of() {
+  "$PROBE" page --session "$OWNER_SESSION" --find "/people/([0-9]+)/end-all-access\"[^<]*<input[^>]*>[^<]*<button[^>]*data-sentence=\"[^\"]*@$1\\b" /people > "$WORK/pid.out" 2>&1
+  if ! grep -q '^found=' "$WORK/pid.out"; then
+    "$PROBE" page --session "$OWNER_SESSION" --find "id=\"person-([0-9]+)\"[^<]*<td[^>]*><a[^>]*>[^<]*<b>@$1</b>" /people > "$WORK/pid.out" 2>&1
+  fi
+  sed -n 's/^found=//p' "$WORK/pid.out" | head -n 1
+}
+# undo_mark HANDLE: the M team mark taken off the person again.
+# shellcheck disable=SC2329
+undo_mark() {
+  local id
+  id="$(account_of "$1")"
+  [[ -n $id ]] && form undo-mark --session "$OWNER_SESSION" --page /people "/people/$id/m-team/remove" sure=yes
+  if [[ -n $id && "$(status_of undo-mark)" == 303 ]]; then
+    rec "undone: the M team mark was taken off $1"
+  else
+    rec "NOT UNDONE: $1 may still be marked M team: take the mark off on $ADDRESS/people"
+  fi
+}
+
 # A new Lab token, then revoked by its own person (no line for that).
+arm token undo_own_token "$tag"
 form token --session "$OWNER_SESSION" /me/tokens "name=$tag" period=30
 { [[ "$(status_of token)" == 200 ]] && grep -qE 'lab_[0-9a-f]{40}' "$WORK/token.body"; } || give_up "no Lab token was made on $ADDRESS/me: $(status_of token) $(said_of token)"
 rm -f "$WORK/token.body"
@@ -68,23 +90,20 @@ id="$(sed -n 's/^found=//p' "$WORK/tid.out" | head -n 1)"
 [[ -n $id ]] || give_up "$ADDRESS/me shows no Lab token $tag"
 form revoke --session "$OWNER_SESSION" "/me/tokens/$id/revoke" sure=yes
 [[ "$(status_of revoke)" == 303 ]] || give_up "the token $tag was not revoked: $(status_of revoke) $(said_of revoke)"
+disarm token
 rec "and revoked it again on their own page"
 
 if [[ -z $other ]]; then
   stopped "a people change and a cut need a person who is not the owner: run it again with --other HANDLE, a GitHub account the owner names"
 fi
 if ! playing; then
+  arm mark undo_mark "$other"
   form mark --session "$OWNER_SESSION" --page /people /people/mark "handle=$other" as=m-team
   [[ "$(status_of mark)" == 303 ]] || give_up "$other was not marked M team: $(status_of mark) $(said_of mark)"
   rec "the owner marked $other as M team on People"
   told_agents "marked $other as M team." "a people change (the M team mark)"
 fi
-"$PROBE" page --session "$OWNER_SESSION" --find "/people/([0-9]+)/end-all-access\"[^<]*<input[^>]*>[^<]*<button[^>]*data-sentence=\"[^\"]*@$other\\b" /people > "$WORK/pid.out" 2>&1
-account="$(sed -n 's/^found=//p' "$WORK/pid.out" | head -n 1)"
-if [[ -z $account ]]; then
-  "$PROBE" page --session "$OWNER_SESSION" --find "id=\"person-([0-9]+)\"[^<]*<td[^>]*><a[^>]*>[^<]*<b>@$other</b>" /people > "$WORK/pid.out" 2>&1
-  account="$(sed -n 's/^found=//p' "$WORK/pid.out" | head -n 1)"
-fi
+account="$(account_of "$other")"
 [[ -n $account ]] || give_up "People shows no row for @$other"
 
 if playing; then
@@ -102,6 +121,7 @@ rec "the owner used \"End all access\" on $other on People"
 told_agents "used \"End all access\" on $other." "a cut (\"End all access\" on another person)"
 form unmark --session "$OWNER_SESSION" --page /people "/people/$account/m-team/remove" sure=yes
 [[ "$(status_of unmark)" == 303 ]] || give_up "the M team mark was not taken off $other: $(status_of unmark) $(said_of unmark)"
+disarm mark
 rec "the owner took the M team mark off $other again"
 told_agents "removed the M team mark from $other." "a people change (the mark taken off)"
 passed

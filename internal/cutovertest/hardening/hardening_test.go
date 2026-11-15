@@ -287,6 +287,70 @@ func TestH06FindsASecretShown(t *testing.T) {
 	}
 }
 
+// probeArgs is the start of a stand-in for the probe: out is its --out file.
+const probeArgs = `out=""; prev=""; for a in "$@"; do [[ $prev != --out ]] || out="$a"; prev="$a"; done
+`
+
+// labRun runs a test through a made-up Lab address: lab says it is logged
+// in, the probe answers as probe (a case on "$*") says, and stdin is what
+// the owner types. It returns what the test said, its exit status, its
+// record and how the probe and lab were called.
+func labRun(t *testing.T, name, probe, stdin string, args ...string) (out string, code int, record, calls string) {
+	t.Helper()
+	lab := `case "$1" in status) echo "NAME STATE" ;; *) exit 9 ;; esac`
+	dir, callsFile := stubs(t, map[string]string{"lab": lab, "hardening-probe": probeArgs + probe})
+	records := t.TempDir()
+	cmd := exec.Command(script(t, name), append([]string{"--lab", "--bin", dir, "--records", records}, args...)...)
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example")
+	cmd.Stdin = strings.NewReader(stdin)
+	b, err := cmd.CombinedOutput()
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if files, _ := filepath.Glob(filepath.Join(records, "*-hardening-"+name[1:3]+".md")); len(files) == 1 {
+		record = read(t, files[0])
+	}
+	c, _ := os.ReadFile(callsFile)
+	return string(b), code, record, string(c)
+}
+
+// H 8 through the Lab address: the owner's browser makes a token and marks
+// a person M team. A "no" at a question leaves the lab as it was.
+const h08Probe = `case "$*" in
+  "page "*"--find /me/tokens/"*) echo status=200; echo found=7 ;;
+  "page "*"--find /people/"*"end-all-access"*) echo status=200; echo found=42 ;;
+  "page "*" /me") echo status=200 ;;
+  "form "*" /me/tokens name="*) echo lab_0123456789012345678901234567890123456789 > "$out"; echo status=200 ;;
+  "form "*" /me/tokens/7/revoke sure=yes") echo status=303 ;;
+  "form "*" /people/mark handle=someone as=m-team") echo status=303 ;;
+  "form "*" /people/42/m-team/remove sure=yes") echo status=303 ;;
+  *) echo status=500 ;;
+esac`
+
+func TestANoAtH08sQuestionLeavesTheLabAsItWas(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ stdin, undone, record string }{
+		"the token's line":   {"session\nno\n", "/me/tokens/7/revoke sure=yes", "undone: the Lab token h08-"},
+		"the M team mark's": {"session\nyes\nno\n", "/people/42/m-team/remove sure=yes", "undone: the M team mark was taken off someone"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out, code, record, calls := labRun(t, "h08-agents-lines", h08Probe, c.stdin, "--other", "someone")
+			if code != 1 || !strings.Contains(record, "Result: fail") {
+				t.Fatalf("exit %d\n%s\n%s", code, out, record)
+			}
+			if !strings.Contains(calls, c.undone) {
+				t.Errorf("the change was not undone (%s):\n%s", c.undone, calls)
+			}
+			if !strings.Contains(record, c.record) || strings.Index(record, c.record) > strings.Index(record, "Result: fail") {
+				t.Errorf("the record does not say it was undone before its result:\n%s", record)
+			}
+		})
+	}
+}
+
 // Through the Lab address a step that needs the owner waits for them: with
 // nobody there the test ends as stopped, exit 3, and asked for nothing.
 func TestAStepForTheOwnerWithNobodyThereStopsTheTest(t *testing.T) {
