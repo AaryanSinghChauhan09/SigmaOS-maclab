@@ -687,6 +687,23 @@ func TestARestartThatDoesNotHappenLeavesTheSecondHalfWaiting(t *testing.T) {
 	r.went("--after-restart")
 }
 
+// A first half that ends before the restart, here at a restart refused,
+// lifts the drain and tells "Agents": jobs do not wait for a restart that is
+// not coming.
+func TestAFirstHalfThatDoesNotRestartLiftsTheDrain(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.set("authrestart-fails", "")
+
+	r.stopped()
+
+	order(t, r.calls(), "ops POST /drain", "fdesetup authrestart", "ops DELETE /drain")
+	got := r.ops.told()
+	if len(got) == 0 || !strings.Contains(got[len(got)-1], "was not restarted, and jobs start again") {
+		t.Errorf("\"Agents\" was told %q", got)
+	}
+}
+
 // Each Homebrew tool by its own check, as the Maintenance run asks it.
 func TestEachToolsOwnCheck(t *testing.T) {
 	t.Parallel()

@@ -145,6 +145,19 @@ updates() {
 
 # ---- before the restart ----
 
+# first_half_ended: however the first half ends between the drain and the
+# restart, a failure, a refused restart or a stop of the run, the drain is
+# lifted and "Agents" is told: jobs do not wait for a restart that is not
+# coming.
+RESTARTING=0
+# shellcheck disable=SC2329
+first_half_ended() {
+  local status=$?
+  (( DRAINING && ! RESTARTING )) || return 0
+  lift_drain
+  tell "Maintenance run on the mini stopped before its restart (exit $status): the mini was not restarted, and jobs start again.${REPORT:+ The report is $REPORT on the mini.}"
+}
+
 stopped_early() {
   lift_drain
   tell "Maintenance run on the mini stopped: $1. The mini was not restarted, and jobs start again."
@@ -198,6 +211,9 @@ first_half() {
     tell "Maintenance run on the mini did not go on: $NOT_DRAINED. Nothing was changed, and jobs start again."
     fail "$NOT_DRAINED. Nothing was changed"
   fi
+  trap first_half_ended EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT TERM
 
   before="$(versions)"
   pins_before="$(pinned_now)"
@@ -285,8 +301,9 @@ EOF
   note "restarting with fdesetup authrestart: it asks for the account's name and password"
   if ! sys fdesetup authrestart; then
     note "fdesetup did not restart the mini"
-    fail "the mini was not restarted. Everything before the restart is done: run sudo fdesetup authrestart yourself, and the second half runs once the mini is back. Jobs wait until then"
+    fail "the mini was not restarted. Everything before the restart is done, and jobs start again meanwhile: run sudo fdesetup authrestart yourself, and the second half runs once the mini is back"
   fi
+  RESTARTING=1
   say "the mini restarts now. The second half runs by itself and reports in \"Agents\"; it writes to /var/log/lab-maintenance.log and to $REPORT"
 }
 
