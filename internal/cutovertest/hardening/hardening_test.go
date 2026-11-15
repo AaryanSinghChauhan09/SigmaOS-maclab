@@ -10,10 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/testhome"
 )
@@ -422,6 +425,44 @@ func TestH07WantsTheStreamClosedByTheCut(t *testing.T) {
 				t.Errorf("the record:\n%s", record)
 			}
 		})
+	}
+}
+
+// A run that starts takes its old line out of the results at once: stopped
+// half way, even by SIGKILL, it leaves no old pass for run --results.
+func TestARunThatStartsTakesItsOldPassOutOfTheResults(t *testing.T) {
+	t.Parallel()
+	dir, calls := stubs(t, map[string]string{
+		"lab":             `case "$1" in status) echo "NAME STATE" ;; *) exit 9 ;; esac`,
+		"hardening-probe": "exec sleep 30",
+	})
+	records := t.TempDir()
+	results := filepath.Join(records, "hardening.results")
+	if err := os.WriteFile(results, []byte("07 pass 2026-11-14 2026-11-14-hardening-07.md\n08 pass 2026-11-14 2026-11-14-hardening-08.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(script(t, "h07-cuts"), "--lab", "--bin", dir, "--records", records)
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "LAB_ADDRESS=https://lab.example")
+	cmd.Stdin = strings.NewReader("session\n")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	for end := time.Now().Add(20 * time.Second); ; {
+		if b, _ := os.ReadFile(calls); strings.Contains(string(b), "hardening-probe page") {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("the run did not reach the lab")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	cmd.Wait()
+	got := read(t, results)
+	if !regexp.MustCompile(`(?m)^07 stopped 20\d\d-\d\d-\d\d 20\d\d-\d\d-\d\d-hardening-07\.md$`).MatchString(got) || !strings.Contains(got, "08 pass 2026-11-14 ") || strings.Contains(got, "07 pass") {
+		t.Errorf("the results after a run cut half way:\n%s", got)
 	}
 }
 

@@ -215,6 +215,19 @@ record_start() {
     fi
     echo
   } > "$RECORD"
+  # Until the run ends, its line says stopped: a run cut half way leaves no
+  # old pass behind it.
+  results_line stopped
+}
+
+# results_line WORD: the test's line in the results file, in place of the
+# one it had.
+results_line() {
+  local results kept
+  results="$(dirname "$RECORD")/$RESULTS_NAME"
+  kept="$(grep -v "^$NUMBER " "$results" 2>/dev/null || true)"
+  { [[ -z $kept ]] || echo "$kept"; echo "$NUMBER $1 $(today) $(basename "$RECORD")"; } | sort > "$results.new"
+  mv "$results.new" "$results"
 }
 
 # rec LINE: one line of the record, shown as it is written.
@@ -223,17 +236,13 @@ rec() {
   say "$*"
 }
 
-# record_done WORD: pass, fail, stopped or waits. The results file gets the
-# test's line, in place of the one it had.
+# record_done WORD: pass, fail, stopped or waits, in the record and in the
+# results file.
 record_done() {
-  local results kept
   undo_all
   RECORD_DONE=1
   { echo; echo "Result: $1"; } >> "$RECORD"
-  results="$(dirname "$RECORD")/$RESULTS_NAME"
-  kept="$(grep -v "^$NUMBER " "$results" 2>/dev/null || true)"
-  { [[ -z $kept ]] || echo "$kept"; echo "$NUMBER $1 $(today) $(basename "$RECORD")"; } | sort > "$results.new"
-  mv "$results.new" "$results"
+  results_line "$1"
   if [[ $MODE == lab || -n $RECORDS ]]; then
     say "$1. The record is $RECORD"
   else
