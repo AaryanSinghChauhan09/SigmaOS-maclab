@@ -472,9 +472,16 @@ new_copy() {
     [[ ! -L $d ]] || continue
     case "$(basename "$d")" in
       "$(basename "$new")" | "$old") ;;
-      *) rm -rf "$d" ;;
+      *) needed_back "$d" || rm -rf "$d" ;;
     esac
   done
+}
+
+# needed_back COPY: whether a Maintenance run that has not ended would switch
+# a tool back to the version COPY holds ($MAINTENANCE/upgraded: name old new).
+needed_back() {
+  [[ -f $MAINTENANCE/upgraded && -f $1/VERSIONS ]] || return 1
+  awk 'NR == FNR { want[$1 " " $2] = 1; next } ($1 " " $2) in want { found = 1 } END { exit !found }' "$MAINTENANCE/upgraded" "$1/VERSIONS"
 }
 
 # A tool whose new version failed its check in a Maintenance run was

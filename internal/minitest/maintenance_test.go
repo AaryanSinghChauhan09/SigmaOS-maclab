@@ -722,6 +722,63 @@ func TestASetUpThatFailsKeepsWhatWasUpgraded(t *testing.T) {
 	}
 }
 
+// A run started again that upgrades another tool makes another copy: the
+// copy that holds the version to switch back to is kept, and the switch back
+// takes that version from it.
+func TestARerunThatUpgradesAnotherToolStillSwitchesBackToTheRightVersion(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.newer("cloudflared", "2.0", "#!/bin/sh\n# bad\necho cloudflared 2.0\n")
+	write(t, filepath.Join(filepath.Dir(r.root), "state", "bootstrap.fails."+cloudflaredLabel), "1", 0o644)
+	r.stopped()
+	r.newer("restic", "0.20.0", listingRestic)
+
+	r.went()
+
+	if got := read(t, r.path("usr/local/lab/maintenance/upgraded")); got != "cloudflared 1.0 2.0\nrestic 0.19.1 0.20.0\n" {
+		t.Fatalf("what was upgraded: %q", got)
+	}
+	r.ops.set(func(o *ops) { o.lines = nil })
+	out := r.stopped("--after-restart")
+	tools := r.path("usr/local/lab/tools")
+	if got := read(t, tools+"/current/cloudflared/bin/cloudflared"); !strings.Contains(got, "cloudflared 1.0") || r.version("cloudflared") != "1.0" {
+		t.Fatalf("switched back to %q, VERSIONS says %s\n%s", got, r.version("cloudflared"), out)
+	}
+	if !strings.Contains(out, "it was switched back to 1.0 from the previous copy, and 1.0 passes") {
+		t.Errorf("the report:\n%s", out)
+	}
+	// Once the record is closed, the next set-up keeps two copies again.
+	r.newer("cloudflared", "3.0", "")
+	brew := exec.Command(r.path("opt/homebrew/bin/brew"), "upgrade", "cloudflared")
+	brew.Env = r.env
+	if out, err := brew.CombinedOutput(); err != nil {
+		t.Fatalf("brew: %v\n%s", err, out)
+	}
+	if out := r.ok("setup"); len(r.copies()) != 2 {
+		t.Errorf("copies after the record closed: %v\n%s", r.copies(), out)
+	}
+}
+
+// A switch back takes only the version its record names: a previous copy
+// that holds another is not copied.
+func TestASwitchBackFindsNoCopyOfTheVersionAndChangesNothing(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.newer("cloudflared", "2.0", "#!/bin/sh\n# bad\necho cloudflared 2.0\n")
+	r.went()
+	r.ops.set(func(o *ops) { o.lines = nil })
+	write(t, r.path("usr/local/lab/maintenance/upgraded"), "cloudflared 0.9 2.0\n", 0o644)
+
+	r.stopped("--after-restart")
+
+	if got := read(t, r.path("usr/local/lab/tools/current/cloudflared/bin/cloudflared")); !strings.Contains(got, "cloudflared 2.0") || r.version("cloudflared") != "2.0" {
+		t.Errorf("a version the record does not name was copied: %q, VERSIONS %s", got, r.version("cloudflared"))
+	}
+	if !r.tunnelLoaded() || !strings.Contains(r.report(), "could not be switched back to 0.9") {
+		t.Errorf("tunnel loaded %v; the report:\n%s", r.tunnelLoaded(), r.report())
+	}
+}
+
 // A first half that ends before the restart, here at a restart refused,
 // lifts the drain and tells "Agents": jobs do not wait for a restart that is
 // not coming.

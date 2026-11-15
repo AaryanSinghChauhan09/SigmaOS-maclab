@@ -371,12 +371,28 @@ back() {
   return "$status"
 }
 
+# kept_copy TOOL VERSION: a copy other than the one in use whose VERSIONS
+# names that version of the tool, the previous copy first. The set-up keeps
+# each copy an open record of the upgrade needs.
+kept_copy() {
+  local d cur
+  cur="$(cd -P "$LAB_TOOLS/current" 2>/dev/null && pwd -P)" || return 1
+  for d in "$LAB_TOOLS/previous" "$LAB_TOOLS"/*; do
+    d="$(cd -P "$d" 2>/dev/null && pwd -P)" || continue
+    [[ $d != "$cur" && -d $d/$1 ]] || continue
+    if awk -v n="$1" -v v="$2" '$1 == n && $2 == v { found = 1 } END { exit !found }' "$d/VERSIONS" 2>/dev/null; then
+      echo "$d"
+      return 0
+    fi
+  done
+  return 1
+}
+
 switch_back() {
   local name="$1" label cur prev held
   label="$(daemon_of "$name")"
   cur="$(cd -P "$LAB_TOOLS/current" 2>/dev/null && pwd -P)" || return 1
-  prev="$(cd -P "$LAB_TOOLS/previous" 2>/dev/null && pwd -P)" || return 1
-  [[ -d $prev/$name && $cur != "$prev" ]] || return 1
+  prev="$(kept_copy "$name" "$2")" || { note "tool $name: no copy kept holds $2"; return 1; }
   if [[ -n $label ]] && loaded "$label"; then stopped "$label" || { again "$label"; return 1; }; fi
   rm -rf "${cur:?}/.$name.failed" || { again "$label"; return 1; }
   mv "$cur/$name" "$cur/.$name.failed" || { again "$label"; return 1; }
