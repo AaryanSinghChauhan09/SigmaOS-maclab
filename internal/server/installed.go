@@ -793,6 +793,10 @@ func (s *Server) hFreezeManifest(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "manifest: %v", err)
 		return
 	}
+	if err := s.approversOf(&m); err != nil {
+		httpErr(w, 400, "manifest: %v", err)
+		return
+	}
 	by, at := leaser(r), s.now()
 	if !by.isMaintainer() {
 		names := slices.Sorted(maps.Keys(m.Macs))

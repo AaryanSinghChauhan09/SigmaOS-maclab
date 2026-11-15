@@ -998,16 +998,19 @@ const PromotedFromRevoked = "promoted from a revoked Release"
 // Release is a Release as the lab lists it, from the moment its manifest is
 // frozen: what it is and its Macs, fixed then, and what happened since.
 type Release struct {
-	Name           string           `json:"name"`
-	FrozenBy       string           `json:"frozen_by"`
-	FrozenByID     int64            `json:"frozen_by_id,omitempty"`
-	FrozenAt       time.Time        `json:"frozen_at"`
-	ManifestSHA256 string           `json:"manifest_sha256"`
-	Kernel         string           `json:"kernel"`
-	Packages       []ReleasePackage `json:"packages"`
-	Macs           []ReleaseMac     `json:"macs"`
-	State          string           `json:"state"`
-	StateAt        *time.Time       `json:"state_at,omitempty"`
+	Name           string    `json:"name"`
+	FrozenBy       string    `json:"frozen_by"`
+	FrozenByID     int64     `json:"frozen_by_id,omitempty"`
+	FrozenAt       time.Time `json:"frozen_at"`
+	ManifestSHA256 string    `json:"manifest_sha256"`
+	// ApprovedBy is the handles of who approved the manifest, a manifest
+	// frozen from 2026-11-16 naming them by account id.
+	ApprovedBy []string         `json:"approved_by,omitempty"`
+	Kernel     string           `json:"kernel"`
+	Packages   []ReleasePackage `json:"packages"`
+	Macs       []ReleaseMac     `json:"macs"`
+	State      string           `json:"state"`
+	StateAt    *time.Time       `json:"state_at,omitempty"`
 	// Passed of Configurations have a passed Installed run.
 	Configurations int `json:"configurations"`
 	Passed         int `json:"configurations_passed"`

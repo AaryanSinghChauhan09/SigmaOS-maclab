@@ -225,6 +225,10 @@ func TestAReleaseOpensInPlaceWithWhatItIsItsMacsAndItsVerdictHistory(t *testing.
 	if err := l.s.store.addPromotion("9.9", "d-m1-pro", api.ReleasePromotion{Time: l.s.now(), Mac: "m1-pro", Job: "job-a2", Kernel: "7.1.12-aurora-9.9", AccountID: maintainerID, Handle: "ravi"}); err != nil {
 		t.Fatal(err)
 	}
+	// Its manifest's approvers, by account id: the page says their handles.
+	if err := l.s.store.addApprovals("9.9", []int64{lrLinus, lrGrace}); err != nil {
+		t.Fatal(err)
+	}
 
 	for who, b := range map[string]*browser{"an M team member": grace, "a Maintainer": ravi} {
 		page := b.releases("?open=9.9")
@@ -245,6 +249,9 @@ func TestAReleaseOpensInPlaceWithWhatItIsItsMacsAndItsVerdictHistory(t *testing.
 			packages = append(packages, li.words())
 		}
 		same(t, who+": its packages with versions", packages, []string{"linux-aurora 7.1.12.aurora2-2", "omarchy-mac-boot 20260925-3"})
+		if got := what.sole(t, "p.release-approved").words(); got != "Approved by @"+l.who(lrLinus).Handle+", @"+l.who(lrGrace).Handle {
+			t.Errorf("%s: who approved it: %q", who, got)
+		}
 
 		macs := open.sole(t, ".release-macs")
 		if got := macs.sole(t, "p.coverage").words(); got != "1 of 2 Configurations have a passed run" {

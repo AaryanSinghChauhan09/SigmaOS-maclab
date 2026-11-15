@@ -510,6 +510,8 @@ func (st *store) forget(f forgetting) error {
 	}
 	exec(`DELETE FROM lab_tokens WHERE account_id = ?`, f.id)
 	exec(`DELETE FROM requests_to_lend WHERE account_id = ?`, f.id)
+	// A frozen manifest keeps its bytes; the lab stops showing them as its approver.
+	exec(`DELETE FROM release_approvals WHERE account_id = ?`, f.id)
 	exec(`DELETE FROM tokens WHERE token_hash IN (SELECT token_hash FROM join_commands WHERE volunteer_id = ?)`, f.id)
 	exec(`DELETE FROM join_commands WHERE volunteer_id = ?`, f.id)
 	// What others typed about them goes with the handle: a Block's reason.

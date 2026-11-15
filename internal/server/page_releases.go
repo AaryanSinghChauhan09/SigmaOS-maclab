@@ -73,6 +73,7 @@ type releaseAsking struct {
 type releaseOpen struct {
 	Kernel        string
 	Packages      []api.ReleasePackage
+	ApprovedBy    []string
 	Coverage      string
 	Macs          []releaseMacRow
 	Warnings      []string
@@ -181,7 +182,7 @@ func (s *Server) showReleases(w http.ResponseWriter, r *http.Request, status int
 }
 
 func (s *Server) openRelease(me *Person, rel *api.Release) *releaseOpen {
-	o := &releaseOpen{Kernel: rel.Kernel, Packages: rel.Packages, Warnings: rel.Warnings,
+	o := &releaseOpen{Kernel: rel.Kernel, Packages: rel.Packages, ApprovedBy: rel.ApprovedBy, Warnings: rel.Warnings,
 		VerdictAction: "/releases/" + url.PathEscape(rel.Name) + "/verdict",
 		Coverage:      fmt.Sprintf("%d of %d %s a passed run", rel.Passed, rel.Configurations, plural(rel.Configurations, "Configuration has", "Configurations have"))}
 	for _, m := range rel.Macs {

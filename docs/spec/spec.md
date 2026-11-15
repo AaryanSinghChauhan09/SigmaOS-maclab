@@ -530,7 +530,7 @@ Recorded in the acceptance run, measured without a script in the page. ("The fro
 
 - Open to M team members and Maintainers.
 - The list: one row per Release, newest first: name; who froze it and when; the state badge with its date; coverage; how many Macs are promoted from it; the matching Candidate set, linked.
-- One Release opened in place: what it is (kernel and packages with versions); its Macs (Mac, Configuration, latest Installed run linked to its job, number of runs, promoted or not) under "n of m Configurations have a passed run"; the verdict history.
+- One Release opened in place: what it is (kernel and packages with versions, and who approved its manifest, by handle); its Macs (Mac, Configuration, latest Installed run linked to its job, number of runs, promoted or not) under "n of m Configurations have a passed run"; the verdict history.
 - M team member: Record verdict, only while there is none. Maintainer: also Change, Revoke, and Promote on each Mac row with a passed run. All ask twice.
 - The page starts nothing: freezing a Release and starting an Installed run stay in `lab`. The kernel gate is not shown.
 
@@ -792,7 +792,7 @@ All from "Terms and privacy" unless another ticket is named.
     | Everything else: the person's record, the People record, Lease, job and build records, the Mac's record, collected files, verdict history, reports | as long as the lab runs, or until the person is Forgotten or the report deleted |
 
     No separate period for the files a job collects from a Volunteer's Mac. No automatic expiry of people who stop signing in.
-11. **The M team and Maintainers accept no terms.** The privacy statement says what is kept about them.
+11. **The M team and Maintainers accept no terms.** The privacy statement says what is kept about them, and that a forgetting keeps the approver's handle in a Release frozen before 2026-11-16.
 12. **No further machinery.** No disappearing-message timer on either Signal group, no list of past forgettings, no second kind of terms change.
 
 ### Forgetting a person
@@ -814,6 +814,7 @@ The person asks on their own page or by mail; the request shows on People; a Mai
 | The lab's copy of an Audit log, Lease record lines, "who asked" on jobs and builds | Kept, the handle removed |
 | People record lines, about them or by them | Kept, the handle removed |
 | Verdict history entries; who froze a Release or an entry; who promoted | Kept with the time and the note, the handle removed |
+| Who approved a Release's manifest | From 2026-11-16 a manifest names each approver by account id and the pages show the handle: the lab stops showing them, and the frozen manifest keeps its bytes. The approver's handle in a Release frozen before 2026-11-16 is kept: the manifest is pinned, byte for byte |
 | A lab-published report's "who asked" | The handle removed |
 | The Blocked state | Kept: the account id, "Blocked", the date and who blocked. The handle and the typed reason are erased |
 | Lines already posted to the Lab group or "Agents" | Kept on the members' phones |

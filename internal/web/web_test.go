@@ -168,7 +168,9 @@ func TestEveryPagesFooterLinksTheTwoTexts(t *testing.T) {
 
 func TestATextShowsItsDateAndIsTheShippedFile(t *testing.T) {
 	s := site(t, "")
+	dates := map[string]string{"terms.txt": "2026-11-14", "privacy.txt": "2026-11-15"}
 	for file, text := range map[string]Text{"terms.txt": Terms(), "privacy.txt": Privacy()} {
+		date := dates[file]
 		shipped, err := os.ReadFile("texts/" + file)
 		if err != nil {
 			t.Fatal(err)
@@ -177,7 +179,7 @@ func TestATextShowsItsDateAndIsTheShippedFile(t *testing.T) {
 		if text.SHA256 != hex.EncodeToString(sum[:]) || text.Body != string(shipped) {
 			t.Errorf("%s: labd carries a text that is not the file", file)
 		}
-		if text.Date != "2026-11-14" {
+		if text.Date != date {
 			t.Errorf("%s: its date is %q", file, text.Date)
 		}
 		body, _ := page(t, s, "text", viewer(SignedOut), Page{Title: "Terms", Data: text})
@@ -185,14 +187,18 @@ func TestATextShowsItsDateAndIsTheShippedFile(t *testing.T) {
 		if hex.EncodeToString(served[:]) != text.SHA256 {
 			t.Errorf("%s: the page's text is not the shipped file's", file)
 		}
-		for _, piece := range []string{`<time datetime="2026-11-14">2026-11-14</time>`, `<code>` + text.SHA256 + `</code>`} {
+		for _, piece := range []string{`<time datetime="` + date + `">` + date + `</time>`, `<code>` + text.SHA256 + `</code>`} {
 			if !strings.Contains(body, piece) {
 				t.Errorf("%s: the page lacks %s", file, piece)
 			}
 		}
 	}
-	if !strings.HasPrefix(Terms().Body, "OMARCHY MAC LAB: LENDING A MAC\nTerms of 2026-11-14\n") || !strings.HasPrefix(Privacy().Body, "PRIVACY\nStatement of 2026-11-14\n") {
+	if !strings.HasPrefix(Terms().Body, "OMARCHY MAC LAB: LENDING A MAC\nTerms of 2026-11-14\n") || !strings.HasPrefix(Privacy().Body, "PRIVACY\nStatement of 2026-11-15\n") {
 		t.Error("the two texts do not open as the spec's do")
+	}
+	// What a forgetting leaves, as the spec's Forgetting table has it.
+	if said := strings.Join(strings.Fields(Privacy().Body), " "); !strings.Contains(said, "the approver's handle in a Release frozen before 2026-11-16") {
+		t.Error("the privacy statement does not name the approver's handle in a Release frozen before 2026-11-16 as kept")
 	}
 }
 
