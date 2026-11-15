@@ -72,6 +72,14 @@ type dev struct {
 	heardSinceStart bool
 	// cleaning: the idle clean-up is on its way to the Mac or running there.
 	cleaning bool
+	// cleanupCmd is the idle clean-up last handed to the Mac, and
+	// cleanupAway that labd's wait for it ended with no result: cleaning
+	// then holds until a check-in no longer lists it as running.
+	cleanupCmd  string
+	cleanupAway bool
+	// cleanupWait is how long labd waits for the idle clean-up's result; 0
+	// is two minutes. Only a test sets it, under mu.
+	cleanupWait time.Duration
 	// updateHold is how long lab agent-update still holds the Mac after its
 	// call ends; 0 is agentUpdateWait. Only a test sets it, under mu.
 	updateHold time.Duration
@@ -419,6 +427,11 @@ func (v *dev) heartbeat(ci api.Checkin) {
 	for _, id := range ci.Running {
 		running[id] = true
 	}
+	if v.cleanupAway && !running[v.cleanupCmd] {
+		// The agent says the clean-up labd stopped waiting for has ended
+		// (or its run or boot did).
+		v.cleaning, v.cleanupAway, v.cleanupCmd = false, false, ""
+	}
 	for id, at := range v.inflight {
 		if !running[id] && now.Sub(at) > 15*time.Second {
 			if c, ok := v.sent[id]; ok {
@@ -468,6 +481,9 @@ func (v *dev) deliver(bootID string) api.CheckinResponse {
 			v.results[c.ID] = api.CommandResult{ID: c.ID, Error: v.d.Name + ": " + agentBeingUpdated + ", so the idle clean-up waits"}
 			delete(v.target, c.ID)
 			continue
+		}
+		if c.Kind == api.CmdCleanup && c.JobID == "" {
+			v.cleanupCmd = c.ID
 		}
 		v.inflight[c.ID] = now
 		v.sent[c.ID] = c

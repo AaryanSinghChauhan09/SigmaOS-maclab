@@ -226,15 +226,22 @@ func (a *Agent) updateSelf(ctx context.Context, c api.Command) (any, *afterAck, 
 	var args UpdateArgs
 	_ = json.Unmarshal(c.Args, &args)
 	a.mu.Lock()
-	job := ""
+	job, cleaning := "", false
 	for id, r := range a.running {
 		if id != c.ID && r.c.JobID != "" {
 			job = r.c.JobID
+		}
+		if id != c.ID && r.c.Kind == api.CmdCleanup {
+			cleaning = true
 		}
 	}
 	a.mu.Unlock()
 	if job != "" {
 		return nil, nil, fmt.Errorf("%s is not idle: job %s runs on it. %s", a.cfg.Name, job, nothingChanged)
+	}
+	if cleaning {
+		// The restart would cut it as it rewrites the boot entries.
+		return nil, nil, fmt.Errorf("%s is not idle: the lab's clean-up of leftover lab kernels runs on it. %s", a.cfg.Name, nothingChanged)
 	}
 	res, err := update(ctx, a.cfg, a.sys)
 	if err != nil || !res.Changed {

@@ -1222,3 +1222,62 @@ func TestAnUpdateWhoseAnswerComesPastTheHoldRestartsNothing(t *testing.T) {
 		t.Fatalf("an update whose answer came past labd's hold restarted lab-agent %d times", sl.restarts)
 	}
 }
+
+// The idle clean-up rewrites boot entries as root, with no deadline of its
+// own on the Mac: when labd's wait for it ends first, lab agent-update stays
+// off until the agent says the clean-up has ended.
+func TestAnIdleCleanUpPastLabdsWaitKeepsAgentUpdateOffUntilItEnds(t *testing.T) {
+	l := newLab(t, false)
+	l.baseline()
+	l.stopAgent()
+	v := l.s.dev(l.name)
+	d := v.snapshot()
+	var running []string
+	cleanup := ""
+	checkIn := func() {
+		v.heartbeat(api.Checkin{BootID: d.BootID, Kernel: d.Kernel, AgentStart: "run-1", Running: running})
+		for _, c := range v.deliver(d.BootID).Commands {
+			if c.Kind == api.CmdCleanup && c.JobID == "" {
+				cleanup, running = c.ID, []string{c.ID}
+			}
+		}
+	}
+	cleaning := func() bool {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		return strings.Contains(v.notUpdatableLocked(true), "removing leftover lab kernels")
+	}
+	checkIn()
+	v.mu.Lock()
+	v.cleanupWait, v.dirty = time.Second, true
+	v.mu.Unlock()
+	for end := time.Now().Add(25 * time.Second); cleanup == ""; time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the idle clean-up never reached the Mac")
+		}
+		checkIn()
+	}
+	for end := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		checkIn()
+		v.mu.Lock()
+		_, gaveUp := v.gaveUp[cleanup]
+		v.mu.Unlock()
+		if gaveUp {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("labd never stopped waiting for the clean-up")
+		}
+	}
+	checkIn()
+	time.Sleep(200 * time.Millisecond)
+	checkIn()
+	if !cleaning() {
+		t.Fatal("lab agent-update is let on while the clean-up labd stopped waiting for still runs")
+	}
+	running = nil
+	checkIn()
+	if cleaning() {
+		t.Fatal("lab agent-update is still kept off after the agent said the clean-up ended")
+	}
+}

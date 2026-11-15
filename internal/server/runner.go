@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -107,13 +108,23 @@ func (s *Server) deviceLoop(v *dev) {
 			// nothing from the lab, this clean-up as root included.
 			// Nor while lab agent-update holds it, whose restart could cut
 			// it; and one under way keeps lab agent-update off (cleaning).
-			need := v.dirty && !v.termsWait && v.updating == nil && v.aliveLocked() && (v.d.State == api.StateReady || v.d.State == api.StateNew)
-			v.cleaning = need
+			// One whose result labd stopped waiting for may still run there:
+			// it holds cleaning until the agent says it ended (heartbeat).
+			need := !v.cleanupAway && v.dirty && !v.termsWait && v.updating == nil && v.aliveLocked() && (v.d.State == api.StateReady || v.d.State == api.StateNew)
+			if !v.cleanupAway {
+				v.cleaning, v.cleanupCmd = need, ""
+			}
+			wait := cmp.Or(v.cleanupWait, 2*time.Minute)
 			v.mu.Unlock()
 			if need {
-				err := v.call(s.ctx, api.CmdCleanup, "", api.CleanupArgs{All: true}, 2*time.Minute, nil)
+				err := v.call(s.ctx, api.CmdCleanup, "", api.CleanupArgs{All: true}, wait, nil)
+				var said agentError
 				v.mu.Lock()
-				v.cleaning = false
+				if err == nil || errors.As(err, &said) || v.cleanupCmd == "" {
+					v.cleaning, v.cleanupCmd = false, ""
+				} else {
+					v.cleanupAway = true
+				}
 				if err == nil {
 					v.dirty = false
 				}
