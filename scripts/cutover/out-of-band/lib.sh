@@ -129,7 +129,20 @@ plain() {
   fi
 }
 
+# AT_END: what puts back a change the test made on the mini, run once before
+# the record's result however the run ends: a failure, a stop, Ctrl-C or a
+# dropped connection. A test sets it before the change and empties it once
+# it has put the change back itself.
+AT_END=""
+at_end() {
+  local what="$AT_END"
+  [[ -n $what ]] || return 0
+  AT_END=""
+  "$what" || true
+}
+
 cleanup() {
+  [[ -z $RECORD || ! -f $RECORD ]] || at_end
   [[ -z $LABD_PID ]] || kill "$LABD_PID" 2>/dev/null || true
   [[ -z $FAKE_PID ]] || kill "$FAKE_PID" 2>/dev/null || true
   wait 2>/dev/null || true
@@ -140,6 +153,7 @@ cleanup() {
 workspace() {
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/out-of-band.XXXXXX")"
   trap cleanup EXIT
+  trap 'exit 129' HUP
   trap 'exit 130' INT TERM
 }
 
@@ -200,9 +214,9 @@ record_done() {
 }
 
 passed() { record_done pass; exit 0; }
-give_up() { rec "FAILED: $1"; record_done fail; exit 1; }
+give_up() { rec "FAILED: $1"; at_end; record_done fail; exit 1; }
 # stopped WHY: the run ends for the owner; exit 3 is no failure of the script.
-stopped() { rec "STOPPED: $1"; record_done stopped; exit 3; }
+stopped() { rec "STOPPED: $1"; at_end; record_done stopped; exit 3; }
 
 # hands TEXT: a step only a person at the machines can do. Through the Lab
 # address the run waits for Enter; against the made-up mini the caller plays
@@ -379,7 +393,7 @@ controller() {
 }
 
 # mini_controller stop|start: the Out-of-band controller, stopped as launchd
-# stops it and started again.
+# stops it and started again. Returns 1 when the mini did not do it.
 mini_controller() {
   if playing; then
     fake controller "state=$(if [[ $1 == stop ]]; then echo stopped; else echo running; fi)"
@@ -387,9 +401,9 @@ mini_controller() {
   fi
   say "the controller on the mini is root's: sudo asks for the password of ${MINI%%@*}"
   if [[ $1 == stop ]]; then
-    ssh -t "$MINI" sudo launchctl bootout "system/$OOBD_LABEL" || give_up "the controller was not stopped on the mini"
+    ssh -t "$MINI" sudo launchctl bootout "system/$OOBD_LABEL"
   else
-    ssh -t "$MINI" sudo launchctl bootstrap system "$OOBD_PLIST" || give_up "the controller was not started again on the mini: sudo launchctl bootstrap system $OOBD_PLIST"
+    ssh -t "$MINI" sudo launchctl bootstrap system "$OOBD_PLIST"
   fi
 }
 

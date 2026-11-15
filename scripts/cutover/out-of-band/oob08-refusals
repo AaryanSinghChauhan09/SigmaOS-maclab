@@ -122,7 +122,17 @@ fi
 
 placed "$M2"
 status_says "Out-of-band controller" "answering" || give_up "before the controller is stopped /status says of it: $(status_part "Out-of-band controller")"
-mini_controller stop
+# controller_back: the controller started again, whatever ended the run.
+# shellcheck disable=SC2329
+controller_back() {
+  if mini_controller start; then
+    rec "the controller was started again on the mini"
+  else
+    rec "the controller could NOT be started again on the mini: start it there with sudo launchctl bootstrap system $OOBD_PLIST"
+  fi
+}
+AT_END=controller_back
+mini_controller stop || give_up "the controller was not stopped on the mini"
 rec "the controller is stopped on the mini"
 REASONS="$(printf 'no Hard reset was sent\nthe Out-of-band controller is not healthy')"
 never "$M2" "a Hard reset with the controller stopped"
@@ -139,7 +149,8 @@ else
 fi
 rec "\"Agents\" was told: $TROUBLE"
 
-mini_controller start
+AT_END=""
+mini_controller start || give_up "the controller was not started again on the mini: sudo launchctl bootstrap system $OOBD_PLIST"
 wait_until 90 status_says "Out-of-band controller" "answering" || give_up "started again, /status still says of the controller: $(status_part "Out-of-band controller")"
 wait_until 60 eval "\"$LAB_CMD\" oob \"$M2\" 2>/dev/null | grep -q '^  controller:  *healthy'" || give_up "started again, the lab does not say the controller is healthy"
 rec "the controller started again: /status says $(status_part "Out-of-band controller"), lab oob says healthy"
