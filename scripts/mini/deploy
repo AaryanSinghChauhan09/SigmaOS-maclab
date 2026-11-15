@@ -346,8 +346,8 @@ tell "Deploy of $tag on the mini: started${previous:+, from $previous}. Jobs are
 if ! drain_jobs "$wait"; then
   announced=0
   rm -rf "${LAB_BUILDS:?}/$tag"
-  tell "Deploy of $tag on the mini did not go on: $STILL_RUNNING still ran after $wait minutes. Nothing was switched, and jobs start again."
-  fail "$STILL_RUNNING still ran after $wait minutes: cancel them (lab cancel) or Deploy later. Nothing was switched"
+  tell "Deploy of $tag on the mini did not go on: $NOT_DRAINED. Nothing was switched, and jobs start again."
+  fail "$NOT_DRAINED. Nothing was switched"
 fi
 
 switching=1

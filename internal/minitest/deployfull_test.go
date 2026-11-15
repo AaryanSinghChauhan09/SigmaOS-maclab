@@ -27,6 +27,8 @@ type ops struct {
 	lines []string
 	// old is a labd from before the drain: it has the lines only.
 	old bool
+	// drainStatus, when set, is the status POST /drain answers with.
+	drainStatus int
 }
 
 func (o *ops) told() []string {
@@ -69,6 +71,10 @@ func (m *mini) ops() *ops {
 		case "POST /drain":
 			if o.old {
 				http.NotFound(w, r)
+				return
+			}
+			if o.drainStatus != 0 {
+				http.Error(w, "drain broke", o.drainStatus)
 				return
 			}
 			answer := "0 0"
@@ -291,6 +297,52 @@ func TestDeployOverALabdThatCannotDrainGoesOn(t *testing.T) {
 
 	if m.current() != tag || !strings.Contains(out, "does not drain jobs") {
 		t.Errorf("the mini runs %q\n%s", m.current(), out)
+	}
+}
+
+// Only a labd from before the drain, which answers 404, lets Deploy go on
+// without one. Any other failure of /drain stops it before labd is stopped,
+// with the drain lifted.
+func TestDeployStopsWhenTheDrainFails(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		answer string
+	}{
+		{"a 500", http.StatusInternalServerError, ""},
+		{"an answer it does not understand", 0, "draining, sort of"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m, k, r := deployed(t)
+			o := m.ops()
+			first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+			bundle(t, k, filepath.Join(r.dir, first), first, true)
+			bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+			m.ok("deploy", "--from", r.from(first), first)
+			o.set(func(o *ops) {
+				o.lines = nil
+				o.drainStatus = c.status
+				if c.answer != "" {
+					o.drain = []string{c.answer}
+				}
+			})
+			os.Remove(m.log)
+
+			out := m.refused("deploy", "--from", r.from(tag), tag)
+
+			if m.current() != first || !m.loaded() || !reflect.DeepEqual(m.builds(), []string{first}) {
+				t.Fatalf("the mini runs %q (loaded %v), builds %v\n%s", m.current(), m.loaded(), m.builds(), out)
+			}
+			if strings.Contains(m.calls(), "launchctl boot") {
+				t.Errorf("a service was touched:\n%s", m.calls())
+			}
+			if !strings.Contains(out, "drain") || !strings.Contains(out, "Nothing was switched") {
+				t.Errorf("no word of the drain:\n%s", out)
+			}
+			if got := o.told(); len(got) != 2 || !strings.Contains(got[1], "did not go on") {
+				t.Errorf("\"Agents\" was told %q", got)
+			}
+		})
 	}
 }
 

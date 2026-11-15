@@ -65,7 +65,7 @@ stop_lab() {
   if loaded "$LITESTREAM_LABEL"; then had_litestream=1; fi
   # As a Deploy does: no job is cut by the stop.
   if declare -F drain_jobs >/dev/null; then
-    drain_jobs 30 || fail "$STILL_RUNNING still run after 30 minutes: nothing was changed. Run this again when they have ended"
+    drain_jobs 30 || fail "$NOT_DRAINED. Nothing was changed"
   fi
   stopped "$LABD_LABEL" || fail "labd did not stop (20 s): nothing was changed"
   stopped "$LITESTREAM_LABEL" || fail "Litestream did not stop (20 s): labd is stopped, and nothing else was changed. Start labd again with: launchctl bootstrap system $LABD_PLIST"

@@ -431,37 +431,64 @@ tell() {
 # ops METHOD PATH: labd's answer on its ops socket.
 ops() { as_lab curl -fsS --max-time 20 --unix-socket "$OPS_SOCKET" -X "$1" "http://labd$2" 2>/dev/null; }
 
+# ops_status METHOD PATH: labd's answer in OPS_ANSWER and its HTTP status in
+# OPS_STATUS: 000 when the socket did not answer at all.
+OPS_ANSWER=""
+OPS_STATUS=""
+ops_status() {
+  local out
+  out="$(as_lab curl -sS --max-time 20 --unix-socket "$OPS_SOCKET" -X "$1" -w '\n%{http_code}' "http://labd$2" 2>/dev/null)" || true
+  OPS_STATUS="${out##*$'\n'}"
+  OPS_ANSWER="${out%$'\n'*}"
+  [[ $out == *$'\n'* ]] || OPS_ANSWER=""
+  [[ $OPS_STATUS =~ ^[0-9]{3}$ ]] || OPS_STATUS=000
+}
+
 DRAINING=0
 
 # drain_jobs MINUTES: labd starts no further job, and this waits until the
 # jobs and builds that run have ended. A job that waits stays queued and
-# starts after the restart. Returns 1, with the drain lifted, when some
-# still run after MINUTES; what ran is then in STILL_RUNNING.
+# starts after the restart. Only a labd too old to drain (404) is gone on
+# from with no drain. Returns 1, with the drain lifted, when some still run
+# after MINUTES or labd's drain fails or answers what is not understood;
+# NOT_DRAINED then says which, and STILL_RUNNING what still ran.
 STILL_RUNNING=""
+NOT_DRAINED=""
 drain_jobs() {
-  local limit=$(( $1 * 60 )) step="${LAB_DRAIN_STEP:-5}" waited=0 left jobs builds
+  local limit=$(( $1 * 60 )) step="${LAB_DRAIN_STEP:-5}" waited=0 jobs builds
   if [[ ! -S $OPS_SOCKET ]] || ! loaded "$LABD_LABEL"; then
     say "labd does not run: there is no job to drain"
     return 0
   fi
-  if ! left="$(ops POST /drain)"; then
-    say "the labd that runs does not drain jobs (it is older than this script, or does not answer): a job that runs now ends with the restart"
+  ops_status POST /drain
+  if [[ $OPS_STATUS == 404 ]]; then
+    say "the labd that runs does not drain jobs (it is older than this script): a job that runs now ends with the restart"
     return 0
   fi
   DRAINING=1
   while :; do
-    read -r jobs builds <<<"$left"
-    [[ $jobs =~ ^[0-9]+$ && $builds =~ ^[0-9]+$ ]] || { say "labd's answer to the drain was not understood: a job that runs now ends with the restart"; return 0; }
+    if [[ $OPS_STATUS != 200 ]]; then
+      NOT_DRAINED="labd's drain of jobs failed (status $OPS_STATUS on its ops socket), so running jobs could not be kept whole"
+      lift_drain
+      return 1
+    fi
+    read -r jobs builds <<<"$OPS_ANSWER"
+    if [[ ! ${jobs:-} =~ ^[0-9]+$ || ! ${builds:-} =~ ^[0-9]+$ ]]; then
+      NOT_DRAINED="labd's answer to the drain of jobs was not understood, so running jobs could not be kept whole"
+      lift_drain
+      return 1
+    fi
     (( jobs + builds > 0 )) || break
     if (( waited >= limit )); then
       STILL_RUNNING="$jobs jobs and $builds builds"
+      NOT_DRAINED="$STILL_RUNNING still ran after $1 minutes: cancel them (lab cancel) or try again later"
       lift_drain
       return 1
     fi
     (( waited % 60 )) || say "waiting for $jobs jobs and $builds builds to end"
     sleep "$step"
     waited=$((waited + step))
-    left="$(ops POST /drain)" || { say "labd stopped answering while jobs were drained"; return 0; }
+    ops_status POST /drain
   done
   say "jobs are drained: none runs, and labd starts none until it is back"
 }

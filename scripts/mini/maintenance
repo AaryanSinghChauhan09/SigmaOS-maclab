@@ -195,8 +195,8 @@ first_half() {
 
   tell "Maintenance run on the mini: started. Jobs are drained; the tools, container and macOS are brought up to date; then the mini restarts with no Unlock. The lab is Dark while it restarts."
   if ! drain_jobs "$wait"; then
-    tell "Maintenance run on the mini did not go on: $STILL_RUNNING still ran after $wait minutes. Nothing was changed, and jobs start again."
-    fail "$STILL_RUNNING still ran after $wait minutes: cancel them (lab cancel) or run it later. Nothing was changed"
+    tell "Maintenance run on the mini did not go on: $NOT_DRAINED. Nothing was changed, and jobs start again."
+    fail "$NOT_DRAINED. Nothing was changed"
   fi
 
   before="$(versions)"
