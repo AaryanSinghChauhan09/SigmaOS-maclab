@@ -440,10 +440,16 @@ func signInCommand(fs *flag.FlagSet, args []string) error {
 	return errors.New("the lab set no session")
 }
 
+// browserTimeout is how long a browser's request, a page or a form, may
+// take.
+var browserTimeout = 2 * time.Minute
+
 var csrfField = regexp.MustCompile(`name="csrf_token" value="([^"]+)"`)
 
 func (w *who) fetch(path string) (*http.Response, []byte, error) {
-	req, err := w.request(context.Background(), "GET", path, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), browserTimeout)
+	defer cancel()
+	req, err := w.request(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -491,7 +497,9 @@ func formCommand(fs *flag.FlagSet, args []string) error {
 		}
 		form.Add(k, v)
 	}
-	req, err := w.request(context.Background(), "POST", fs.Arg(0), strings.NewReader(form.Encode()))
+	ctx, cancel := context.WithTimeout(context.Background(), browserTimeout)
+	defer cancel()
+	req, err := w.request(ctx, "POST", fs.Arg(0), strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
