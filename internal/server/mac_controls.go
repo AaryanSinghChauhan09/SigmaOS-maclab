@@ -120,7 +120,7 @@ func (s *Server) pEndEnrollment(w http.ResponseWriter, r *http.Request) {
 		if !s.sure(w, r, "End the enrollment of "+mac+": it leaves the lab now, and any job on it stops", "/people?open="+r.PathValue("id")) {
 			return
 		}
-		if !s.endEnrollment(v, leaving{how: leftByMaintainer, by: *PersonOf(r)}) {
+		if err = s.endEnrollment(v, leaving{how: leftByMaintainer, by: *PersonOf(r)}); errors.Is(err, errMacGone) {
 			err = refuse(http.StatusConflict, "@%s lends no Mac called %s.", k.Handle, mac)
 		}
 	}

@@ -65,25 +65,33 @@ func (l leaving) reason() string {
 // Lab group. Unless the Mac itself said it left, labd remembers whose
 // secret it was and who ended it: a Mac that was out of reach learns it
 // was ended when it next reaches the lab, and finishes leaving then. It is
-// false when the Mac was not enrolled any more.
-func (s *Server) endEnrollment(v *dev, l leaving) bool {
+// errMacGone when the Mac was not enrolled any more. The retirement is
+// written first: when it cannot be, nothing has changed and the error says
+// why.
+func (s *Server) endEnrollment(v *dev, l leaving) error {
 	reason := l.reason()
 	v.mu.Lock()
 	name, secretHash, e := v.d.Name, v.secretHash, v.d.Enrollment
 	// As lab forget does: nothing still holding v may write its row back.
 	if v.forgotten {
 		v.mu.Unlock()
-		return false
+		return errMacGone
 	}
 	v.forgotten = true
 	d := v.d
 	v.mu.Unlock()
+	if s.dev(name) != v {
+		return errMacGone
+	}
+	if err := s.store.retire(&d, l.how, s.now()); err != nil {
+		v.mu.Lock()
+		v.forgotten = false
+		v.mu.Unlock()
+		s.log.Printf("retire %s: %v", name, err)
+		return fmt.Errorf("%s's enrollment could not be ended: %w", name, err)
+	}
 	s.endLeaseOfLeaving(v, reason)
 	s.mu.Lock()
-	if s.devs[name] != v {
-		s.mu.Unlock()
-		return false
-	}
 	// The record of who ended it is written before the Mac disappears, so its
 	// secret is never unknown without an answer to why.
 	if !l.atMac {
@@ -93,7 +101,7 @@ func (s *Server) endEnrollment(v *dev, l leaving) bool {
 	}
 	delete(s.devs, name)
 	s.mu.Unlock()
-	s.retired(&d, l)
+	s.afterRetiring(&d, l)
 
 	v.mu.Lock()
 	v.goneWhy = reason
@@ -137,13 +145,24 @@ func (s *Server) endEnrollment(v *dev, l leaving) bool {
 			Body:     fmt.Sprintf("The Maintainer %s ended your Mac's enrollment in the lab. Its lab-agent removes the lab from your Mac at its next check-in; `sudo lab-agent log` records it.", by),
 			Priority: "high", Volunteer: true, MacTopic: s.macTopicURL(e)})
 	}
-	return true
+	return nil
 }
 
 // retired does what leaving the lab does to a Mac's record, d as it stood:
-// the three lines (the Mac's record, the People record, the Lab group),
-// then the record is Retired and what labd kept under the Mac's name goes.
-func (s *Server) retired(d *api.Device, l leaving) {
+// the record is Retired, then the three lines (the Mac's record, the People
+// record, the Lab group) are written and what labd kept under the Mac's
+// name goes. When the record cannot be Retired, nothing else is done.
+func (s *Server) retired(d *api.Device, l leaving) error {
+	if err := s.store.retire(d, l.how, s.now()); err != nil {
+		s.log.Printf("retire %s: %v", d.Name, err)
+		return err
+	}
+	s.afterRetiring(d, l)
+	return nil
+}
+
+// afterRetiring is what follows a Mac's record being Retired.
+func (s *Server) afterRetiring(d *api.Device, l leaving) {
 	line := "left the lab: its Volunteer ended it"
 	switch l.how {
 	case leftByMaintainer:
@@ -160,9 +179,6 @@ func (s *Server) retired(d *api.Device, l leaving) {
 	}
 	s.macSaid(d.Name, d.ID, macLeft, line)
 	s.leftOnPeopleRecord(d, l)
-	if err := s.store.retire(d, l.how, s.now()); err != nil {
-		s.log.Printf("retire %s: %v", d.Name, err)
-	}
 	if _, err := s.store.dropTokens(d.Name); err != nil {
 		s.log.Printf("retire %s: its enrollment tokens: %v", d.Name, err)
 	}
@@ -219,27 +235,38 @@ func (s *Server) leaveMac(v *dev, by Person) error {
 	if err := s.lends(v, by); err != nil {
 		return err
 	}
-	if !s.endEnrollment(v, leaving{how: leftByVolunteer, by: by}) {
+	err := s.endEnrollment(v, leaving{how: leftByVolunteer, by: by})
+	if errors.Is(err, errMacGone) {
 		return refuse(http.StatusNotFound, "No Mac of yours has that name.")
 	}
-	return nil
+	return err
 }
 
 // hEndEnrollment is a Maintainer ending a Mac's enrollment (`lab remove`).
 func (s *Server) hEndEnrollment(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	v := s.dev(name)
-	if v == nil || !s.endEnrollment(v, leaving{how: leftByMaintainer, by: leaser(r)}) {
-		httpErr(w, 404, "no device %q", name)
-		return
+	err := errMacGone
+	if v != nil {
+		err = s.endEnrollment(v, leaving{how: leftByMaintainer, by: leaser(r)})
 	}
-	w.Write([]byte("enrollment ended\n"))
+	switch {
+	case errors.Is(err, errMacGone):
+		httpErr(w, 404, "no device %q", name)
+	case err != nil:
+		httpErr(w, 500, "%v", err)
+	default:
+		w.Write([]byte("enrollment ended\n"))
+	}
 }
 
 // hAgentLeave is a Mac telling labd its Volunteer has left the lab.
 func (s *Server) hAgentLeave(w http.ResponseWriter, r *http.Request) {
 	v := agentDev(r)
-	s.endEnrollment(v, leaving{how: leftByVolunteer, atMac: true})
+	if err := s.endEnrollment(v, leaving{how: leftByVolunteer, atMac: true}); err != nil && !errors.Is(err, errMacGone) {
+		httpErr(w, 500, "%v", err)
+		return
+	}
 	w.Write([]byte("left\n"))
 }
 

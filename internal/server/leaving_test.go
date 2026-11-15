@@ -845,3 +845,47 @@ func TestLeavingEndsAJobThatWaitedForAWindow(t *testing.T) {
 		t.Errorf("the job that waited ended %s %s: %s", j.State, j.Outcome, j.Summary)
 	}
 }
+
+// A leaving whose retirement cannot be written (a full disk) changes
+// nothing: the Volunteer gets an error, and the Mac stays in the lab with
+// its secret and its files. Leaving again, once it can be written, works.
+func TestALeavingThatCannotBeWrittenChangesNothing(t *testing.T) {
+	l, _ := lendLab(t)
+	l.signedIn(maintainerID).did("/people/mark", "handle", "grace", "as", "invite")
+	grace := l.signedIn(graceID)
+	v, secret := grace.lent("shelf-mac")
+	files, _ := l.kept("shelf-mac")
+	if _, err := l.s.store.db.Exec(`CREATE TRIGGER full_disk BEFORE INSERT ON retired_macs BEGIN SELECT RAISE(FAIL, 'database or disk is full'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := grace.post("/my-macs/shelf-mac/leave", "sure", "yes"); w.Code != http.StatusInternalServerError {
+		t.Fatalf("a leaving that could not be written answers %d", w.Code)
+	}
+	if l.s.dev("shelf-mac") != v {
+		t.Fatal("the Mac is gone from the lab")
+	}
+	select {
+	case <-v.stop:
+		t.Fatal("the Mac's enrollment was ended")
+	default:
+	}
+	for _, f := range files[:4] {
+		if !exists(f) {
+			t.Errorf("%s was deleted", f)
+		}
+	}
+	if r := l.checkin(secret, api.Checkin{AccessLevel: api.AccessQualification}); r.Code != http.StatusOK {
+		t.Errorf("the Mac's secret after the failed leaving: %d %s", r.Code, r.Body)
+	}
+
+	if _, err := l.s.store.db.Exec(`DROP TRIGGER full_disk`); err != nil {
+		t.Fatal(err)
+	}
+	if w := grace.post("/my-macs/shelf-mac/leave", "sure", "yes"); w.Code != http.StatusSeeOther {
+		t.Fatalf("leaving again: %d", w.Code)
+	}
+	if l.s.dev("shelf-mac") != nil {
+		t.Error("the Mac is still in the lab after it left")
+	}
+}
