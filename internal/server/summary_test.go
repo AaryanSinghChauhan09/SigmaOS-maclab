@@ -46,15 +46,19 @@ func TestTheDailySummaryGoesAt0800Brisbane(t *testing.T) {
 		}
 		return out
 	}
-	// until moves the clock on in the summary loop's own steps until n summaries went.
-	until := func(n int, limit time.Duration) {
+	// at0800 moves the clock on to the next 08:00 Brisbane, in the summary
+	// loop's own steps, and holds it there until n summaries went: the clock
+	// does not run on while labd is still posting.
+	at0800 := func(n int) {
 		t.Helper()
-		for moved := time.Duration(0); len(summaries()) < n; moved += 30 * time.Second {
-			if moved > limit {
-				t.Fatalf("%d summaries after %s, want %d", len(summaries()), moved, n)
-			}
+		for next := nextSummary(clock.Now()); clock.Now().Before(next); {
 			clock.Advance(30 * time.Second)
 			time.Sleep(20 * time.Millisecond)
+		}
+		for deadline := time.Now().Add(20 * time.Second); len(summaries()) < n; time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d summaries at %s Brisbane, want %d", len(summaries()), clock.Now().In(brisbane).Format("15:04:05"), n)
+			}
 		}
 	}
 
@@ -65,7 +69,7 @@ func TestTheDailySummaryGoesAt0800Brisbane(t *testing.T) {
 	if got := summaries(); len(got) != 0 {
 		t.Fatalf("a summary went before 08:00: %q", got)
 	}
-	until(1, 10*time.Minute)
+	at0800(1)
 	if at := clock.Now().In(brisbane).Format("15:04"); at != "08:00" {
 		t.Errorf("the summary went at %s Brisbane, want 08:00", at)
 	}
@@ -84,7 +88,7 @@ func TestTheDailySummaryGoesAt0800Brisbane(t *testing.T) {
 	if got := summaries(); len(got) != 1 {
 		t.Fatalf("%d summaries in one day: %q", len(got), got)
 	}
-	until(2, 10*time.Minute)
+	at0800(2)
 	if got := summaries()[1]; !strings.HasPrefix(got, "Omarchy Mac Lab, "+day.AddDate(0, 0, 1).In(brisbane).Format("Mon 2 Jan")+"\nsim-mac (Configuration unknown): ") {
 		t.Errorf("the next day's summary is\n%s", got)
 	}
