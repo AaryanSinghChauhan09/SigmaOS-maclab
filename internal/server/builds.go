@@ -245,7 +245,8 @@ func (s *Server) queueBuild(b *api.Build, force bool) (*api.Build, error) {
 	if err := s.store.saveBuild(b); err != nil {
 		return nil, err
 	}
-	s.log.Printf("build %s queued for %s: %s", b.ID, orStr(b.AskedBy, "labd"), buildWhat(b))
+	// By account: labd's log is beyond a forgetting's reach.
+	s.log.Printf("build %s queued for %s: %s", b.ID, accountOr(b.AskedByID, "labd"), buildWhat(b))
 	s.hub.publish("build", "", b)
 	go s.builds.bump()
 	return b, nil

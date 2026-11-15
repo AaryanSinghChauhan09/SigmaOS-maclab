@@ -196,6 +196,15 @@ func (f forgetting) stored(s string) string {
 	return f.value(s)
 }
 
+// accountOr names a person in labd's own log, which a forgetting does not
+// reach: by account id, or def for nobody.
+func accountOr(id int64, def string) string {
+	if id == 0 {
+		return def
+	}
+	return "account " + strconv.FormatInt(id, 10)
+}
+
 // ---- who may forget whom ----
 
 // errForgottenAlready is a Blocked account forgotten before: all that is

@@ -917,3 +917,24 @@ func TestAMacEndedByAForgottenMaintainerStillLeavesAtItsNextCheckin(t *testing.T
 		t.Errorf("the answer names the forgotten Maintainer: %s", w.Body)
 	}
 }
+
+// labd's own log, which a forgetting never reaches, names nobody for a
+// build queued or an enrollment ended: the records do, and lose the name.
+func TestTheLogNamesNobodyForABuildOrAnEnding(t *testing.T) {
+	l, logs := lendLab(t)
+	ravi := l.signedIn(maintainerID)
+	ravi.did("/people/mark", "handle", "grace", "as", "invite")
+	grace := l.signedIn(graceID)
+	grace.lent("shelf-mac")
+	if _, err := l.s.queueBuild(&api.Build{ID: "b-41", Key: "k-41", State: api.BuildQueued, Source: api.Source{Repo: "https://github.com/labtest/linux", Ref: "main", SHA: strings.Repeat("e", 40)}, AskedBy: "grace", AskedByID: graceID, Created: l.clock.Now()}, true); err != nil {
+		t.Fatal(err)
+	}
+	if w := ravi.write("POST", "/api/devices/shelf-mac/end-enrollment", ""); w.Code != http.StatusOK {
+		t.Fatalf("a Maintainer ending an enrollment: %d %s", w.Code, w.Body)
+	}
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if (strings.Contains(line, "b-41") || strings.Contains(line, "shelf-mac")) && (strings.Contains(line, "grace") || strings.Contains(line, "ravi")) {
+			t.Errorf("the log names a person: %s", line)
+		}
+	}
+}

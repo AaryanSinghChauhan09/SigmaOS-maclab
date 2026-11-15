@@ -75,7 +75,7 @@ func (v *dev) endLeaseLocked(why string) bool {
 	if l == nil {
 		return false
 	}
-	v.s.log.Printf("%s: %s; %s's lease ends", v.d.Name, why, l.Holder)
+	v.s.log.Printf("%s: %s; its Lease ends", v.d.Name, why)
 	ended := *l
 	ended.Expires = v.s.now()
 	v.d.Lease, v.leaseCut = &ended, why

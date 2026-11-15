@@ -96,7 +96,7 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 	// secret is never unknown without an answer to why.
 	if !l.atMac {
 		if err := s.store.addEnded(secretHash, name, l.by.Handle, s.now()); err != nil {
-			s.log.Printf("record that %s ended %s's enrollment: %v", l.by.Handle, name, err)
+			s.log.Printf("record who ended %s's enrollment: %v", name, err)
 		}
 	}
 	delete(s.devs, name)
@@ -110,7 +110,7 @@ func (s *Server) endEnrollment(v *dev, l leaving) error {
 	close(v.stop)
 	v.bump()
 	v.mu.Unlock()
-	s.log.Printf("%s: enrollment ended: %s", name, reason)
+	s.log.Printf("%s: enrollment ended (%s)", name, l.how)
 
 	// The job holding the Mac ends incomplete (see runJob); the ones queued
 	// behind it, or waiting for the Mac or its window, have no Mac to run on.
@@ -215,7 +215,7 @@ func (s *Server) leftOnPeopleRecord(d *api.Device, l leaving) {
 		}
 	}
 	if err := s.store.addRecord(line); err != nil {
-		s.log.Printf("the People record, %s: %v", line, err)
+		s.log.Printf("the People record, %s's leaving: %v", d.Name, err)
 	}
 }
 
