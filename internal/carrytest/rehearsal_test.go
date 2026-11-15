@@ -332,6 +332,79 @@ func TestTheCutoversLockHeldElsewhereRefusesAndALeftOneIsTaken(t *testing.T) {
 	}
 }
 
+// lockRacer takes the Cutover's lock and holds it a moment.
+const lockRacer = `. "$1"
+hold_lab
+echo "took $$"
+sleep 3
+`
+
+// deadPS is a ps for which the dead holder's pid is gone only once both
+// racers have asked: the first goes on at once, the second a second later,
+// after the first has taken the lock again.
+const deadPS = `#!/bin/bash
+if [[ $1 == -p && $2 == "$DEAD_HOLDER" ]]; then
+  first=0
+  mkdir "$STUB_STATE/ps.first" 2>/dev/null && first=1
+  touch "$STUB_STATE/ps.asked.$PPID"
+  for n in $(seq 100); do
+    (( $(ls "$STUB_STATE" | grep -c '^ps\.asked\.') >= 2 )) && break
+    sleep 0.05
+  done
+  (( first )) || sleep 1
+  exit 1
+fi
+exec /bin/ps "$@"
+`
+
+// Two scripts that find the same dead holder's lock: one takes it, and the
+// other is refused by the lock the first now holds; it never removes it.
+func TestTwoRunsThatFindALeftLockTakeItOnce(t *testing.T) {
+	m := newMini(t, oldlabtest.OnOmarchyGPU)
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	lock := m.path(cutoverLock)
+	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(strconv.Itoa(gone.Process.Pid), lock); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(m.base, "stubs", "ps"), deadPS, 0o755)
+	env := append(m.env, "DEAD_HOLDER="+strconv.Itoa(gone.Process.Pid))
+	lib := filepath.Join(repo(t), "scripts", "cutover", "mini.sh")
+	outs := make([]strings.Builder, 2)
+	cmds := make([]*exec.Cmd, 2)
+	for i := range cmds {
+		cmds[i] = exec.Command("bash", "-c", lockRacer, "racer", lib)
+		cmds[i].Env = env
+		cmds[i].Stdout, cmds[i].Stderr = &outs[i], &outs[i]
+		if err := cmds[i].Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	took, refused := 0, 0
+	for i, c := range cmds {
+		c.Wait()
+		out := outs[i].String()
+		t.Logf("racer %d:\n%s", i, out)
+		if strings.Contains(out, "took ") {
+			took++
+		}
+		if strings.Contains(out, "changes the lab now") {
+			refused++
+		}
+	}
+	if took != 1 || refused != 1 {
+		t.Errorf("%d took the lock and %d were refused, want one each", took, refused)
+	}
+	if exists(lock) {
+		t.Error("the lock was left behind")
+	}
+}
+
 // A run that empties the reports and then fails leaves no pass from earlier
 // the same day for the opening to read.
 func TestAFailedImportTakesAwayTheDaysEarlierPass(t *testing.T) {
