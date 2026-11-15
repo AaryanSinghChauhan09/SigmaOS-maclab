@@ -7,6 +7,8 @@ package hardening
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +37,9 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	if binDir != "" {
 		os.RemoveAll(binDir)
+	}
+	if probePath != "" {
+		os.RemoveAll(filepath.Dir(probePath))
 	}
 	exit(code)
 }
@@ -376,7 +381,9 @@ case "$*" in
     echo status=200
     if [ -f "$S/marked" ]; then kind="${H08_KIND_AFTER-M team}"; else kind="${H08_KIND:-}"; fi
     [ -z "$kind" ] || echo "found=$kind" ;;
-  "page "*"marked as M team"*" /people?open=42") echo status=200; [ -z "${H08_MARKED_BY-owner}" ] || echo "found=${H08_MARKED_BY-owner}" ;;
+  "page "*"marked as M team"*" /people?open=42")
+    [ -z "${H08_RECORD_AT:-}" ] || LAB_ADDRESS="$H08_RECORD_AT" exec "$H08_REAL_PROBE" "$@"
+    echo status=200; [ -z "${H08_MARKED_BY-owner}" ] || echo "found=${H08_MARKED_BY-owner}" ;;
   "page "*"--find /me/tokens/"*) [ -z "${H08_ME_FAILS:-}" ] || { echo status=500; exit 0; }; echo status=200; echo found=7 ;;
   "page "*"--find /people/"*"end-all-access"*) echo status=200; echo found=42 ;;
   "page "*"<h1>@"*" /me") echo status=200; echo found=owner ;;
@@ -418,6 +425,61 @@ func TestH08TakesOffOnlyAMarkOfItsOwnWhoseAnswerWasLost(t *testing.T) {
 				t.Errorf("the record lacks %q:\n%s", c.want, record)
 			}
 		})
+	}
+}
+
+var (
+	probeOnce sync.Once
+	probePath string
+	probeErr  error
+)
+
+// realProbe is tools/hardening-probe, built once.
+func realProbe(t *testing.T) string {
+	t.Helper()
+	probeOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "hardening-probe")
+		if probeErr = err; err != nil {
+			return
+		}
+		probePath = filepath.Join(dir, "hardening-probe")
+		cmd := exec.Command("go", "build", "-o", probePath, "./tools/hardening-probe")
+		cmd.Dir = repo(t)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			probeErr = fmt.Errorf("go build: %v\n%s", err, out)
+		}
+	})
+	if probeErr != nil {
+		t.Fatal(probeErr)
+	}
+	return probePath
+}
+
+// Who gave the newest mark is read from the person's record on People in
+// its order, newest first, through the real probe: an older mark by the
+// owner under a newer one by another Maintainer is the other's, and stays.
+func TestH08ReadsWhoGaveTheNewestMarkInThePagesOrder(t *testing.T) {
+	t.Parallel()
+	probe := realProbe(t)
+	people := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/people" || r.URL.Query().Get("open") != "42" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<ol class="record">
+<li><span class="when">2026-11-16 04:10</span> @zed marked as M team @someone</li>
+<li><span class="when">2026-11-16 04:02</span> @zed removed the M team mark from @someone</li>
+<li><span class="when">2026-11-15 21:40</span> @owner marked as M team @someone</li>
+</ol>`)
+	}))
+	defer people.Close()
+	out, code, record, calls := labRun(t, "h08-agents-lines", "", h08Probe, "session\nyes\n",
+		[]string{"H08_MARK=0", "H08_RECORD_AT=" + people.URL, "H08_REAL_PROBE=" + probe}, "--other", "someone")
+	if code != 1 || !strings.Contains(record, "FAILED: someone was not marked M team: 0") {
+		t.Fatalf("exit %d\n%s\n%s", code, out, record)
+	}
+	if strings.Contains(calls, "/people/42/m-team/remove") || !strings.Contains(record, "left: @zed marked someone as M team, not this test") {
+		t.Errorf("a newer mark by another Maintainer was not left as theirs:\n%s\n%s", calls, record)
 	}
 }
 

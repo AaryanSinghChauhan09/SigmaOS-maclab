@@ -24,7 +24,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -50,7 +49,7 @@ const usage = `usage: hardening-probe <command>
       --page (default /me). --origin names another page's origin
   page --session F [--find REGEX] [--out FILE] PATH
       fetch a page as the browser of the session: its status, and each
-      first group of REGEX found= (never the page)
+      first group of REGEX found= in the page's order, once (never the page)
   listen
       take connections on a loopback port: port=N, then connection=N for
       each one, until stopped
@@ -564,7 +563,6 @@ func pageCommand(fs *flag.FlagSet, args []string) error {
 				found = append(found, string(m[1]))
 			}
 		}
-		sort.Strings(found)
 		for _, f := range found {
 			say("found", plain([]byte(f)))
 		}
