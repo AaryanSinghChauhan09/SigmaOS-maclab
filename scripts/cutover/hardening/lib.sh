@@ -72,9 +72,11 @@ fail() { echo "$ME: $*" >&2; exit 1; }
 hd_options() {
   while (( $# )); do
     case "$1" in
-      --dry-run) MODE=dry ;;
-      --local) MODE=local ;;
-      --lab) MODE=lab ;;
+      --dry-run|--local|--lab)
+        local want="${1#--}"
+        [[ $want != dry-run ]] || want=dry
+        [[ -z ${MODE_SET:-} || $MODE_SET == "$want" ]] || fail "$1 and --${MODE_SET/#dry/dry-run} are two modes: give one. Nothing was done."
+        MODE="$want" MODE_SET="$want" ;;
       --mac) (( $# >= 2 )) || fail "--mac needs a Mac's name"; MAC="$2"; shift ;;
       --mini) (( $# >= 2 )) || fail "--mini needs USER@HOST"; MINI="$2"; shift ;;
       --records) (( $# >= 2 )) || fail "--records needs a folder"; RECORDS="$2"; shift ;;

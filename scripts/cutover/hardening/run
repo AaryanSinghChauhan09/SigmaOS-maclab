@@ -47,6 +47,7 @@ only="$all"
 skip=""
 results=0
 mode=dry-run
+set_mode=""
 records=""
 pass=()
 fors=()
@@ -58,12 +59,16 @@ while (( i < ${#args[@]} )); do
     --skip) skip="${args[i + 1]:-}"; i=$((i + 1)) ;;
     --for)
       [[ ${args[i + 1]:-} =~ ^([1-9]|1[0-4])$ ]] || { echo "$ME: --for takes a test's number, 1 to 14" >&2; exit 2; }
+      [[ " ${args[i + 2]:-} " != *" --dry-run "* && " ${args[i + 2]:-} " != *" --local "* && " ${args[i + 2]:-} " != *" --lab "* ]] \
+        || { echo "$ME: a mode goes to the runner, not inside --for. Nothing was done." >&2; exit 2; }
       fors+=("${args[i + 1]}" "${args[i + 2]:-}")
       i=$((i + 2)) ;;
     --results) results=1 ;;
     --records) records="${args[i + 1]:-}"; pass+=(--records "$records"); i=$((i + 1)) ;;
     --mac|--mini|--bin) pass+=("${args[i]}" "${args[i + 1]:-}"); i=$((i + 1)) ;;
-    --dry-run|--local|--lab) pass+=("${args[i]}"); mode="${args[i]#--}" ;;
+    --dry-run|--local|--lab)
+      [[ -z $set_mode || $set_mode == "${args[i]#--}" ]] || { echo "$ME: ${args[i]} and --$set_mode are two modes: give one. Nothing was done." >&2; exit 2; }
+      pass+=("${args[i]}"); mode="${args[i]#--}"; set_mode="$mode" ;;
     -h|--help) usage ;;
     *) echo "$ME: an option it does not take: ${args[i]}" >&2; exit 2 ;;
   esac

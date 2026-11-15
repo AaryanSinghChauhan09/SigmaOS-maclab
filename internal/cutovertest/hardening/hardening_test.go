@@ -168,6 +168,9 @@ func TestEveryDryRunSaysItsStepsAndSendsNothing(t *testing.T) {
 		if out, code := run(t, env, script(t, name), "--lab", "--open-everything"); code != 1 || !strings.Contains(out, "Nothing was done") {
 			t.Errorf("%s took an option it does not know: exit %d\n%s", name, code, out)
 		}
+		if out, code := run(t, env, script(t, name), "--dry-run", "--lab"); code != 1 || !strings.Contains(out, "two modes") {
+			t.Errorf("%s took two modes: exit %d\n%s", name, code, out)
+		}
 	}
 	for name, why := range map[string]string{"h03-freeze-entry": "--lab needs --release R", "h06-no-secret-shown": "--lab needs --mini", "h09-notice-topic": "--lab needs --volunteers-mac NAME and --redirect URL"} {
 		if out, code := run(t, env, script(t, name), "--lab"); code != 1 || !strings.Contains(out, why) {
@@ -183,6 +186,12 @@ func TestEveryDryRunSaysItsStepsAndSendsNothing(t *testing.T) {
 	}
 	if out, code := run(t, env, script(t, "run"), "--skip", "1,2,3,4,5,6,7,8,9,10,11,12,13"); code != 0 || strings.Count(out, ": dry run.") != 1 || !strings.Contains(out, "h14-volunteers-mac: dry run.") {
 		t.Errorf("run --skip all but 14: exit %d\n%s", code, out)
+	}
+	if out, code := run(t, env, script(t, "run"), "--dry-run", "--lab"); code != 2 || !strings.Contains(out, "two modes") {
+		t.Errorf("run with two modes: exit %d\n%s", code, out)
+	}
+	if out, code := run(t, env, script(t, "run"), "--for", "3", "--lab --release R"); code != 2 || !strings.Contains(out, "not inside --for") {
+		t.Errorf("run with a mode inside --for: exit %d\n%s", code, out)
 	}
 	if b, _ := os.ReadFile(calls); len(b) != 0 {
 		t.Errorf("a dry run, or a run refused for its options, called:\n%s", b)
