@@ -102,13 +102,20 @@ func (s *Server) deviceLoop(v *dev) {
 			v.mu.Lock()
 			// A Mac waiting for its Volunteer to accept changed terms takes
 			// nothing from the lab, this clean-up as root included.
-			need := v.dirty && !v.termsWait && v.aliveLocked() && (v.d.State == api.StateReady || v.d.State == api.StateNew)
+			// Nor while lab agent-update holds it, whose restart could cut
+			// it; and one under way keeps lab agent-update off (cleaning).
+			need := v.dirty && !v.termsWait && v.updating == nil && v.aliveLocked() && (v.d.State == api.StateReady || v.d.State == api.StateNew)
+			v.cleaning = need
 			v.mu.Unlock()
 			if need {
-				if err := v.call(s.ctx, api.CmdCleanup, "", api.CleanupArgs{All: true}, 2*time.Minute, nil); err == nil {
-					v.mu.Lock()
+				err := v.call(s.ctx, api.CmdCleanup, "", api.CleanupArgs{All: true}, 2*time.Minute, nil)
+				v.mu.Lock()
+				v.cleaning = false
+				if err == nil {
 					v.dirty = false
-					v.mu.Unlock()
+				}
+				v.mu.Unlock()
+				if err == nil {
 					s.log.Printf("%s: removed leftover lab kernels", v.d.Name)
 				}
 			}

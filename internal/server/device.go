@@ -66,6 +66,8 @@ type dev struct {
 	// agentStart is the api.Checkin.AgentStart labd last heard, and
 	// factsStart the one its d.Facts came with.
 	agentStart, factsStart string
+	// cleaning: the idle clean-up is on its way to the Mac or running there.
+	cleaning bool
 	// updateHold is how long lab agent-update still holds the Mac after its
 	// call ends; 0 is agentUpdateWait. Only a test sets it, under mu.
 	updateHold time.Duration
@@ -447,6 +449,12 @@ func (v *dev) deliver(bootID string) api.CheckinResponse {
 		// for its Volunteer, is not delivered while it waits: it stays dirty.
 		if v.termsWait && c.Kind == api.CmdCleanup && c.JobID == "" && v.d.ActiveJob == "" {
 			v.results[c.ID] = api.CommandResult{ID: c.ID, Error: termsWaitingLine(v.d.Name)}
+			delete(v.target, c.ID)
+			continue
+		}
+		// Nor while lab agent-update holds it: the agent's restart would cut it.
+		if v.updating != nil && c.Kind == api.CmdCleanup && c.JobID == "" && v.d.ActiveJob == "" {
+			v.results[c.ID] = api.CommandResult{ID: c.ID, Error: v.d.Name + ": " + agentBeingUpdated + ", so the idle clean-up waits"}
 			delete(v.target, c.ID)
 			continue
 		}

@@ -522,6 +522,51 @@ func TestADisconnectedUpdateHoldsTheMacAndRestartsNothing(t *testing.T) {
 	}
 }
 
+// The idle clean-up rewrites boot entries as root: it is not sent while lab
+// agent-update holds the Mac, whose restart could cut it.
+func TestAnIdleCleanUpIsNotSentWhileTheAgentIsUpdated(t *testing.T) {
+	k := sshsigtest.NewKey(t)
+	handed := signedAgent(t, k, "0.11.0")
+	fetching, fetch := make(chan struct{}), make(chan struct{})
+	var once, let sync.Once
+	letFetch := func() { let.Do(func() { close(fetch) }) }
+	wrap := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "GET" && r.URL.Path == "/api/agent/lab-agent" {
+				once.Do(func() { close(fetching); <-fetch })
+			}
+			h.ServeHTTP(w, r)
+		})
+	}
+	sl := newWrappedSoftwareLab(t, k, false, agentUpdateMinAgent, func(c *Config) { c.AgentBinary, c.LabAgent = handed, "0.11.0" }, wrap)
+	t.Cleanup(letFetch)
+	sl.baseline()
+	sl.waitAgent(agentUpdateMinAgent)
+	v := sl.s.dev(sl.name)
+	updated := make(chan struct{})
+	go func() {
+		sl.post("/api/devices/"+sl.name+"/agent-update", nil)
+		close(updated)
+	}()
+	select {
+	case <-fetching:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the Mac never fetched the lab's lab-agent")
+	}
+	v.mu.Lock()
+	v.dirty = true // a lab kernel left staged
+	v.mu.Unlock()
+	time.Sleep(11 * time.Second) // past the Mac's loop's look at it
+	v.mu.Lock()
+	dirty := v.dirty
+	v.mu.Unlock()
+	if !dirty || strings.Contains(sl.logs.String(), "removed leftover lab kernels") {
+		t.Fatal("the idle clean-up was sent while lab agent-update held the Mac")
+	}
+	letFetch()
+	<-updated
+}
+
 func TestAgentUpdateRefusesWhatItCannotDo(t *testing.T) {
 	k := sshsigtest.NewKey(t)
 

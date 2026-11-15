@@ -183,6 +183,8 @@ func (v *dev) notUpdatableLocked(signed bool) string {
 		return fmt.Sprintf("%s is not idle: job %s runs on it. lab agent-update waits for no job and no Lease", d.Name, d.ActiveJob)
 	case lease != nil:
 		return fmt.Sprintf("%s is not idle: %s holds a Lease on it until %s. lab agent-update waits for no job and no Lease", d.Name, lease.Who(), lease.Expires.Format(time.TimeOnly))
+	case v.cleaning:
+		return fmt.Sprintf("%s is not idle: the lab is removing leftover lab kernels from it. lab agent-update waits for no job and no Lease", d.Name)
 	case len(v.queue)+len(v.parked) > 0:
 		return fmt.Sprintf("%s is not idle: a job waits for it. lab agent-update waits for no job and no Lease", d.Name)
 	case !v.aliveLocked():
