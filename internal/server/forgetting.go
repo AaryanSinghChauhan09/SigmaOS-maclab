@@ -8,10 +8,10 @@ package server
 // their record goes, and everything else labd keeps loses their handle and
 // account id: both databases, labd's copies of Audit logs, what the frozen
 // Releases keep but their pinned files, the caller log, and the lines for
-// Signal, sent or not. Exec record lines keep the handle until they are 12 months old. A Blocked
-// person stays Blocked: the account id, the date and who blocked are kept.
-// No list of forgettings is kept; the lines for one name only who carried
-// it out.
+// Signal, sent or not. Exec record lines keep the handle until they are 12
+// months old. A Blocked person stays Blocked: the account id, the date and
+// who blocked are kept. No list of forgettings is kept; the lines for one
+// name only who carried it out.
 
 import (
 	"bytes"
