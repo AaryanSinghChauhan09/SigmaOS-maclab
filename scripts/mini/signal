@@ -9,8 +9,9 @@
 #   sudo scripts/mini/signal [--dry-run] test
 #
 # link      links the sender to the owner's own number as a device named
-#           "Omarchy Mac Lab": it shows a QR code (it needs Homebrew's
-#           qrencode) to scan in Signal on his phone, under Settings, Linked
+#           "Omarchy Mac Lab": it shows a QR code (with Homebrew's qrencode;
+#           without it, the link alone, to show as a QR code on another
+#           screen) to scan in Signal on his phone, under Settings, Linked
 #           devices. Lines then come from his own number.
 # register  or: asks for a number of the sender's own, the captcha link and
 #           the code Signal sends by SMS, and registers it with signal-cli.
@@ -35,7 +36,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/lib.sh
 . "$here/lib.sh"
 
-usage() { sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 while [[ ${1:-} == --dry-run ]]; do
   DRY=1
@@ -111,13 +112,22 @@ qrencode() {
   return 1
 }
 
-# show_link QRENCODE: signal-cli link's output, with the link shown as a QR code.
+# show_link [QRENCODE]: signal-cli link's output, with the link shown as a QR
+# code, or with no qrencode printed alone, to this terminal only, for the owner
+# to show as a QR code on another screen. printf is bash's own: no other
+# program is handed the link.
 show_link() {
   local line
   while IFS= read -r line; do
     if [[ $line == sgnl://* ]]; then
-      echo "In Signal on your phone: Settings, Linked devices, Link a new device, and scan:" >&2
-      printf '%s' "$line" | as_lab "$1" -t ansiutf8 >&2 || echo "(qrencode failed: the link is not shown. Stop with Ctrl-C and run link again)" >&2
+      if [[ -n ${1:-} ]]; then
+        echo "In Signal on your phone: Settings, Linked devices, Link a new device, and scan:" >&2
+        printf '%s' "$line" | as_lab "$1" -t ansiutf8 >&2 || echo "(qrencode failed: the link is not shown. Stop with Ctrl-C and run link again)" >&2
+      else
+        echo "No qrencode here: show this link as a QR code on another screen, then in Signal on your phone: Settings, Linked devices, Link a new device, and scan it." >&2
+        echo "The link is a secret, good for a few minutes: whoever has it can link a device to your number. Keep it out of any file, log or chat." >&2
+        printf '%s\n' "$line"
+      fi
       echo "Waiting for the phone..." >&2
     else
       printf '%s\n' "$line"
@@ -125,13 +135,14 @@ show_link() {
   done
 }
 
-# The link is never printed, nor traced: whoever has it can link a device.
+# The link is never traced, written down or an argument of anything: whoever
+# has it can link a device.
 link() {
   local q
   set +x
-  q="$(qrencode)" || fail "no qrencode here, and the link is shown only as a QR code: install Homebrew's qrencode, as the account /opt/homebrew belongs to, and run link again. Nothing was changed"
+  q="$(qrencode)" || q=""
   alone
-  cli link -n "$DEVICE_NAME" | show_link "$q" || fail "signal-cli did not link: run link again for a new QR code"
+  cli link -n "$DEVICE_NAME" | show_link "$q" || fail "signal-cli did not link: run link again for a new link"
   say "linked as \"$DEVICE_NAME\", a device of your number: lines come from your own number. Then: scripts/mini/signal groups"
 }
 
@@ -174,7 +185,7 @@ case "$verb" in
   link | register | groups | accept | test)
     if (( DRY )); then
       case "$verb" in
-        link) say "would stop $SIGNAL_LABEL, link signal-cli as $LAB_OWNER to your number as the device \"$DEVICE_NAME\" by a QR code you scan on your phone, and start $SIGNAL_LABEL again" ;;
+        link) say "would stop $SIGNAL_LABEL, link signal-cli as $LAB_OWNER to your number as the device \"$DEVICE_NAME\" by a QR code you scan on your phone (or, with no qrencode, the link alone, to show as one on another screen), and start $SIGNAL_LABEL again" ;;
         register) say "would stop $SIGNAL_LABEL, ask for the number, the captcha link and the SMS code, register the number with signal-cli as $LAB_OWNER, and start $SIGNAL_LABEL again" ;;
         groups) say "would stop $SIGNAL_LABEL, fetch and throw away what waits for the sender, list its groups with their ids, and start $SIGNAL_LABEL again" ;;
         accept) say "would stop $SIGNAL_LABEL, accept the invitation to the group, and start $SIGNAL_LABEL again" ;;

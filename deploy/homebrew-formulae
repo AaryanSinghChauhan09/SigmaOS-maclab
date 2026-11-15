@@ -23,4 +23,4 @@ restic        # the nightly backup: deploy/org.omarchy-mac.lab.backup.plist
 
 # Not qrencode: its program loads libpng from /opt/homebrew, so the copy would
 # refuse it. scripts/mini/signal link runs Homebrew's own, as the lab account,
-# and refuses to link without it.
+# and without it prints the link alone, to the terminal only.

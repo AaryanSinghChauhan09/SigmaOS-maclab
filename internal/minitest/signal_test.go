@@ -307,7 +307,8 @@ const linkStub = `#!/bin/bash
 echo "signal-cli $*" >> "$STUB_LOG"
 case " $* " in
   *" link "*)
-    echo "sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=dGVzdC1wdWJsaWMta2V5"
+    key=dGVzdC1wdWJsaWMta2V5 # apart, so that this file does not hold the link
+    echo "sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=$key"
     echo "Associated with: +61491570156" ;;
 esac
 `
@@ -315,8 +316,8 @@ esac
 const linkURL = "sgnl://linkdevice?uuid=dGVzdC11dWlk&pub_key=dGVzdC1wdWJsaWMta2V5"
 
 // The owner links the sender to his own number: the link is shown as a QR
-// code to scan in Signal on his phone, or alone when there is no qrencode,
-// and it is never an argument of anything nor written down.
+// code to scan in Signal on his phone, or alone on the terminal when there is
+// no qrencode, and it is never traced, an argument of anything nor written down.
 func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 	need(t, "openssl")
 	m := newMini(t)
@@ -336,16 +337,48 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 		t.Fatalf("--dry-run link: exit %d\n%s\n%s", code, out, m.callsOrNone())
 	}
 
-	// No qrencode: refused before the sender is stopped, and no link is made.
-	out, code := m.signal("", "link")
-	if code == 0 || !strings.Contains(out, "qrencode") || strings.Contains(out, "sgnl://") || exists(m.log) {
-		t.Fatalf("link with no qrencode: exit %d\n%s\n%s", code, out, m.callsOrNone())
+	// No qrencode, and none on the PATH either: the link alone, on stdout, with
+	// the note that it is a secret, and the run succeeds.
+	m.env = withoutQrencode(m.env)
+	script := filepath.Join(m.tree, "scripts", "mini", "signal")
+	cmd := exec.Command(script, "link")
+	cmd.Env = m.env
+	cmd.Dir = filepath.Dir(m.tree)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil || !strings.Contains(stdout.String(), linkURL) || !strings.Contains(stdout.String(), "Associated with") || !strings.Contains(stderr.String(), "a secret, good for a few minutes") {
+		t.Fatalf("link with no qrencode: %v\nstdout:\n%s\nstderr:\n%s\n%s", err, stdout.String(), stderr.String(), m.callsOrNone())
 	}
+	if strings.Contains(stderr.String(), "sgnl://") {
+		t.Errorf("the link went to stderr too:\n%s", stderr.String())
+	}
+	if strings.Contains(m.calls(), "sgnl://") || strings.Contains(m.calls(), "qrencode") {
+		t.Errorf("the link was an argument of a command, or a qrencode ran:\n%s", m.calls())
+	}
+	if !m.senderLoaded() {
+		t.Errorf("link with no qrencode left the sender stopped:\n%s", m.calls())
+	}
+	m.nothingHolds(linkURL)
+
+	// Under bash -x, the trace shows no link.
+	cmd = exec.Command("bash", "-x", script, "link")
+	cmd.Env = m.env
+	traced, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(traced), linkURL) {
+		t.Fatalf("link under bash -x with no qrencode: %v\n%s", err, traced)
+	}
+	for _, line := range strings.Split(string(traced), "\n") {
+		if strings.HasPrefix(line, "+") && strings.Contains(line, "sgnl://") {
+			t.Errorf("the trace shows the link: %s", line)
+		}
+	}
+	m.nothingHolds(linkURL)
 
 	// With qrencode: the link goes to it on its input, as the lab account.
+	os.Remove(m.log)
 	qrencode := m.path("opt/homebrew/bin/qrencode")
 	write(t, qrencode, "#!/bin/bash\necho \"qrencode $*\" >> \"$STUB_LOG\"\necho \"[QR of $(cat)]\"\n", 0o755)
-	out, code = m.signal("", "link")
+	out, code := m.signal("", "link")
 	if code != 0 || !strings.Contains(out, "[QR of "+linkURL+"]") || !strings.Contains(out, "Associated with") {
 		t.Fatalf("link with qrencode: exit %d\n%s", code, out)
 	}
@@ -383,9 +416,9 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 	})
 
 	// Run under bash -x, the trace still shows no link.
-	cmd := exec.Command("bash", "-x", filepath.Join(m.tree, "scripts", "mini", "signal"), "link")
+	cmd = exec.Command("bash", "-x", script, "link")
 	cmd.Env = m.env
-	traced, err := cmd.CombinedOutput()
+	traced, err = cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(traced), "[QR of "+linkURL+"]") {
 		t.Fatalf("link under bash -x: %v\n%s", err, traced)
 	}
@@ -395,9 +428,41 @@ func TestTheOwnerLinksTheSenderToHisOwnNumber(t *testing.T) {
 		}
 	}
 
+	m.nothingHolds(linkURL)
+
 	// signal-cli failing is a failure, and the sender is started again.
 	write(t, m.path(signalCLI), "#!/bin/bash\necho \"signal-cli $*\" >> \"$STUB_LOG\"\necho 'Link request error: Connection closed!' >&2\nexit 3\n", 0o755)
 	if out, code := m.signal("", "link"); code == 0 || !strings.Contains(out, "did not link") || !m.senderLoaded() {
 		t.Errorf("a failed link: exit %d, sender up %v\n%s", code, m.senderLoaded(), out)
 	}
+}
+
+// withoutQrencode is env with no folder on its PATH that holds a qrencode.
+func withoutQrencode(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if dirs, ok := strings.CutPrefix(e, "PATH="); ok {
+			var keep []string
+			for _, d := range filepath.SplitList(dirs) {
+				if _, err := os.Stat(filepath.Join(d, "qrencode")); err != nil {
+					keep = append(keep, d)
+				}
+			}
+			e = "PATH=" + strings.Join(keep, string(filepath.ListSeparator))
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// nothingHolds fails the test when any file under the test's folders holds
+// secret.
+func (m *mini) nothingHolds(secret string) {
+	m.t.Helper()
+	filepath.Walk(filepath.Dir(m.root), func(p string, info os.FileInfo, err error) error {
+		if err == nil && info.Mode().IsRegular() && strings.Contains(read(m.t, p), secret) {
+			m.t.Errorf("%s holds %q", p, secret)
+		}
+		return nil
+	})
 }
