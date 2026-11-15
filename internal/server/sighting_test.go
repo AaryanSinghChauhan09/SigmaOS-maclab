@@ -905,6 +905,9 @@ func TestAResetThatMayHaveGoneOutAndDidNotEndsWithTheMacUp(t *testing.T) {
 	if r.StatusCode == http.StatusOK || !strings.Contains(body, "no Hard reset was sent") {
 		t.Fatalf("a reset whose turn did not come: %s %s", r.Status, body)
 	}
+	// The controller learns its caller left when it sees the connection
+	// close, a moment after labd let go: the reset ends without its turn.
+	l.oob.waitResetCalls(t, "the Hard reset labd let go still waits at the controller", func(asked, ended int) bool { return asked > 0 && ended == asked })
 	release()
 	if err := <-probed; err != nil {
 		t.Fatal(err)
