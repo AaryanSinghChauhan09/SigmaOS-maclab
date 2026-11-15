@@ -159,7 +159,7 @@ func (c *Client) Probe(ctx context.Context, rid int) (Port, error) {
 
 // Reset sends a Hard reset to a port. With seen, the controller sends it only
 // while the port still shows that state, and answers *Changed otherwise.
-// With nil the port alone is named: a Proving reset.
+// With nil the port alone is named, and nothing is compared.
 //
 // ctx bounds the wait for the controller's turn. Once the controller says
 // the reset is going out (102), its answer is waited for whatever ctx does:

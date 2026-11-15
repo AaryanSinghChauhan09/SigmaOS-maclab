@@ -747,3 +747,32 @@ func TestTheLadderAfterAPersonsResetKnowsTheBootBeforeIt(t *testing.T) {
 	}
 	l.wantResets("the Mac was back before the ladder began")
 }
+
+// A Proving reset carries the port as labd read it at the proof's start,
+// and the controller compares it under its lock: a port that changes in
+// between gets no reset.
+func TestAProvingResetOfAPortThatChangesMeanwhileIsNotSent(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	max := l.addMac("m2-max")
+	l.oob.plug(portMiddle, max, "", productM2Max)
+	l.sight()
+	l.wantCable("m2-max", api.CableNotSighted, "--prove")
+	var reads atomic.Int32
+	l.oob.onRead(func(rid int) {
+		// The proof's look at its ports, then its look at the middle one:
+		// the cable is pulled and plugged back in after that.
+		if rid == portMiddle && reads.Add(1) == 2 {
+			l.oob.plug(portMiddle, max, "", productM2Max)
+		}
+	})
+	r, body := l.resetAs(harnessToken, "m2-max", "middle")
+	l.oob.onRead(nil)
+	if r.StatusCode != http.StatusConflict || !strings.Contains(body, "no Proving reset was sent") || !strings.Contains(body, "plug count") {
+		t.Fatalf("a Proving reset of a port that changed after labd looked: %s %s", r.Status, body)
+	}
+	l.wantResets("the port changed before the reset")
+	if _, ok := l.s.cables.of("m2-max"); ok {
+		t.Fatal("a Proving reset that was not sent placed the Mac")
+	}
+}

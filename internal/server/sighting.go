@@ -506,7 +506,10 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 		return nil, refuse(http.StatusConflict, "no Proving reset was sent: nothing is connected to %s", port)
 	case p.Name != "":
 		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s shows the name %q, and a Proving reset is for a Mac that shows none", port, p.Name)
+	case p.ProductID <= 0 || p.PlugCount <= 0:
+		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s shows no product id or plug count, and the reset goes out only while the port is as it was read", port)
 	}
+	start := oob.Seen{ProductID: p.ProductID, PlugCount: p.PlugCount}
 	others := map[string]string{}
 	heard := map[string]bool{}
 	for _, o := range s.allDevs() {
@@ -531,7 +534,12 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 	}
 	sent := s.now()
 	s.log.Printf("%s: Proving reset of %s by %s", name, port, by)
-	if err := s.cfg.OOB.Reset(ctx, rid, nil); err != nil {
+	err = s.cfg.OOB.Reset(ctx, rid, &start)
+	var moved *oob.Changed
+	switch {
+	case errors.As(err, &moved):
+		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s", moved.Reason)
+	case err != nil:
 		return nil, refuse(http.StatusBadGateway, "no Proving reset reached %s: %v", port, err)
 	}
 	restarted := func() []string {
