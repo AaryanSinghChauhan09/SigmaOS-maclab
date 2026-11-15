@@ -40,3 +40,22 @@ func TestTheMinisBundleLeavesOutTheOwnersMiniConf(t *testing.T) {
 		t.Error("release/check.sh does not refuse a bundle that holds deploy/mini.conf")
 	}
 }
+
+// The example names what goes in deploy/mini.conf and gives no value: one
+// copied unchanged must fail loudly, not reach a made-up host.
+func TestTheMiniConfExampleHasNoValues(t *testing.T) {
+	names := 0
+	for _, line := range strings.Split(read(t, root(t), "deploy/mini.conf.example"), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || !strings.HasPrefix(name, "MACLAB_") || value != "" {
+			t.Errorf("deploy/mini.conf.example has the line %q, want MACLAB_NAME= with no value", line)
+		}
+		names++
+	}
+	if names != 2 {
+		t.Errorf("deploy/mini.conf.example names %d values, want the mini's address and the old lab's host", names)
+	}
+}

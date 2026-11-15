@@ -2,12 +2,14 @@
 # neither: the scripts that need one read it from the environment or, when
 # it is not set there, from deploy/mini.conf beside this file. mini.conf is
 # not committed: copy this file to it and put your own values in. Plain
-# NAME=value lines, no quotes. Nothing here is a secret.
+# NAME=value lines, no quotes. Nothing here is a secret. The values here are
+# empty: a copy left unchanged is refused, not taken for a host.
 
 # The mini's address on the LAN, reserved on the router: the only address
-# the backup guest's rest-server answers (scripts/mini/guest/setup --mini).
-MACLAB_MINI_ADDRESS=192.168.1.20
+# the backup guest's rest-server answers (scripts/mini/guest/setup --mini),
+# as four numbers.
+MACLAB_MINI_ADDRESS=
 
 # The old lab's host as SSH reaches it: your account there and its name
-# (scripts/cutover/old-lab --from).
-MACLAB_OLD_LAB=owner@omarchy-gpu
+# (scripts/cutover/old-lab --from), as USER@HOST.
+MACLAB_OLD_LAB=
