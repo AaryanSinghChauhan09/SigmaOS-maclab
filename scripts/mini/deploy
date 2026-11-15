@@ -149,25 +149,48 @@ litestream_up() {
   fi
 }
 
-# restore_snapshot BUILD [WHY]: the databases as they were before the Deploy
-# of BUILD; WHY is said when one cannot be put back. Litestream is stopped
-# meanwhile and starts on the restored files with nothing of its own kept,
-# so that it sends them whole.
+# restore_beside BUILD [WHY]: the databases as they were before the Deploy
+# of BUILD, copied beside the ones in use, with Litestream stopped. Nothing
+# in use changes here: when a copy fails, a disk that fills among them, the
+# copies go and it fails, saying WHY.
 # shellcheck disable=SC2317,SC2329
-restore_snapshot() {
-  local build="$1" dir="$BEFORE_DEPLOY/$1" name
+restore_beside() {
+  local dir="$BEFORE_DEPLOY/$1" name n
   no_link "$BEFORE_DEPLOY" "$dir"
+  for name in $LAB_DATABASES; do no_link "$LAB_DATA/$name" "$LAB_DATA/$name.restored" "$dir/$name"; done
   litestream_down "${2:-}"
   for name in $LAB_DATABASES; do
-    no_link "$LAB_DATA/$name" "$dir/$name"
-    if [[ -f $dir/$name ]]; then
-      # shellcheck disable=SC2016
-      as_lab /bin/sh -c 'set -e; cp "$1" "$2.restored"; rm -rf "$2-wal" "$2-shm" "$3"; mv -f "$2.restored" "$2"' restore "$dir/$name" "$LAB_DATA/$name" "$LAB_DATA/.$name-litestream" ||
-        fail "$name could not be put back from $dir${2:+: $2}"
-      say "put $name back as it was before the Deploy of $build"
-    elif [[ -e $LAB_DATA/$name ]]; then
-      as_lab rm -rf "$LAB_DATA/$name" "$LAB_DATA/$name-wal" "$LAB_DATA/$name-shm" "$LAB_DATA/.$name-litestream"
-      say "removed $name: there was none before the Deploy of $build"
+    as_lab rm -f "$LAB_DATA/$name.restored"
+    [[ -f $dir/$name ]] || continue
+    if ! as_lab cp "$dir/$name" "$LAB_DATA/$name.restored"; then
+      for n in $LAB_DATABASES; do as_lab rm -f "$LAB_DATA/$n.restored"; done
+      fail "$name could not be copied beside the databases from $dir, so none was put back${2:+: $2}"
+    fi
+  done
+}
+
+# into_place FROM NAME: FROM, a whole database, is NAME of the lab's data by
+# a rename, which needs no room, with nothing kept of the one it replaces:
+# its WAL, its SHM, Litestream's own files of it. With no FROM, NAME goes.
+# shellcheck disable=SC2317,SC2329
+into_place() {
+  no_link "$1" "$LAB_DATA/$2"
+  # shellcheck disable=SC2016
+  as_lab /bin/sh -c 'set -e; rm -rf "$2-wal" "$2-shm" "$3"; if [ -f "$1" ]; then mv -f "$1" "$2"; else rm -f "$2"; fi' into-place "$1" "$LAB_DATA/$2" "$LAB_DATA/.$2-litestream"
+}
+
+# restore_in_place BUILD [WHY]: the copies restore_beside made take the
+# place of the databases, both renamed; Litestream starts on them with
+# nothing of its own kept, so that it sends them whole.
+# shellcheck disable=SC2317,SC2329
+restore_in_place() {
+  local name
+  for name in $LAB_DATABASES; do
+    into_place "$LAB_DATA/$name.restored" "$name" || fail "$name could not be put in place${2:+: $2}"
+    if [[ -f $BEFORE_DEPLOY/$1/$name ]]; then
+      say "put $name back as it was before the Deploy of $1"
+    else
+      say "removed $name: there was none before the Deploy of $1"
     fi
   done
   litestream_up
@@ -268,18 +291,26 @@ verify() {
 # back with it. It always ends the Deploy as failed.
 # shellcheck disable=SC2317,SC2329
 way_back() {
-  local lost=""
+  local lost="" name
   switching=0 announced=0
   if (( went_back )) && [[ -d $BEFORE_DEPLOY/$tag ]]; then
+    # The copy this Deploy made of them is renamed back, not copied: a disk
+    # that filled on the way does not stop it.
     went_back=0
     stop_labd
     say "the databases go back as $previous had them"
-    restore_snapshot "$tag" "the lab is Dark"
+    no_link "$BEFORE_DEPLOY" "$BEFORE_DEPLOY/$tag"
+    litestream_down "the lab is Dark"
+    for name in $LAB_DATABASES; do
+      into_place "$BEFORE_DEPLOY/$tag/$name" "$name" || fail "$name could not be put back from $BEFORE_DEPLOY/$tag: the lab is Dark"
+    done
+    litestream_up
     lost=" The databases are as $previous had them."
   elif [[ -f $LAB_BUILDS/$tag/deploy/no-way-back && -d $BEFORE_DEPLOY/$tag && "$(running)" == "$tag" ]]; then
     stop_labd
     say "$tag says \"No way back.\": the databases go back as they were before it"
-    restore_snapshot "$tag" "the lab is Dark, with $tag's databases in place"
+    restore_beside "$tag" "the lab is Dark, with $tag's databases in place"
+    restore_in_place "$tag" "the lab is Dark"
     lost=" The databases are as they were before it: what arrived since is lost."
   fi
   if [[ -n $previous ]]; then
@@ -436,9 +467,9 @@ snapshot
 lost=""
 if (( going_back )); then
   say "$previous says \"No way back.\": the databases go back as they were before it"
-  litestream_down
+  restore_beside "$previous"
   went_back=1
-  restore_snapshot "$previous"
+  restore_in_place "$previous"
   lost=" $previous says \"No way back.\": the databases are as they were before $previous, and what arrived since is lost."
 fi
 switch_to "$tag"

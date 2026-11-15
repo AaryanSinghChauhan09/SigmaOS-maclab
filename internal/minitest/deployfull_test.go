@@ -1021,3 +1021,32 @@ func TestAStuckLitestreamChangesNoDatabase(t *testing.T) {
 		t.Errorf("no word of Litestream:\n%s", out)
 	}
 }
+
+// The way back from an older Deploy that put the databases back needs no
+// room: it renames, so a full disk does not leave the lab Dark.
+func TestTheWayBackFromAnOlderDeployNeedsNoRoom(t *testing.T) {
+	m, k, r := deployed(t)
+	m.ops()
+	m.databases()
+	old, mark, bad := "v0.2.0", "v0.3.0", "v0.2.1"
+	bundle(t, k, filepath.Join(r.dir, old), old, true)
+	bundle(t, k, filepath.Join(r.dir, mark), mark, true)
+	noWayBack(t, k, filepath.Join(r.dir, mark), mark, true)
+	bundle(t, k, filepath.Join(r.dir, bad), bad, false)
+	m.ok("deploy", "--from", r.from(old), old)
+	m.ok("deploy", "--from", r.from(mark), mark)
+	m.sql("labd.db", "INSERT INTO seen VALUES('after')")
+	// The disk is full from the moment the older build starts.
+	write(t, m.bin+"/cp", `#!/bin/bash
+if [[ "$*" == *"/`+bad+`/deploy/`+labdLabel+`.plist "* ]]; then touch "$STUB_STATE/full"; fi
+if [[ -f $STUB_STATE/full && "$*" == *"/var/lab/data/"* ]]; then echo "cp: No space left on device" >&2; exit 1; fi
+exec /bin/cp "$@"
+`, 0o755)
+
+	out := m.refused("deploy", "--from", r.from(bad), bad)
+
+	theMarkedReleasesDatabases(t, m, mark, out)
+	if !strings.Contains(out, mark+" is back and answers") {
+		t.Errorf("no word of the way back:\n%s", out)
+	}
+}
