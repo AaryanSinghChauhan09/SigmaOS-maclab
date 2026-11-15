@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -160,5 +162,81 @@ func TestARefusedSourceContactsNothing(t *testing.T) {
 	before := n.Load()
 	if code, _ := ask(api.BuildRequest{Source: "https://ada:hunter2@" + addr + "/o/r", Config: config}); code != 400 || n.Load() != before {
 		t.Fatalf("an address with credentials at a listed host: %d, %d new connections", code, n.Load()-before)
+	}
+}
+
+// fakeGit puts a git first on PATH that records each call and answers
+// ls-remote with one commit for the ref asked, and returns a reader of what it recorded.
+func fakeGit(t *testing.T) func() string {
+	t.Helper()
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\necho \"$*\" >> '" + calls + "'\nprintf '17cba00e43b94ba6b5c64be7cbe3db9234a41f84\\t%s\\n' \"$4\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() string {
+		b, _ := os.ReadFile(calls)
+		return string(b)
+	}
+}
+
+// An address that could carry a credential is refused before git runs:
+// userinfo, any query, a fragment that is not a ref name, a scheme other
+// than https. The plain public form still reaches git.
+func TestASourceThatCouldCarryACredentialRunsNoGit(t *testing.T) {
+	calls := fakeGit(t)
+	b := newBuilderLab(t)
+	b.hosts = []string{"git.example.org"}
+	b.start()
+	config, _, err := b.s.storeArtifact(strings.NewReader("CONFIG_X=y\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask := func(src string) (int, string) {
+		body, _ := json.Marshal(api.BuildRequest{Source: src, Config: config})
+		code, data := b.do(b.ctx, "POST", "/api/builds", "lab_mtok", strings.NewReader(string(body)))
+		return code, strings.TrimSpace(string(data))
+	}
+	for _, src := range []string{
+		"https://hunter2@github.com/o/r",
+		"https://x-access-token:hunter2@github.com/o/r",
+		"https://ada:hunter2@git.example.org/linux.git",
+		"https://github.com/o/r?access_token=hunter2",
+		"https://github.com/o/r?",
+		"github.com/o/r?access_token=hunter2",
+		"https://github.com/o/r/tree/main?access_token=hunter2",
+		"https://github.com/o/r?access_token=hunter2#main",
+		"https://github.com/o/r#main?access_token=hunter2",
+		"https://github.com/o/r#access_token=hunter2",
+		"https://github.com/o/r#a#access_token=hunter2",
+		"https://github.com/o/r/tree/a%3Dhunter2",
+		"https://git.example.org/linux.git?token=hunter2",
+		"https://git.example.org/linux.git@v7.1?token=hunter2",
+		"https://git.example.org/linux.git#token=hunter2",
+		"http://github.com/o/r",
+		"git://github.com/o/r",
+		"ssh://git@github.com/o/r",
+		"file:///srv/git/linux.git",
+	} {
+		code, body := ask(src)
+		if code != 400 || strings.Contains(body, "hunter2") || strings.Contains(body, "\n") || !strings.Contains(body, "source") {
+			t.Errorf("%s: %d %q", src, code, body)
+		}
+	}
+	if got := calls(); got != "" {
+		t.Fatalf("git ran for refused sources:\n%s", got)
+	}
+	if all, _ := b.s.store.builds(`1=1`); len(all) != 0 {
+		t.Fatalf("%d builds were queued for refused sources", len(all))
+	}
+	for _, src := range []string{"https://github.com/o/r", "https://github.com/o/r#main", "https://git.example.org/linux.git@v7.1"} {
+		if code, body := ask(src); code >= 300 {
+			t.Errorf("the public form %s: %d %q", src, code, body)
+		}
+	}
+	if got := calls(); !strings.Contains(got, "ls-remote -- https://github.com/o/r ") || !strings.Contains(got, "ls-remote -- https://git.example.org/linux.git v7.1") {
+		t.Fatalf("git was not asked for the public forms:\n%s", got)
 	}
 }

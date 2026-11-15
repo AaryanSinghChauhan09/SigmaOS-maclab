@@ -5,18 +5,19 @@
 #
 #   h05-build-sources [--dry-run | --local | --lab] [--records DIR]
 #
-# Five sources are asked for as builds: another host, this machine's own
+# Seven sources are asked for as builds: another host, this machine's own
 # loopback, a GitHub address with a user and password, the same at the
-# loopback, and GitHub over plain http. Each must be
-# refused by the rule, saying back no password or token. Locally labd runs with
-# every proxy variable pointing at a port that counts who connects, and the
-# loopback sources name that port too: nothing may connect, and labd's log
-# names no git ls-remote. Through the Lab address the refusal must be the
-# rule's own sentence, which labd says before it resolves anything.
+# loopback, GitHub over plain http, and GitHub with a token in the query and
+# in the fragment. Each must be refused by the rule, saying back no password
+# or token. Locally labd runs with every proxy variable pointing at a port
+# that counts who connects, and the loopback sources name that port too:
+# nothing may connect, and labd's log names no git ls-remote. Through the Lab
+# address the refusal must be the rule's own sentence, said before labd
+# resolves anything.
 set -euo pipefail
 # shellcheck source=scripts/cutover/hardening/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
-usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 hd_options "$@"
 no_rest
@@ -26,7 +27,8 @@ if [[ $MODE == dry ]]; then
 $ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, it would:
   1. run: lab upload a small config
   2. ask POST /api/builds for each source: https://gitlab.com/..., https://127.0.0.1:PORT/...,
-     https://USER:PASSWORD@github.com/..., https://USER:PASSWORD@127.0.0.1:PORT/..., http://github.com/...
+     https://USER:PASSWORD@github.com/..., https://USER:PASSWORD@127.0.0.1:PORT/..., http://github.com/...,
+     https://github.com/...?access_token=PASSWORD, https://github.com/...#access_token=PASSWORD
      expects: each refused (400) by the source rule, no password or token said back, no build made
   3. locally also: nothing connected to the counting port that the proxies and the loopback sources name; no git ls-remote in labd's log
   4. write docs/acceptance/$(today)-hardening-05.md and its line in docs/acceptance/$RESULTS_NAME
@@ -60,7 +62,8 @@ before="$(rows builds-before | wc -l | tr -d ' ')"
 secret="h05secret$(nonce)"
 for source in "https://gitlab.com/hardening/linux" "https://127.0.0.1:$port/hardening/linux.git" \
   "https://hardening:$secret@github.com/hardening/linux" "https://hardening:$secret@127.0.0.1:$port/hardening/linux.git" \
-  "http://github.com/hardening/linux"; do
+  "http://github.com/hardening/linux" "https://github.com/hardening/linux?access_token=$secret" \
+  "https://github.com/hardening/linux#access_token=$secret"; do
   shown="${source//$secret/PASSWORD}"
   ask source --timeout 60s --json "{\"source\":\"$source\",\"config\":\"$config\"}" POST /api/builds
   [[ "$(status_of source)" == 400 ]] || give_up "the source $shown: $(status_of source) $(said_of source)"

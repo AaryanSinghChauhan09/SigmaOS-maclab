@@ -18,7 +18,8 @@ var reHex40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // A build's source is public: labd and the Builder hold no credential for
 // one. It is a repository at https://github.com/<owner>/<repo>, or at a host
 // the server's configuration lists (Config.SourceHosts). An address that
-// carries credentials is refused whatever its host. A refused source is
+// carries credentials, or could (a user, a query, a fragment that is no ref),
+// is refused whatever its host. A refused source is
 // never contacted: the rule is applied before anything is resolved.
 
 var reGitHubName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}$`)
@@ -47,6 +48,12 @@ func parseSource(in string, hosts ...string) (api.Source, error) {
 	if u.User != nil {
 		return s, fmt.Errorf("a build's source is public: an address that carries credentials is refused, and the lab keeps none for a source")
 	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return s, fmt.Errorf("a build's source is public: an address with a query is refused, as a query can carry a credential")
+	}
+	if u.Fragment != "" || s.Ref != "" && !validRef(s.Ref) {
+		return s, fmt.Errorf("a build's source is public: after # comes only a branch, tag or commit, and an address carrying anything else is refused")
+	}
 	host := strings.ToLower(u.Host)
 	if u.Scheme != "https" {
 		return s, fmt.Errorf("a build's source is fetched over https: https://github.com/<owner>/<repo>, not %s://", u.Scheme)
@@ -72,21 +79,33 @@ func parseSource(in string, hosts ...string) (api.Source, error) {
 		case len(rest) >= 2 && rest[0] == "releases" && rest[1] == "tag" && len(rest) >= 3:
 			s.Ref = strings.Join(rest[2:], "/")
 		}
+		if s.Ref != "" && !validRef(s.Ref) {
+			return s, fmt.Errorf("a build's source is public: its branch, tag or commit is not a ref name, and an address carrying anything else is refused")
+		}
 		return s, nil
 	}
 	if !slices.Contains(hosts, host) {
 		return s, fmt.Errorf("a build's source is a public repository at https://github.com/<owner>/<repo>: %s is not on the lab's list of other hosts", host)
 	}
-	if u.RawQuery != "" {
-		return s, fmt.Errorf("a build's source is a repository's address, with no query")
-	}
 	// A git URL at a listed host, optionally repo@ref.
 	if i := strings.LastIndex(raw, "@"); i > 0 && !strings.Contains(raw[i:], "/") {
 		s.Ref = raw[i+1:]
 		raw = raw[:i]
+		if !validRef(s.Ref) {
+			return s, fmt.Errorf("a build's source is public: after @ comes only a branch, tag or commit, and an address carrying anything else is refused")
+		}
 	}
 	s.Repo = raw
 	return s, nil
+}
+
+var reRef = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/+-]{0,254}$`)
+
+// validRef is a branch, tag or commit name as git allows one, narrowed to
+// characters a credential's key=value form cannot be written in.
+func validRef(ref string) bool {
+	return reRef.MatchString(ref) && !strings.Contains(ref, "..") && !strings.Contains(ref, "//") &&
+		!strings.HasSuffix(ref, "/") && !strings.HasSuffix(ref, ".lock")
 }
 
 // source is parseSource with the hosts this labd was configured with.
