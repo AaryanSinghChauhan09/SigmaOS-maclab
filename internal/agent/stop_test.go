@@ -356,6 +356,30 @@ func TestAHungLoginctlInTheLockWaitIsEnded(t *testing.T) {
 	}
 }
 
+// sync(2) cannot be cut: a flush that hangs holds lab-agent no longer than
+// a system tool's bound, and a second flush meanwhile waits on the first
+// rather than starting another.
+func TestAHungSyncHoldsLabAgentNoLongerThanTheBound(t *testing.T) {
+	was, wasFS := toolTimeout, syncFS
+	toolTimeout = time.Second
+	hung := make(chan struct{})
+	var started atomic.Int32
+	syncFS = func() { started.Add(1); <-hung }
+	t.Cleanup(func() { close(hung); toolTimeout, syncFS = was, wasFS })
+	for i := 0; i < 2; i++ {
+		done := make(chan struct{})
+		go func() { syncDisks(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(toolTimeout + 3*time.Second):
+			t.Fatal("a hung sync held lab-agent")
+		}
+	}
+	if n := started.Load(); n != 1 {
+		t.Errorf("%d flushes were started while the first one hung", n)
+	}
+}
+
 // A stopped lab exec's leader has the whole grace between SIGTERM and
 // SIGKILL: one that takes four seconds to clean up gets to finish.
 func TestAStoppedExecsLeaderHasTheWholeGrace(t *testing.T) {

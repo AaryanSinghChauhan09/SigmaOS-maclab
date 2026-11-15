@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -435,7 +437,37 @@ func dirSize(dir string) uint64 {
 // command's result (rebooting, resetting, or moving on), so the result must
 // only go out once the change is on disk. sync(2) also covers GRUB's /boot and
 // U-Boot's variable file, whatever the layout.
-func syncDisks() { unix.Sync() }
+//
+// sync(2) cannot be cut, and a sync program inside it cannot be reaped, so
+// the bound is on lab-agent's wait: after toolTimeout it goes on without
+// the flush. A flush still under way is waited on, not started again.
+func syncDisks() {
+	syncMu.Lock()
+	if syncing == nil {
+		done := make(chan struct{})
+		syncing = done
+		go func() {
+			syncFS()
+			syncMu.Lock()
+			syncing = nil
+			syncMu.Unlock()
+			close(done)
+		}()
+	}
+	done := syncing
+	syncMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(toolTimeout):
+		log.Printf("sync did not end within %s; going on without it", toolTimeout)
+	}
+}
+
+var (
+	syncFS  = func() { unix.Sync() }
+	syncMu  sync.Mutex
+	syncing chan struct{}
+)
 
 // guiEnv finds the GUI user's Wayland session so tests can drive Hyprland.
 func guiEnv(name string, wait time.Duration) (*user.User, []string, error) {
