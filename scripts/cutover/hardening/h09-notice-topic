@@ -18,8 +18,9 @@
 # this machine's loopback, where a port counts who connects; a Maintainer
 # then ends the Mac's enrollment, which sends its Volunteer a Notice: nothing
 # may connect. The redirect needs a public address, so it is tried through
-# the Lab address only, where the owner sets each topic at the Mac and reads
-# My Macs.
+# the Lab address only, where the owner sets each topic at the Mac and the
+# test reads the Mac's card: a redirect is found only when a Notice is sent,
+# so a job is started for its Notice and canceled before the Mac reboots.
 set -euo pipefail
 # shellcheck source=scripts/cutover/hardening/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -41,12 +42,13 @@ if [[ $MODE == dry ]]; then
   cat <<PLAN
 $ME: dry run. Through $ADDRESS, with the Volunteer of ${volunteers:-NAME} at the Mac and the owner's browser (the session cookie typed at a hidden prompt), it would:
   1. STOP, by hand: at ${volunteers:-NAME}, run: sudo lab-agent notify --topic https://192.168.0.1/h09
-  2. read My Macs at $ADDRESS/my-macs as the Volunteer
-     expects: the topic shown as refused (a private address)
-  3. STOP, by hand: at ${volunteers:-NAME}, run: sudo lab-agent notify --topic ${redirect:-URL}
-  4. read My Macs again
-     expects: the topic shown as refused (a redirect is not followed)
-  5. write docs/acceptance/$(today)-hardening-09.md and its line in docs/acceptance/$RESULTS_NAME
+  2. read ${volunteers:-NAME}'s card on My Macs (for M team, Mine on Macs at $ADDRESS/macs?show=mine)
+     expects: the topic shown as refused (not a public address)
+  3. STOP, by hand: at ${volunteers:-NAME}, run: sudo lab-agent notify --topic ${redirect:-URL}, then: sudo lab-agent notify --jobs on
+  4. run: lab run ${volunteers:-NAME} --no-wait, for the Notice that a job is starting; read the card; lab cancel the job before the Mac reboots
+     expects: the topic shown as refused (a redirect is not followed); the topic got no Notice
+  5. STOP, by hand: at ${volunteers:-NAME}, put its topic back (said again if the run ends first)
+  6. write docs/acceptance/$(today)-hardening-09.md and its line in docs/acceptance/$RESULTS_NAME
 Locally: a Volunteer's simulated Mac reports a topic on this machine's loopback, a Maintainer ends its enrollment,
      expects: nothing connects to the topic's port; the Notice is dropped
 Nothing was sent.
@@ -86,17 +88,68 @@ if playing; then
   passed
 fi
 
-form_volunteer() {
-  hands "At $volunteers, run: sudo lab-agent notify --topic $1"
-  sleep 60
-  owner_session
+# The Mac's card, as the owner's browser reads My Macs: for an M team
+# member or a Maintainer it is Mine on Macs, where /my-macs sends them.
+WAIT="${H09_WAIT:-120}"
+# shellcheck disable=SC2329
+card() {
+  local loc
   "$PROBE" page --session "$OWNER_SESSION" --out "$WORK/my-macs.html" /my-macs > "$WORK/my-macs.out" 2>&1 || true
+  if grep -qx 'status=303' "$WORK/my-macs.out"; then
+    loc="$(fact my-macs location)"
+    [[ $loc == /* ]] || give_up "My Macs sent the browser to $loc"
+    "$PROBE" page --session "$OWNER_SESSION" --out "$WORK/my-macs.html" "$loc" > "$WORK/my-macs.out" 2>&1 || true
+  fi
   grep -qx 'status=200' "$WORK/my-macs.out" || give_up "My Macs did not open: $(tr '\n' ' ' < "$WORK/my-macs.out")"
-  grep -qi 'refused' "$WORK/my-macs.html" || rule_broken "My Macs does not show the topic $2 as refused"
-  rec "the topic $2: My Macs shows it refused"
-  confirm "Did that topic get no Notice from the lab?" || rule_broken "the topic $2 got a Notice"
+  awk -v id="id=\"mac-$volunteers\"" 'index($0, id) { on = 1 } on && /<section class="card/ && !index($0, id) { exit } on { print }' "$WORK/my-macs.html" > "$WORK/card.html"
+  [[ -s $WORK/card.html ]] || give_up "My Macs shows no card for $volunteers"
 }
-form_volunteer "https://192.168.0.1/h09" "at a private address"
-form_volunteer "$redirect" "behind a redirect"
-hands "At $volunteers, put the topic back: sudo lab-agent notify --topic <the one it had>"
+# refusal: what the Mac's card says of its topic's refusal, or nothing.
+refusal() { grep -o 'Your own topic is refused: [^<]*' "$WORK/card.html" | head -n 1 || true; }
+# shellcheck disable=SC2329
+refused_with() { card; refusal | grep -qF -- "$1"; }
+# shellcheck disable=SC2329
+not_refused_with() { card; ! refusal | grep -qF -- "$1"; }
+
+# The topic is set at the Mac, by hand, and only there can it be put back.
+# shellcheck disable=SC2329
+undo_topic() {
+  rec "BY HAND: at $volunteers, put its topic back: sudo lab-agent notify --topic <the one it had>; and sudo lab-agent notify --jobs off if its job Notices were off"
+}
+# shellcheck disable=SC2329
+undo_job() {
+  if "$LAB_CMD" cancel "$1" > "$WORK/undo-job.out" 2>&1; then
+    rec "undone: job $1 on $volunteers was canceled"
+  else
+    rec "NOT UNDONE: job $1 on $volunteers may still run: lab cancel $1 ($(plain "$WORK/undo-job.out"))"
+  fi
+}
+
+owner_session
+arm topic undo_topic
+hands "At $volunteers, run: sudo lab-agent notify --topic https://192.168.0.1/h09"
+wait_until "$WAIT" refused_with "not a public address" || rule_broken "$volunteers's card does not show the topic at a private address refused"
+rec "the topic at a private address: $volunteers's card says: $(refusal)"
+
+# Behind a redirect the topic passes when the Mac reports it: only a Notice
+# finds the redirect. A job's Notice that it is starting is sent before the
+# Mac shows its Volunteer the reboot warning, and the job is canceled then.
+hands "At $volunteers, run: sudo lab-agent notify --topic $redirect, then: sudo lab-agent notify --jobs on"
+confirm "The test now starts a job on $volunteers for its Notice that a job is starting, and cancels it before the Mac reboots for it. Go on?" \
+  || stopped "the topic behind a redirect needs a job's Notice, and none was made"
+"$LAB_CMD" status "$volunteers" > "$WORK/mac.out" 2>&1 || give_up "lab status $volunteers: $(plain "$WORK/mac.out")"
+! grep -q '^  lease:' "$WORK/mac.out" || stopped "somebody holds a Lease on $volunteers now: run this when it is free"
+wait_until "$WAIT" not_refused_with "not a public address" || give_up "$volunteers did not report the topic behind a redirect: its card still says $(refusal)"
+"$LAB_CMD" run "$volunteers" --no-wait > "$WORK/job.out" 2>&1 || give_up "no job on $volunteers: $(plain "$WORK/job.out")"
+job="$(sed -n 's/^job \([^ ]*\) queued on .*/\1/p' "$WORK/job.out" | head -n 1)"
+[[ -n $job ]] || give_up "lab run named no job: $(plain "$WORK/job.out")"
+arm job undo_job "$job"
+wait_until "$WAIT" refused_with "redirect" || rule_broken "$volunteers's card does not show the topic behind a redirect refused, after job $job's Notice"
+"$LAB_CMD" cancel "$job" > "$WORK/cancel.out" 2>&1 || give_up "job $job was not canceled: $(plain "$WORK/cancel.out")"
+disarm job
+rec "job $job on $volunteers made a Notice to the topic behind a redirect, and was canceled"
+rec "the topic behind a redirect: $volunteers's card says: $(refusal)"
+confirm "Did that topic, or the address it sends to, get no Notice from the lab?" || rule_broken "the topic behind a redirect got a Notice"
+hands "At $volunteers, put its topic back: sudo lab-agent notify --topic <the one it had>; and sudo lab-agent notify --jobs off if its job Notices were off"
+disarm topic
 passed

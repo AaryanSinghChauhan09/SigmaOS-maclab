@@ -152,7 +152,7 @@ func stubs(t *testing.T, text map[string]string) (dir, calls string) {
 func TestEveryDryRunSaysItsStepsAndSendsNothing(t *testing.T) {
 	dir, calls := stubs(t, nil)
 	env := []string{"PATH=" + dir + ":" + os.Getenv("PATH")}
-	byHand := map[string]int{"h07-cuts": 1, "h09-notice-topic": 2, "h10-browser": 1}
+	byHand := map[string]int{"h07-cuts": 1, "h09-notice-topic": 3, "h10-browser": 1}
 	for _, name := range tests {
 		for _, option := range [][]string{nil, {"--dry-run"}} {
 			out, code := run(t, env, script(t, name), option...)
@@ -486,6 +486,68 @@ func TestARunThatStartsTakesItsOldPassOutOfTheResults(t *testing.T) {
 	got := read(t, results)
 	if !regexp.MustCompile(`(?m)^07 stopped 20\d\d-\d\d-\d\d 20\d\d-\d\d-\d\d-hardening-07\.md$`).MatchString(got) || !strings.Contains(got, "08 pass 2026-11-14 ") || strings.Contains(got, "07 pass") {
 		t.Errorf("the results after a run cut half way:\n%s", got)
+	}
+}
+
+// H 9 through the Lab address, as the owner: an Admin, whose /my-macs is
+// Mine on Macs. The card shows a private topic refused until lab status
+// sees the Mac report the redirect, and the redirect refused once a job
+// has made a Notice.
+const h09Lab = `S="$(dirname "$0")"
+case "$1" in
+  status) echo "NAME STATE"; [ -z "${2:-}" ] || touch "$S/reported" ;;
+  run) touch "$S/job"; echo "job j-1 queued on $2" ;;
+  cancel) echo "canceled" ;;
+  *) exit 9 ;;
+esac`
+
+const h09Probe = `S="$(dirname "$0")"
+card() {
+  echo '<section class="card mac-card" id="mac-other"><span class="flash">Your own topic is refused: it answers with a redirect, which labd does not follow.</span></section>'
+  echo '<section class="card mac-card" id="mac-m2-max">'
+  echo "<dt>Notices</dt><dd>$1</dd>"
+  echo '</section>'
+}
+case "$*" in
+  "page "*" /me") echo status=200 ;;
+  "page "*" /my-macs") echo status=303; echo "location=/macs?show=mine" ;;
+  "page "*" /macs?show=mine")
+    echo status=200
+    if [ -f "$S/job" ] && [ -z "${H09_NO_REDIRECT:-}" ]; then
+      card '<span class="flash">Your own topic is refused: it answers with a redirect, which labd does not follow.</span>' > "$out"
+    elif [ -f "$S/reported" ]; then
+      card 'job Notices on' > "$out"
+    else
+      card '<span class="flash">Your own topic is refused: its host 192.168.0.1 is at 192.168.0.1, not a public address.</span>' > "$out"
+    fi ;;
+  *) echo status=500 ;;
+esac`
+
+func TestH09ReadsTheMacsCardAsAnAdmin(t *testing.T) {
+	t.Parallel()
+	args := []string{"--volunteers-mac", "m2-max", "--redirect", "https://redirect.example/h09"}
+	out, code, record, calls := labRun(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\nyes\nyes\n\n", []string{"H09_WAIT=10"}, args...)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, out, record)
+	}
+	for _, want := range []string{"the topic at a private address: m2-max's card says: Your own topic is refused: its host 192.168.0.1",
+		"job j-1 on m2-max made a Notice to the topic behind a redirect, and was canceled", "the topic behind a redirect: m2-max's card says: Your own topic is refused: it answers with a redirect"} {
+		if !strings.Contains(record, want) {
+			t.Errorf("the record lacks %q:\n%s", want, record)
+		}
+	}
+	if !strings.Contains(calls, "lab run m2-max --no-wait") || !strings.Contains(calls, "lab cancel j-1") {
+		t.Errorf("no job made the Notice, or it was not canceled:\n%s", calls)
+	}
+
+	// The redirect never refused: the job is canceled, the owner told how to
+	// put the topic back.
+	out, code, record, calls = labRun(t, "h09-notice-topic", h09Lab, h09Probe, "session\n\n\nyes\n", []string{"H09_WAIT=4", "H09_NO_REDIRECT=1"}, args...)
+	if code != 1 || !strings.Contains(record, "FAILED: m2-max's card does not show the topic behind a redirect refused") {
+		t.Fatalf("exit %d\n%s\n%s", code, out, record)
+	}
+	if !strings.Contains(calls, "lab cancel j-1") || !strings.Contains(record, "BY HAND: at m2-max, put its topic back") {
+		t.Errorf("the job was left, or the topic not named:\n%s\n%s", calls, record)
 	}
 }
 
