@@ -35,7 +35,7 @@ func TestFD04CutsAnUploadAndResumesIt(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	cut := regexp.MustCompile(`cut: lab upload killed while it sent, with (\d) of 7 parts taken by labd and the next under way`).FindStringSubmatch(out)
+	cut := regexp.MustCompile(`cut: lab upload killed while it sent, with (\d) of 7 parts taken by labd and [1-9]\d* bytes of another received`).FindStringSubmatch(out)
 	m := regexp.MustCompile(`resume: labd held (\d) of 7 parts; the same command sent the other (\d) in`).FindStringSubmatch(out)
 	if cut == nil || m == nil || cut[1] < "2" || m[1] < cut[1] || m[1] == "7" || m[1][0]-'0'+m[2][0]-'0' != 7 {
 		t.Errorf("no cut with two parts held, or no resume from at least those and not all:\n%s", out)
@@ -77,6 +77,39 @@ func TestFD04FailsWhenNoRunResumes(t *testing.T) {
 	out, code := run(t, nil, "", frontDoor(t, "fd04-upload-resume"), "--local", "--bin", dir, "--size", fmt.Sprint(200*mib))
 	if code != 1 || !strings.Contains(out, ": fail") || !strings.Contains(out, "did not say it resumed") || strings.Contains(out, "checksum") {
 		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+// A cut counts only inside a part: a lab that says labd takes its parts and
+// sends none, so that labd never holds part of one, does not pass, though
+// the run after it says what a resume says and prints the right SHA-256.
+func TestFD04BetweenTwoPartsDoesNotPass(t *testing.T) {
+	real := bins(t)
+	dir := t.TempDir()
+	for _, tool := range []string{"labd", "lab-agent"} {
+		if err := os.Symlink(filepath.Join(real, tool), filepath.Join(dir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wrapper := `#!/bin/bash
+[[ $1 == upload ]] || exec "` + real + `/lab" "$@"
+if [[ ${MACLAB_UPLOAD_PROGRESS:-} == 1 ]]; then
+  for n in 1 2 3 4 5 6; do echo "lab: labd holds $n of 7 parts" >&2; sleep 0.3; done
+  exit 1
+fi
+echo "lab: resuming: labd holds 2 of 7 parts" >&2
+shasum -a 256 "$2" | cut -d' ' -f1
+`
+	if err := os.WriteFile(filepath.Join(dir, "lab"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code := run(t, nil, "", frontDoor(t, "fd04-upload-resume"), "--local", "--bin", dir, "--size", fmt.Sprint(200*mib))
+	if code != 1 || !strings.Contains(out, ": fail") || !strings.Contains(out, "while labd held part of a part") || strings.Contains(out, "checksum") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	// Through the Lab address labd's upload folder is on the mini.
+	if out, code := run(t, nil, "", frontDoor(t, "fd04-upload-resume"), "--lab"); code != 1 || !strings.Contains(out, "--lab needs --mini USER@HOST") {
+		t.Errorf("--lab with no --mini: exit %d\n%s", code, out)
 	}
 }
 

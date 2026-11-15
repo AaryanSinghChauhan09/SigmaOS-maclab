@@ -40,6 +40,7 @@ JOB_SCRIPT="$FD_HERE/transfer-file.sh"
 JOB_FILE="test-transfer-file/transfer.bin"
 JOB_FILE_BYTES=$((80 << 20))
 MINI_SCRIPTS=/usr/local/lab/current/scripts/mini
+MINI_DATA=/var/lab/data
 TUNNEL_METRICS=http://127.0.0.1:20241/metrics
 
 WORK=""
