@@ -1042,6 +1042,21 @@ line in `docs/acceptance/out-of-band.results`. `run --results` is green when
 all eight say pass. `scripts/mini/ports --seen` is what the tests read on
 the mini: one line a port, no root, no tool.
 
+**Hardening's fourteen tests** (Ready item 8, spec section 12) are
+`scripts/cutover/hardening/h01-console` to `h14-volunteers-mac`, with `run`
+around them, in the same three ways. `--local` starts a labd on loopback
+with a stand-in for GitHub that signs in an Admin, two M team members, a
+Volunteer and a person with no role, and simulated Macs, one of them lent
+through the Join command. `--lab` runs through the Lab address under the
+saved login; where a test acts as the owner's browser, the session cookie
+is typed at a prompt that shows nothing. Each writes
+`docs/acceptance/YYYY-MM-DD-hardening-NN.md` and its line in
+`docs/acceptance/hardening.results`; `run --results` is green when all
+fourteen say pass. Test 14 runs once, while the M2 Max is the owner's own
+Volunteer's Mac (step 14a). `sudo scripts/mini/secrets-seen` says whether a
+secret of the mini shows in a process or a service definition: counts and
+file names only.
+
 ### The Signal sender on the mini
 
 labd tells two Signal groups what happens, a line for each event: the Lab
