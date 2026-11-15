@@ -141,12 +141,6 @@ for p in darwin-arm64 linux-arm64 linux-amd64; do
 done
 (( ran == 1 )) || fail "no lab ran here to say its version"
 
-bundled_sources() {
-  local d
-  for d in builder deploy scripts/mini; do
-    if [[ -d $d ]]; then find "$d" -type f ! -name '*.pyc' ! -path '*/__pycache__/*' ! -name '.DS_Store'; fi
-  done | sort
-}
 bundled=0
 bundle_check() { # bundle_check DIR: the unpacked bundle under DIR
   local s="$1/lab-server" f p
@@ -184,6 +178,7 @@ bundle_check() { # bundle_check DIR: the unpacked bundle under DIR
     bundled=$((bundled + 1))
   done < <(cd "$repo" && bundled_sources)
   (( bundled > 0 )) || fail "no builder/ or deploy/ files found in the source tree"
+  [[ ! -e $s/deploy/mini.conf ]] || fail "the bundle holds deploy/mini.conf, the owner's own file"
   [[ "$( (cd "$s" && find builder deploy scripts -type f 2>/dev/null) | wc -l | tr -d ' ')" == "$bundled" ]] || fail "the bundle holds files of builder/, deploy/ or scripts/ the tree doesn't"
   for p in lab-loop lab-esp lab-workflow lab-recovery-default; do
     [[ -z "$(find "$s" -name "$p*")" ]] || fail "the bundle ships $p"

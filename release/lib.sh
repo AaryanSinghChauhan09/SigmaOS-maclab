@@ -43,3 +43,14 @@ sign() {
 verified() {
   ssh-keygen -Y verify -f "$1" -I "$RELEASE_SIGNER" -n "$RELEASE_NAMESPACE" -s "$2.sig" < "$2" >/dev/null 2>&1
 }
+
+# bundled_sources: the files of builder/, deploy/ and scripts/mini/ that the
+# mini's bundle carries, from the tree in the current folder, in order. Not
+# deploy/mini.conf: it is the owner's own, git-ignored, and names the mini's
+# address and the old lab's account.
+bundled_sources() {
+  local d
+  for d in builder deploy scripts/mini; do
+    if [[ -d $d ]]; then find "$d" -type f ! -name '*.pyc' ! -path '*/__pycache__/*' ! -name '.DS_Store' ! -path deploy/mini.conf; fi
+  done | sort
+}

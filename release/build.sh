@@ -115,9 +115,7 @@ install -m 0644 "$repo/LICENSE" "$repo/THIRD_PARTY_NOTICES.md" "$server/"
 # The Volunteer's terms and the privacy statement, as labd carries and serves them.
 install -D -m 0644 "$repo/internal/web/texts/terms.txt" "$server/texts/terms.txt"
 install -D -m 0644 "$repo/internal/web/texts/privacy.txt" "$server/texts/privacy.txt"
-(cd "$repo" && for d in builder deploy scripts/mini; do
-  if [[ -d $d ]]; then find "$d" -type f ! -name '*.pyc' ! -path '*/__pycache__/*' ! -name '.DS_Store'; fi
-done | sort | while read -r f; do
+(cd "$repo" && bundled_sources | while read -r f; do
   install -D -m "$([[ -x $f ]] && echo 0755 || echo 0644)" "$f" "$server/$f"
 done)
 printf '%s\n' "$epoch" > "$out/.stage/epoch"
