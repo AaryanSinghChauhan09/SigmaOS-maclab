@@ -61,6 +61,8 @@ type dev struct {
 	oobCallCancel context.CancelFunc
 	// resetting: a person's Hard reset is on its way to the controller.
 	resetting bool
+	// updating: lab agent-update holds the Mac (agent_software.go).
+	updating *agentUpdating
 	// beforeSend, which only a test sets (under mu), runs once a job's wait
 	// is over and before labd gives it the Mac.
 	beforeSend func()
@@ -353,6 +355,7 @@ func (v *dev) heartbeat(ci api.Checkin) {
 	}
 	if ci.Facts != nil {
 		v.d.Facts = *ci.Facts
+		v.heardAgentLocked()
 	}
 	if v.noticeUpdateLocked() {
 		persist = true

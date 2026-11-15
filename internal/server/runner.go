@@ -218,6 +218,9 @@ func (s *Server) runJob(ctx context.Context, v *dev, j *api.Job) {
 			// it would cut the job's power
 			return fmt.Sprintf("waiting: a Hard reset of %s is on its way", v.d.Name)
 		}
+		if v.updating != nil {
+			return fmt.Sprintf("waiting: %s's %s", v.d.Name, agentBeingUpdated)
+		}
 		if needs != "" && v.d.Limited && v.d.AccessLevel == api.AccessFull {
 			// lab-agent, which knows nothing of the site, would run it.
 			return fmt.Sprintf("%s is limited to Access level Qualification by its Volunteer, which allows no %s, until they remove the limit", v.d.Name, needs)

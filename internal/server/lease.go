@@ -207,6 +207,10 @@ func (s *Server) takeLease(v *dev, p Person, holder string, ttl time.Duration) (
 		return api.Lease{}, err
 	}
 	v.mu.Lock()
+	if err := v.updatingRefusalLocked("no Lease was taken"); err != nil {
+		v.mu.Unlock()
+		return api.Lease{}, err
+	}
 	lease := &api.Lease{Holder: holder, Maintainer: p.Handle, By: p.Handle, AccountID: p.AccountID, Expires: s.now().Add(ttl)}
 	if had := v.liveLeaseLocked(); had != nil {
 		lease.Job = had.Job // a renewal keeps the job running under it, and is no longer an extension

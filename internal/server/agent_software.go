@@ -15,6 +15,7 @@ package server
 // (`lab agent-update`). There is no fleet-wide minimum agent.
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -107,6 +108,13 @@ func (s *Server) releaseKey() string {
 	return ""
 }
 
+// agentUpdating marks a Mac that `lab agent-update` holds: no job is sent,
+// no Lease taken and no exec run on it until its lab-agent is back as to
+// (once the Mac has answered), or agentUpdateWait after that.
+type agentUpdating struct{ to string }
+
+const agentBeingUpdated = "lab-agent is being updated"
+
 // hAgentUpdate is `lab agent-update <mac>`: a Maintainer has a Lab-owned Mac
 // that is idle take the lab's lab-agent.
 func (s *Server) hAgentUpdate(w http.ResponseWriter, r *http.Request) {
@@ -114,37 +122,87 @@ func (s *Server) hAgentUpdate(w http.ResponseWriter, r *http.Request) {
 	if v == nil {
 		return
 	}
-	v.mu.Lock()
-	d, alive, lease, waiting := v.d, v.aliveLocked(), v.liveLeaseLocked(), len(v.queue)+len(v.parked)
-	idle := d.State == api.StateNew || d.State == api.StateReady
-	v.mu.Unlock()
 	_, signed := s.agentSig()
+	mark := &agentUpdating{}
+	v.mu.Lock()
+	d := v.d
+	why := v.notUpdatableLocked(signed)
+	if why == "" {
+		v.updating = mark
+	}
+	v.mu.Unlock()
+	if why != "" {
+		httpErr(w, 409, "%s", why)
+		return
+	}
+	var res api.AgentUpdate
+	if err := v.call(r.Context(), api.CmdAgentUpdate, "", nil, agentUpdateWait, &res); err != nil {
+		v.endUpdating(mark)
+		httpErr(w, 502, "%s did not update its lab-agent: %v", d.Name, err)
+		return
+	}
+	v.mu.Lock()
+	mark.to = res.To
+	v.heardAgentLocked()
+	v.mu.Unlock()
+	time.AfterFunc(agentUpdateWait, func() { v.endUpdating(mark) })
+	if res.Changed {
+		s.log.Printf("%s: lab-agent %s -> %s by %s", d.Name, res.From, res.To, callerOf(r).maintainer)
+	}
+	writeJSON(w, res)
+}
+
+// notUpdatableLocked is why lab agent-update cannot update v now, or "".
+// Caller holds v.mu.
+func (v *dev) notUpdatableLocked(signed bool) string {
+	d, lease := v.d, v.liveLeaseLocked()
 	switch {
 	case d.IsVolunteer():
-		httpErr(w, 409, "%s is a Volunteer's Mac, and lab-agent is never pushed to a Volunteer's Mac: its Volunteer runs `%s` at the Mac, and My Macs shows them the line", d.Name, volunteerUpdateLine)
+		return fmt.Sprintf("%s is a Volunteer's Mac, and lab-agent is never pushed to a Volunteer's Mac: its Volunteer runs `%s` at the Mac, and My Macs shows them the line", d.Name, volunteerUpdateLine)
 	case !signed:
-		httpErr(w, 409, "this lab has no signed lab-agent to hand out: it was not Deployed from a Lab release")
+		return "this lab has no signed lab-agent to hand out: it was not Deployed from a Lab release"
+	case v.updating != nil:
+		return fmt.Sprintf("%s: %s already", d.Name, agentBeingUpdated)
 	case d.ActiveJob != "":
-		httpErr(w, 409, "%s is not idle: job %s runs on it. lab agent-update waits for no job and no Lease", d.Name, d.ActiveJob)
+		return fmt.Sprintf("%s is not idle: job %s runs on it. lab agent-update waits for no job and no Lease", d.Name, d.ActiveJob)
 	case lease != nil:
-		httpErr(w, 409, "%s is not idle: %s holds a Lease on it until %s. lab agent-update waits for no job and no Lease", d.Name, lease.Who(), lease.Expires.Format(time.TimeOnly))
-	case waiting > 0:
-		httpErr(w, 409, "%s is not idle: a job waits for it. lab agent-update waits for no job and no Lease", d.Name)
-	case !alive:
-		httpErr(w, 409, "%s is offline, so its lab-agent cannot be updated now", d.Name)
-	case !idle:
-		httpErr(w, 409, "%s is not idle: it is %s. lab agent-update waits for no job and no Lease", d.Name, d.State)
+		return fmt.Sprintf("%s is not idle: %s holds a Lease on it until %s. lab agent-update waits for no job and no Lease", d.Name, lease.Who(), lease.Expires.Format(time.TimeOnly))
+	case len(v.queue)+len(v.parked) > 0:
+		return fmt.Sprintf("%s is not idle: a job waits for it. lab agent-update waits for no job and no Lease", d.Name)
+	case !v.aliveLocked():
+		return fmt.Sprintf("%s is offline, so its lab-agent cannot be updated now", d.Name)
+	case d.State != api.StateNew && d.State != api.StateReady:
+		return fmt.Sprintf("%s is not idle: it is %s. lab agent-update waits for no job and no Lease", d.Name, d.State)
 	case !versionAtLeast(d.Facts.AgentVersion, agentUpdateMinAgent):
-		httpErr(w, 409, "%s runs lab-agent %s; lab agent-update needs %s or later, the first that updates itself: Join the Mac again to give it the lab's", d.Name, orStr(d.Facts.AgentVersion, "(unknown)"), agentUpdateMinAgent)
-	default:
-		var res api.AgentUpdate
-		if err := v.call(r.Context(), api.CmdAgentUpdate, "", nil, agentUpdateWait, &res); err != nil {
-			httpErr(w, 502, "%s did not update its lab-agent: %v", d.Name, err)
-			return
-		}
-		if res.Changed {
-			s.log.Printf("%s: lab-agent %s -> %s by %s", d.Name, res.From, res.To, callerOf(r).maintainer)
-		}
-		writeJSON(w, res)
+		return fmt.Sprintf("%s runs lab-agent %s; lab agent-update needs %s or later, the first that updates itself: Join the Mac again to give it the lab's", d.Name, orStr(d.Facts.AgentVersion, "(unknown)"), agentUpdateMinAgent)
 	}
+	return ""
+}
+
+// heardAgentLocked lets the Mac go once its lab-agent says it is the one
+// lab agent-update installed. Caller holds v.mu.
+func (v *dev) heardAgentLocked() {
+	if u := v.updating; u != nil && u.to != "" && v.d.Facts.AgentVersion == u.to {
+		v.updating = nil
+		v.bump()
+	}
+}
+
+// endUpdating lets the Mac go, if mark still holds it.
+func (v *dev) endUpdating(mark *agentUpdating) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.updating == mark {
+		v.updating = nil
+		v.bump()
+	}
+}
+
+// updatingRefusalLocked is the refusal of a Lease or an exec while lab
+// agent-update holds the Mac, or nil. Caller holds v.mu.
+func (v *dev) updatingRefusalLocked(what string) error {
+	if v.updating == nil {
+		return nil
+	}
+	return refuse(409, "%s: %s, so %s; try again once it is back", v.d.Name, agentBeingUpdated, what)
 }
