@@ -39,11 +39,13 @@ while (( $# )); do
 done
 
 # Where lab-agent keeps a Volunteer's Notice settings at the Mac, and where
-# the test copies them aside (see notices below).
+# the test copies them aside (see notices below). Each command stops at its
+# first step that fails: the copy aside goes only once every setting is
+# back.
 agent_dir=/var/lib/maclab
 saved_dir=/var/lib/maclab-h09
-save_settings="sudo sh -c 'mkdir -m 700 $saved_dir && for f in ntfy-topic ntfy-jobs; do [ ! -e $agent_dir/\$f ] || cp -p $agent_dir/\$f $saved_dir/; done'"
-put_back="sudo sh -c 'cd $saved_dir && for f in ntfy-topic ntfy-jobs; do if [ -e \$f ]; then cp -p \$f $agent_dir/; else rm -f $agent_dir/\$f; fi; done && cd / && rm -r $saved_dir'"
+save_settings="sudo sh -c 'set -e; mkdir -m 700 $saved_dir; for f in ntfy-topic ntfy-jobs; do [ ! -e $agent_dir/\$f ] || cp -p $agent_dir/\$f $saved_dir/; done'"
+put_back="sudo sh -c 'set -e; cd $saved_dir; for f in ntfy-topic ntfy-jobs; do if [ -e \$f ]; then cp -p \$f $agent_dir/; else rm -f $agent_dir/\$f; fi; done; cd /; rm -r $saved_dir'"
 
 if [[ $MODE == dry ]]; then
   cat <<PLAN

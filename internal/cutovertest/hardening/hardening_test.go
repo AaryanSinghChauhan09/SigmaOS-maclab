@@ -734,17 +734,54 @@ func TestH09PutsTheMacsNoticeSettingsBack(t *testing.T) {
 		if !strings.Contains(calls, "lab cancel j-1") {
 			t.Errorf("the job was left:\n%s", calls)
 		}
-		if !strings.Contains(record, "NOT UNDONE: m2-max's topic and job Notices are still the test's: at m2-max, put them back: sudo sh -c 'cd /var/lib/maclab-h09") {
+		if !strings.Contains(record, "NOT UNDONE: m2-max's topic and job Notices are still the test's: at m2-max, put them back: sudo sh -c 'set -e; cd /var/lib/maclab-h09") {
 			t.Errorf("the record does not say how to put the settings back:\n%s", record)
 		}
 	})
 	t.Run("nobody there to copy them aside", func(t *testing.T) {
 		t.Parallel()
 		out, code, record, _ := labRun(t, "h09-notice-topic", h09Lab, h09Probe, "session\n", []string{"H09_WAIT=4"}, args...)
-		if code != 3 || !strings.Contains(out, "sudo sh -c 'mkdir -m 700 /var/lib/maclab-h09") || strings.Contains(record, "UNDONE") {
+		if code != 3 || !strings.Contains(out, "sudo sh -c 'set -e; mkdir -m 700 /var/lib/maclab-h09") || strings.Contains(record, "UNDONE") {
 			t.Errorf("exit %d\n%s\n%s", code, out, record)
 		}
 	})
+}
+
+// H 9's restore command, run as root at the Mac, stops at the first step
+// that fails and keeps the copy aside: a topic that could not be copied
+// back is not lost with it.
+func TestH09sRestoreKeepsTheCopyWhenAStepFails(t *testing.T) {
+	t.Parallel()
+	out, code := run(t, nil, script(t, "h09-notice-topic"), "--dry-run")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	m := regexp.MustCompile(`put its Notice settings back, as root: sudo sh -c '([^']*)'`).FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("the dry run does not say the restore command:\n%s", out)
+	}
+	root := t.TempDir()
+	agent, saved := filepath.Join(root, "maclab"), filepath.Join(root, "maclab-h09")
+	for _, d := range []string{agent, saved} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(saved, "ntfy-topic"), []byte("https://ntfy.example/mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The topic cannot be copied back: the agent's folder takes no file.
+	if err := os.Chmod(agent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(agent, 0o700) })
+	restore := strings.NewReplacer("/var/lib/maclab-h09", saved, "/var/lib/maclab", agent).Replace(m[1])
+	if _, err := exec.Command("sh", "-c", restore).CombinedOutput(); err == nil {
+		t.Error("the restore said it worked")
+	}
+	if got, err := os.ReadFile(filepath.Join(saved, "ntfy-topic")); err != nil || !strings.Contains(string(got), "ntfy.example/mine") {
+		t.Errorf("the copy aside was not kept: %q, %v", got, err)
+	}
 }
 
 // H 9's job is armed by the holder it is asked under before it is asked
