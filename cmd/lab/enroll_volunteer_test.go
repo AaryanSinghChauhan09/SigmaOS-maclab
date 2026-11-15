@@ -122,14 +122,13 @@ func TestEnrollMakesAJoinCommandForALabOwnedMac(t *testing.T) {
 }
 
 // With no signed lab-agent to hand out labd makes no Join command, and lab
-// enroll prints no line to copy an agent and run it unchecked: the token is
-// canceled and the Maintainer told why.
+// enroll prints no line to copy an agent and run it unchecked: the token
+// alone, and why there is no line.
 func TestEnrollPrintsNoUncheckedLineWhenLabdHasNoSignedAgent(t *testing.T) {
-	revoked := 0
-	c, _ := joinCommandLab(t, "", &revoked)
+	c, _ := joinCommandLab(t, "", nil)
 	out, err := runLab(t, c, "enroll", "rack-mac")
-	if err == nil || !strings.Contains(err.Error(), "no signed lab-agent") || strings.Contains(out, "lab-agent setup") || strings.Contains(out+err.Error(), "enr_fixture_token") || revoked != 1 {
-		t.Fatalf("lab enroll with no Join command: %v, %d canceled\n%s", err, revoked, out)
+	if err != nil || !strings.Contains(out, "no signed lab-agent") || strings.Contains(out, "lab-agent setup") || strings.Contains(out, "copy lab-agent") || !strings.Contains(out, "enr_fixture_token") {
+		t.Fatalf("lab enroll with no Join command: %v\n%s", err, out)
 	}
 }
 

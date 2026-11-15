@@ -319,10 +319,11 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 			return err
 		}
 		if t.JoinCommand == "" {
-			return noJoinCommand(ctx, c, pos[0])
+			fmt.Printf("Enrollment token for %s, a Lab-owned Mac (one Mac, once; expires %s). Keep it private.\n\n  %s\n\n%s.\n\n", pos[0], t.Expires.Format(time.DateTime), t.Token, noJoinCommand)
+		} else {
+			fmt.Printf("Join command for %s, a Lab-owned Mac (one Mac, once; expires %s). Keep it private.\n\n", pos[0], t.Expires.Format(time.DateTime))
+			fmt.Printf("Run this in a terminal on the Mac, as yourself; it checks the Mac, shows the lab's terms, and joins once you type yes:\n\n  %s\n\n", t.JoinCommand)
 		}
-		fmt.Printf("Join command for %s, a Lab-owned Mac (one Mac, once; expires %s). Keep it private.\n\n", pos[0], t.Expires.Format(time.DateTime))
-		fmt.Printf("Run this in a terminal on the Mac, as yourself; it checks the Mac, shows the lab's terms, and joins once you type yes:\n\n  %s\n\n", t.JoinCommand)
 		fmt.Printf("Cancel it unused: lab enroll %s --revoke. Then: lab baseline %s\n", pos[0], pos[0])
 		return nil
 
@@ -1914,14 +1915,6 @@ func printReleases(w io.Writer, all []api.Release) {
 	}
 }
 
-// noJoinCommand cancels the enrollment token labd made for name when it made
-// no Join command with it: labd had no signed lab-agent to hand out, and an
-// agent copied to the Mac by hand would be installed with no signature
-// checked.
-func noJoinCommand(ctx context.Context, c *client.Client, name string) error {
-	why := "labd has no signed lab-agent to hand out, so it made no Join command for " + name
-	if _, err := c.RevokeEnrollTokens(ctx, name); err != nil {
-		return fmt.Errorf("%s, and canceling its enrollment token failed (%v): cancel it with lab enroll %s --revoke", why, err, name)
-	}
-	return errors.New(why + " and its enrollment token was canceled. A labd of a Lab release hands out lab-agent with its signature")
-}
+// noJoinCommand is what lab enroll says when labd made no Join command: it
+// prints no line that installs an agent copied by hand, unchecked.
+const noJoinCommand = "labd has no signed lab-agent to hand out, so there is no Join command and no line to run: a lab-agent copied to the Mac by hand would be installed with no signature checked. A labd of a Lab release hands one out"

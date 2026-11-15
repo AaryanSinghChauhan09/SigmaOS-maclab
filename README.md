@@ -589,7 +589,8 @@ What each install checks:
   and refuse an agent older than the one installed; a refusal says "Nothing was
   changed."
 - **A labd with no signed lab-agent** to hand out makes no Join command:
-  `lab enroll` cancels the token it made and prints no line to run.
+  `lab enroll` prints the enrollment token alone and no line that installs an
+  agent copied by hand.
 
 ```sh
 sudo lab-agent update      # at the Mac: take the lab's lab-agent

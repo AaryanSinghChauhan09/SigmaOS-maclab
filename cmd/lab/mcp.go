@@ -103,11 +103,9 @@ func newMCP(c *client.Client) *mcp.Server {
 				os.Remove(a.Out)
 				return nil, nil, err
 			}
-			line := t.JoinCommand
+			line, what := t.JoinCommand, "The Join command"
 			if line == "" {
-				f.Close()
-				os.Remove(a.Out)
-				return nil, nil, noJoinCommand(ctx, c, a.Name)
+				line, what = t.Token, "Only the enrollment token ("+noJoinCommand+")"
 			}
 			_, err = f.WriteString(line + "\n")
 			if err == nil {
@@ -122,8 +120,8 @@ func newMCP(c *client.Client) *mcp.Server {
 				c.RevokeEnrollTokens(ctx, a.Name)
 				return nil, nil, fmt.Errorf("writing the Join command to %s failed (%v); it was canceled", a.Out, err)
 			}
-			return text(fmt.Sprintf("The Join command for %s, a Lab-owned Mac, is in %s (mode 0600) and nowhere else. It joins one Mac, once, and expires %s. The person runs it in a terminal on the Mac, as themselves. Cancel it unused with lab_enroll revoke; then lab_baseline %s.",
-				a.Name, a.Out, t.Expires.Format(time.DateTime), a.Name)), nil, nil
+			return text(fmt.Sprintf("%s for %s, a Lab-owned Mac, is in %s (mode 0600) and nowhere else. It joins one Mac, once, and expires %s. The person runs it in a terminal on the Mac, as themselves. Cancel it unused with lab_enroll revoke; then lab_baseline %s.",
+				what, a.Name, a.Out, t.Expires.Format(time.DateTime), a.Name)), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "lab_remove", Description: "End a Mac's enrollment (Maintainers): its device secret stops working at once, its record is Retired, and lab-agent removes the lab from the Mac at its next check-in; a Volunteer is told. Only when a person asks for it: it cannot be undone, the Mac has to Join again."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a devArg) (*mcp.CallToolResult, any, error) {
