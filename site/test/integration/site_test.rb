@@ -14,7 +14,7 @@ class SiteTest < ActionDispatch::IntegrationTest
   test "the installer pins the same release key as the release workflow and README" do
     key = Rails.root.join("..", "release", "allowed_signers").read.strip
     assert_includes InstallerController.path.read, "local allowed_signer='#{key}'"
-    assert_includes Rails.root.join("..", "README.md").read, key.split.last(2).join(" ")
+    assert_includes Rails.root.join("..", "docs", "omarchy-m-test.md").read, key.split.last(2).join(" ")
   end
 
   test "the home page shows the install command" do
