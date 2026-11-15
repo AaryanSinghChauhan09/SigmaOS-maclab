@@ -63,6 +63,23 @@ rule_broken() {
   give_up "$1"
 }
 
+# before_lab: a stand-in for the lab's own notice server, where the topics
+# labd makes for Volunteers' Macs are: the control, which a Notice does reach.
+# shellcheck disable=SC2329
+before_lab() {
+  "$PROBE" listen > "$WORK/control.out" 2>&1 &
+  PIDS+=($!)
+  wait_until 10 grep -q '^port=' "$WORK/control.out" || fail "the stand-in for the notice server did not start"
+  LOCAL_FLAGS+=("--ntfy=http://127.0.0.1:$(sed -n 's/^port=//p' "$WORK/control.out")")
+}
+# stored KEY: what labd keeps on the loaner's record.
+stored() { sqlite3 "file:$LOCAL_DATA/labd.db?mode=ro" "SELECT json_extract(data, '\$.$1') FROM devices WHERE name = $(sql_text "$volunteers")" 2>/dev/null | head -n 1; }
+# shellcheck disable=SC2329
+topic_refused() { [[ "$(stored ntfy_own_url)" == "$topic" && -n "$(stored notice_topic_refused)" ]]; }
+reached() { grep -c '^connection=' "$WORK/$1.out" || true; }
+# shellcheck disable=SC2329
+control_reached() { (( $(reached control) > 0 )); }
+
 begin 09 "a Notice topic at a private address, or behind a redirect, is refused"
 if playing; then
   people
@@ -75,15 +92,30 @@ if playing; then
   port="$(sed -n 's/^port=//p' "$WORK/listen.out")"
   dir="$(sim_dir "$volunteers")" || fail "no folder for the simulated $volunteers"
   # What sudo lab-agent notify --topic writes at the Mac.
-  echo "https://127.0.0.1:$port/h09" > "$dir/ntfy-topic"
-  sleep 8
+  topic="https://127.0.0.1:$port/h09"
+  echo "$topic" > "$dir/ntfy-topic"
   rec "$volunteers reports its own topic, https://127.0.0.1:PORT/h09, on this machine's loopback"
+  wait_until 30 topic_refused || rule_broken "labd did not keep $volunteers's topic as refused: it keeps $( [[ "$(stored ntfy_own_url)" == "$topic" ]] && echo "the topic" || echo "another topic or none"), refused: $(stored notice_topic_refused)"
+  rec "labd keeps that topic and refuses it: $(stored notice_topic_refused)"
+
+  # The control: a second Mac of the lender's with no topic of its own.
+  form join2 --session "$WORK/lender.session" --page /lend /lend/join-command model=j314s name=control
+  token="$( { grep -oE 'enr_[0-9a-f]{32}' "$WORK/join2.body" || true; } | head -n 1)"
+  rm -f "$WORK/join2.body"
+  [[ -n $token ]] || fail "Lend a Mac showed the lender no second Join command: $(status_of join2) $(said_of join2)"
+  sim_mac control "$token"
+  "$LAB_CMD" remove control > "$WORK/remove-control.out" 2>&1 || give_up "lab remove control: $(plain "$WORK/remove-control.out")"
+  wait_until 20 control_reached || give_up "labd sent no Notice when control's enrollment was ended: nothing here proves a Notice would have gone"
+  rec "a Maintainer ended control's enrollment, a Mac of @lender's with no topic of its own: control's Notice reached the stand-in for the lab's notice server"
+  before="$(reached control)"
+
   "$LAB_CMD" remove "$volunteers" > "$WORK/remove.out" 2>&1 || give_up "lab remove $volunteers: $(plain "$WORK/remove.out")"
   rec "a Maintainer ended $volunteers's enrollment, which sends its Volunteer a Notice"
   sleep 5
-  connections="$(grep -c '^connection=' "$WORK/listen.out" || true)"
+  connections="$(reached listen)"
   [[ $connections == 0 ]] || rule_broken "labd connected $connections time(s) to the Volunteer's topic at a private address (this machine's loopback)"
-  rec "nothing connected to the topic's port: the Notice was dropped"
+  [[ "$(reached control)" == "$before" ]] || rule_broken "the Notice for $volunteers went to the lab's notice server in place of its refused topic"
+  rec "nothing connected to the topic's port, nor to the lab's notice server: the Notice was dropped"
   rec "the redirect is tried through the Lab address only: it needs a public address"
   passed
 fi

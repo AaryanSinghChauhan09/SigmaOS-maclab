@@ -238,7 +238,8 @@ func TestTheFourteenRunLocally(t *testing.T) {
 			"Reports, for a Maintainer, says it arrived by the Mac's own tool", "a report carrying a lab_job key: 422", "the 31st of the hour: 429"},
 		"h14-volunteers-mac": {"lab run loaner --installed: refused", "lab installed promote loaner: refused", "Promote on the Release's page: refused",
 			"the site's boot form has no field for an Installed run", "POST /api/jobs, an Installed run: refused", "POST /api/installed/0.0.0-hardening-14/promote: refused", "no job was made on loaner"},
-		"h09-notice-topic": {"reports its own topic, https://127.0.0.1:PORT/h09", "nothing connected to the topic's port: the Notice was dropped"},
+		"h09-notice-topic": {"reports its own topic, https://127.0.0.1:PORT/h09", "labd keeps that topic and refuses it: its host 127.0.0.1 is at 127.0.0.1, not a public address",
+			"control's Notice reached the stand-in for the lab's notice server", "nothing connected to the topic's port, nor to the lab's notice server: the Notice was dropped"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
