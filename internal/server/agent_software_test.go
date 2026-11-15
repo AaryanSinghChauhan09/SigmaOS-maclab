@@ -683,9 +683,11 @@ func TestMacsShowsAnAgentOlderThanTheLabsAndWhoUpdatesIt(t *testing.T) {
 		t.Errorf("a Maintainer's page of a Volunteer's Mac: %s", got)
 	}
 	own := part(t, linus.macPage("vol-air", ""), `id="mac-facts"`, "</section>")
-	if !strings.Contains(own, "<code>sudo lab-agent update</code>") || strings.Count(own, "lab-agent update") != 1 {
+	if !strings.Contains(own, "<code data-copy>sudo lab-agent update</code>") || strings.Count(own, "lab-agent update") != 1 {
 		t.Errorf("the Volunteer's own page does not give the one line: %s", rowText(own))
 	}
+	offersToCopy(t, own, "the update command", "sudo lab-agent update")
+	offersToCopy(t, part(t, ravi.macPage("m1-pro", ""), `id="mac-facts"`, "</section>"), "the update command", "lab agent-update m1-pro")
 	if got := facts(ravi, "m2-air"); strings.Contains(got, "older than") || strings.Contains(got, "agent-update") {
 		t.Errorf("a Mac on the lab's agent: %s", got)
 	}

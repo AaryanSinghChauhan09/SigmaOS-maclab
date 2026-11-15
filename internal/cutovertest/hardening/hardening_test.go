@@ -788,7 +788,7 @@ const h09Probe = `S="$(dirname "$0")"
 card() {
   echo '<section class="card mac-card" id="mac-other"><span class="flash">Your own topic is refused: it answers with a redirect, which labd does not follow.</span></section>'
   echo '<section class="card mac-card" id="mac-m2-max">'
-  echo "<dt>Notices</dt><dd><code>$1</code> <span class=\"nowrap\">job Notices $2</span>$3</dd>"
+  echo "<dt>Notices</dt><dd><span class=\"copyable\"><code data-copy>$1</code> <button class=\"button button-small button-plain copy-button\" type=\"button\" aria-label=\"Copy the Notices topic\" hidden>Copy</button></span> <span class=\"nowrap\">job Notices $2</span>$3</dd>"
   echo '</section>'
 }
 case "$*" in

@@ -61,7 +61,7 @@ func (w *lockedBuffer) String() string {
 	return w.b.String()
 }
 
-var reJoinLine = regexp.MustCompile(`(?s)<pre class="legal"><code>(.*?)</code></pre>`)
+var reJoinLine = regexp.MustCompile(`(?s)<pre class="command"><span class="prompt" aria-hidden="true">\$ </span><code data-copy>(.*?)</code></pre>`)
 
 // joinCommandOn is the Join command a page shows: its one line, as a shell
 // reads it, and its token.
@@ -72,6 +72,7 @@ func joinCommandOn(t *testing.T, body string) (line, token string) {
 		t.Fatalf("the page shows no Join command:\n%s", refusalIn(body))
 	}
 	line = html.UnescapeString(m[1])
+	offersToCopy(t, body, "the Join command", line)
 	token = regexp.MustCompile(`enr_[0-9a-f]{32}`).FindString(line)
 	if token == "" {
 		t.Fatalf("the Join command carries no token: %s", line)

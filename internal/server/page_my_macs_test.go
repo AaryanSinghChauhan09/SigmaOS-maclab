@@ -205,6 +205,12 @@ func TestACardShowsEverythingItsVolunteerMaySeeAndDo(t *testing.T) {
 	l.s.macSaid("vol-air", id, macJoined, "Joined as a Volunteer's Mac, at Qualification with publishing off")
 	lease := grace.mustLease("vol-air", "grace@desk", 0)
 
+	cardHTML := part(t, linus.page("/my-macs"), `id="mac-vol-air"`, "</section>\n")
+	offersToCopy(t, cardHTML, "the Notices topic", "https://ntfy.example/linus-own-topic")
+	offersToCopy(t, cardHTML, "the update command", "sudo lab-agent update")
+	for _, c := range onlyAtTheMac {
+		offersToCopy(t, cardHTML, c.Line, c.Line)
+	}
 	card := linus.myMacs().sole(t, "#mac-vol-air")
 	if got := card.sole(t, "h2").words(); got != "vol-air" {
 		t.Errorf("the card is named %q", got)

@@ -311,6 +311,9 @@ func TestTheHomePageShowsTheMatrixOrSaysThereAreNoReportsYet(t *testing.T) {
 	if got := page.sole(t, "#install").words(); got != "curl -fsSL "+labAddress+"/install | bash" {
 		t.Errorf("the install command: %q", got)
 	}
+	home := l.do("GET", "/", "").Body.String()
+	offersToCopy(t, home, "the install command", "curl -fsSL "+labAddress+"/install | bash")
+	offersToCopy(t, home, "omarchy-m-test", "omarchy-m-test")
 	l.add(goldenDoc(t, "m2-max-image2"), "a")
 	page = l.page("/")
 	if page.count(t, "table.matrix tr.model-summary") != 1 || page.count(t, "tbody.matrix-history tr.build-row") != 1 {

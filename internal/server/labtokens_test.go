@@ -53,6 +53,8 @@ func (b *browser) makeToken(name, period string) string {
 	if w.Code != http.StatusOK || len(found) != 1 {
 		b.l.t.Fatalf("make the Lab token %q: %d, and the page shows %d secrets:\n%s", name, w.Code, len(found), w.Body)
 	}
+	offersToCopy(b.l.t, w.Body.String(), "the Lab token", found[0])
+	offersToCopy(b.l.t, w.Body.String(), "lab login", "lab login")
 	return found[0]
 }
 

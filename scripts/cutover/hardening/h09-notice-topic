@@ -166,7 +166,7 @@ not_refused_with() { card; ! refusal | grep -qF -- "$1"; }
 # notices: the topic and the job Notices the Mac's card shows, a line each.
 notices() {
   card
-  grep -oE '<dt>Notices</dt><dd>(<code>[^<]*</code>|<span class="dim">no topic</span>)' "$WORK/card.html" | head -n 1 || true
+  grep -oE '<dt>Notices</dt><dd>(<span class="copyable"><code data-copy>[^<]*</code>|<span class="dim">no topic</span>)' "$WORK/card.html" | head -n 1 || true
   grep -oE 'job Notices o(n|ff)' "$WORK/card.html" | head -n 1 || true
 }
 # shellcheck disable=SC2329
