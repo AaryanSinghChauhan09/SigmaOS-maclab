@@ -269,6 +269,29 @@ func TestTheFourteenRunLocally(t *testing.T) {
 	})
 }
 
+// The deletion link is a secret: it reaches curl on stdin, never in its
+// arguments, where the process list would show its token.
+func TestH10GivesCurlTheDeletionLinkOnStdin(t *testing.T) {
+	t.Parallel()
+	real, err := exec.LookPath("curl")
+	if err != nil {
+		t.Skip("no curl")
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "curl.args")
+	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte("#!/bin/sh\necho \"$*\" >> "+log+"\nexec "+real+" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code, record, _ := local(t, []string{"PATH=" + dir + ":" + os.Getenv("PATH")}, "h10-browser")
+	if code != 0 || !strings.Contains(record, "opening the deletion link: 200") {
+		t.Fatalf("exit %d\n%s\n%s", code, out, record)
+	}
+	args := read(t, log)
+	if strings.Contains(args, "token=") || strings.Contains(args, "/deletion?") {
+		t.Errorf("curl was given the deletion link as an argument:\n%s", args)
+	}
+}
+
 // A secret put where the rule says it must not be is found: in a service
 // definition, and on a command line.
 func TestH06FindsASecretShown(t *testing.T) {

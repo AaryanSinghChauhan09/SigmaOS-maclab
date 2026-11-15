@@ -118,7 +118,11 @@ else
 fi
 link="$(cat "$WORK/deletion")"
 [[ $link == "$ADDRESS"/reports/*/deletion\?token=* ]] || give_up "that is not a deletion link at $ADDRESS"
-code="$(curl -sS -o "$WORK/deletion.html" -D "$WORK/deletion.headers" -w '%{http_code}' --max-time 30 "$link")" || code=000
+# The link reaches curl on stdin, as its config: an argument would show its
+# token in the process list.
+quoted="${link//\\/\\\\}"
+quoted="${quoted//\"/\\\"}"
+code="$(printf 'url = "%s"\n' "$quoted" | curl -sS -o "$WORK/deletion.html" -D "$WORK/deletion.headers" -w '%{http_code}' --max-time 30 --config -)" || code=000
 [[ $code == 200 ]] || give_up "the deletion link answered $code"
 grep -qi '^cache-control:.*no-store' "$WORK/deletion.headers" || give_up "the deletion page may be kept: no no-store"
 grep -qi '^referrer-policy: *no-referrer' "$WORK/deletion.headers" || give_up "the deletion page sends a referrer"
