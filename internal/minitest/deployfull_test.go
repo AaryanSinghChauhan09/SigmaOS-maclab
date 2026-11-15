@@ -27,7 +27,8 @@ type ops struct {
 	lines []string
 	// old is a labd from before the drain: it has the lines only.
 	old bool
-	// drainStatus, when set, is the status POST /drain answers with.
+	// drainStatus, when set, is the status POST /drain answers with. Parts
+	// of "500" are a GET /parts that answers that status.
 	drainStatus int
 }
 
@@ -90,6 +91,10 @@ func (m *mini) ops() *ops {
 		case "GET /parts":
 			if o.old {
 				http.NotFound(w, r)
+				return
+			}
+			if o.parts == "500" {
+				http.Error(w, "parts broke", http.StatusInternalServerError)
 				return
 			}
 			io.WriteString(w, o.parts)
@@ -350,6 +355,9 @@ func TestDeployGoesBackWhenTheBuilderOrTheControllerIsNotWell(t *testing.T) {
 	for _, c := range []struct{ parts, word string }{
 		{"builder silent\ncontroller ok\n", "the Builder has not asked labd for work"},
 		{"builder ok\ncontroller bad\n", "the Out-of-band controller does not answer labd"},
+		{"500", "labd did not say how the Builder and the Out-of-band controller are"},
+		{"all is well\n", "labd did not say how the Builder and the Out-of-band controller are"},
+		{"builder ok\n", "labd did not say how the Builder and the Out-of-band controller are"},
 	} {
 		t.Run(c.word, func(t *testing.T) {
 			m, k, r := deployed(t)

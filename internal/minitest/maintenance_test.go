@@ -554,6 +554,23 @@ func TestTheMaintenanceRunsDryRunChangesNothing(t *testing.T) {
 	}
 }
 
+// A labd whose parts cannot be read is not taken for one whose parts are
+// well: every service is checked, and the run ends as wrong.
+func TestPartsThatCannotBeReadFailTheCheckOfServices(t *testing.T) {
+	t.Parallel()
+	for _, parts := range []string{"500", "builder ok\n", "nothing to say\n"} {
+		r := maintained(t)
+		r.went()
+		r.ops.set(func(o *ops) { o.lines = nil; o.parts = parts })
+
+		out := r.stopped("--after-restart")
+
+		if !strings.Contains(r.report(), "FAIL  labd did not say how the Builder and the Out-of-band controller are") || !strings.Contains(r.report(), "FAILED: not every service is up") {
+			t.Errorf("parts %q:\n%s\n%s", parts, out, r.report())
+		}
+	}
+}
+
 // The second half has no dry run: asked for one, it refuses, and the run
 // that waits is left as it was, for the real second half.
 func TestTheSecondHalfsDryRunChangesNothing(t *testing.T) {
