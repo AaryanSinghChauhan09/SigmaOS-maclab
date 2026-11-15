@@ -704,6 +704,38 @@ func TestAFirstHalfThatDoesNotRestartLiftsTheDrain(t *testing.T) {
 	}
 }
 
+// A switch back whose copy fails puts the tool's folder back as it was,
+// with its daemon started, and changes neither VERSIONS nor HELD.
+func TestASwitchBackThatCannotCopyLeavesTheToolAsItWas(t *testing.T) {
+	t.Parallel()
+	r := maintained(t)
+	r.newer("cloudflared", "2.0", "#!/bin/sh\n# bad\necho cloudflared 2.0\n")
+	r.went()
+	r.ops.set(func(o *ops) { o.lines = nil })
+	tools := r.path("usr/local/lab/tools")
+	prevTool := tools + "/previous/cloudflared/bin/cloudflared"
+	if err := os.Chmod(prevTool, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(prevTool, 0o755) })
+	os.Remove(r.log)
+
+	r.stopped("--after-restart")
+
+	if got := read(t, tools+"/current/cloudflared/bin/cloudflared"); !strings.Contains(got, "cloudflared 2.0") {
+		t.Errorf("the copy the daemons run from holds: %q", got)
+	}
+	if r.version("cloudflared") != "2.0" || exists(tools+"/current/HELD") || exists(tools+"/current/.cloudflared.failed") {
+		t.Errorf("VERSIONS or HELD changed, or the failed folder was left:\n%s", read(t, tools+"/current/VERSIONS"))
+	}
+	if !r.tunnelLoaded() {
+		t.Errorf("the tunnel was left stopped:\n%s", r.calls())
+	}
+	if !strings.Contains(r.report(), "tool cloudflared 2.0 fails its check, and it could not be switched back to 1.0") {
+		t.Errorf("the report:\n%s", r.report())
+	}
+}
+
 // Each Homebrew tool by its own check, as the Maintenance run asks it.
 func TestEachToolsOwnCheck(t *testing.T) {
 	t.Parallel()

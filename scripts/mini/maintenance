@@ -327,20 +327,28 @@ back() {
   prev="$(cd -P "$LAB_TOOLS/previous" 2>/dev/null && pwd -P)" || return 1
   [[ -d $prev/$name && $cur != "$prev" ]] || return 1
   if [[ -n $label ]] && loaded "$label"; then stopped "$label" || return 1; fi
-  rm -rf "${cur:?}/.$name.failed"
-  mv "$cur/$name" "$cur/.$name.failed"
-  cp -R "$prev/$name" "$cur/$name"
-  chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$cur/$name"
-  chmod -R ug-s,go-w "$cur/$name"
-  rm -rf "${cur:?}/.$name.failed"
-  awk -v n="$name" -v v="$2" '$1 == n { print n, v; next } { print }' "$cur/VERSIONS" > "$cur/VERSIONS.new"
-  mv -f "$cur/VERSIONS.new" "$cur/VERSIONS"
-  { grep -v "^$name " "$cur/HELD" 2>/dev/null || true; echo "$name $3"; } > "$cur/HELD.new"
-  mv -f "$cur/HELD.new" "$cur/HELD"
-  if [[ -n $label && -f $LAUNCHD_DIR/$label.plist ]]; then
-    launchctl enable "system/$label" || true
-    launchctl bootstrap system "$LAUNCHD_DIR/$label.plist" || return 1
+  rm -rf "${cur:?}/.$name.failed" || { again "$label"; return 1; }
+  mv "$cur/$name" "$cur/.$name.failed" || { again "$label"; return 1; }
+  # Called as "if ! back", errexit is off here: each step is checked, and a
+  # copy that fails puts the tool's folder back as it was.
+  if ! cp -R "$prev/$name" "$cur/$name" || ! chown -Rh "$ROOT_OWNER:$ROOT_GROUP" "$cur/$name" || ! chmod -R ug-s,go-w "$cur/$name"; then
+    rm -rf "${cur:?}/$name"
+    mv "$cur/.$name.failed" "$cur/$name" || true
+    again "$label"
+    return 1
   fi
+  rm -rf "${cur:?}/.$name.failed" || return 1
+  awk -v n="$name" -v v="$2" '$1 == n { print n, v; next } { print }' "$cur/VERSIONS" > "$cur/VERSIONS.new" || return 1
+  mv -f "$cur/VERSIONS.new" "$cur/VERSIONS" || return 1
+  { grep -v "^$name " "$cur/HELD" 2>/dev/null || true; echo "$name $3"; } > "$cur/HELD.new" || return 1
+  mv -f "$cur/HELD.new" "$cur/HELD" || return 1
+  again "$label"
+}
+
+# again LABEL: the tool's daemon, if it has one, started from the copy.
+again() {
+  [[ -n $1 && -f $LAUNCHD_DIR/$1.plist ]] || return 0
+  boot_in "$1" "$LAUNCHD_DIR/$1.plist"
 }
 
 tools() {
