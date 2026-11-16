@@ -22,8 +22,8 @@ const usage = `lab-agent: the Mac side of Omarchy Mac Lab
   sudo lab-agent setup --server <Lab address> --token-stdin [--gui-user you] [--accept-terms <sha256>]
         [--autologin|--stay-awake] [--volatile-journal] [--ca-file <pem>] [--allow-plain-http]
                                   what the Join command runs on the Mac: the pre-checks, the lab's terms and a
-                                  typed yes, leaving any other lab, enrolling, and one question for the weekly
-                                  Availability window (a Volunteer's Mac refuses --autologin and --stay-awake)
+                                  typed yes, leaving any other lab and enrolling; the weekly Availability window
+                                  is set on My Macs (a Volunteer's Mac refuses --autologin and --stay-awake)
   sudo lab-agent move --server <the new Lab address> [--ca-file <pem>] [--allow-plain-http] [--no-check]
                                   for a change of the Lab address only: point this enrolled Mac at it, and change
                                   nothing else (a Mac joins another lab with that lab's Join command)

@@ -275,9 +275,9 @@ func TestACardShowsEverythingItsVolunteerMaySeeAndDo(t *testing.T) {
 			t.Errorf("the commands for what only the Mac can give lack %q:\n%s", want, commands)
 		}
 	}
-	// Nothing on the site gives.
+	// Nothing on the site gives but the weekly window (window_from_site_test.go).
 	for _, f := range card.all(t, "form") {
-		for _, gives := range []string{"open", "access", "publish", "window", "full"} {
+		for _, gives := range []string{"open", "access", "publish", "full"} {
 			if strings.HasSuffix(f.attr("action"), "/"+gives) {
 				t.Errorf("the card has a form that gives: %s", f.attr("action"))
 			}

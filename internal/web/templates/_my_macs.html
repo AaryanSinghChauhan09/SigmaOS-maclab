@@ -35,7 +35,7 @@
 {{end}}<dl class="facts">
 <dt>Configuration</dt><dd>{{.Configuration}}</dd>
 <dt>State</dt><dd>{{.State}}{{if .Reason}} <span class="dim">{{.Reason}}</span>{{end}}</dd>
-<dt>Availability window</dt><dd>{{if .Schedule}}{{.Schedule}}{{if .Zone}} <span class="dim">({{.Zone}})</span>{{end}}{{else}}none yet{{end}} <br>{{.Window}}</dd>
+<dt>Availability window</dt><dd>{{if .Schedule}}{{.Schedule}}{{if .Zone}} <span class="dim">({{.Zone}})</span>{{end}}{{else}}none yet{{end}} <br>{{.Window}}{{if .Pending}} <br>{{.Pending}} <span class="dim">pending until the Mac checks in</span>{{end}}</dd>
 <dt>Access level</dt><dd>{{.AccessLevel}}</dd>
 <dt>Publishing</dt><dd>{{if .Publishing}}on <span class="dim">the lab may publish this Mac's reports</span>{{else}}off <span class="dim">the lab publishes none of this Mac's reports</span>{{end}}</dd>
 <dt>Installed runs</dt><dd>{{if .Eligible}}Eligible{{else}}not Eligible <span class="dim">its system cannot be captured first</span>{{end}} <span class="dim">Installed runs are not offered on a Volunteer's Mac yet.</span></dd>
@@ -49,7 +49,13 @@
 {{end}}{{if .Limited}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/remove-limit")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Remove limit</button></form>
 {{else}}<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/limit")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small button-plain" type="submit" data-sentence="{{.LimitSentence}}">Limit to Qualification</button></form>
 {{end}}{{template "take" ($.Take (print "/my-macs/" .Name "/leave") "Leave" .LeaveSentence)}}
-<p class="dim">The site only takes away, and gives back only what it took. Pause and Limit stop a job that is running and end a Lease. A time is the Mac's own{{if .Zone}} ({{.Zone}}){{end}}; with none, Pause holds until you Resume.</p>
+</div>
+<div class="controls" id="window-{{.Name}}">
+<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/window")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><label class="dim">days <input type="text" name="days" placeholder="mon-fri" size="7" required></label> <label class="dim">from <input type="text" name="from" placeholder="19:00" size="5" required></label> <label class="dim">to <input type="text" name="to" placeholder="07:00" size="5" required></label> <button class="button button-small" type="submit">Add a window</button></form>
+<form class="inline" method="post" action="{{href (print "/my-macs/" .Name "/window")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="always" value="yes"><button class="button button-small button-plain" type="submit">Always</button></form>
+{{range .Rules}}<form class="inline" method="post" action="{{href (print "/my-macs/" $card.Name "/window")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="remove" value="{{.}}"><button class="button button-small button-plain" type="submit">Remove {{.}}</button></form>
+{{end}}<p class="dim">The weekly window: days like mon-fri, sat or sun, and times in the Mac's own clock{{if .Zone}} ({{.Zone}}){{end}}, 19:00 to 07:00 crossing midnight, 00:00 to 24:00 a whole day; Always is every hour. The Mac takes a change when it next checks in, and a change made at the Mac since wins.</p>
+<p class="dim">Otherwise the site only takes away, and gives back only what it took. Pause and Limit stop a job that is running and end a Lease. A time is the Mac's own{{if .Zone}} ({{.Zone}}){{end}}; with none, Pause holds until you Resume.</p>
 </div>
 <h3>jobs</h3>
 <div id="jobs-{{.Name}}">

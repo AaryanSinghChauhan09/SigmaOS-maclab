@@ -872,10 +872,14 @@ reads "no window yet", then "first check pending (restarts twice)", then
 "ready"; a first baseline that fails is shown and posted, and a Maintainer
 looks.
 
-Only the Mac gives: Open now, the weekly schedule, raising to Full and turning
-publishing on are `sudo lab-agent …` at the Mac, and labd has no route for
-them. The site only takes away, for the Mac's own Volunteer, and undoes only
-what it took:
+Only the Mac gives Open now, raising to Full and turning publishing on:
+`sudo lab-agent …` at the Mac, and labd has no route for them. The weekly
+schedule is set at the Mac or, by the Mac's own Volunteer, on My Macs (`POST
+/my-macs/{name}/window`, or `POST /api/devices/{name}/window` with their Lab
+token): labd keeps the change and hands it to the Mac in its next check-in
+answer, the Mac takes it unless its own changed later, and the card shows it
+pending until a check-in carries it. Otherwise the site only takes away, for
+the Mac's own Volunteer, and undoes only what it took:
 
 - **Pause**, until a time or until Resume. The Mac is closed to the lab
   whatever its own window says, an Open now included.

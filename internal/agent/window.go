@@ -125,12 +125,12 @@ func windowCmd(ctx context.Context, cfg *Config, sys System, args []string, out 
 			case args[0] == "add" && i >= 0:
 				fmt.Fprintf(out, "%s is already a window\n", r)
 			case args[0] == "add":
-				s.Rules = append(s.Rules, r)
+				s.Rules, s.RulesAt = append(s.Rules, r), now
 				fmt.Fprintf(out, "added %s (in this Mac's local time)\n", r)
 			case i < 0:
 				return fmt.Errorf("%s is not one of this Mac's windows (see window show)", r)
 			default:
-				s.Rules = slices.Delete(s.Rules, i, i+1)
+				s.Rules, s.RulesAt = slices.Delete(s.Rules, i, i+1), now
 				fmt.Fprintf(out, "removed %s\n", r)
 			}
 			fmt.Fprintln(out, "Window: "+describeWindow(*s, now))
@@ -138,6 +138,34 @@ func windowCmd(ctx context.Context, cfg *Config, sys System, args []string, out 
 		})
 	}
 	return usage
+}
+
+// errWindowKept is takeWindow keeping the Mac's own weekly windows.
+var errWindowKept = errors.New("kept")
+
+// takeWindow takes the weekly windows the Mac's Volunteer set on My Macs,
+// which labd hands over in its check-in answers until a check-in carries
+// them; unless the Mac's own changed since: the last change wins. Pause and
+// Open now stay the Mac's.
+func (a *Agent) takeWindow(w api.WindowWanted) {
+	var words string
+	err := changeWindow(a.cfg, func(s *window.Settings, now time.Time) error {
+		if s.RulesAt.After(w.At) || s.Schedule() == (window.Settings{Rules: w.Rules}).Schedule() {
+			return errWindowKept
+		}
+		s.Rules, s.RulesAt = slices.Clone(w.Rules), w.At
+		words = s.Schedule()
+		return nil
+	})
+	switch {
+	case errors.Is(err, errWindowKept):
+	case err != nil:
+		a.log.Printf("Availability window set on My Macs: %v", err)
+	case words == "":
+		a.log.Printf("Availability window: none, as set on My Macs")
+	default:
+		a.log.Printf("Availability window: %s, as set on My Macs", words)
+	}
 }
 
 // untilArg reads the one flag pause and open take: --until VALUE.

@@ -756,6 +756,7 @@ func (s *Server) routes() []route {
 		{"POST /api/devices/{name}/end-enrollment", maintainers, s.hEndEnrollment},
 		{"GET /api/retired", maintainers, s.hRetired},
 		{"POST /api/devices/{name}/lease", team, s.hLease},
+		{"POST /api/devices/{name}/window", macNamed, s.hWindow},
 		{"DELETE /api/devices/{name}/lease", team, s.hRelease},
 		{"GET /api/devices/{name}/leases", macNamed, s.hLeaseRecord},
 		{"POST /api/devices/{name}/reset", team, s.hReset},

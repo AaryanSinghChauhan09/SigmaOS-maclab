@@ -538,6 +538,9 @@ func (a *Agent) poll(ctx context.Context) error {
 		a.lastFacts = a.clock().Now()
 	}
 	a.mu.Unlock()
+	if resp.Window != nil && a.volunteer() {
+		a.takeWindow(*resp.Window)
+	}
 	for _, c := range resp.Commands {
 		a.start(a.life, c)
 	}

@@ -462,6 +462,9 @@ func (v *dev) deliver(bootID string) api.CheckinResponse {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	resp := api.CheckinResponse{IntervalMS: int(v.s.cfg.Interval / time.Millisecond), Kind: v.d.Kind, Held: v.heldLocked()}
+	if v.d.IsVolunteer() {
+		resp.Window = v.d.WindowWanted
+	}
 	if bootID != v.d.BootID {
 		return resp
 	}

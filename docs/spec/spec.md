@@ -106,7 +106,7 @@ It starts on the site. `./volunteer` is retired; nothing looks for the lab, and 
 1. **Sign in** with GitHub. "Lend a Mac" opens with the Test machine rule, then a table of what the lab may and may not do, and the terms text.
 2. **Leave to lend**, needed once per person: an M team member or a Maintainer has it; a person with an Invite has it; anyone else sends a Request to lend and waits for a Maintainer.
 3. **Join command.** The person names the Mac on the page and gets one line to copy.
-4. **On the Mac.** Pre-checks, then the terms and a typed `yes`, then leaving any other lab, then enrolling and setup, then one question for the weekly Availability window.
+4. **On the Mac.** Pre-checks, then the terms and a typed `yes`, then leaving any other lab, then enrolling and setup. Join asks nothing about the Availability window: the Mac arrives closed, and setup's last line points to My Macs to set it.
 5. **Arrival.** The Mac is at Qualification with publishing off. The lab queues its first baseline itself; it runs in the first open window.
 6. **Afterwards.** My Macs shows the Mac, its records and its jobs. Leaving is one click or one command.
 
@@ -155,7 +155,7 @@ Installing a Release and rolling back is not offered on a Volunteer's Mac until 
 
 **Arriving.** A Mac arrives closed: with no Availability window it takes nothing. Joining sets Qualification and publishing off, whatever the Mac had in another lab; a window it had is kept. The first baseline is queued by the lab itself, no Maintainer step; a failed one is shown and posted, and a Maintainer looks. My Macs shows "no window yet", "first check pending (restarts twice)", "ready". ("Volunteering a Mac")
 
-**Controls: the Mac sets the ceiling.** Only the Mac gives: Open now, the weekly schedule, raising to Full and turning publishing on are `sudo lab-agent …` at the Mac; My Macs shows each command. The site only takes away, and undoes only what it took: Pause (until a time or Resume), Limit to Qualification (until "Remove limit"), Leave. Pause and Limit stop a running job as a closing window does and end a Lease. One control on the site gives: accepting changed terms. ("Volunteering a Mac"; "Terms and privacy")
+**Controls: the Mac sets the ceiling, save the weekly schedule.** Only the Mac gives Open now, raising to Full and turning publishing on: `sudo lab-agent …` at the Mac; My Macs shows each command. The weekly schedule is set either at the Mac (`sudo lab-agent window …`) or on My Macs by that Mac's own Volunteer, signed in or with their Lab token (add a window, always included, or remove one); nobody else sets it, Maintainers and the M team included. labd keeps a change made on the site and hands it to the Mac at its next check-in; the Mac enforces its window itself, labd down or not, and My Macs shows the change pending until the Mac holds it. The last change wins, and each is in the Mac's record and posted to the Lab group. The trade-off: a stolen session or Lab token of that Volunteer can widen their own Mac's window, which before took the Mac itself. Otherwise the site only takes away, and undoes only what it took: Pause (until a time or Resume), Limit to Qualification (until "Remove limit"), Leave. Pause and Limit stop a running job as a closing window does and end a Lease. Two controls on the site give: the weekly schedule and accepting changed terms. Lab-owned Macs have no window. ("Volunteering a Mac"; "Terms and privacy")
 
 **The weekly schedule** is days and hours in the Mac's local time, `mon-fri 19:00-07:00`; `00:00-24:00` is a whole day, and `always` (every day, every hour) leaves no gap at midnight. ("Volunteering a Mac")
 
@@ -607,7 +607,7 @@ Unchanged: `baseline`, `crashtest`, `run`, `logs`, `retry`, `gate`, `exclude`, `
 | Command | | What |
 |---|---|---|
 | `update` | added | `sudo lab-agent update`, at the Mac, takes the agent from the lab server; a bad signature, or an agent older than the one installed, is refused |
-| `setup` | changed | pre-checks first; finds and leaves another lab; arrives at Qualification with publishing off; asks once for the window; shows the terms (`--accept-terms <sha256>` keeps its meaning); the Tailscale flags go |
+| `setup` | changed | pre-checks first; finds and leaves another lab; arrives at Qualification with publishing off; asks nothing of the window and points to My Macs for it; shows the terms (`--accept-terms <sha256>` keeps its meaning); the Tailscale flags go |
 | `move` | changed | only for a change of the Lab address |
 | `leave` | changed | its message loses the Tailscale line |
 | `status` | changed | says when changed terms are waiting on My Macs |

@@ -136,9 +136,12 @@ func (r Rule) on(d time.Weekday) bool {
 
 // Settings are a Volunteer Mac's window settings: the weekly schedule in the
 // Mac's local time plus the Pause and Open now overrides. Only the Volunteer
-// changes them, on the Mac.
+// changes them: at the Mac, and the weekly schedule on My Macs too.
 type Settings struct {
-	Rules       []Rule    `json:"rules"`
+	Rules []Rule `json:"rules"`
+	// RulesAt is when Rules last changed, by the clock of where they were
+	// changed: the Mac's at the Mac, labd's on My Macs. The last change wins.
+	RulesAt     time.Time `json:"rules_at,omitzero"`
 	Zone        string    `json:"zone,omitempty"`        // IANA name of the Mac's local time zone
 	PausedUntil time.Time `json:"paused_until,omitzero"` // Pause: closed until then
 	OpenUntil   time.Time `json:"open_until,omitzero"`   // Open now: open until then

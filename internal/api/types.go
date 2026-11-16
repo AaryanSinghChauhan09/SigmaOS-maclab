@@ -186,8 +186,11 @@ type Device struct {
 	// latest check-in said: a Mac that can't is not eligible for Installed runs.
 	SnapshotEligible bool `json:"snapshot_eligible"`
 	// Window is a Volunteer Mac's Availability window settings as its latest
-	// check-in carried them. Only the Volunteer changes them, on the Mac.
+	// check-in carried them.
 	Window *window.Settings `json:"window,omitempty"`
+	// WindowWanted is the weekly schedule its Volunteer set on My Macs that
+	// the Mac does not hold yet; nil when nothing waits for the Mac.
+	WindowWanted *WindowWanted `json:"window_wanted,omitempty"`
 	// AccessLevel is what Maintainers may do on a Volunteer's Mac, and
 	// Publish whether its omarchy-m-test reports may be published, as its
 	// latest check-in carried them. Only the Volunteer changes them, on the Mac.
@@ -470,6 +473,24 @@ type CheckinResponse struct {
 	Held bool `json:"held,omitempty"`
 	// AuditHave is how much of the Mac's Audit log labd's copy holds, in bytes.
 	AuditHave int64 `json:"audit_have,omitempty"`
+	// Window is the weekly schedule the Mac's Volunteer set on My Macs, for
+	// the Mac to take unless its own changed later; nil when none waits.
+	Window *WindowWanted `json:"window,omitempty"`
+}
+
+// WindowWanted is a weekly schedule set on My Macs, at At by labd's clock,
+// on its way to the Mac. No Rules is no window: the Mac is closed.
+type WindowWanted struct {
+	Rules []window.Rule `json:"rules"`
+	At    time.Time     `json:"at"`
+}
+
+// WindowChange is one change to a Volunteer's Mac's weekly schedule on
+// labd's API: a window to add or one to remove, in `window add` syntax,
+// "mon-fri 19:00-07:00" or "always".
+type WindowChange struct {
+	Add    string `json:"add,omitempty"`
+	Remove string `json:"remove,omitempty"`
 }
 
 // Command kinds sent to the agent.
