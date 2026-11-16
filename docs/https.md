@@ -164,6 +164,8 @@ labd states a policy on every response; the default is `no-store`.
 - `/install` and `/install/lab`: public, 5 minutes, the same for whoever asks. In Preview both serve the Release
   candidate the mini runs; after the opening, the latest Lab release. Fingerprinted assets: public, one year.
 - `/api/*` is never cached, the exports under `/api/v1/` excepted. Artifacts say `private` themselves.
+- A request with a Lab token or the session cookie is never answered from the edge's cache, whatever the path.
+- The edge passes labd's `max-age` to the browser as it is (Browser Cache TTL: Respect Existing Headers).
 
 ## A labd of your own
 

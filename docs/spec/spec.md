@@ -378,6 +378,7 @@ All set, and checked on every run, by the zone script, which fails if one drifts
 
 - **Off**: Bot Fight Mode, AI-bot blocking, AI Labyrinth, Rocket Loader, email obfuscation, Always Online, automatic HTTPS rewrites, Cloudflare Fonts, the analytics script injection.
 - **On**: Always Use HTTPS, HTTP/3, TLS 1.3, 0-RTT, Early Hints, Smart Tiered Cache, Speed Brain.
+- **Browser Cache TTL**: Respect Existing Headers, so a browser keeps to the server's `max-age`; the default four hours would override it.
 - **One skip rule on `/api/*` and `/join`**: no Browser Integrity Check, no managed rules.
 - **One rate rule**, a flood cap: 300 requests in 10 s per address, whole site.
 - Clients name themselves in `User-Agent` and report an edge challenge as a plain error.
@@ -389,8 +390,9 @@ All set, and checked on every run, by the zone script, which fails if one drifts
 - Fingerprinted assets: public, one year, shipped inside the binary already compressed at the highest Brotli level.
 - `/install`: public, 5 minutes.
 - Public pages and exports, `/terms` and `/privacy` among them, for visitors with no session: cached at the edge, fresh for 60 s, then served stale while the edge refreshes, for up to a day, and stale on error for a day (`stale-if-error`). Browsers always revalidate. Nothing is purged in normal running; the one purge is at the lab's opening (section 16, step 25).
-- The guard: the cache rule matches only public paths on requests without the session cookie; anything rendered for a session says `private, no-store`.
+- The guard: the cache rule matches only public paths on requests without the session cookie or a Lab token; anything rendered for a session says `private, no-store`.
 - `/api/*`: one rule bypasses cache. Artifacts send `Cache-Control: private` themselves.
+- A request with a Lab token (`Authorization`) or the session cookie: one rule, the last, bypasses cache on every path.
 - Never a "cache everything" rule or a forced edge lifetime.
 - Left to the build: the exact header pair; the edge lifetime goes in the CDN-only header.
 

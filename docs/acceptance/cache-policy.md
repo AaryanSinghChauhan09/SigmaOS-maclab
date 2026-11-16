@@ -29,7 +29,11 @@ Nothing rendered for a session is kept. labd decides by the request, as the edge
 
 ## The exports and `/api/*`
 
-The spec says exports are cached like the public pages and that one rule bypasses cache on `/api/*`; the exports live under `/api/v1/`. Both now hold: in `scripts/cloud/edge.json` the first cache rule lists the eleven export paths beside the pages, and the bypass covers everything under `/api/` except one of those paths asked for without the session cookie. Exactly one of the two rules matches any request under `/api/`, so their order decides nothing. The skip rule on `/api/*` is unchanged.
+The spec says exports are cached like the public pages and that one rule bypasses cache on `/api/*`; the exports live under `/api/v1/`. Both now hold: in `scripts/cloud/edge.json` the first cache rule lists the eleven export paths beside the pages, and the bypass covers everything under `/api/` except one of those paths asked for without the session cookie. The skip rule on `/api/*` is unchanged.
+
+## A Lab token, the session cookie, and the browser's copy
+
+FD 13 through the real edge on 2026-11-16 found two things labd's headers alone do not hold. A public page asked for with a Lab token was a `HIT`: the edge keeps a page by the request's path and cookie, and an `Authorization` header is neither. And every public page reached the browser as `public, max-age=14400`: the zone's Browser Cache TTL was Cloudflare's default of four hours, which rewrites a lower `max-age`. So the zone script now sets Browser Cache TTL to Respect Existing Headers (0), the first cache rule also leaves out a request with an `Authorization` header, and a third rule, the last, bypasses cache for any request with an `Authorization` header or the session cookie, on every path. Cloudflare applies every cache rule that matches, a later one over an earlier one, so the third wins wherever it matches.
 
 ## What was run, 2026-11-15
 
