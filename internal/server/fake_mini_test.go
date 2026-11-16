@@ -68,8 +68,11 @@ type fakeMini struct {
 	// answers after each reset it sent.
 	onLook      func(rid int)
 	rebootFails error
-	client      *oob.Client
-	log         *logBuf
+	// resetPlugs is how many plugs a port counts for each reset the tool
+	// sends to it: the Mac's restart, as the real mini counts one.
+	resetPlugs int
+	client     *oob.Client
+	log        *logBuf
 }
 
 // holdProbes makes the tool's next nop run until release is called: a tool
@@ -130,6 +133,23 @@ func (m *fakeMini) plug(rid int, sim *agent.Sim, name string, productID int) {
 	defer m.mu.Unlock()
 	m.cables[rid] = &fakeCable{sim: sim, name: name, productID: productID}
 	m.plugs[rid]++
+}
+
+// restarted is the port of a Mac that restarted by itself, as the mini
+// sees it: the port counts n more plugs, its cable untouched. A real Apple
+// Silicon Mac's port counts two for each restart (the M2 Max's went from 21
+// to 25 across two reboots).
+func (m *fakeMini) restarted(rid, n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.plugs[rid] += n
+}
+
+// countResets has each reset the tool sends count n plugs on its port.
+func (m *fakeMini) countResets(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetPlugs = n
 }
 
 func (m *fakeMini) unplug(rid int) {
@@ -262,6 +282,7 @@ func (m *fakeMini) Run(_ context.Context, rid int, command string) (string, erro
 	var sim *agent.Sim
 	if c := m.cables[rid]; c != nil {
 		sim = c.sim
+		m.plugs[rid] += m.resetPlugs
 	}
 	fails := m.rebootFails
 	m.mu.Unlock()

@@ -1019,9 +1019,13 @@ keeps it in memory.
   show. While a Mac's Linux is up with a Thunderbolt link the port shows the
   Mac's name; when that name (the Mac's name in the lab, or the hostname its
   check-ins report) belongs to exactly one Lab-owned Mac's record, labd
-  remembers the Mac, the port, the partner's product id and the plug count.
-  A port that is no longer connected, or shows another product id or plug
-  count, ends the Sighting. Any conflict ends the Sightings involved and
+  remembers the Mac, the port, the partner's product id, the plug count and
+  the Mac's boot id. A port that is no longer connected, or shows another
+  product id, ends the Sighting. A Mac's own restart moves its port's plug
+  count, as a pull does: a higher count keeps the Sighting while the Mac
+  comes back on a new boot (which takes the new count) or stays silent, as
+  a Mac hung after a restart does, and ends it once the Mac is heard again
+  on the boot it had, a cable pulled while it stayed up. Any conflict ends the Sightings involved and
   makes none: one name on two ports, a sighted Mac's name on another port,
   another name on a sighted Mac's port, one name in two records. After labd
   restarts it holds none, and Macs that are up are sighted again by
@@ -1030,7 +1034,8 @@ keeps it in memory.
   Lab-owned Mac's page, which asks twice: a Maintainer, or the holder of a
   Lease on the Mac. labd looks at the port, and the controller compares it
   once more under its lock; a port that changed ends the Sighting and the
-  reset is refused with the reason. If the Mac does not return the lab sends
+  reset is refused with the reason. While the plug count has moved and the
+  Mac is still heard on the boot it had, no reset goes out. If the Mac does not return the lab sends
   one more, then asks for hands. Refused for a Mac the lab cannot place, and
   always for a Volunteer's Mac.
 - **Proving reset.** `lab reset <mac> --prove left|middle|right`, Maintainers

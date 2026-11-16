@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -77,6 +78,8 @@ func TestANameOnAPortOfExactlyOneLabOwnedMacMakesASighting(t *testing.T) {
 func TestAHardResetGoesOutOnlyWhileThePortIsAsItWasSighted(t *testing.T) {
 	l := sightLab(t, labConfig{})
 	l.baseline()
+	// The look labd takes every 15 s: it knows the boot the baseline left.
+	l.sight()
 	refused := func(why, state string, saying ...string) {
 		t.Helper()
 		r, body := l.resetAs(harnessToken, l.name, "")
@@ -102,9 +105,15 @@ func TestAHardResetGoesOutOnlyWhileThePortIsAsItWasSighted(t *testing.T) {
 		}
 	}
 
-	// Its cable pulled and plugged back in.
+	// Its cable pulled and plugged back in with the Mac up: no reset until
+	// the lab can tell that from a restart, and the name it shows sights it
+	// again.
 	l.oob.plug(portRight, l.sim, l.name, productM1Pro)
-	refused("the plug count moved", api.CableNotSighted, "the right port has plug count 42, not the 41 it was seen with")
+	if r, body := l.resetAs(harnessToken, l.name, ""); r.StatusCode != http.StatusConflict ||
+		!strings.Contains(body, "the right port has plug count 42, not the 41 it was seen with, and "+l.name+" is up on the boot it had") {
+		t.Fatalf("the plug count moved: %s %s", r.Status, body)
+	}
+	l.wantResets("the plug count moved")
 	sighted()
 
 	// Another model at the end of the cable.
@@ -440,9 +449,13 @@ func TestAProvingResetCountsOnlyIfThatMacReturnsAndEveryOtherKeepsItsBootID(t *t
 	}
 	l.wantResets("the placed Mac", portLeft, portMiddle, portMiddle, portMiddle)
 	l.waitDeviceJSON("m2-max", func(m map[string]any) bool { return m["boot_id"] != boot && m["alive"] == true })
+	l.sight()
 
-	// Its cable pulled: the placing is gone with it.
+	// Its cable pulled while it stayed up: once it is heard on its boot
+	// again, the placing is gone with it.
 	l.oob.plug(portMiddle, max, "", productM2Max)
+	l.sight()
+	l.heardAgain("m2-max")
 	l.sight()
 	l.wantCable("m2-max", api.CableNotSighted, "its Sighting was dropped", "plug count")
 }
@@ -1061,5 +1074,144 @@ func TestAJobQueuedWhileAProvingResetReadsThePortsWaitsForIt(t *testing.T) {
 	l.wantResets("the Proving reset", portMiddle)
 	if got := l.wait(j.ID, 60*time.Second); got.Outcome != api.OutcomePass {
 		t.Errorf("the job that waited for the Proving reset: %s %s", got.Outcome, got.Summary)
+	}
+}
+
+// placeOnMiddle enrolls a Lab-owned Mac on the middle port that shows the
+// mini no name, and places it there by a Proving reset.
+func (l *lab) placeOnMiddle(name string) *agent.Sim {
+	l.t.Helper()
+	sim := l.addMac(name)
+	l.oob.plug(portMiddle, sim, "", productM2Max)
+	l.sight()
+	if r, body := l.resetAs(harnessToken, name, "middle"); r.StatusCode != http.StatusOK {
+		l.t.Fatalf("the Proving reset of %s: %s %s", name, r.Status, body)
+	}
+	l.waitDeviceJSON(name, func(m map[string]any) bool { return m["alive"] == true && m["state"] != string(api.StateRecovering) })
+	return sim
+}
+
+// heardAgain waits for a check-in from the Mac named name after now.
+func (l *lab) heardAgain(name string) {
+	l.t.Helper()
+	since := l.s.now()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if l.s.dev(name).heardAt().After(since) {
+			return
+		}
+	}
+	l.t.Fatalf("%s was not heard again", name)
+}
+
+// A Mac's own restarts move its port's plug count (the M2 Max's went from 21
+// to 25 across a job's two reboots) and do not end its Sighting: a Mac placed
+// by a Proving reset still gets a Hard reset after a job.
+func TestASightingHoldsAcrossTheMacsOwnRestarts(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	l.oob.countResets(2)
+	max := l.placeOnMiddle("m2-max")
+	sg, _ := l.s.cables.of("m2-max")
+	placed := sg.seen.PlugCount
+	held := func(why string, plugs int) {
+		t.Helper()
+		sg, ok := l.s.cables.of("m2-max")
+		if !ok || sg.rid != portMiddle || !sg.proved || sg.seen != (oob.Seen{ProductID: productM2Max, PlugCount: plugs}) {
+			t.Fatalf("%s: the Sighting is %+v %v, want the middle port at plug count %d", why, sg, ok, plugs)
+		}
+		l.wantCable("m2-max", api.CableSighted)
+	}
+
+	// A job reboots it into its kernel and back: two restarts.
+	boot := l.bootOf("m2-max")
+	j, _, err := l.s.Submit(api.JobSpec{Device: "m2-max", Baseline: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.wait(j.ID, 60*time.Second); got.Outcome != api.OutcomePass {
+		t.Fatalf("the job: %s %s", got.Outcome, got.Summary)
+	}
+	if l.bootOf("m2-max") == boot {
+		t.Fatal("the job did not restart the Mac")
+	}
+	l.oob.restarted(portMiddle, 4)
+	l.sight()
+	held("after a job", placed+4)
+
+	// Looked at while it is down for a restart, then once it is back.
+	boot = l.bootOf("m2-max")
+	l.oob.restarted(portMiddle, 2)
+	if err := max.Reboot(); err != nil {
+		t.Fatal(err)
+	}
+	l.sight()
+	held("while it restarts", placed+4)
+	l.waitDeviceJSON("m2-max", func(m map[string]any) bool { return m["boot_id"] != boot && m["alive"] == true })
+	l.sight()
+	held("back from its restart", placed+6)
+
+	// A Hard reset reaches it, and the plugs the reset counts do not end the
+	// Sighting either.
+	boot = l.bootOf("m2-max")
+	if r, body := l.resetAs(harnessToken, "m2-max", ""); r.StatusCode != http.StatusOK || !strings.Contains(body, "through the middle port") {
+		t.Fatalf("a Hard reset after the Mac's own restarts: %s %s", r.Status, body)
+	}
+	l.wantResets("the Proving reset and the Hard reset", portMiddle, portMiddle)
+	l.waitDeviceJSON("m2-max", func(m map[string]any) bool { return m["boot_id"] != boot && m["alive"] == true })
+	l.sight()
+	held("back from its Hard reset", placed+8)
+}
+
+// A Mac that restarted into a hang shows its port's new plug count and is
+// never heard on a new boot: its Sighting holds, and the Hard reset that
+// brings it back goes out.
+func TestAMacHungAfterItsRestartStillGetsItsHardReset(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	max := l.placeOnMiddle("m2-max")
+	boot := l.bootOf("m2-max")
+	l.oob.restarted(portMiddle, 2)
+	go max.Quiet(10 * time.Second)
+	l.waitDeviceJSON("m2-max", func(m map[string]any) bool { return m["alive"] == false })
+	l.sight()
+	if _, ok := l.s.cables.of("m2-max"); !ok {
+		t.Fatal("the look dropped the Sighting of a Mac that restarted and went silent")
+	}
+	if r, body := l.resetAs(harnessToken, "m2-max", ""); r.StatusCode != http.StatusOK || !strings.Contains(body, "through the middle port") {
+		t.Fatalf("a Hard reset of the hung Mac: %s %s", r.Status, body)
+	}
+	l.wantResets("the Proving reset and the Hard reset", portMiddle, portMiddle)
+	l.waitDeviceJSON("m2-max", func(m map[string]any) bool { return m["boot_id"] != boot && m["alive"] == true })
+	l.sight()
+	if sg, ok := l.s.cables.of("m2-max"); !ok || sg.rid != portMiddle {
+		t.Fatalf("after the Hard reset: %+v %v", sg, ok)
+	}
+}
+
+// A cable pulled and put back while its Mac stays up moves the plug count
+// as a restart does, but the Mac is heard again on the boot it had: that
+// ends the Sighting. Until the lab knows, no Hard reset goes out.
+func TestACablePulledWhileItsMacStaysUpEndsItsSighting(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	max := l.placeOnMiddle("m2-max")
+	boot := l.bootOf("m2-max")
+	sg, _ := l.s.cables.of("m2-max")
+	l.oob.plug(portMiddle, max, "", productM2Max)
+	r, body := l.resetAs(harnessToken, "m2-max", "")
+	if r.StatusCode != http.StatusConflict || !strings.Contains(body, "no Hard reset was sent") ||
+		!strings.Contains(body, fmt.Sprintf("the middle port has plug count %d, not the %d it was seen with", sg.seen.PlugCount+1, sg.seen.PlugCount)) ||
+		!strings.Contains(body, "m2-max is up on the boot it had") {
+		t.Fatalf("a Hard reset of a Mac up while its plug count moved: %s %s", r.Status, body)
+	}
+	l.wantResets("the Proving reset alone", portMiddle)
+	l.heardAgain("m2-max")
+	l.sight()
+	if _, ok := l.s.cables.of("m2-max"); ok {
+		t.Fatal("the Sighting outlived a cable pulled while its Mac stayed up")
+	}
+	l.wantCable("m2-max", api.CableNotSighted, "its Sighting was dropped", "plug count", "was heard since on the boot it had")
+	if l.bootOf("m2-max") != boot {
+		t.Fatal("the Mac was restarted")
 	}
 }

@@ -227,19 +227,19 @@ func TestTheEightRunAgainstAMadeUpMini(t *testing.T) {
 	})
 }
 
-// If a reset moves the plug count and the connection id as a pull does, the
-// lab's rule cannot tell them apart: test 4 stops, which is the plan's
-// "one more slice".
-func TestOOB04StopsWhenAResetLooksLikeAPull(t *testing.T) {
+// A reset that moves the plug count and the connection id as a pull does,
+// as the real mini counts a restart: the lab tells the two apart by the
+// Mac's boot id, and test 4 passes saying so.
+func TestOOB04PassesWhenARestartMovesThePlugCount(t *testing.T) {
 	t.Parallel()
 	out, code, record, results := local(t, []string{"OOB_FAKE_MINI=--reset-counts-as-plug"}, "oob04-sighting")
-	if code != 3 || !strings.HasPrefix(results, "04 stopped ") {
+	if code != 0 || !strings.HasPrefix(results, "04 pass ") {
 		t.Fatalf("exit %d, results %q\n%s", code, results, out)
 	}
 	if m := regexp.MustCompile(`across a Hard reset: plug count (\d+) -> (\d+), connection id changed`).FindStringSubmatch(record); m == nil || m[1] == m[2] {
 		t.Errorf("the record does not say the reset moved the plug count:\n%s", record)
 	}
-	for _, want := range []string{"STOPPED: neither the plug count nor the connection id tells an unplug from a restart", "a controller that watches the ports continuously", "Result: stopped"} {
+	for _, want := range []string{"the plug count moved through a restart too, and with the pull: the lab tells an unplug from the Mac's own restart by its boot id", "Result: pass"} {
 		if !strings.Contains(record, want) {
 			t.Errorf("the record lacks %q:\n%s", want, record)
 		}

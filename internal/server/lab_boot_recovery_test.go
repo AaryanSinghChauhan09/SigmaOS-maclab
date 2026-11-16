@@ -256,12 +256,19 @@ func TestWithNoSightingTheLadderSkipsTheHardResetRung(t *testing.T) {
 		why   []string
 	}{
 		{"no cable", func(l *lab) { l.oob.unplug(portRight) }, api.CableNone, []string{"no cable can be the one of sim-mac"}},
-		{"not sighted", func(l *lab) { l.oob.plug(portRight, l.sim, "", productM1Pro) }, api.CableNotSighted,
+		{"not sighted", func(l *lab) {
+			// Pulled and put back while the Mac stays up, and the Mac heard
+			// on its boot since: another cable, as far as the lab can tell.
+			l.oob.plug(portRight, l.sim, "", productM1Pro)
+			l.sight()
+			l.heardAgain(l.name)
+		}, api.CableNotSighted,
 			[]string{"the lab has no Sighting of sim-mac", "A Maintainer can prove its port: `lab reset sim-mac --prove right`"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			l := sightLab(t, labConfig{})
 			l.baseline()
+			l.sight()
 			c.cable(l)
 			l.sight()
 			l.wantCable(l.name, c.state, c.why...)
@@ -321,7 +328,8 @@ func TestTheMacsOwnWatchdogGetsItsTimeWhereNoHardResetReaches(t *testing.T) {
 	l.oob.stop(false)
 	l.sight()
 	check("the controller back", false)
-	l.oob.shows(portRight, "")
+	l.oob.unplug(portRight)
+	l.sight()
 	l.oob.plug(portRight, l.sim, "", productM1Pro)
 	l.sight()
 	check("not sighted", true)
