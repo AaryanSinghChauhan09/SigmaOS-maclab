@@ -132,6 +132,9 @@ func (s *Server) deviceConfig(ctx context.Context, name string) (string, error) 
 	}
 	var text string
 	if err := v.call(ctx, api.CmdConfig, "", nil, time.Minute, &text); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "", fmt.Errorf("reading %s's kernel config: %s did not send it in time; try again when it answers", name, name)
+		}
 		return "", fmt.Errorf("reading %s's kernel config: %w", name, err)
 	}
 	sha, _, err := s.storeArtifact(strings.NewReader(text))
@@ -538,6 +541,10 @@ func (s *Server) hBuilderDone(w http.ResponseWriter, r *http.Request) {
 
 // ---- Maintainer API ----
 
+// createBuildWait bounds asking for a build, so the asker hears back before
+// the edge gives up on labd at 100 s.
+var createBuildWait = 80 * time.Second
+
 func (s *Server) hCreateBuild(w http.ResponseWriter, r *http.Request) {
 	var req api.BuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -550,7 +557,9 @@ func (s *Server) hCreateBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
-	b, err := s.EnsureBuild(r.Context(), req)
+	ctx, cancel := context.WithTimeout(r.Context(), createBuildWait)
+	defer cancel()
+	b, err := s.EnsureBuild(ctx, req)
 	if err != nil {
 		httpErr(w, 400, "%v", err)
 		return
