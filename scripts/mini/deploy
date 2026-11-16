@@ -113,6 +113,13 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
+# A Deploy cut off (the owner's terminal closes, Ctrl-C, a kill) exits
+# through cleanup by a trap of its own: left to bash, a signal taken while it
+# waits on a command around the switch can end it with no EXIT trap run, and
+# cleanup read the last command's 0 as the status.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # running: the tag of the build labd runs from, or nothing.
 running() {
