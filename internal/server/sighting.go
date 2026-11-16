@@ -149,8 +149,9 @@ func (s *Server) saveSightings() {
 
 // restoreLocked keeps or drops each Sighting labd's data held as it
 // started, at its first look at the ports: one is kept while its port is
-// still connected with the same product id. It returns the log's lines.
-// The caller holds c.mu.
+// still connected with the same product id, from the port as it is then,
+// whose plug count the mini's own restart starts again. It returns the
+// log's lines. The caller holds c.mu.
 func (c *cables) restoreLocked(ports map[int]oob.Port, macs []labOwned) (said []string) {
 	if c.kept == nil {
 		return nil
@@ -181,6 +182,7 @@ func (c *cables) restoreLocked(ports map[int]oob.Port, macs []labOwned) (said []
 			said = append(said, "sighting not kept across the restart: "+where+": "+why)
 			continue
 		}
+		sg.seen.PlugCount, sg.rose = p.PlugCount, time.Time{}
 		c.held[name] = sg
 		said = append(said, "sighting kept across the restart: "+where)
 	}

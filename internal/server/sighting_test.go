@@ -1295,3 +1295,24 @@ func TestASightingIsNotKeptAcrossARestartWhenItsPortChanged(t *testing.T) {
 		})
 	}
 }
+
+// After the mini restarts its ports count plugs from the start again: a
+// kept Sighting holds by the same rule, from the port as it is then.
+func TestASightingIsKeptAcrossARestartOfTheMini(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	l.placeOnMiddle("m2-max")
+	l.oob.mu.Lock()
+	l.oob.plugs[portMiddle], l.oob.plugs[portRight] = 1, 1
+	l.oob.mu.Unlock()
+	fresh, logs := l.restartedLabd()
+	for _, name := range []string{"m2-max", l.name} {
+		sg, ok := fresh.cables.of(name)
+		if !ok || sg.seen.PlugCount != 1 {
+			t.Fatalf("%s after the mini restarted: %+v %v\n%s", name, sg, ok, logs.String())
+		}
+	}
+	if !strings.Contains(logs.String(), "sighting kept across the restart: m2-max on middle") {
+		t.Fatalf("the log:\n%s", logs.String())
+	}
+}

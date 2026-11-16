@@ -1031,9 +1031,8 @@ learns it, and keeps what it learnt in its data.
   keeps its Sightings in its data: after labd restarts, as at a Deploy,
   each one holds while its port is still connected with the same product
   id (the log says `sighting kept across the restart: MAC on PORT`), and
-  the rules above go on from there. After the mini restarts its plug
-  counts start again: every Sighting is gone, and Macs that are up are
-  sighted again by themselves.
+  the rules above go on from the port as it is then. The same holds after
+  the mini restarts, which starts its plug counts again.
 - **Hard reset.** `lab reset <mac>`, or Hard reset on the Live tab of a
   Lab-owned Mac's page, which asks twice: a Maintainer, or the holder of a
   Lease on the Mac. labd looks at the port, and the controller compares it
