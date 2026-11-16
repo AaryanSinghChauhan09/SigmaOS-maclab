@@ -1095,6 +1095,9 @@ builder() {
   [[ ! -L $BUILDER_IO ]] || fail "$BUILDER_IO is a symbolic link (to $(readlink "$BUILDER_IO")), and the Builder's scratch folder is a folder of $ROOT_OWNER's own: nothing was written through it. Look at who put it there, remove the link and run this again"
   folder "$BUILDER_IO" "$ROOT_OWNER" "$ROOT_GROUP" 755
   if rendered "$CONTAINER_LABEL" "$user" "$cpus"; then again=1; fi
+  # The images it runs now, until those of the Deployed build are there.
+  image="$(builder_runs --image)" pkg_image="$(builder_runs --pkg-image)"
+  if rendered "$BUILDER_LABEL" "$user" "$cpus" "${image:-maclab-kbuild:1}" "${pkg_image:-maclab-pkgbuild:1}"; then BUILDER_AGAIN=1; fi
   if [[ ! -x $watch || ! -x $LAB_CURRENT/bin/lab-builder ]]; then
     say "container's server and the Builder start once a build is Deployed: run the set-up again after the first Deploy"
     return 0
