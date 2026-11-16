@@ -308,8 +308,8 @@ printf '%s' "$answer" > "$REC/setup.answer"
 	}
 	cmd.Env = run.env("SHELL=" + bash)
 	in, _ := cmd.StdinPipe()
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	out := &lockedBuffer{b: &bytes.Buffer{}}
+	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
