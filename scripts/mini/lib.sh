@@ -40,7 +40,10 @@ TAP_FILES="https://raw.githubusercontent.com"
 CONTAINER_LABEL="org.omarchy-mac.lab.container"
 BUILDER_LABEL="org.omarchy-mac.lab.builder"
 BUILDER_VOLUMES="maclab-cache:40G maclab-pkgcache:120G"
-BUILDER_IMAGES="maclab-kbuild:1:builder maclab-pkgbuild:1:builder/pkg"
+# The two images: the name, lab-builder's option for it and the folder of
+# the build it is made from. Each is tagged by what it is made from
+# (builder_image), so a build whose builder/ is other has other images.
+BUILDER_IMAGES="maclab-kbuild:--image:builder maclab-pkgbuild:--pkg-image:builder/pkg"
 # The backup guest on pve2, by the name the set-up writes into /etc/hosts.
 BACKUP_GUEST="lab-backup"
 BACKUP_HOUSE="rest:https://$BACKUP_GUEST:8000/mini/"
@@ -144,6 +147,9 @@ BUILDER_IO="$LAB_ROOT/io"
 # builder/pkg.
 BUILDER_ROOTFS="ArchLinuxARM-aarch64-latest.tar.gz"
 BUILDER_PKG_CONTEXT="$LAB_ROOT/pkg-image"
+# The Builder's images the set-up made, one NAME:TAG a line, the last made
+# last: it removes all but the two last of each name.
+BUILDER_MADE="$LAB_ROOT/builder-images"
 # The lab's Signal sender: signal-cli from the copy of the Homebrew tools,
 # its account's keys and the two groups' ids as files of the lab account.
 SIGNAL_PLIST="$LAUNCHD_DIR/$SIGNAL_LABEL.plist"
@@ -621,6 +627,49 @@ lift_drain() {
   (( DRAINING )) || return 0
   DRAINING=0
   ops DELETE /drain >/dev/null || true
+}
+
+# builder_image NAME DIR BUILD [ROOTFS]: NAME:TAG, the image of the Builder
+# made from BUILD's DIR. TAG is the first 12 hex of a sha256 over each
+# file's path and content in DIR, but the package image's folder inside
+# builder/; the package image's adds the root file system it is made from
+# (ROOTFS, or the one in its build context). Nothing when DIR, or that root
+# file system, is not there.
+builder_image() {
+  local name="$1" dir="$2" build="$3" rootfs="${4:-$BUILDER_PKG_CONTEXT/$BUILDER_ROOTFS}" sums
+  [[ -d $build/$dir ]] || return 0
+  if [[ $dir == builder/pkg ]]; then
+    [[ -s $rootfs ]] || return 0
+  else
+    rootfs=""
+  fi
+  sums="$(
+    cd "$build/$dir" || exit 1
+    find . -type f ! -path './pkg/*' | LC_ALL=C sort | while IFS= read -r file; do
+      echo "$(shasum -a 256 < "$file" | cut -c1-64) $file"
+    done
+    [[ -z $rootfs ]] || echo "$(shasum -a 256 < "$rootfs" | cut -c1-64) $BUILDER_ROOTFS"
+  )" || return 0
+  echo "$name:$(shasum -a 256 <<<"$sums" | cut -c1-12)"
+}
+
+# builder_runs OPTION: what the Builder's installed LaunchDaemon file gives
+# lab-builder for OPTION (--image, --pkg-image, --cpus); nothing without it.
+builder_runs() {
+  awk -v o="<string>$1</string><string>" 'index($0, o) { s = substr($0, index($0, o) + length(o)); sub(/<.*/, "", s); print s; exit }' "$LAUNCHD_DIR/$BUILDER_LABEL.plist" 2>/dev/null || true
+}
+
+# builder_behind BUILD: one line for each image the Builder does not run
+# that BUILD names, when the Builder is installed.
+builder_behind() {
+  local pair name option dir want runs
+  [[ -f $LAUNCHD_DIR/$BUILDER_LABEL.plist ]] || return 0
+  for pair in $BUILDER_IMAGES; do
+    IFS=: read -r name option dir <<<"$pair"
+    want="$(builder_image "$name" "$dir" "$1")"
+    runs="$(builder_runs "$option")"
+    [[ -z $want || $runs == "$want" ]] || echo "the Builder runs ${runs:-the image lab-builder names when it is given none}, not $want, the image of $dir in the Deployed build"
+  done
 }
 
 # parts_bad: what labd says is wrong with the Builder or the Out-of-band

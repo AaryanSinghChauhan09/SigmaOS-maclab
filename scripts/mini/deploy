@@ -18,7 +18,9 @@
 #   6. verifies labd on this machine and, once the tunnel is installed here,
 #      through the Front door; and that the Builder asks labd for work and
 #      the Out-of-band controller answers it;
-#   7. reports in "Agents".
+#   7. reports in "Agents", and says to run the set-up when the build names
+#      other images for the Builder than those it runs: the set-up builds
+#      them, which takes a while, and starts the Builder with them.
 #
 # When the check fails it Deploys the previous version by itself; with none
 # before it, labd and the controller, loaded here or at boot, stay stopped. Going back
@@ -43,7 +45,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mini/lib.sh
 . "$here/lib.sh"
 
-usage() { sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 from=""
 tag=""
@@ -509,7 +511,12 @@ if verify; then
   went_back=0
   DRAINING=0
   prune
-  tell "Deployed $tag on the mini: labd answers $where; the Builder and the Out-of-band controller are as labd expects.${previous:+ $previous is kept as the way back.}$lost"
+  behind=""
+  if [[ -n "$(builder_behind "$LAB_CURRENT")" ]]; then
+    behind=" The Builder still runs the images it had: run sudo $LAB_CURRENT/scripts/mini/setup to build the Builder's new images and start it with them."
+    builder_behind "$LAB_CURRENT" | while IFS= read -r line; do say "$line"; done
+  fi
+  tell "Deployed $tag on the mini: labd answers $where; the Builder and the Out-of-band controller are as labd expects.${previous:+ $previous is kept as the way back.}$lost$behind"
   exit 0
 fi
 

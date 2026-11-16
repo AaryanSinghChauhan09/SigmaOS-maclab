@@ -165,7 +165,7 @@ case "$1" in
     case "$1 $2" in
       "volume delete" | "volume create") [[ ! -f $GATE/volume.fails ]] ;;
       "volume inspect") printf '[{"name":"%s","source":"%s"}]\n' "$3" "$GATE/$3.img" ;;
-      "image inspect") [[ ! -f $GATE/no.$3 ]] ;;
+      "image inspect") [[ ! -f $GATE/no.${3%%:*} ]] ;;
       *) exit 64 ;;
     esac ;;
   *) exit 64 ;;
@@ -176,7 +176,8 @@ const gateSetupStub = `#!/bin/bash
 echo "setup $*" >> "$GATE/mini-calls"
 [[ $1 == --builder-cpus ]] || exit 64
 plist="$LAB_SYSROOT/Library/LaunchDaemons/org.omarchy-mac.lab.builder.plist"
-echo "    <string>--cpus</string><string>$2</string>" > "$plist"
+sed "s|<string>--cpus</string><string>[0-9]*</string>|<string>--cpus</string><string>$2</string>|" "$plist" > "$plist.new"
+mv "$plist.new" "$plist"
 `
 
 const gatePageTimesStub = `#!/bin/bash
@@ -337,25 +338,27 @@ func newGate(t *testing.T) *gate {
 	stubs := filepath.Join(root, "stubs")
 	g.bin = stubs
 	files := map[string]string{
-		filepath.Join(stubs, "lab"):                                                    gateLabStub,
-		filepath.Join(stubs, "ssh"):                                                    gateSSHStub,
-		filepath.Join(stubs, "du"):                                                     gateDuStub,
-		filepath.Join(stubs, "hardening-probe"):                                        gateProbeStub,
-		filepath.Join(stubs, "launchctl"):                                              "#!/bin/bash\nexit 0\n",
-		filepath.Join(g.state, "machine/ps"):                                           gatePsStub,
-		filepath.Join(g.state, "machine/vm_stat"):                                      gateVMStatStub,
-		filepath.Join(g.state, "machine/pfctl"):                                        gatePfctlStub,
-		filepath.Join(scripts, "container"):                                            gateContainerStub,
-		filepath.Join(scripts, "setup"):                                                gateSetupStub,
-		filepath.Join(scripts, "page-times"):                                           gatePageTimesStub,
-		filepath.Join(scripts, "build-watch"):                                          read(t, filepath.Join(repo(t), "scripts/mini/build-watch")),
-		filepath.Join(scripts, "lib.sh"):                                               read(t, filepath.Join(repo(t), "scripts/mini/lib.sh")),
-		filepath.Join(g.deploy, "builder-cpus"):                                        read(t, filepath.Join(repo(t), "deploy/builder-cpus")),
-		filepath.Join(g.recipe, "PKGBUILD"):                                            "pkgname=linux-aurora\n",
-		filepath.Join(mini, "usr/local/lab/container-user"):                            me.Username + "\n",
-		filepath.Join(mini, "Library/LaunchDaemons/org.omarchy-mac.lab.builder.plist"): "    <string>--cpus</string><string>10</string>\n",
-		filepath.Join(mini, "var/lab/data/artifacts/keep"):                             "",
-		filepath.Join(mini, "usr/local/lab/io/keep"):                                   "",
+		filepath.Join(stubs, "lab"):                                                       gateLabStub,
+		filepath.Join(stubs, "ssh"):                                                       gateSSHStub,
+		filepath.Join(stubs, "du"):                                                        gateDuStub,
+		filepath.Join(stubs, "hardening-probe"):                                           gateProbeStub,
+		filepath.Join(stubs, "launchctl"):                                                 "#!/bin/bash\nexit 0\n",
+		filepath.Join(g.state, "machine/ps"):                                              gatePsStub,
+		filepath.Join(g.state, "machine/vm_stat"):                                         gateVMStatStub,
+		filepath.Join(g.state, "machine/pfctl"):                                           gatePfctlStub,
+		filepath.Join(scripts, "container"):                                               gateContainerStub,
+		filepath.Join(scripts, "setup"):                                                   gateSetupStub,
+		filepath.Join(scripts, "page-times"):                                              gatePageTimesStub,
+		filepath.Join(scripts, "build-watch"):                                             read(t, filepath.Join(repo(t), "scripts/mini/build-watch")),
+		filepath.Join(scripts, "lib.sh"):                                                  read(t, filepath.Join(repo(t), "scripts/mini/lib.sh")),
+		filepath.Join(g.deploy, "builder-cpus"):                                           read(t, filepath.Join(repo(t), "deploy/builder-cpus")),
+		filepath.Join(g.recipe, "PKGBUILD"):                                               "pkgname=linux-aurora\n",
+		filepath.Join(mini, "usr/local/lab/container-user"):                               me.Username + "\n",
+		filepath.Join(mini, "usr/local/lab/current/builder/Containerfile"):                "FROM scratch\n",
+		filepath.Join(mini, "usr/local/lab/current/builder/pkg/Containerfile"):            "FROM scratch\n",
+		filepath.Join(mini, "usr/local/lab/pkg-image/ArchLinuxARM-aarch64-latest.tar.gz"): "\x1f\x8b a made-up root file system\n",
+		filepath.Join(mini, "var/lab/data/artifacts/keep"):                                "",
+		filepath.Join(mini, "usr/local/lab/io/keep"):                                      "",
 	}
 	for path, text := range files {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -366,6 +369,21 @@ func newGate(t *testing.T) *gate {
 		}
 	}
 	if err := os.MkdirAll(g.records, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The Builder runs the images the set-up named from the Deployed build.
+	named := exec.Command("bash", "-c", `. "$1"; builder_image maclab-kbuild builder "$LAB_CURRENT"; builder_image maclab-pkgbuild builder/pkg "$LAB_CURRENT"`, "images", filepath.Join(scripts, "lib.sh"))
+	named.Env = append(os.Environ(), "LAB_SYSROOT="+mini)
+	images, err := named.Output()
+	tags := strings.Fields(string(images))
+	if err != nil || len(tags) != 2 {
+		t.Fatalf("the Deployed build's images: %v %q", err, images)
+	}
+	plist := "    <string>--cpus</string><string>10</string>\n    <string>--image</string><string>" + tags[0] + "</string>\n    <string>--pkg-image</string><string>" + tags[1] + "</string>\n"
+	if err := os.MkdirAll(filepath.Join(mini, "Library/LaunchDaemons"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mini, "Library/LaunchDaemons/org.omarchy-mac.lab.builder.plist"), []byte(plist), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for name, text := range map[string]string{
@@ -839,7 +857,7 @@ func TestWhatCannotBeMeasuredDecidesNothing(t *testing.T) {
 		"the cold cache":      {func(g *gate) { g.set("volume.fails", "") }, "the mini did not get ready for the builds at 10 cores"},
 		"the watch gone":      {func(g *gate) { g.set("watch.dies", "") }, "the watch on the mini ended while the cold kernel build ran"},
 		"other cores":         {func(g *gate) { g.set("vm.cores", "4\n") }, "the Builder gave the cold kernel build 4 cores, not 10"},
-		"an image missing":    {func(g *gate) { g.set("no.maclab-pkgbuild:1", "") }, "the mini did not get ready for the builds at 10 cores"},
+		"an image missing":    {func(g *gate) { g.set("no.maclab-pkgbuild", "") }, "the mini did not get ready for the builds at 10 cores"},
 		"a stale image": {func(g *gate) {
 			g.set("outcome.10.1", "stale\n")
 			g.set("says.stale", "kbuild: /in/config: No such file or directory\n")
@@ -858,7 +876,7 @@ func TestWhatCannotBeMeasuredDecidesNothing(t *testing.T) {
 			}
 			wants(t, "the record", g.record(), "FAILED: "+c.says, "Result: fail")
 			if name == "a stale image" {
-				wants(t, "the record", g.record(), `sudo /usr/local/lab/current/scripts/mini/container as "$(cat /usr/local/lab/container-user)" image delete maclab-kbuild:1 maclab-pkgbuild:1, then sudo /usr/local/lab/current/scripts/mini/setup`)
+				wants(t, "the record", g.record(), "sudo /usr/local/lab/current/scripts/mini/setup builds the images the Deployed build names and starts the Builder with them")
 			}
 			if g.cores() != "10" || strings.Count(g.calls("calls"), "ssh ") != 1 || !strings.HasPrefix(g.results(), "builder-gate fail ") {
 				t.Errorf("it went on, or wrote: cores %s, results %q\n%s", g.cores(), g.results(), g.calls("calls"))

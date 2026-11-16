@@ -1400,7 +1400,15 @@ gpg --verify ArchLinuxARM-aarch64-latest.tar.gz.sig ArchLinuxARM-aarch64-latest.
 On the mini the set-up takes it (`scripts/mini/setup --builder-rootfs FILE`): it copies the archive into
 a build context only root writes (`/usr/local/lab/pkg-image`), beside the Deployed build's `builder/pkg`,
 says its SHA-256, and builds the image from there. With no archive the Builder's step stops before
-`container`'s server is started and says what to bring. Elsewhere:
+`container`'s server is started and says what to bring.
+
+On the mini each image is tagged by what it is made from: `maclab-kbuild:<tag>` with the first 12 hex
+of a SHA-256 over the paths and contents of `builder/` (not `builder/pkg`), `maclab-pkgbuild:<tag>`
+over `builder/pkg` and the root file system's archive. The set-up builds a tag it does not find,
+writes both into the Builder's LaunchDaemon file (`--image`, `--pkg-image`) and starts it again,
+and removes the images it made before, keeping the last as the way back. A Deploy whose `builder/`
+changed says to run the set-up; until then the Builder runs the images it had, and
+`scripts/mini/check` and `build-watch` say so. Elsewhere:
 
 ```sh
 # in a directory holding builder/pkg/* and the checked rootfs tarball
@@ -1420,7 +1428,7 @@ ignores it: rebuild the image, under a new tag if another lab-builder still uses
 
 The 30+ GB work tree is deleted after every build. The volume keeps downloaded sources (the newest
 six) and the Rust toolchains. `lab-builder` takes package builds only when it has
-`--pkg-image` (the default, `maclab-pkgbuild:1`). An older builder only ever gets kernel builds.
+`--pkg-image` (the default, `maclab-pkgbuild:1`; on the mini, the set-up's tag). An older builder only ever gets kernel builds.
 
 ## Release gate
 

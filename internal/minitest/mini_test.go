@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -374,6 +375,12 @@ func (k key) sign(t *testing.T, file string) {
 // the made-up labd below reads.
 func bundle(t *testing.T, k key, dir, tag string, healthy bool, routes ...string) {
 	t.Helper()
+	bundleWith(t, k, dir, tag, healthy, nil, routes...)
+}
+
+// bundleWith is bundle with more files in it, by their path in the build.
+func bundleWith(t *testing.T, k key, dir, tag string, healthy bool, more map[string]string, routes ...string) {
+	t.Helper()
 	routes = append(routes, "the first routes")
 	labd := "#!/bin/sh\n[ \"$1\" = --version ] && echo " + tag + "\n"
 	if !healthy {
@@ -387,6 +394,17 @@ func bundle(t *testing.T, k key, dir, tag string, healthy bool, routes ...string
 		{"lab-server/bin/labd", labd, 0o755},
 		{"lab-server/deploy/" + labdLabel + ".plist", "<plist><!-- " + tag + " --></plist>\n", 0o664},
 		{"lab-server/deploy/cloudflared.yml", "# " + routes[0] + "\n", 0o644},
+	}
+	names := make([]string, 0, len(more))
+	for name := range more {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		files = append(files, struct {
+			name, text string
+			mode       int64
+		}{"lab-server/" + name, more[name], 0o644})
 	}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
