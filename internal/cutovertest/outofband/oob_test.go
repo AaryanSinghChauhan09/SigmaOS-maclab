@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -182,6 +183,8 @@ func TestEveryDryRunSaysItsStepsAndSendsNothing(t *testing.T) {
 func TestTheEightRunAgainstAMadeUpMini(t *testing.T) {
 	t.Parallel()
 	bins(t)
+	// Records of real runs are committed there; a local run adds none.
+	kept, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*out-of-band*"))
 	for name, wants := range map[string][]string{
 		"oob01-tool": {"m1-pro is sighted on the right port by the name it shows", "left port, reset 3 of 3: Hard reset sent to m1-pro through the left port",
 			"middle port, power-on from shutdown by a Hard reset", "middle port: m2-max kept its boot id through all four"},
@@ -221,7 +224,8 @@ func TestTheEightRunAgainstAMadeUpMini(t *testing.T) {
 		})
 	}
 	t.Cleanup(func() {
-		if left, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*out-of-band*")); len(left) != 0 {
+		all, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*out-of-band*"))
+		if left := slices.DeleteFunc(all, func(f string) bool { return slices.Contains(kept, f) }); len(left) != 0 {
 			t.Errorf("a local run left a record in docs/acceptance: %v", left)
 		}
 	})

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -211,6 +212,8 @@ func TestEveryDryRunSaysItsStepsAndSendsNothing(t *testing.T) {
 func TestTheFourteenRunLocally(t *testing.T) {
 	t.Parallel()
 	bins(t)
+	// Records of real runs are committed there; a local run adds none.
+	kept, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*hardening*"))
 	for name, wants := range map[string][]string{
 		"h01-console": {"GET /api/devices/m1-pro/console: 410, The serial console is not part of Omarchy Mac Lab.", "POST /api/devices/m1-pro/console/arm: 410",
 			"GET /api/devices/m1-pro/serial: 410", "serial-assisted: 410", "lab shell m1-pro: exit 1", "off the network, under the caller's Lease: 409",
@@ -269,7 +272,8 @@ func TestTheFourteenRunLocally(t *testing.T) {
 		})
 	}
 	t.Cleanup(func() {
-		if left, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*hardening*")); len(left) != 0 {
+		all, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*hardening*"))
+		if left := slices.DeleteFunc(all, func(f string) bool { return slices.Contains(kept, f) }); len(left) != 0 {
 			t.Errorf("a local run left a record in docs/acceptance: %v", left)
 		}
 	})
