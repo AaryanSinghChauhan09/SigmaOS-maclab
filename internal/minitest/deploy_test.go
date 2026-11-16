@@ -8,10 +8,13 @@ import (
 	"testing"
 )
 
-// deployed is a mini with a pinned key, a release server and a labd.
+// deployed is a mini with a pinned key, a release server and a labd. Deploy
+// is run from a checkout in an admin's home, which the lab account cannot
+// read.
 func deployed(t *testing.T) (*mini, key, *release) {
 	t.Helper()
 	m := newMini(t)
+	m.env = append(m.env, "STUB_LAB_CANNOT_READ="+m.tree)
 	k := newKey(t)
 	m.pinned(k)
 	m.labd()

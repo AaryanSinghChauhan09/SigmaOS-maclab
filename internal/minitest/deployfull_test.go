@@ -33,6 +33,10 @@ type ops struct {
 	drainStatus int
 	// onLift, when set, runs before DELETE /drain is answered.
 	onLift func()
+	// busy lines, those that start so, are answered 503 that many times
+	// first, as by a labd that has just started again.
+	busy      string
+	busyTimes int
 }
 
 func (o *ops) told() []string {
@@ -70,6 +74,11 @@ func (m *mini) ops() *ops {
 		}
 		switch r.Method + " " + r.URL.Path {
 		case "POST /agents/line":
+			if o.busy != "" && o.busyTimes > 0 && strings.HasPrefix(string(body), o.busy) {
+				o.busyTimes--
+				http.Error(w, "not yet", http.StatusServiceUnavailable)
+				return
+			}
 			o.lines = append(o.lines, string(body))
 			io.WriteString(w, "recorded\n")
 		case "POST /drain":
@@ -787,6 +796,52 @@ func TestDeployTellsAgentsThroughLabd(t *testing.T) {
 	}
 	if !strings.Contains(out, "jobs are drained") {
 		t.Errorf("a real labd was not asked to drain:\n%s", out)
+	}
+}
+
+// With no labd to take them, a Deploy's lines are in notify.log, written
+// by the lab account, as Deploy says they are.
+func TestADeploysLinesThatCannotGoAreInNotifyLog(t *testing.T) {
+	m, k, r := deployed(t)
+	if err := os.MkdirAll(m.path("var/lab/log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tag := "v0.2.0-rc.1"
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+
+	out := m.ok("deploy", "--from", r.from(tag), tag)
+
+	log := m.notified()
+	for _, want := range []string{" agents Deploy of " + tag + " on the mini: started.", " agents Deployed " + tag + " on the mini: labd answers"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("notify.log lacks %q:\n%s", want, log)
+		}
+	}
+	if !strings.Contains(out, `that line did not reach "Agents": it is in `+m.path("var/lab/log/notify.log")) {
+		t.Errorf("Deploy did not say where the lines are:\n%s", out)
+	}
+}
+
+// The labd just started may not take a line at once: the report waits a
+// moment for it.
+func TestTheDeployedLineWaitsForTheNewLabd(t *testing.T) {
+	m, k, r := deployed(t)
+	o := m.ops()
+	first, tag := "v0.2.0-rc.1", "v0.2.0-rc.2"
+	bundle(t, k, filepath.Join(r.dir, first), first, true)
+	bundle(t, k, filepath.Join(r.dir, tag), tag, true)
+	m.ok("deploy", "--from", r.from(first), first)
+	o.set(func(o *ops) { o.lines, o.busy, o.busyTimes = nil, "Deployed ", 2 })
+	m.env = append(m.env, "LAB_TELL_TRIES=5")
+
+	out := m.ok("deploy", "--from", r.from(tag), tag)
+
+	got := o.told()
+	if len(got) != 2 || !strings.HasPrefix(got[0], "Deploy of "+tag+" on the mini: started") || !strings.HasPrefix(got[1], "Deployed "+tag) {
+		t.Errorf("\"Agents\" was told %q\n%s", got, out)
+	}
+	if strings.Contains(out, "did not reach") {
+		t.Errorf("a line was said not to reach \"Agents\":\n%s", out)
 	}
 }
 

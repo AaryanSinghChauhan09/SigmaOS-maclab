@@ -157,9 +157,14 @@ echo "installer $*" >> "$STUB_LOG"
 `
 
 // as-lab stands in for sudo -u lab: it writes down what the lab account was
-// asked to run, and runs it.
+// asked to run, and runs it. A program under STUB_LAB_CANNOT_READ is one the
+// lab account cannot read, as in an admin's home, and does not run.
 const asLabStub = `#!/bin/bash
 echo "as-lab $*" >> "$STUB_LOG"
+if [[ -n ${STUB_LAB_CANNOT_READ:-} && $1 == "$STUB_LAB_CANNOT_READ"/* ]]; then
+  echo "bash: $1: Permission denied" >&2
+  exit 126
+fi
 exec "$@"
 `
 
@@ -256,6 +261,7 @@ func newMini(t *testing.T) *mini {
 		"STUB_LOG="+m.log,
 		"STUB_STATE="+filepath.Join(root, "state"),
 		"LAB_VERIFY_TRIES=2",
+		"LAB_TELL_TRIES=2",
 		"LAB_AS_LAB="+m.bin+"/as-lab",
 	)
 	m.machine()

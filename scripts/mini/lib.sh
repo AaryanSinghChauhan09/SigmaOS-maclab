@@ -483,12 +483,33 @@ recovered() {
 # What follows is for the two scripts that restart labd: Deploy and the
 # Maintenance run. Both run as root and reach labd as the lab account.
 
-# tell TEXT: one line for "Agents", from a script that runs as root.
+# tell TEXT: one line for "Agents", from a script that runs as root. Deploy
+# runs from a checkout, often in an admin's home that the lab account cannot
+# read, so the lab account runs no script of it: it writes the line in
+# notify.log, as notify does, and hands it to labd on the ops socket with
+# curl. A labd that is loaded and does not take it yet, as one just started
+# again, is asked again each second for LAB_TELL_TRIES seconds (10).
 tell() {
-  local hook
-  hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/notify"
+  local log="$LAB_HOME/log/notify.log" line n kept=0
   say "$1"
-  as_lab "$hook" agents "$1" >/dev/null 2>&1 || say "that line did not reach \"Agents\": it is in $LAB_HOME/log/notify.log"
+  line="$(tr '\n' ' ' <<<"$1")"
+  line="${line% }"
+  # shellcheck disable=SC2016
+  if (no_link "$log") && as_lab /bin/sh -c 'printf "%s agents %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$2"' tell "$line" "$log" 2>/dev/null; then
+    kept=1
+  fi
+  for (( n = ${LAB_TELL_TRIES:-10}; n > 0; n-- )); do
+    if [[ -S $OPS_SOCKET ]] && printf '%s' "$line" | as_lab curl -fsS --max-time 10 --unix-socket "$OPS_SOCKET" -H 'Content-Type: text/plain' --data-binary @- http://labd/agents/line >/dev/null 2>&1; then
+      return 0
+    fi
+    if (( n == 1 )) || ! loaded "$LABD_LABEL"; then break; fi
+    sleep 1
+  done
+  if (( kept )); then
+    say "that line did not reach \"Agents\": it is in $log"
+  else
+    say "that line did not reach \"Agents\", and could not be written to $log either"
+  fi
 }
 
 # ops METHOD PATH: labd's answer on its ops socket.
