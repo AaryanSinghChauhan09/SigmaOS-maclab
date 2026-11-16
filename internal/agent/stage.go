@@ -248,7 +248,56 @@ func stageCmdline(knownGood string, stock func() (string, error), a api.StageArg
 	if !hasParam(base, "root") {
 		return "", fmt.Errorf("the test cmdline would have no root= (base %q, strip %q)", a.CmdlineBase, a.CmdlineStrip)
 	}
-	return testCmdline(base, a, job), nil
+	return testCmdline(withDiskUnlock(base, knownGood), a, job), nil
+}
+
+// withDiskUnlock adds to a test boot's base the known-good boot's disk
+// unlocking (rd.luks.name/uuid/key/options) for each volume the base doesn't
+// set up itself. On an auto-unlocked Mac the known-good cmdline has
+// lab-only-autounlock's rd.luks.key=<uuid>=<file>, and every initramfs
+// mkinitcpio builds holds that file, the test kernel's too; a stock or literal
+// base, or a strip glob such as rd.*, would leave the boot at the passphrase
+// prompt with no one there to type it.
+func withDiskUnlock(base, knownGood string) string {
+	out := strings.Fields(base)
+	have := map[string]bool{}
+	for _, f := range out {
+		if k := diskUnlockKey(f); k != "" {
+			have[k] = true
+		}
+	}
+	for _, f := range strings.Fields(knownGood) {
+		if k := diskUnlockKey(f); k != "" && !have[k] {
+			out = append(out, f)
+			have[k] = true
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// diskUnlockKey is what a cmdline token sets up for systemd-cryptsetup, as
+// "<what> <uuid>" ("*" for every volume), or "" when it sets up none.
+func diskUnlockKey(tok string) string {
+	k, v, _ := strings.Cut(tok, "=")
+	k = strings.TrimPrefix(k, "rd.")
+	uuidOf := func(v string) string {
+		if u, _, ok := strings.Cut(v, "="); ok && !strings.HasPrefix(v, "/") {
+			return luksUUID(u)
+		}
+		return "*"
+	}
+	switch k {
+	case "luks.uuid":
+		return "volume " + luksUUID(v)
+	case "luks.name":
+		u, _, _ := strings.Cut(v, "=")
+		return "volume " + luksUUID(u)
+	case "luks.key":
+		return "key " + uuidOf(v)
+	case "luks.options":
+		return "options " + uuidOf(v)
+	}
+	return ""
 }
 
 // stripParams drops the parameters whose name (before "=") or whole text
