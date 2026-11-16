@@ -116,7 +116,7 @@ It starts on the site. `./volunteer` is retired; nothing looks for the lab, and 
 
 **The Join command and its token.**
 
-- One line: the enrollment token only in a header and on stdin; the agent downloaded with the token; then `lab-agent setup`. The agent the Mac installs carries its own signature by the release key, checked against the key pinned in the Join command's script. ("Volunteering a Mac"; "Hardening inside the lab")
+- One short line, `curl -fsSL https://lab.omarchy-mac.org/join | LAB_JOIN=enr_… bash`: the enrollment token travels in the environment of the person's own shell, readable only by them and root, never in an argument or a URL; then only in a header and on stdin; the agent downloaded with the token; then `lab-agent setup`, which asks its questions on the terminal. The agent the Mac installs carries its own signature by the release key, checked against the key pinned in the script labd serves at `/join` for the current release; that script holds no secret, is served to anyone and is never cached, and a download of it cut short runs nothing. ("Volunteering a Mac"; "Hardening inside the lab")
 - The token is made by the signed-in person on the page; no Lab token and no device flow in the terminal. It lasts 1 hour; one unused per person; a new one cancels the old.
 - One Mac, once: the first Mac to use it binds it and may run the command again if setup was interrupted; any other Mac is refused.
 - The command tests the token before anything changes, fails once without retrying and names the case: expired or used; too many refused attempts from this network (wait 15 minutes); challenged at the edge. Blocked, cap reached and name taken are refused at enrollment with the reason.
@@ -376,7 +376,7 @@ All set, and checked on every run, by the zone script, which fails if one drifts
 
 - **Off**: Bot Fight Mode, AI-bot blocking, AI Labyrinth, Rocket Loader, email obfuscation, Always Online, automatic HTTPS rewrites, Cloudflare Fonts, the analytics script injection.
 - **On**: Always Use HTTPS, HTTP/3, TLS 1.3, 0-RTT, Early Hints, Smart Tiered Cache, Speed Brain.
-- **One skip rule on `/api/*`**: no Browser Integrity Check, no managed rules.
+- **One skip rule on `/api/*` and `/join`**: no Browser Integrity Check, no managed rules.
 - **One rate rule**, a flood cap: 300 requests in 10 s per address, whole site.
 - Clients name themselves in `User-Agent` and report an edge challenge as a plain error.
 - HTTP/3 is switched off for the hostname if Chrome is seen to stall large downloads over it.

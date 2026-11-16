@@ -1304,9 +1304,10 @@ type EnrollTokenResponse struct {
 	Name    string    `json:"name"`
 	Token   string    `json:"token"`
 	Expires time.Time `json:"expires"`
-	// JoinCommand is the one-liner that joins a Mac with this token: run on
-	// the Mac by its owner, it downloads lab-agent, checks its sha256, shows
-	// the terms and sets the Mac up. Empty when labd has no lab-agent to
+	// JoinCommand is the one line that joins a Mac with this token,
+	// curl -fsSL <Lab address>/join | LAB_JOIN=<token> bash: run on the Mac
+	// by its owner, its script downloads lab-agent, checks its sha256 and
+	// signature, shows the terms and sets the Mac up. Empty when labd has no lab-agent to
 	// hand out.
 	JoinCommand string `json:"join_command,omitempty"`
 }

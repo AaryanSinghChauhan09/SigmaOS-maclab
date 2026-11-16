@@ -466,9 +466,17 @@ nothing. Once the token has expired (1 hour), make a new one with `lab
 enroll <name>`, after `lab remove <name>` if the Mac is listed already. `lab
 enroll <name> --revoke` withdraws a token.
 
-On the Mac, the Join command downloads lab-agent from the lab, checks its
-signature against the release key written into the line itself, and runs
-`setup`, handing it the token on stdin. By hand:
+On the Mac, the Join command is one short line:
+
+```sh
+ curl -fsSL https://lab.omarchy-mac.org/join | LAB_JOIN=enr_... bash
+```
+
+`/join` is a script that holds no secret, made by labd for its current
+release. It downloads lab-agent with the token, checks its sha256 and its
+signature against the release key written into the script, and runs
+`setup`, handing it the token on stdin; setup asks its questions on the
+terminal. By hand:
 
 ```sh
 printf '%s\n' enr_... | sudo ./lab-agent setup --server https://lab.omarchy-mac.org --token-stdin --gui-user <you> --autologin
@@ -518,8 +526,12 @@ Join command (a legacy install from a checkout). It is `omarchy-m-test`'s
 rule, read from files, since the pre-checks run nothing
 (`TestHowASystemIsRecognisedAsOmarchy`).
 
-The Join command holds the token, so keep it private; the token stays out of
-URLs, labd's log and the arguments of the curl and sudo it starts.
+The Join command holds the token, so keep it private. The token stays in the
+environment of your own shell (`LAB_JOIN`, readable by you and root only,
+taken out before anything starts) and out of URLs, labd's log and the
+arguments of the curl and sudo it starts. The line starts with a space, so a
+shell that skips such lines leaves it out of its history. A download of the
+script cut short runs nothing.
 
 `setup` makes these changes. Each one is idempotent and backed up:
 
@@ -582,7 +594,7 @@ lab-agent itself comes from the lab server only, signed, and never from GitHub.
 What each install checks:
 
 - **The Join command** checks the agent's signature against the release key
-  written into the line, and setup stops at its pre-checks when the lab-agent
+  written into the script labd serves at `/join` for the current release, and setup stops at its pre-checks when the lab-agent
   installed on the Mac is newer than the one it brings.
 - **`sudo lab-agent update`** and **`lab agent-update`** check the new agent's
   signature against the release key pinned in the lab-agent already running,

@@ -107,13 +107,17 @@ read `lab exec` in its silent form, which only the loopback port gives: they run
 
 - The person who lends a Mac makes its **Join command** on "Lend a Mac", signed in; a Maintainer runs `lab enroll <name>`
   for a Lab-owned Mac. Either is one line, good for one Mac, once, for 1 hour.
-- The line holds a one-time enrollment token, `enr_…`. The token travels only in an `Authorization` header, never in an
-  address, and is in no process's arguments: curl reads that header on stdin (`-H @-`), and setup reads the token on
-  stdin too. The line starts with a space, so a shell that skips such lines leaves it out of its history.
-- It downloads lab-agent and its signature from the lab, checks the sha256 and then the signature against the release
-  key written into the line itself (`ssh-keygen -Y verify`), before anything runs as root, and runs
-  `sudo lab-agent setup --server https://lab.omarchy-mac.org --token-stdin`. A lab with no signed agent makes no Join
-  command.
+- The line is `curl -fsSL https://lab.omarchy-mac.org/join | LAB_JOIN=enr_… bash`. It holds a one-time enrollment
+  token, `enr_…`, in the environment of the person's own shell, readable by them and root only. The script takes it
+  out of the environment before it starts anything; then the token travels only in an `Authorization` header, never
+  in an address, and is in no process's arguments: curl reads that header on stdin (`-H @-`), and setup reads the
+  token on stdin too. The line starts with a space, so a shell that skips such lines leaves it out of its history.
+- `/join` is the Join command's script: no secret, served to anyone, never kept (`no-store`), made for the current
+  release. Its body is one function called on its last line, so a download cut short runs nothing. It downloads
+  lab-agent and its signature from the lab, checks the sha256 and then the signature against the release key written
+  into it (`ssh-keygen -Y verify`), before anything runs as root, and runs
+  `sudo lab-agent setup --server https://lab.omarchy-mac.org --token-stdin`; setup and sudo ask on the terminal, so
+  they work under `curl | bash`. A lab with no signed agent makes no Join command.
 - `lab-agent setup` runs its pre-checks, then shows the terms and needs a typed `yes` on the terminal before it changes
   anything or tells the lab anything about the Mac. Without a terminal it stops, unless `--accept-terms <sha256>` names
   the exact terms read at `/terms`. The lab records the acceptance with the person, the Mac, the time and that sha256.

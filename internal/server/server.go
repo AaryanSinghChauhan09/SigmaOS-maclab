@@ -774,6 +774,7 @@ func (s *Server) routes() []route {
 		{"POST /api/enroll-tokens", maintainers, s.hEnrollToken},
 		{"POST /api/volunteer", anyone, s.hVolunteerGone},
 		{"GET /api/volunteer/lab-agent", anyone, s.hVolunteerGone},
+		{"GET /join", anyone, s.hJoinScript},
 		{"GET /api/join/lab-agent", invited, s.hJoinAgent},
 		{"GET /api/join/lab-agent.sig", invited, s.hAgentSig},
 		{"GET /api/agent/lab-agent", ownMac, s.hJoinAgent},

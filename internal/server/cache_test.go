@@ -406,7 +406,7 @@ func TestTheEdgesCacheRulesNameThePathsLabdKeeps(t *testing.T) {
 			t.Errorf("labd does not keep the export %s", p)
 		}
 	}
-	for _, p := range []string{"/api/", "/api/auth", "/api/devices", "/api/v1/tester_requests", "/api/v1/reports/x", "/status", "/me", "/sign-in", "/healthz", "/reports/x/deletion", "/installer", "/assets/app.css"} {
+	for _, p := range []string{"/api/", "/api/auth", "/api/devices", "/api/v1/tester_requests", "/api/v1/reports/x", "/status", "/me", "/sign-in", "/healthz", "/reports/x/deletion", "/installer", "/assets/app.css", "/join"} {
 		if edgeKeeps(p) {
 			t.Errorf("labd keeps %s", p)
 		}

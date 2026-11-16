@@ -153,7 +153,7 @@ func TestADryRunOfAStreamOrEdgeTestSendsNothing(t *testing.T) {
 		"fd01-exec-keepalives": {"lab exec --timeout 3600 m1-pro 'sleep 3590", "one every 30 s (120 in all)", "front-door-01.md", "Exec record"},
 		"fd02-freeze-entry":    {"freeze-entry m1-pro --release R", "frozen once", "front-door-02.md"},
 		"fd06-ten-clients":     {"six times over, lab status m1-pro", "the event stream", "lab logs JOB", "front-door-06.md"},
-		"fd07-clients-pass":    {"lab status", "Python CLI", "curl -fsSL https://lab.omarchy-mac.org/install", "never runs", "front-door-07.md"},
+		"fd07-clients-pass":    {"lab status", "Python CLI", "curl -fsSL https://lab.omarchy-mac.org/install", "curl -fsSL https://lab.omarchy-mac.org/join, with no token", "never runs", "front-door-07.md"},
 		"fd08-forged-address":  {"CF-Connecting-IP: 203.0.113.77", "edge-facts callers", "No address goes into the record", "front-door-08.md"},
 		"fd09-tunnel-restart":  {"launchctl kickstart -k system/org.omarchy-mac.lab.cloudflared", "connection lost; the command may still be running", "Exec record to hold lab's command once", "front-door-09.md"},
 		"fd10-origin-closed":   {"edge-facts origin", "7770 7780 20241 80 443 8080", "UPnP", "--no-forwards", "front-door-10.md"},
@@ -325,7 +325,7 @@ func TestFD06FailsWhenTheEdgeThrottles(t *testing.T) {
 func TestFD07TheLabsClientsPass(t *testing.T) {
 	t.Parallel()
 	passes(t, "fd07-clients-pass", "lab (Go): lab status was answered by labd", "omarchy-m-test (Python): /install came as the script", "lab-agent: m1-pro is checking in",
-		"curl -fsSL …/install: the install script", "a body of shell, SQL and script text reached m1-pro")
+		"curl -fsSL …/install: the install script", "curl -fsSL …/join: labd's own answer", "a body of shell, SQL and script text reached m1-pro")
 	fails(t, "challenge", "fd07-clients-pass", "FAIL: omarchy-m-test (Python): /install gave HTTP 403")
 }
 

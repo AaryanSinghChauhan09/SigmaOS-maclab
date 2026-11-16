@@ -5,8 +5,9 @@ package server
 // lab-agent comes from the lab server only: labd hands out the one built
 // with it, with its signature beside it, to the Join command's token and to
 // an enrolled Mac's own device secret. The Mac checks it: the Join command
-// against the release key written into the line, a running lab-agent against
-// the key it pins (`sudo lab-agent update`), refusing an older one.
+// against the release key written into its script (/join), a running
+// lab-agent against the key it pins (`sudo lab-agent update`), refusing an
+// older one.
 //
 // Nothing pushes an agent to a Volunteer's Mac. Its Volunteer is told once,
 // by a Notice, and My Macs gives the one line to run at the Mac; until then

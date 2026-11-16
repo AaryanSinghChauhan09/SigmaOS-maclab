@@ -105,6 +105,10 @@ func TestTheRulesAreTheSpecs(t *testing.T) {
 	if x := skip[0]["expression"].(string); !strings.Contains(x, api) || !strings.Contains(x, onLab) {
 		t.Errorf("the skip rule is not on /api/* at the Lab address: %s", x)
 	}
+	// The Join command's script goes through as the Join command's API does.
+	if x := skip[0]["expression"].(string); !strings.Contains(x, `(`+api+` or http.request.uri.path eq "/join")`) {
+		t.Errorf("the skip rule is not on /join too: %s", x)
+	}
 
 	rate := rule(t, e, "http_ratelimit")
 	if len(rate) != 1 {
@@ -242,13 +246,13 @@ func drifts(t *testing.T) []drift {
 	another := map[string]any{"id": "x", "action": "block", "expression": `(http.request.uri.path eq "/x")`, "enabled": true}
 	const custom, rate, cache, redirect = "http_request_firewall_custom", "http_ratelimit", "http_request_cache_settings", "http_request_dynamic_redirect"
 	out = append(out,
-		drift{"the skip rule on /api/*", func(f *fake) { delete(f.rules, custom) }},
-		drift{"the skip rule on /api/*", edit(custom, func(r []map[string]any) []map[string]any { return append(r, another) })},
-		drift{"the skip rule on /api/*", edit(custom, func(r []map[string]any) []map[string]any {
+		drift{"the skip rule on /api/* and /join", func(f *fake) { delete(f.rules, custom) }},
+		drift{"the skip rule on /api/* and /join", edit(custom, func(r []map[string]any) []map[string]any { return append(r, another) })},
+		drift{"the skip rule on /api/* and /join", edit(custom, func(r []map[string]any) []map[string]any {
 			r[0]["action_parameters"] = map[string]any{"phases": []any{"http_request_firewall_managed"}}
 			return r
 		})},
-		drift{"the skip rule on /api/*", edit(custom, func(r []map[string]any) []map[string]any { r[0]["enabled"] = false; return r })},
+		drift{"the skip rule on /api/* and /join", edit(custom, func(r []map[string]any) []map[string]any { r[0]["enabled"] = false; return r })},
 		drift{"the rate rule", func(f *fake) { delete(f.rules, rate) }},
 		drift{"the rate rule", edit(rate, func(r []map[string]any) []map[string]any {
 			r[0]["ratelimit"].(map[string]any)["requests_per_period"] = 3000

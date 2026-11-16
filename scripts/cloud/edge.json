@@ -20,12 +20,12 @@
   ],
   "rules": [
     {
-      "name": "the skip rule on /api/*",
+      "name": "the skip rule on /api/* and /join",
       "phase": "http_request_firewall_custom",
       "want": [
         {
-          "description": "Under /api/: no Browser Integrity Check, no managed rules",
-          "expression": "(http.host eq \"lab.omarchy-mac.org\" and starts_with(http.request.uri.path, \"/api/\"))",
+          "description": "Under /api/ and at /join: no Browser Integrity Check, no managed rules",
+          "expression": "(http.host eq \"lab.omarchy-mac.org\" and (starts_with(http.request.uri.path, \"/api/\") or http.request.uri.path eq \"/join\"))",
           "action": "skip",
           "action_parameters": {"phases": ["http_request_firewall_managed"], "products": ["bic"]},
           "logging": {"enabled": true},

@@ -701,14 +701,10 @@ func TestMacsShowsAnAgentOlderThanTheLabsAndWhoUpdatesIt(t *testing.T) {
 }
 
 // The Join command checks the first agent against the release key written
-// into the line itself.
-func TestTheJoinCommandChecksTheAgentsSignatureAgainstTheKeyInTheLine(t *testing.T) {
+// into the script labd serves at /join for the current release.
+func TestTheJoinCommandChecksTheAgentsSignatureAgainstTheKeyInItsScript(t *testing.T) {
 	if _, err := exec.LookPath("ssh-keygen"); err != nil {
 		t.Skip("no ssh-keygen")
-	}
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("no bash")
 	}
 	k, other := sshsigtest.NewKey(t), sshsigtest.NewKey(t)
 	handed := signedAgent(t, k, agent.Version)
@@ -719,49 +715,29 @@ func TestTheJoinCommandChecksTheAgentsSignatureAgainstTheKeyInTheLine(t *testing
 	}
 	const token = "enr_0123456789abcdef0123456789abcdef"
 	line := s.joinCommand(httptest.NewRequest("POST", "https://lab.omarchy-mac.org/api/enroll-tokens", nil), token)
-	for _, want := range []string{`"$U/api/join/lab-agent.sig"`, "ssh-keygen -Y verify", k.Public, `-n '` + agent.ReleaseNamespace + `'`, `-I '` + agent.ReleaseSigner + `'`,
-		`-s "$D/lab-agent.sig" < "$D/lab-agent"`, "sha256sum -c --quiet"} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("the Join command lacks %q:\n%s", want, line)
+	script := string(s.joinScript(httptest.NewRequest("GET", "https://lab.omarchy-mac.org/join", nil)))
+	for _, want := range []string{`"$u/api/join/lab-agent.sig"`, "ssh-keygen -Y verify", agent.ReleaseSigner + ` namespaces="` + agent.ReleaseNamespace + `" ` + k.Public,
+		`-n '` + agent.ReleaseNamespace + `'`, `-I '` + agent.ReleaseSigner + `'`, `-s "$d/lab-agent.sig" < "$d/lab-agent"`, "sha256sum -c --quiet"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("the Join command's script lacks %q:\n%s", want, script)
 		}
 	}
-	if strings.Count(line, token) != 1 || strings.Contains(line, "\n") {
-		t.Errorf("the token is in the line more than once, or the line is more than one:\n%s", line)
+	if strings.Count(line, token) != 1 || strings.Contains(line, "\n") || strings.Contains(script, token) {
+		t.Errorf("the token is in the line more than once, or in the script, or the line is more than one:\n%s", line)
 	}
-	if i, j := strings.Index(line, "ssh-keygen -Y verify"), strings.Index(line, "sudo "); i < 0 || j < i {
-		t.Errorf("the signature is not checked before anything runs as root:\n%s", line)
+	if i, j := strings.Index(script, "ssh-keygen -Y verify"), strings.Index(script, "sudo "); i < 0 || j < i {
+		t.Errorf("the signature is not checked before anything runs as root:\n%s", script)
 	}
 
 	// The line itself, run by bash: curl hands out what the lab would, sudo
 	// records that it was reached.
-	bin, rec := t.TempDir(), t.TempDir()
 	agentBody, _ := os.ReadFile(handed)
 	sig, _ := os.ReadFile(handed + ".sig")
-	stand := func(name, script string) {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/bash\n"+script), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	stand("curl", `cat > /dev/null
-out= url=
-while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift ;; http*) url=$1 ;; esac; shift; done
-case "$url" in *.sig) cp "$REC/sig" "$out" ;; *) cp "$REC/agent" "$out"; printf 200 ;; esac
-`)
-	stand("sudo", `cat > /dev/null
-echo reached > "$REC/sudo"
-`)
-	if runtime.GOOS != "linux" { // the line runs on Omarchy and calls GNU sha256sum
-		stand("sha256sum", "exec shasum -a 256 -c -s\n")
-	}
+	jr := newJoinRun(t, []byte(script), agentBody, sig)
 	run := func(agentBody, sig []byte) (string, bool) {
-		os.Remove(filepath.Join(rec, "sudo"))
-		os.WriteFile(filepath.Join(rec, "agent"), agentBody, 0o600)
-		os.WriteFile(filepath.Join(rec, "sig"), sig, 0o600)
-		cmd := exec.Command(bash, "-c", line)
-		cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "REC=" + rec, "USER=owner", "HOME=" + t.TempDir(), "TMPDIR=" + t.TempDir()}
-		out, _ := cmd.CombinedOutput()
-		_, err := os.Stat(filepath.Join(rec, "sudo"))
-		return string(out), err == nil
+		jr.put("agent", agentBody)
+		jr.put("sig", sig)
+		return jr.run(line)
 	}
 	if out, reached := run(agentBody, sig); !reached {
 		t.Fatalf("the signed agent was not run:\n%s", out)
@@ -1124,6 +1100,11 @@ func TestBothInstallLinesServeTheReleaseCandidateInPreviewAndTheLatestAfter(t *t
 	}
 	if !edgeKeeps("/install/lab") {
 		t.Error("the edge is not told it may keep /install/lab")
+	}
+	// The Join command's script leads from the Alias to the Lab address
+	// too, which curl -L follows.
+	if w := l.do("GET", "/join", "", "Host", aliasHost); w.Code != http.StatusPermanentRedirect || w.Header().Get("Location") != labAddress+"/join" {
+		t.Errorf("/join on the Alias: %d to %q", w.Code, w.Header().Get("Location"))
 	}
 }
 

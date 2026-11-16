@@ -54,9 +54,9 @@ on: Smart Tiered Cache (the Smart topology)
 on: Speed Brain
   GET /zones/{zone}/settings/speed_brain
   PATCH /zones/{zone}/settings/speed_brain {"value":"on"}
-the skip rule on /api/*
+the skip rule on /api/* and /join
   GET /zones/{zone}/rulesets/phases/http_request_firewall_custom/entrypoint
-  PUT /zones/{zone}/rulesets/phases/http_request_firewall_custom/entrypoint {"rules":[{"description":"Under /api/: no Browser Integrity Check, no managed rules","expression":"(http.host eq \"lab.omarchy-mac.org\" and starts_with(http.request.uri.path, \"/api/\"))","action":"skip","action_parameters":{"phases":["http_request_firewall_managed"],"products":["bic"]},"logging":{"enabled":true},"enabled":true}]}
+  PUT /zones/{zone}/rulesets/phases/http_request_firewall_custom/entrypoint {"rules":[{"description":"Under /api/ and at /join: no Browser Integrity Check, no managed rules","expression":"(http.host eq \"lab.omarchy-mac.org\" and (starts_with(http.request.uri.path, \"/api/\") or http.request.uri.path eq \"/join\"))","action":"skip","action_parameters":{"phases":["http_request_firewall_managed"],"products":["bic"]},"logging":{"enabled":true},"enabled":true}]}
 the rate rule
   GET /zones/{zone}/rulesets/phases/http_ratelimit/entrypoint
   PUT /zones/{zone}/rulesets/phases/http_ratelimit/entrypoint {"rules":[{"description":"Flood cap: 300 requests in 10 s per address, whole site","expression":"true","action":"block","ratelimit":{"characteristics":["cf.colo.id","ip.src"],"period":10,"requests_per_period":300,"mitigation_timeout":10},"enabled":true}]}
