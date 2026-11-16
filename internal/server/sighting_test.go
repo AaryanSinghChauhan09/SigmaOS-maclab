@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -204,8 +205,10 @@ func TestAnyConflictDropsTheSightingsInvolved(t *testing.T) {
 	l.wantResets("conflicts")
 }
 
-// After a restart labd holds no Sighting and rebuilds them unaided.
-func TestAfterARestartLabdHoldsNoSightingAndRebuildsThemUnaided(t *testing.T) {
+// After a restart labd holds no Sighting until it has looked at the ports,
+// with the controller starting after it, as after an Unlock; then it keeps
+// the one its data held, on a port that did not change.
+func TestAfterARestartLabdHoldsNoSightingUntilItHasLookedAtThePorts(t *testing.T) {
 	l := newLabWith(t, labConfig{oob: true})
 	l.baseline()
 	if _, ok := l.s.cables.of(l.name); !ok {
@@ -233,7 +236,7 @@ func TestAfterARestartLabdHoldsNoSightingAndRebuildsThemUnaided(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("labd did not sight the Mac again by itself")
+			t.Fatal("labd did not sight the Mac again")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -1213,5 +1216,82 @@ func TestACablePulledWhileItsMacStaysUpEndsItsSighting(t *testing.T) {
 	l.wantCable("m2-max", api.CableNotSighted, "its Sighting was dropped", "plug count", "was heard since on the boot it had")
 	if l.bootOf("m2-max") != boot {
 		t.Fatal("the Mac was restarted")
+	}
+}
+
+// restartedLabd is a second labd on this lab's data, as after a Deploy, with a
+// log the test reads: it looks at the ports once as it starts.
+func (l *lab) restartedLabd() (*Server, *logBuf) {
+	l.t.Helper()
+	logs := &logBuf{}
+	fresh, err := New(l.ctx, l.s.cfg, log.New(logs, "labd: ", 0))
+	if err != nil {
+		l.t.Fatal(err)
+	}
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if strings.Contains(logs.String(), "across the restart") {
+			break
+		}
+	}
+	return fresh, logs
+}
+
+// A Sighting is kept in labd's data: after a restart it holds while its port
+// is still connected with the same product id, and the lab's rules go on
+// from there.
+func TestASightingIsKeptAcrossARestartOfLabd(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	max := l.placeOnMiddle("m2-max")
+	placed, _ := l.s.cables.of("m2-max")
+	named, _ := l.s.cables.of(l.name)
+	fresh, logs := l.restartedLabd()
+	for name, was := range map[string]sighting{"m2-max": placed, l.name: named} {
+		sg, ok := fresh.cables.of(name)
+		if !ok || sg.rid != was.rid || sg.seen != was.seen || sg.proved != was.proved || sg.boot != was.boot {
+			t.Fatalf("%s after the restart: %+v %v, want %+v", name, sg, ok, was)
+		}
+	}
+	for _, line := range []string{"sighting kept across the restart: m2-max on middle", "sighting kept across the restart: " + l.name + " on right"} {
+		if !strings.Contains(logs.String(), line) {
+			t.Fatalf("the log lacks %q:\n%s", line, logs.String())
+		}
+	}
+	// From there the rules go on: a higher count holds it until the lab
+	// can tell a restart from a pull.
+	l.oob.plug(portMiddle, max, "", productM2Max)
+	fresh.sight(l.ctx)
+	if _, ok := fresh.cables.of("m2-max"); !ok {
+		t.Fatal("the restarted labd dropped the Sighting at the first look at a higher count")
+	}
+}
+
+// A kept Sighting whose port shows another product id after the restart, or
+// nothing, is not kept, and the log says why.
+func TestASightingIsNotKeptAcrossARestartWhenItsPortChanged(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		change func(l *lab)
+		saying string
+	}{
+		{"another product id", func(l *lab) { l.oob.swap(portMiddle, productM1Pro) }, "the middle port shows product id 29448, not the 29453 it was seen with"},
+		{"nothing on the port", func(l *lab) { l.oob.unplug(portMiddle) }, "the middle port is no longer connected"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l := sightLab(t, labConfig{})
+			l.baseline()
+			l.placeOnMiddle("m2-max")
+			c.change(l)
+			fresh, logs := l.restartedLabd()
+			if _, ok := fresh.cables.of("m2-max"); ok {
+				t.Fatal("the Sighting was kept across the restart")
+			}
+			if line := "sighting not kept across the restart: m2-max on middle: " + c.saying; !strings.Contains(logs.String(), line) {
+				t.Fatalf("the log lacks %q:\n%s", line, logs.String())
+			}
+			if _, ok := fresh.cables.of(l.name); !ok {
+				t.Fatalf("%s, whose port did not change, was not kept", l.name)
+			}
+		})
 	}
 }

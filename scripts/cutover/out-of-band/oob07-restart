@@ -1,14 +1,17 @@
 #!/bin/bash
 # Out-of-band wiring's test 7: the controller as a root LaunchDaemon: after
-# an Unlock and after a planned restart, Sightings rebuild unaided (spec
-# section 16, Ready item 2; section 7 "Sighting"; section 13 "Unlock and
-# restarts").
+# labd alone restarts every Sighting is kept, and after an Unlock and after
+# a planned restart of the mini, Sightings rebuild unaided (spec section 16,
+# Ready item 2; section 7 "Sighting"; section 13 "Unlock and restarts").
 #
 #   oob07-restart [--dry-run | --local | --lab --mini USER@HOST] [--lab-back MINUTES]
 #                 [--m1 NAME] [--m2 NAME] [--records DIR]
 #
-# A Mac the lab sighted by the name it shows must be sighted again, on the
-# same port, by nobody's doing, once the mini is back: first after a restart
+# First labd alone is restarted, as a Deploy does: every Mac the lab had
+# placed, by its name or by a Proving reset, keeps its Sighting, the same
+# one, from labd's data. Then a Mac the lab sighted by the name it shows
+# must be sighted again, on the same port, by nobody's doing, once the
+# mini is back: first after a restart
 # from cold, which needs the Unlock, then after a planned restart, which
 # needs none. A Mac that was placed by a Proving reset shows no name and is
 # not sighted again by itself; the record says so, and it is no failure.
@@ -19,7 +22,7 @@
 set -euo pipefail
 # shellcheck source=scripts/cutover/out-of-band/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
-usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 oob_options "$@"
 lab_back=15
@@ -29,21 +32,25 @@ if (( ${#REST[@]} )); then
 fi
 COLD="Restart the mini from cold: on the mini, sudo shutdown -r now. When it is up, do the Unlock (FileVault's password at the mini, or from outside the house through omarchy-gpu). Touch no cable and no test Mac."
 PLANNED="Restart the mini as a Maintenance run does: on the mini, sudo fdesetup authrestart. It needs no Unlock. Touch no cable and no test Mac."
+LABD="Restart labd alone, as a Deploy does: on the mini, sudo launchctl kickstart -k system/$LABD_LABEL. Touch no cable and no test Mac."
 
 if [[ $MODE == dry ]]; then
   cat <<PLAN
 $ME: dry run. Through $ADDRESS, under the saved login of a Maintainer, and on the mini over SSH, it would:
-  1. note which of $M1 and $M2 the lab sights by the name they show (lab oob)
-     expects: at least one
+  1. note which of $M1 and $M2 the lab sights by the name they show, and which it has placed at all (lab oob)
+     expects: at least one by its name
   2. look at the controller on the mini: launchctl print system/$OOBD_LABEL, and who owns $OOBD_PLIST
      expects: a LaunchDaemon that runs, as root, from a file that is root's
-  3. STOP, by hand: $COLD
+  3. STOP, by hand: $LABD
   4. wait for the lab to answer again, up to $lab_back minutes, then up to 2 minutes more
-     expects: each Mac noted in step 1 is sighted again on the same port, with a Sighting newer than the restart, and the controller is healthy; nobody did anything
-  5. STOP, by hand: $PLANNED
+     expects: each Mac placed in step 1 is placed on the same port, by the Sighting it had (the same since); nobody did anything
+  5. STOP, by hand: $COLD
   6. wait as in step 4
+     expects: each Mac sighted by its name in step 1 is sighted again on the same port, with a Sighting newer than the restart, and the controller is healthy; nobody did anything
+  7. STOP, by hand: $PLANNED
+  8. wait as in step 6
      expects: the same
-  7. write docs/acceptance/$(today)-out-of-band-07.md and its line in docs/acceptance/$RESULTS_NAME
+  9. write docs/acceptance/$(today)-out-of-band-07.md and its line in docs/acceptance/$RESULTS_NAME
 Nothing was sent and nothing is reset by this test.
 PLAN
   exit 0
@@ -52,9 +59,11 @@ fi
 begin 07 "the controller as a root LaunchDaemon: after an Unlock and after a planned restart, Sightings rebuild unaided"
 
 named=""
+placed=()
 for mac in "$M1" "$M2"; do
   wait_until "$(if playing; then echo 25; else echo 45; fi)" is_placed "$mac" || true
   port="$(port_of "$mac")"
+  [[ -z $port ]] || placed+=("$mac|$port|$(since_of "$mac")")
   if [[ -n $port ]] && by_name "$mac" "$port"; then
     named="$named $mac:$port"
     rec "before: $mac is sighted on the $port port by the name it shows"
@@ -78,6 +87,22 @@ else
   rec "the controller: $OOBD_LABEL runs under launchd in the system domain, as root, from a file that is root's ($owner)"
 fi
 
+# kept: labd alone restarted, and every Sighting it held kept, the same one.
+kept() {
+  local entry mac port was since
+  hands "$LABD"
+  ! playing || restart_labd
+  wait_until "$((lab_back * 60))" "$LAB_CMD" status "$M1" > /dev/null 2>&1 || give_up "after labd restarted alone: the lab did not answer again within $lab_back minutes"
+  for entry in "${placed[@]}"; do
+    IFS='|' read -r mac port was <<<"$entry"
+    wait_until 120 is_placed "$mac" "$port" || give_up "after labd restarted alone: $mac is not placed on the $port port: $(cable_of "$mac")"
+    since="$(since_of "$mac")"
+    [[ $since == "$was" ]] || give_up "after labd restarted alone: the Sighting of $mac is from $since, not the $was it had: labd did not keep it"
+    rec "after labd restarted alone: $mac kept its Sighting on the $port port, since $since"
+  done
+}
+kept
+
 # after WHAT INSTRUCTION: one restart of the mini and what must follow.
 after() {
   local pair mac port asked since
@@ -92,7 +117,7 @@ after() {
     mac="${pair%%:*}"
     port="${pair##*:}"
     wait_until 120 by_name "$mac" "$port" || give_up "$1: $mac was not sighted again on the $port port within 2 minutes of the lab answering: $(cable_of "$mac")"
-    since="$("$LAB_CMD" oob "$mac" 2>/dev/null | sed -n 's/^  since: *//p')"
+    since="$(since_of "$mac")"
     [[ -n $since && ! $since < $asked ]] || give_up "$1: the Sighting of $mac is from $since, before the restart was asked at $asked: labd did not start again"
     rec "$1: $mac is sighted again on the $port port, since $since, unaided"
   done

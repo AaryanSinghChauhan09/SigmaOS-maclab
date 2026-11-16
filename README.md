@@ -1012,8 +1012,8 @@ Thunderbolt-capable cable, and nothing else goes on those ports.
   reads, for the controller, and `/var/lab/secrets/oobd.token`, which only
   the `lab` account reads, for labd (`--oobd-token-file`).
 
-**Which Mac is on which port** is not written anywhere: labd learns it and
-keeps it in memory.
+**Which Mac is on which port** is not written in any Mac's record: labd
+learns it, and keeps what it learnt in its data.
 
 - **Sighting.** Every 15 s labd asks the controller what its three ports
   show. While a Mac's Linux is up with a Thunderbolt link the port shows the
@@ -1027,9 +1027,13 @@ keeps it in memory.
   a Mac hung after a restart does, and ends it once the Mac is heard again
   on the boot it had, a cable pulled while it stayed up. Any conflict ends the Sightings involved and
   makes none: one name on two ports, a sighted Mac's name on another port,
-  another name on a sighted Mac's port, one name in two records. After labd
-  restarts it holds none, and Macs that are up are sighted again by
-  themselves.
+  another name on a sighted Mac's port, one name in two records. labd
+  keeps its Sightings in its data: after labd restarts, as at a Deploy,
+  each one holds while its port is still connected with the same product
+  id (the log says `sighting kept across the restart: MAC on PORT`), and
+  the rules above go on from there. After the mini restarts its plug
+  counts start again: every Sighting is gone, and Macs that are up are
+  sighted again by themselves.
 - **Hard reset.** `lab reset <mac>`, or Hard reset on the Live tab of a
   Lab-owned Mac's page, which asks twice: a Maintainer, or the holder of a
   Lease on the Mac. labd looks at the port, and the controller compares it

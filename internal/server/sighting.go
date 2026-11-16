@@ -4,15 +4,19 @@ package server
 // controller resets a port, not a Mac, and no port is written in a Mac's
 // record: labd learns the port by a Sighting, the Mac's name read there, or
 // by a Maintainer's Proving reset, and sends a Hard reset only where it is
-// sure. Sightings live in memory alone: after a restart labd holds none and
-// Macs that are up are sighted again by themselves.
+// sure. Sightings are kept in labd's data: after a restart labd keeps each
+// one whose port is still connected with the same product id, at its first
+// look at the ports, and Macs that are up and show their name are sighted
+// again by themselves.
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -48,6 +52,12 @@ type cables struct {
 	// ports are the controller's ports as it last showed them.
 	ports map[int]oob.Port
 	held  map[string]sighting
+	// kept are the Sightings labd's data held as it started, until its
+	// first look at the ports keeps or drops each; nil after that.
+	kept map[string]sighting
+	// saved is what labd's data holds now; saveMu is held to write it.
+	saved  map[string]sighting
+	saveMu sync.Mutex
 	// lost is why a Mac has no Sighting, where there is something to say.
 	lost map[string]string
 	// down is why the controller is not healthy; "" while it answers.
@@ -65,6 +75,117 @@ type cables struct {
 
 func newCables(c *oob.Client) *cables {
 	return &cables{none: c == nil, ports: map[int]oob.Port{}, held: map[string]sighting{}, lost: map[string]string{}}
+}
+
+// sightings are the Sightings labd's data holds.
+func (st *store) sightings() (map[string]sighting, error) {
+	rows, err := st.db.Query(`SELECT mac, rid, product_id, plug_count, boot, proved, at FROM sightings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]sighting{}
+	for rows.Next() {
+		var name string
+		var sg sighting
+		var at int64
+		if err := rows.Scan(&name, &sg.rid, &sg.seen.ProductID, &sg.seen.PlugCount, &sg.boot, &sg.proved, &at); err != nil {
+			return nil, err
+		}
+		sg.at = time.UnixMicro(at)
+		out[name] = sg
+	}
+	return out, rows.Err()
+}
+
+// saveSightings makes labd's data hold these Sightings and no others.
+func (st *store) saveSightings(held map[string]sighting) error {
+	tx, err := st.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM sightings`); err != nil {
+		return err
+	}
+	for name, sg := range held {
+		if _, err := tx.Exec(`INSERT INTO sightings (mac, rid, product_id, plug_count, boot, proved, at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			name, sg.rid, sg.seen.ProductID, sg.seen.PlugCount, sg.boot, sg.proved, sg.at.UnixMicro()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// saveSightings writes the Sightings labd holds to its data, when they
+// changed. Before labd's first look at the ports its data keeps what it
+// held.
+func (s *Server) saveSightings() {
+	c := s.cables
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
+	c.mu.Lock()
+	if c.kept != nil || c.none {
+		c.mu.Unlock()
+		return
+	}
+	held := map[string]sighting{}
+	for name, sg := range c.held {
+		sg.rose = time.Time{}
+		held[name] = sg
+	}
+	c.mu.Unlock()
+	if maps.EqualFunc(held, c.saved, func(a, b sighting) bool {
+		return a.rid == b.rid && a.seen == b.seen && a.proved == b.proved && a.boot == b.boot && a.at.Equal(b.at)
+	}) {
+		return
+	}
+	if err := s.store.saveSightings(held); err != nil {
+		s.log.Printf("sighting: the Sightings were not written to labd's data: %v", err)
+		return
+	}
+	c.saved = held
+}
+
+// restoreLocked keeps or drops each Sighting labd's data held as it
+// started, at its first look at the ports: one is kept while its port is
+// still connected with the same product id. It returns the log's lines.
+// The caller holds c.mu.
+func (c *cables) restoreLocked(ports map[int]oob.Port, macs []labOwned) (said []string) {
+	if c.kept == nil {
+		return nil
+	}
+	known := map[string]bool{}
+	for _, m := range macs {
+		known[m.name] = true
+	}
+	names := slices.Sorted(maps.Keys(c.kept))
+	for _, name := range names {
+		sg := c.kept[name]
+		p := ports[sg.rid]
+		port := "the " + oob.PortName(sg.rid) + " port"
+		why := ""
+		switch {
+		case !known[name]:
+			why = "it is no Lab-owned Mac of the lab any more"
+		case !p.Connected:
+			why = port + " is no longer connected"
+		case p.ProductID != sg.seen.ProductID:
+			why = fmt.Sprintf("%s shows product id %d, not the %d it was seen with", port, p.ProductID, sg.seen.ProductID)
+		}
+		where := name + " on " + oob.PortName(sg.rid)
+		if why != "" {
+			if known[name] {
+				c.lost[name] = "its Sighting was not kept across a restart of labd: " + why
+			}
+			said = append(said, "sighting not kept across the restart: "+where+": "+why)
+			continue
+		}
+		c.held[name] = sg
+		said = append(said, "sighting kept across the restart: "+where)
+	}
+	c.kept = nil
+	return said
 }
 
 // of is the Sighting of the Mac named name.
@@ -287,22 +408,34 @@ func (s *Server) sight(ctx context.Context) {
 		}
 		ports[rid] = p
 	}
+	if s.lookedAt(ports, downs) {
+		s.saveSightings()
+	}
+}
+
+// lookedAt brings the Sightings in line with ports, read in a look begun
+// when the controller had been found not answering downs times; false when
+// that look is older news.
+func (s *Server) lookedAt(ports map[int]oob.Port, downs uint64) bool {
 	macs := s.labOwnedMacs()
 	now := s.now()
 	s.cables.mu.Lock()
 	defer s.cables.mu.Unlock()
 	if s.cables.downs != downs {
 		// found not answering while this look was under way: its ports are older news
-		return
+		return false
 	}
 	if s.cables.down != "" {
 		s.cables.down = ""
 		s.log.Printf("the Out-of-band controller answers again")
 	}
-	said := s.cables.apply(ports, macs, now)
-	for _, line := range said {
+	for _, line := range s.cables.restoreLocked(ports, macs) {
+		s.log.Printf("%s", line)
+	}
+	for _, line := range s.cables.apply(ports, macs, now) {
 		s.log.Printf("sighting: %s", line)
 	}
+	return true
 }
 
 // portNow is how a port compares with what a Sighting saw on it.
@@ -536,11 +669,13 @@ func (s *Server) hardReset(ctx context.Context, v *dev) (port string, err error)
 	switch st, why := sg.against(p, m); st {
 	case portChanged:
 		s.cables.drop(name, why, s.now())
+		s.saveSightings()
 		s.log.Printf("sighting: %s is no longer sighted: %s", name, why)
 		return port, refuse(http.StatusConflict, "no Hard reset was sent: %s. The Sighting of %s is dropped", why, name)
 	case portRestarted:
 		sg.seen.PlugCount, sg.boot, sg.rose = p.PlugCount, m.boot, time.Time{}
 		s.cables.keep(name, sg)
+		s.saveSightings()
 	case portRising:
 		if sg.rose.IsZero() {
 			sg.rose = s.now()
@@ -565,6 +700,7 @@ func (s *Server) hardReset(ctx context.Context, v *dev) (port string, err error)
 		return port, mayHaveGone{refuse(http.StatusBadGateway, "the Hard reset of %s may have gone out: %v", name, maybe.Err)}
 	case errors.As(err, &moved):
 		s.cables.drop(name, moved.Reason, s.now())
+		s.saveSightings()
 		s.log.Printf("sighting: %s is no longer sighted: %s", name, moved.Reason)
 		return port, refuse(http.StatusConflict, "no Hard reset was sent: %s. The Sighting of %s is dropped", moved.Reason, name)
 	case err != nil:
@@ -748,6 +884,7 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 	s.cables.held[name] = sighting{rid: rid, seen: oob.Seen{ProductID: p.ProductID, PlugCount: p.PlugCount}, at: s.now(), proved: true, boot: boot}
 	delete(s.cables.lost, name)
 	s.cables.mu.Unlock()
+	s.saveSightings()
 	s.log.Printf("sighting: %s is placed on %s by the Proving reset of %s (product id %d, plug count %d)", name, port, by, p.ProductID, p.PlugCount)
 	return &api.Proving{Device: name, Port: oob.PortName(rid), Cable: s.cables.cable(name)}, nil
 }

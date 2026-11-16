@@ -396,6 +396,15 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 		}
 	}
 	s.cables = newCables(cfg.OOB)
+	if cfg.OOB != nil {
+		kept, err := st.sightings()
+		if err != nil {
+			st.db.Close()
+			rep.Close()
+			return nil, fmt.Errorf("reading the Sightings: %w", err)
+		}
+		s.cables.kept, s.cables.saved = kept, kept
+	}
 	s.lines = newGroupLines(st, s.clock(), logger, cfg.Signal, cfg.SignalDir)
 	s.labGroup = labGroupLines{l: s.lines, link: s.pageAddress}
 	s.agents = agentsLines{s.lines}
