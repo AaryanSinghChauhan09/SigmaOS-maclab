@@ -386,6 +386,72 @@ func TestFD10NothingAnswersBeyondLoopback(t *testing.T) {
 	noAddress(t, "fd10-origin-closed", record)
 }
 
+// An address the mini shares with the machine asking it, such as the
+// bridge Apple's container gives both Macs, reaches the asker itself: it is
+// not asked, and the record says why without naming it.
+func TestFD10DoesNotAskAnAddressThatIsAlsoThisMachines(t *testing.T) {
+	t.Parallel()
+	stubs, bin, records := t.TempDir(), t.TempDir(), t.TempDir()
+	calls := filepath.Join(stubs, "calls")
+	write := func(file, body string) {
+		if err := os.WriteFile(file, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(stubs, "ssh"), `#!/bin/bash
+case "$*" in
+  *edge-facts\ origin*) printf 'lab_listeners=3\nbeyond_loopback=0\nbeyond_loopback_ports=\n' ;;
+  */sbin/ifconfig*) printf 'lo0: flags=8049\n\tinet 127.0.0.1 netmask 0xff000000\nen0: flags=8863\n\tinet 198.51.100.7 netmask 0xffffff00\nbridge100: flags=8863\n\tinet 192.0.2.1 netmask 0xffffff00\nutun4: flags=8051\n\tinet 203.0.113.77 --> 203.0.113.77\n' ;;
+  *) exit 1 ;;
+esac
+`)
+	write(filepath.Join(stubs, "ifconfig"), "#!/bin/sh\nprintf 'lo0: flags=8049\\n\\tinet 127.0.0.1 netmask 0xff000000\\nen0: flags=8863\\n\\tinet 192.0.2.50 netmask 0xffffff00\\nbridge100: flags=8863\\n\\tinet 192.0.2.1 netmask 0xffffff00\\n'\n")
+	// The stand-in for the probe: SSH answers everywhere, and 7780 answers
+	// at the shared address, as this machine's own listener did.
+	write(filepath.Join(bin, "front-door-probe"), `#!/bin/bash
+echo "probe $*" >> "`+calls+`"
+case "$1" in
+  answers)
+    shift
+    asked=$# open=0 ports=""
+    for a in "$@"; do
+      if [[ $a == *:22 || $a == 192.0.2.1:7780 ]]; then open=$((open + 1)); ports="${a##*:}"; fi
+    done
+    printf 'asked=%s\nopen=%s\nclosed=%s\nopen_ports=%s\n' "$asked" "$open" "$((asked - open))" "$ports" ;;
+  router) printf 'upnp=silent\nnat_pmp=silent\n' ;;
+esac
+`)
+	out, code := run(t, []string{"PATH=" + stubs + ":" + os.Getenv("PATH")}, "", frontDoor(t, "fd10-origin-closed"),
+		"--lab", "--mini", "owner@mini.example", "--bin", bin, "--records", records, "--no-forwards", "--upnp-off")
+	files, _ := filepath.Glob(filepath.Join(records, "*-front-door-10.md"))
+	if len(files) != 1 {
+		t.Fatalf("no record: exit %d\n%s", code, out)
+	}
+	record := read(t, files[0])
+	if code != 0 || !strings.Contains(record, "\nResult: pass\n") {
+		t.Errorf("fd10 --lab: exit %d\n%s\nrecord:\n%s", code, out, record)
+	}
+	for _, want := range []string{
+		"the mini has 3 address(es) beyond loopback; 1 of them is also this machine's own address: not asked",
+		"2 of the rest can be reached from this machine (SSH answers there)",
+		"asked on 2 address(es) and ports 7770 7780 20241 80 443 8080: none takes a connection",
+	} {
+		if !strings.Contains(record, want) {
+			t.Errorf("the record lacks %q:\n%s", want, record)
+		}
+	}
+	if probed := read(t, calls); strings.Contains(probed, "192.0.2.1:") {
+		t.Errorf("the shared address was asked:\n%s", probed)
+	}
+	if !strings.Contains(out, "192.0.2.1 is also this machine's own address: not asked") {
+		t.Errorf("the run does not name the address it left out:\n%s", out)
+	}
+	if strings.Contains(record, "192.0.2.1") {
+		t.Errorf("the record names an address:\n%s", record)
+	}
+	noAddress(t, "fd10-origin-closed", record)
+}
+
 func TestFD11ACutJobWaitLeavesItsJob(t *testing.T) {
 	t.Parallel()
 	passes(t, "fd11-cut-job-wait", "lab wait was killed 3 s into its call", "the job is still going", "it passed: the cut did not cancel it")
