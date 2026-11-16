@@ -87,10 +87,10 @@ func changeWindow(cfg *Config, f func(s *window.Settings, now time.Time) error) 
 	return saveWindow(cfg, s)
 }
 
-// windowCmd is `window show`, `window add <days> <HH:MM-HH:MM>` and
-// `window remove <days> <HH:MM-HH:MM>`.
+// windowCmd is `window show`, `window add <days> <HH:MM-HH:MM>|always` and
+// `window remove <days> <HH:MM-HH:MM>|always`.
 func windowCmd(ctx context.Context, cfg *Config, sys System, args []string, out io.Writer) error {
-	usage := errors.New("usage: window show | window add <days> <HH:MM-HH:MM> | window remove <days> <HH:MM-HH:MM>, e.g. window add mon-fri 19:00-07:00")
+	usage := errors.New("usage: window show | window add <days> <HH:MM-HH:MM>|always | window remove <days> <HH:MM-HH:MM>|always, e.g. window add mon-fri 19:00-07:00")
 	if len(args) == 0 {
 		return usage
 	}
@@ -112,10 +112,10 @@ func windowCmd(ctx context.Context, cfg *Config, sys System, args []string, out 
 		fmt.Fprintln(out, "Window: "+describeWindow(s, cfg.clock().Now()))
 		return nil
 	case "add", "remove":
-		if len(args) != 3 {
+		if len(args) != 3 && (len(args) != 2 || args[1] != "always") {
 			return usage
 		}
-		r, err := window.ParseRule(args[1] + " " + args[2])
+		r, err := window.ParseRule(strings.Join(args[1:], " "))
 		if err != nil {
 			return err
 		}
@@ -177,6 +177,9 @@ func pause(ctx context.Context, cfg *Config, sys System, args []string, out io.W
 				fmt.Fprintln(out, "The window is closed already; nothing to pause.")
 				return nil
 			}
+			if st.Always {
+				return errors.New("this Mac's window has no end to pause until: pause --until YYYY-MM-DD closes it until that date")
+			}
 			if st.End.After(s.PausedUntil) {
 				s.PausedUntil = st.End
 			}
@@ -222,6 +225,8 @@ func describeWindow(s window.Settings, now time.Time) string {
 	when := func(t time.Time) string { return t.In(s.Location()).Format("Mon 2 Jan 15:04") }
 	var b strings.Builder
 	switch {
+	case st.Always:
+		b.WriteString("open always")
 	case st.Open && st.Attended:
 		fmt.Fprintf(&b, "open (attended) until %s", when(st.End))
 	case st.Open:

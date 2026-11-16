@@ -493,7 +493,7 @@ func askWindow(tty *terminal, cfg *Config, say func(string, ...any)) {
 		say("%s", later)
 		return
 	}
-	answer, _ := tty.ask("\nWhen may the lab use this Mac each week? Days and hours in this Mac's local time, like mon-fri 19:00-07:00.\nPress Enter to decide later: ")
+	answer, _ := tty.ask("\nWhen may the lab use this Mac each week? Days and hours in this Mac's local time, like mon-fri 19:00-07:00, or always.\nPress Enter to decide later: ")
 	if answer == "" {
 		say("%s", later)
 		return

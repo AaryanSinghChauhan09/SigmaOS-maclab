@@ -754,3 +754,25 @@ func TestACardReadsABoundedTailOfTheAuditCopy(t *testing.T) {
 		t.Errorf("the card's Audit log: %q", card.sole(t, "#audit-vol-air").words())
 	}
 }
+
+// A Mac lent always shows its window as always, open with no end, and the
+// command for the window at the Mac says always is an answer.
+func TestACardOfAMacLentAlwaysSaysAlways(t *testing.T) {
+	l := myMacsLab(t)
+	v := l.lentMac("vol-air", linusID, api.AccessQualification, time.Time{})
+	always, err := window.ParseRule("always")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.mu.Lock()
+	v.d.Window.Rules = []window.Rule{always}
+	v.mu.Unlock()
+	linus := l.signedIn(linusID)
+	card := linus.myMacs().sole(t, "#mac-vol-air")
+	if facts := factsOf(t, card); !strings.Contains(facts, "Availability window always (Australia/Brisbane) open always") {
+		t.Errorf("the card of an always Mac: %s", facts)
+	}
+	if !strings.Contains(card.words(), "or window add always") {
+		t.Errorf("the card does not say always is a window: %s", card.words())
+	}
+}

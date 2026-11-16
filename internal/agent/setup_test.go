@@ -441,6 +441,8 @@ func TestAMacArrivesAtQualificationWithPublishingOffAndKeepsItsWindow(t *testing
 func TestJoinAsksOnceForTheAvailabilityWindow(t *testing.T) {
 	for answer, want := range map[string][]string{
 		"mon-fri 19:00-07:00\n":       {"mon-fri 19:00-07:00"},
+		"always\n":                    {"always"},
+		"mon-sun 00:00-24:00\n":       {"always"},
 		"\n":                          nil,
 		"whenever\nsat 10:00-12:00\n": nil,
 	} {
@@ -448,6 +450,9 @@ func TestJoinAsksOnceForTheAvailabilityWindow(t *testing.T) {
 		run := lab.join(sim, "yes\n"+answer, nil)
 		if run.err != nil {
 			t.Fatalf("answer %q: %v", answer, run.err)
+		}
+		if !strings.Contains(run.tty, "like mon-fri 19:00-07:00, or always.") {
+			t.Errorf("answer %q: the question does not offer always:\n%s", answer, run.tty)
 		}
 		if n := strings.Count(run.tty, "When may the lab use this Mac"); n != 1 {
 			t.Errorf("answer %q: asked %d time(s):\n%s", answer, n, run.tty)

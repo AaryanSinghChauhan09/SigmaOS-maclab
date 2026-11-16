@@ -32,7 +32,7 @@ const usage = `lab-agent: the Mac side of Omarchy Mac Lab
   sudo lab-agent status           what this Mac is enrolled as, its ntfy topic, its Availability window,
                                   Access level, Installed-run eligibility, latest Audit log entries, and
                                   whether the lab's changed terms wait for you on My Macs
-  sudo lab-agent window show|add|remove [<days> <HH:MM-HH:MM>]
+  sudo lab-agent window show|add|remove [<days> <HH:MM-HH:MM>|always]
                                   when the lab may use a Volunteer's Mac, e.g. window add mon-fri 19:00-07:00
   sudo lab-agent pause [--until YYYY-MM-DD]
                                   end the current window now, or stay closed until that date
