@@ -552,6 +552,58 @@ func TestPkgbuildParses(t *testing.T) {
 	}
 }
 
+// The package image is an up-to-date Arch Linux ARM: one full upgrade, nothing
+// held back, and what it installed written into the image and onto every build
+// log. Build b1116-183947-7af0 failed on linux-api-headers 7.3 meeting a 7.1
+// kernel tree, and only the headers' version in the log says so at a glance.
+func TestPkgImageIsFullyUpgradedAndSaysWhatItHolds(t *testing.T) {
+	read := func(name string) string {
+		raw, err := os.ReadFile("../../builder/pkg/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	cf := strings.ReplaceAll(read("Containerfile"), "\\\n", " ")
+	var pacman []string
+	for _, l := range strings.Split(cf, "\n") {
+		for _, part := range strings.Split(l, "&&") {
+			f := strings.Fields(part)
+			if len(f) > 0 && f[0] == "RUN" {
+				f = f[1:]
+			}
+			if len(f) > 1 && f[0] == "pacman" && strings.HasPrefix(f[1], "-S") {
+				pacman = append(pacman, strings.Join(f, " "))
+			}
+		}
+	}
+	if len(pacman) != 1 || !strings.HasPrefix(pacman[0], "pacman -Syu ") {
+		t.Fatalf("pacman installs %q, want one full upgrade (pacman -Syu ...)", pacman)
+	}
+	for _, held := range []string{"--ignore", "--assume-installed", "--nodeps", "-Sydd"} {
+		if strings.Contains(pacman[0], held) {
+			t.Errorf("the upgrade holds something back with %s: %s", held, pacman[0])
+		}
+	}
+	if !strings.Contains(" "+pacman[0]+" ", " base-devel ") {
+		t.Errorf("the upgrade does not install base-devel: %s", pacman[0])
+	}
+	if !strings.Contains(cf, "pacman -Q > /usr/share/maclab/packages") {
+		t.Error("the image does not record what it installed in /usr/share/maclab/packages")
+	}
+	var toolchain string
+	for _, l := range strings.Split(read("pkgbuild"), "\n") {
+		if strings.HasPrefix(l, `echo "toolchain: `) {
+			toolchain = l
+		}
+	}
+	for _, p := range []string{"gcc", "glibc", "linux-api-headers", "binutils", "rustup", "rust-bindgen", "pahole"} {
+		if !strings.Contains(toolchain, " "+p+" ") && !strings.Contains(toolchain, " "+p+")") {
+			t.Errorf("the toolchain log line does not name %s: %s", p, toolchain)
+		}
+	}
+}
+
 // A kernel build's out/ holds the boot artifact and the retained inputs for
 // external modules: both upload as named files, and the one the kernel file
 // names becomes the artifact. A refused upload is an error, not a silent gap.
