@@ -483,6 +483,23 @@ func (sg sighting) against(p oob.Port, m labOwned) (portNow, string) {
 	return portRising, moved + ", and " + m.name + " has not been heard on a new boot since"
 }
 
+// placeholderNames are what a Mac's Thunderbolt link shows before its
+// hostname is set, early in boot or hung there: the Linux kernel's default
+// hostname "(none)", systemd's fallbacks, and the mini's own placeholder for
+// a partner whose name it has not read. None is evidence of any Mac.
+var placeholderNames = []string{"unknown_xd_device", "(none)", "localhost", "localhost.localdomain", "archlinux"}
+
+// realName is the name a port shows, or "" when it is a placeholder.
+func realName(name string) string {
+	name = strings.TrimSpace(name)
+	for _, p := range placeholderNames {
+		if strings.EqualFold(name, p) {
+			return ""
+		}
+	}
+	return name
+}
+
 // recordsNamed are the Macs a name read on a port belongs to.
 func recordsNamed(name string, macs []labOwned) []string {
 	var out []string
@@ -548,11 +565,12 @@ func (c *cables) apply(ports map[int]oob.Port, macs []labOwned, now time.Time) (
 	conflict := map[string]string{}
 	for _, rid := range oob.RIDs {
 		p := ports[rid]
-		if !p.Connected || p.Name == "" {
+		shown := realName(p.Name)
+		if !p.Connected || shown == "" {
 			continue
 		}
 		port := "the " + oob.PortName(rid) + " port"
-		owners := recordsNamed(p.Name, macs)
+		owners := recordsNamed(shown, macs)
 		switch {
 		case len(owners) > 1:
 			for _, name := range owners {
@@ -796,7 +814,7 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 		return nil, refuse(http.StatusServiceUnavailable, "no Proving reset was sent: the Out-of-band controller is not healthy: %v", err)
 	case !p.Connected:
 		return nil, refuse(http.StatusConflict, "no Proving reset was sent: nothing is connected to %s", port)
-	case p.Name != "":
+	case realName(p.Name) != "":
 		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s shows the name %q, and a Proving reset is for a Mac that shows none", port, p.Name)
 	case p.ProductID <= 0 || p.PlugCount <= 0:
 		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s shows no product id or plug count, and the reset goes out only while the port is as it was read", port)

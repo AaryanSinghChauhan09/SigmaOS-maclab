@@ -1191,6 +1191,53 @@ func TestAMacHungAfterItsRestartStillGetsItsHardReset(t *testing.T) {
 	}
 }
 
+// Early in boot a Mac's Thunderbolt link announces a placeholder name
+// before its hostname is set (m1-pro's port showed "unknown_xd_device" for
+// 30 s during a job's reboot on 2026-11-16): that is no other Mac. It
+// neither ends nor places a Sighting, a Mac hung there still gets its Hard
+// reset, and a Proving reset takes it as a port that shows no name.
+func TestAPlaceholderNameIsNoOtherMac(t *testing.T) {
+	l := sightLab(t, labConfig{})
+	l.baseline()
+	l.sight()
+	for _, name := range []string{"unknown_xd_device", "(none)", "localhost", "archlinux", ""} {
+		l.oob.shows(portRight, name)
+		l.sight()
+		if sg, ok := l.s.cables.of(l.name); !ok || sg.rid != portRight {
+			t.Fatalf("the right port shows %q: the Sighting %+v %v, want it kept", name, sg, ok)
+		}
+		l.wantCable(l.name, api.CableSighted)
+	}
+	l.oob.shows(portRight, "unknown_xd_device")
+	boot := l.bootOf(l.name)
+	if r, body := l.resetAs(harnessToken, l.name, ""); r.StatusCode != http.StatusOK || !strings.Contains(body, "through the right port") {
+		t.Fatalf("a Hard reset of a Mac showing a placeholder name: %s %s", r.Status, body)
+	}
+	l.wantResets("the Mac showing a placeholder name", portRight)
+	l.waitDevice(func(d api.Device) bool { return d.BootID != boot && d.State == api.StateReady })
+
+	// A placeholder places nothing, and a Proving reset is for that port.
+	max := l.addMac("m2-max")
+	l.oob.plug(portMiddle, max, "unknown_xd_device", productM2Max)
+	l.sight()
+	l.wantCable("m2-max", api.CableNotSighted, "`lab reset m2-max --prove middle`")
+	if r, body := l.resetAs(harnessToken, "m2-max", "middle"); r.StatusCode != http.StatusOK {
+		t.Fatalf("the Proving reset of a port showing a placeholder name: %s %s", r.Status, body)
+	}
+	l.wantResets("the Hard reset and the Proving reset", portRight, portMiddle)
+	if sg, ok := l.s.cables.of("m2-max"); !ok || sg.rid != portMiddle {
+		t.Fatalf("after the Proving reset: %+v %v", sg, ok)
+	}
+
+	// A real name of no Lab-owned Mac still ends the Sighting.
+	l.oob.shows(portRight, "somebody-elses-mac")
+	l.sight()
+	if _, ok := l.s.cables.of(l.name); ok {
+		t.Fatal("the Sighting outlived another Mac's name on its port")
+	}
+	l.wantCable(l.name, api.CableNotSighted, `the right port shows the name "somebody-elses-mac", which is not its own`)
+}
+
 // A cable pulled and put back while its Mac stays up moves the plug count
 // as a restart does, but the Mac is heard again on the boot it had: that
 // ends the Sighting. Until the lab knows, no Hard reset goes out.
