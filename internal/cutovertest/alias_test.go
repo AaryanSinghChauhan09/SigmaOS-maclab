@@ -65,6 +65,7 @@ func TestTheRehearsalAndTheRecordingsAreSound(t *testing.T) {
 // With no option the rehearsal and the recordings say their steps and run
 // nothing: no cloud script, no ssh, no dig, no curl, no lab.
 func TestTheRehearsalsAndTheRecordingsDryRunsSendNothing(t *testing.T) {
+	added := map[string]func() []string{"*alias-rehearsal*": recordsAdded(t, "*alias-rehearsal*"), "*dark-recordings*": recordsAdded(t, "*dark-recordings*")}
 	stubs := t.TempDir()
 	log := filepath.Join(stubs, "calls")
 	for _, tool := range []string{"lab", "curl", "ssh", "dig", "alias.sh", "rehearsal-record.sh"} {
@@ -108,7 +109,7 @@ func TestTheRehearsalsAndTheRecordingsDryRunsSendNothing(t *testing.T) {
 		t.Errorf("a dry run ran:\n%s", b)
 	}
 	for _, stem := range []string{"*alias-rehearsal*", "*dark-recordings*"} {
-		if entries, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", stem)); len(entries) != 0 {
+		if entries := added[stem](); len(entries) != 0 {
 			t.Errorf("a dry run left a record: %v", entries)
 		}
 	}
@@ -118,6 +119,7 @@ func TestTheRehearsalsAndTheRecordingsDryRunsSendNothing(t *testing.T) {
 // socket the tunnel would use, forwards pages to the Lab address with path
 // and query kept, refuses the API in the plain line, and sets no cookie.
 func TestOnTheAliasLabdForwardsPagesAndRefusesTheAPI(t *testing.T) {
+	added := recordsAdded(t, "*alias-rehearsal*")
 	records := t.TempDir()
 	out, code := run(t, nil, "", cutover(t, "alias-rehearsal"), "--local", "--bin", bins(t), "--records", records)
 	if code != 0 {
@@ -145,7 +147,7 @@ func TestOnTheAliasLabdForwardsPagesAndRefusesTheAPI(t *testing.T) {
 			t.Errorf("the record lacks %q:\n%s", want, record)
 		}
 	}
-	if entries, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*alias-rehearsal*")); len(entries) != 0 {
+	if entries := added(); len(entries) != 0 {
 		t.Errorf("a local run left a record in docs/acceptance: %v", entries)
 	}
 }
@@ -360,6 +362,7 @@ func (p *played) left() []string {
 // The whole rehearsal as the owner starts it, with the route played: made,
 // issued, asked, the record taken away, the lapse seen, everything deleted.
 func TestTheRehearsalRunsFromMakingToDeleting(t *testing.T) {
+	added := recordsAdded(t, "*alias-rehearsal*")
 	p := newPlayed(t, bins(t))
 	out, code, record := p.rehearse("--agents-line", "seen", "--charged", "nothing")
 	if code != 0 {
@@ -415,7 +418,7 @@ func TestTheRehearsalRunsFromMakingToDeleting(t *testing.T) {
 		}
 		at += i
 	}
-	if entries, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*alias-rehearsal*")); len(entries) != 0 {
+	if entries := added(); len(entries) != 0 {
 		t.Errorf("the run left a record in docs/acceptance: %v", entries)
 	}
 }

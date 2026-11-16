@@ -233,6 +233,7 @@ func TestFD04StoppedWhileLabIsStoppedEnds(t *testing.T) {
 // member's script, the measuring and the decision, which is shown and
 // written nowhere.
 func TestTheTransferTestsRunAgainstALocalLabd(t *testing.T) {
+	added := recordsAdded(t, "*front-door*")
 	plist := read(t, filepath.Join(repo(t), "deploy", "org.omarchy-mac.lab.labd.plist"))
 	routes := read(t, filepath.Join(repo(t), "deploy", "cloudflared.yml"))
 	for name, wants := range map[string][]string{
@@ -253,7 +254,7 @@ func TestTheTransferTestsRunAgainstALocalLabd(t *testing.T) {
 	if read(t, filepath.Join(repo(t), "deploy", "org.omarchy-mac.lab.labd.plist")) != plist || read(t, filepath.Join(repo(t), "deploy", "cloudflared.yml")) != routes {
 		t.Error("a local run wrote in deploy/")
 	}
-	if entries, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*front-door*")); len(entries) != 0 {
+	if entries := added(); len(entries) != 0 {
 		t.Errorf("a local run left a record in docs/acceptance: %v", entries)
 	}
 }

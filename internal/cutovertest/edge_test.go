@@ -148,6 +148,7 @@ func stubs(t *testing.T) (env []string, log string) {
 // With no option every test says what it would do and runs nothing: no lab,
 // no curl, no ssh, no probe.
 func TestADryRunOfAStreamOrEdgeTestSendsNothing(t *testing.T) {
+	added := recordsAdded(t, "*front-door*")
 	env, log := stubs(t)
 	for name, wants := range map[string][]string{
 		"fd01-exec-keepalives": {"lab exec --timeout 3600 m1-pro 'sleep 3590", "one every 30 s (120 in all)", "front-door-01.md", "Exec record"},
@@ -180,7 +181,7 @@ func TestADryRunOfAStreamOrEdgeTestSendsNothing(t *testing.T) {
 	if b, _ := os.ReadFile(log); len(b) != 0 {
 		t.Errorf("a dry run ran:\n%s", b)
 	}
-	if entries, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*front-door*")); len(entries) != 0 {
+	if entries := added(); len(entries) != 0 {
 		t.Errorf("a dry run left a record: %v", entries)
 	}
 }

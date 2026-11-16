@@ -936,6 +936,7 @@ func TestTheGateTestRefusesBeforeItAsksAnything(t *testing.T) {
 // With no option it says its steps and runs nothing; with no record,
 // --results is not green.
 func TestTheGateTestsDryRunSaysTheStepsAndRunsNothing(t *testing.T) {
+	added := recordsAdded(t, "*builder-gate*")
 	g := newGate(t)
 	out, code := run(t, g.env, "", cutover(t, "builder-gate"))
 	if code != 0 {
@@ -949,7 +950,7 @@ func TestTheGateTestsDryRunSaysTheStepsAndRunsNothing(t *testing.T) {
 	if g.calls("calls") != "" || g.calls("mini-calls") != "" {
 		t.Errorf("a dry run ran:\n%s%s", g.calls("calls"), g.calls("mini-calls"))
 	}
-	if files, _ := filepath.Glob(filepath.Join(repo(t), "docs", "acceptance", "*builder-gate*")); len(files) != 0 {
+	if files := added(); len(files) != 0 {
 		t.Errorf("a dry run left a record: %v", files)
 	}
 	if out, code := run(t, nil, "", cutover(t, "builder-gate"), "--results", "--records", g.records); code == 0 || !strings.Contains(out, "no run of the Builder's gate test is recorded") {
