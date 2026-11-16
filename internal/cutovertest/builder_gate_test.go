@@ -66,11 +66,9 @@ case "$1" in
       echo "b1115-999997-src  queued  src" > "$GATE/row.b1115-999997-src"
       echo "${meta%|*}|https://github.com/o/linux-aurora/tree/other" > "$GATE/meta.b1115-999997-src"
     fi
-    # The build goes on as labd's would, after lab has gone; busy.ID says
-    # so until it ends, and a canceled build ends at once.
-    : > "$GATE/busy.$id"
+    # The build goes on as labd's would, after lab has gone; a canceled
+    # build ends at once.
     (
-      trap 'rm -f "$GATE/busy.$id"' EXIT
       canceled() { grep -q '  canceled  ' "$GATE/row.$id" 2>/dev/null; }
       sleep 0.3
       canceled && exit 0
@@ -286,7 +284,36 @@ func (g *gate) run(args ...string) (string, int) {
 	g.t.Helper()
 	all := append([]string{"--lab", "--mini", "owner@mini", "--kernel", "https://github.com/o/linux-aurora/tree/aurora", "--recipe", g.recipe,
 		"--size", "65536", "--deploy", g.deploy, "--records", g.records, "--bin", g.bin}, args...)
-	return run(g.t, g.env, "", cutover(g.t, "builder-gate"), all...)
+	cmd := exec.Command(cutover(g.t, "builder-gate"), all...)
+	cmd.Env = append(os.Environ(), g.env...)
+	cmd.Stdin = strings.NewReader("")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := cmd.CombinedOutput()
+	if cmd.Process != nil {
+		endGroup(g.t, cmd.Process.Pid)
+	}
+	if err == nil {
+		return string(out), 0
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		return string(out), ee.ExitCode()
+	}
+	g.t.Fatalf("builder-gate: %v\n%s", err, out)
+	return "", 0
+}
+
+// endGroup ends what a run left going in its process group. A build the
+// made-up lab took goes on after a run that ended first, as labd's would,
+// and it writes in the test's folder: left, it races the folder's removal.
+func endGroup(t *testing.T, pgid int) {
+	t.Helper()
+	syscall.Kill(-pgid, syscall.SIGKILL)
+	for end := time.Now().Add(10 * time.Second); syscall.Kill(-pgid, 0) == nil; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Errorf("processes of the run in group %d outlived it", pgid)
+			return
+		}
+	}
 }
 
 func newGate(t *testing.T) *gate {
@@ -304,15 +331,6 @@ func newGate(t *testing.T) *gate {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	// A made-up build outlives a run that ends first; the folder goes once
-	// it has ended.
-	t.Cleanup(func() {
-		for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-			if busy, _ := filepath.Glob(filepath.Join(root, "state", "busy.*")); len(busy) == 0 {
-				return
-			}
-		}
-	})
 	g := &gate{t: t, state: filepath.Join(root, "state"), deploy: filepath.Join(root, "deploy"), records: filepath.Join(root, "records"), recipe: filepath.Join(root, "recipes", "linux-aurora")}
 	mini := filepath.Join(root, "mini")
 	scripts := filepath.Join(mini, "usr/local/lab/current/scripts/mini")
@@ -679,6 +697,7 @@ func TestAGateThatEndsFirstLeavesNoBuild(t *testing.T) {
 		// Ctrl-C at the owner's terminal: the whole group gets it.
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
 		cmd.Wait()
+		endGroup(t, cmd.Process.Pid)
 		if !strings.Contains(g.calls("calls"), "probe ask POST /api/builds/b1115-000001-abcd/cancel\n") || !strings.Contains(g.record(), "build b1115-000001-abcd was canceled") {
 			t.Errorf("the build was left:\n%s\n%s", g.calls("calls"), g.record())
 		}
