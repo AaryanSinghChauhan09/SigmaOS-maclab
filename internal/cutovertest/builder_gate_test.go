@@ -66,15 +66,21 @@ case "$1" in
       echo "b1115-999997-src  queued  src" > "$GATE/row.b1115-999997-src"
       echo "${meta%|*}|https://github.com/o/linux-aurora/tree/other" > "$GATE/meta.b1115-999997-src"
     fi
+    # The build goes on as labd's would, after lab has gone; busy.ID says
+    # so until it ends, and a canceled build ends at once.
+    : > "$GATE/busy.$id"
     (
+      trap 'rm -f "$GATE/busy.$id"' EXIT
+      canceled() { grep -q '  canceled  ' "$GATE/row.$id" 2>/dev/null; }
       sleep 0.3
+      canceled && exit 0
       uploads="$(wc -l < "$GATE/uploads")"
       echo "$id" > "$GATE/vm"
       echo "$id  running: build 40%  src" > "$GATE/row.$id"
       case "$outcome" in
         "done")
           if [[ $step != 2 ]]; then
-            for i in $(seq 300); do [[ "$(wc -l < "$GATE/uploads")" -gt $uploads ]] && break; sleep 0.2; done
+            for i in $(seq 300); do canceled && exit 0; [[ "$(wc -l < "$GATE/uploads")" -gt $uploads ]] && break; sleep 0.2; done
           fi
           sleep 1.2
           rm -f "$GATE/vm"
@@ -298,6 +304,15 @@ func newGate(t *testing.T) *gate {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
+	// A made-up build outlives a run that ends first; the folder goes once
+	// it has ended.
+	t.Cleanup(func() {
+		for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			if busy, _ := filepath.Glob(filepath.Join(root, "state", "busy.*")); len(busy) == 0 {
+				return
+			}
+		}
+	})
 	g := &gate{t: t, state: filepath.Join(root, "state"), deploy: filepath.Join(root, "deploy"), records: filepath.Join(root, "records"), recipe: filepath.Join(root, "recipes", "linux-aurora")}
 	mini := filepath.Join(root, "mini")
 	scripts := filepath.Join(mini, "usr/local/lab/current/scripts/mini")
