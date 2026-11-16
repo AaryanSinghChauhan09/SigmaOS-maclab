@@ -3,6 +3,7 @@ package minitest
 import (
 	"crypto/sha256"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -303,6 +304,63 @@ func TestTheOwnerRegistersTheSenderAndGivesLabdItsGroups(t *testing.T) {
 	}
 	if want := "labd --signal-socket " + m.path("var/lab/run/signal-cli.sock") + " --signal " + m.path("var/lab/secrets") + " --signal-test"; !strings.Contains(m.calls(), want) {
 		t.Errorf("labd was not asked for the test line as %q:\n%s", want, m.calls())
+	}
+}
+
+// The daemon's socket comes back a moment after launchd starts it again: a
+// command that restarted it returns once the socket answers, so that the
+// test line and labd's own lines that follow reach it; or says it does not.
+func TestARestartedSenderIsWaitedForUntilItsSocketAnswers(t *testing.T) {
+	need(t, "openssl", "nc")
+	m := newMini(t)
+	k := newKey(t)
+	m.withSender()
+	m.ok("setup", "--release-key", k.signers)
+	os.Chmod(filepath.Dir(m.path(signalCLI)), 0o755)
+	write(t, m.path(signalCLI), signalStub, 0o755)
+	sock := m.path("var/lab/run/signal-cli.sock")
+	started := func() int { return strings.Count(m.callsOrNone(), "launchctl bootstrap system "+m.path(signalPlist)) }
+	before := started()
+	done := make(chan net.Listener, 1)
+	go func() {
+		for deadline := time.Now().Add(20 * time.Second); started() == before && time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
+		}
+		time.Sleep(1500 * time.Millisecond)
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- ln
+	}()
+	m.env = append(m.env, "LAB_SENDER_WAIT=15")
+
+	for _, verb := range []string{"groups", "accept"} {
+		args := []string{verb}
+		if verb == "accept" {
+			args = append(args, groupID)
+		}
+		out, code := m.signal("", args...)
+		if code != 0 {
+			t.Fatalf("%s: exit %d\n%s", verb, code, out)
+		}
+		if verb == "groups" {
+			c, err := net.Dial("unix", sock)
+			if err != nil {
+				t.Fatalf("groups returned before the sender's socket answered: %v\n%s", err, out)
+			}
+			c.Close()
+			if strings.Contains(out, "does not answer") {
+				t.Errorf("groups said the socket does not answer:\n%s", out)
+			}
+			(<-done).Close()
+			os.Remove(sock)
+			m.env = append(m.env, "LAB_SENDER_WAIT=1")
+			continue
+		}
+		if !strings.Contains(out, "its socket "+sock+" does not answer") {
+			t.Errorf("accept did not say the socket does not answer:\n%s", out)
+		}
 	}
 }
 

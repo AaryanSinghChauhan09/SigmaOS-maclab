@@ -447,11 +447,27 @@ verified() {
 
 stop_sender() { stopped "$SIGNAL_LABEL" || fail "$SIGNAL_LABEL did not stop (20 s)"; }
 
+# sender_answers: signal-cli's daemon takes a connection on its socket.
+sender_answers() { nc -U -w 1 "$SIGNAL_SOCKET" </dev/null >/dev/null 2>&1; }
+
+# start_sender: the daemon started again, and waited for until its socket
+# answers, for LAB_SENDER_WAIT seconds (30): what is sent right after, the
+# test line or labd's own lines, finds it there. One that does not answer is
+# said, and not failed.
 start_sender() {
+  local waited=0 wait="${LAB_SENDER_WAIT:-30}"
   stop_sender
   launchctl enable "system/$SIGNAL_LABEL" || true
   launchctl bootstrap system "$SIGNAL_PLIST" || fail "launchd did not take $SIGNAL_PLIST"
   loaded "$SIGNAL_LABEL" || fail "$SIGNAL_LABEL is not loaded after its start: see $LAB_HOME/log/signal-cli.log"
+  until sender_answers; do
+    if (( waited >= wait )); then
+      say "$SIGNAL_LABEL started, but its socket $SIGNAL_SOCKET does not answer after $wait s: labd's lines and scripts/mini/signal test fail until it does. See $LAB_HOME/log/signal-cli.log"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
 }
 
 # notify TEXT: one operations line for "Agents". A line that cannot be sent

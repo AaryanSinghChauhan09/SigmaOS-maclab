@@ -262,6 +262,7 @@ func newMini(t *testing.T) *mini {
 		"STUB_STATE="+filepath.Join(root, "state"),
 		"LAB_VERIFY_TRIES=2",
 		"LAB_TELL_TRIES=2",
+		"LAB_SENDER_WAIT=0",
 		"LAB_AS_LAB="+m.bin+"/as-lab",
 	)
 	m.machine()
