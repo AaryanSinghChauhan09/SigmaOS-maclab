@@ -110,6 +110,12 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
                                       a Proving reset (Maintainers): reset that port of the lab server to place a
                                       Mac the lab has no Sighting of. It counts only if that Mac returns and every
                                       other Mac keeps its boot id
+  lab controller add <name> --url https://ADDRESS:PORT --fingerprint SHA256 --token-file FILE
+                                      add a Mac lab controller (Maintainers): a Mac with lab-controller installed,
+                                      whose ports reset the Macs cabled to it. Its install prints the three values
+  lab controller list | lab controller remove <name>
+                                      the Out-of-band controllers, the mini's own first; remove drops the
+                                      Sightings on that controller's ports (Maintainers)
   lab oob <device>                    its cable: sighted, not sighted or no cable, and what the ports show
   lab audit <device>                  labd's copy of a Volunteer's Mac's Audit log: every Maintainer action on it
   lab upload <file> [--for <mac>]     to the artifact store, in 32 MiB parts; cut, the same command resumes
@@ -129,7 +135,7 @@ var (
 		"boot-test", "login", "builder", "status", "enroll", "remove", "device", "baseline", "build", "package",
 		"builds", "build-log", "build-get", "exec", "run", "crashtest", "pack", "jobs", "job", "wait", "cancel",
 		"logs", "gate", "exclude", "retry", "publish", "lease", "release", "installed", "reset", "oob", "audit",
-		"upload", "agent-update", "macos", "mcp", "version", "set", "bench",
+		"upload", "agent-update", "macos", "controller", "mcp", "version", "set", "bench",
 	}
 	atHome = []string{"boot-test", "login", "pack", "mcp", "version"}
 )
@@ -577,6 +583,8 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 
 	case "builder":
 		return builderCmd(ctx, c, args)
+	case "controller":
+		return controllerCmd(ctx, c, args)
 
 	case "set":
 		return setCmd(ctx, c, args)

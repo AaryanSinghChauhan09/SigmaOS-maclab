@@ -491,3 +491,19 @@ func (c *Client) Set(ctx context.Context, name string) (*api.PackageSet, error) 
 	var out api.PackageSet
 	return &out, c.do(ctx, "GET", "/api/sets/"+url.PathEscape(name), nil, &out)
 }
+
+// Controllers are the lab's Out-of-band controllers (Maintainers).
+func (c *Client) Controllers(ctx context.Context) ([]api.Controller, error) {
+	var out []api.Controller
+	return out, c.do(ctx, "GET", "/api/controllers", nil, &out)
+}
+
+// AddController adds a Mac lab controller (Maintainers).
+func (c *Client) AddController(ctx context.Context, in api.ControllerAdd) error {
+	return c.do(ctx, "POST", "/api/controllers", jsonBody(in), nil)
+}
+
+// RemoveController removes a Mac lab controller (Maintainers).
+func (c *Client) RemoveController(ctx context.Context, name string) error {
+	return c.do(ctx, "DELETE", "/api/controllers/"+url.PathEscape(name), nil, nil)
+}

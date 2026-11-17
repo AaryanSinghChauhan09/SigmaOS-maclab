@@ -28,6 +28,9 @@ var specTable = map[string]string{
 	"set capture":               "added",
 	"set list":                  "added",
 	"set show":                  "added",
+	"controller add":            "added",
+	"controller list":           "added",
+	"controller remove":         "added",
 	"login":                     "changed",
 	"exec":                      "changed",
 	"installed freeze-entry":    "changed",
@@ -80,10 +83,10 @@ var siteOnly = []string{"people", "person", "request", "requests", "lend", "invi
 	"hide", "show", "delete", "maintainer", "maintainers", "forget"}
 
 // The commands with no tool, and why: the Lab token is typed by its person
-// and never handed to an agent; `lab mcp` is the server itself; `pack` and
+// and never handed to an agent, nor is a controller's token; `lab mcp` is the server itself; `pack` and
 // `boot-test` work on files of the person's own machine and ask the lab
 // nothing. `bench mirror` downloads gigabytes to the person's machine.
-var noTool = []string{"login", "mcp", "pack", "boot-test", "bench"}
+var noTool = []string{"login", "mcp", "pack", "boot-test", "bench", "controller"}
 
 func tableCommands() (top []string, subs map[string][]string) {
 	subs = map[string][]string{}
