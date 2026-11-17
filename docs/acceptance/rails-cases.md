@@ -1,12 +1,12 @@
-# The old site's 224 test cases, and what holds each now
+# The old site's 225 test cases, and what holds each now
 
-The Rails site in `site/` came with 224 test cases. Each is held here by the Go test that replaced it, or dropped by a line of the spec. `TestEveryRailsCaseIsHeldOrDropped` in `internal/repotest` reads this table: it fails when a case of `site/test` is missing from it or listed twice, when a Go test it names is not in the package it names, and when a dropped case names no section of the spec. Once `site/` is deleted the table is the record of what its tests asked.
+The Rails site in `site/` came with 225 test cases. Each is held here by the Go test that replaced it, or dropped by a line of the spec. `TestEveryRailsCaseIsHeldOrDropped` in `internal/repotest` reads this table: it fails when a case of `site/test` is missing from it or listed twice, when a Go test it names is not in the package it names, and when a dropped case names no section of the spec. Once `site/` is deleted the table is the record of what its tests asked.
 
-Two more test files in `site/test/integration` are not among the 224: `report_parity_test.rb` and `page_parity_test.rb` were written with the port, to make Rails judge, count and render the corpus that the Go tests `TestVerdictsAreTheOldSites`, `TestTheCountsAreTheOldSites`, `TestThePagesPinWhatTheOldSitesPin` and `TestTheExportsAreTheOldSites` compare the port with. They leave with `site/`.
+Two more test files in `site/test/integration` are not among the 225: `report_parity_test.rb` and `page_parity_test.rb` were written with the port, to make Rails judge, count and render the corpus that the Go tests `TestVerdictsAreTheOldSites`, `TestTheCountsAreTheOldSites`, `TestThePagesPinWhatTheOldSitesPin` and `TestTheExportsAreTheOldSites` compare the port with. They leave with `site/`.
 
 Where a case reads "tester", "admin" or "allowlist", the lab says Verified run or M team member, Maintainer, and the M team mark on People. A test named with its package (`internal/reports:TestName`) sits outside the package the row names first.
 
-224 cases: 216 held by a Go test, 8 dropped.
+225 cases: 217 held by a Go test, 8 dropped.
 
 ## admin_test.rb
 
@@ -239,7 +239,7 @@ Where a case reads "tester", "admin" or "allowlist", the lab says Verified run o
 
 ## pages_test.rb
 
-`site/test/integration/pages_test.rb`, 11 cases.
+`site/test/integration/pages_test.rb`, 12 cases.
 
 | Case | Held by |
 |---|---|
@@ -250,6 +250,7 @@ Where a case reads "tester", "admin" or "allowlist", the lab says Verified run o
 | a feature page shows per-chip expectations and results per Mac | `internal/server` `TestAFeaturePageShowsPerChipExpectationsAndResultsPerMac` |
 | a feature no check covers says so | `internal/server` `TestAFeaturePageShowsPerChipExpectationsAndResultsPerMac` |
 | Touch ID lists its readiness and human unlock checks | `internal/server` `TestAFeaturePageShowsPerChipExpectationsAndResultsPerMac` |
+| the Neural engine and the GPU list the compute checks | `internal/server` `TestAFeaturePageShowsPerChipExpectationsAndResultsPerMac` |
 | an unknown feature is not found | `internal/server` `TestAFeaturePageShowsPerChipExpectationsAndResultsPerMac` |
 | the kernel-gap list shows reported gaps and what Asahi has but Aurora hasn't verified | `internal/server` `TestTheKernelGapListShowsReportedGapsAndWhatAsahiHasButAuroraHasNotVerified` |
 | the reports page lists every visible report, newest first | `internal/server` `TestTheReportsPageListsEveryPublishedReportNewestFirst` |
