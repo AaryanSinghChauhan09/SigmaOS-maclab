@@ -179,7 +179,7 @@ func TestEnrollmentNeedsTheCurrentTerms(t *testing.T) {
 	}
 	// The terms are the text shipped with the Lab release, the one /terms
 	// serves: its sha256 is the version a Mac accepts.
-	if text, sum := j.s.terms(); text != web.Terms().Body || sum != web.Terms().SHA256 || len(sum) != 64 || !strings.HasPrefix(text, "OMARCHY MAC LAB: LENDING A MAC\n") {
+	if text, sum := j.s.terms(); text != web.Terms().Body || sum != web.Terms().SHA256 || len(sum) != 64 || text != web.TermsLine+"\n" {
 		t.Errorf("the terms a Mac accepts are not the shipped text: %s", sum)
 	}
 }

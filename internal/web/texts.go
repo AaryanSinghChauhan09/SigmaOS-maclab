@@ -3,7 +3,8 @@ package web
 // The Volunteer's terms and the privacy statement are two text files in
 // texts/. They are compiled into labd, which serves them at /terms and
 // /privacy, and they ship beside it in a Lab release. A text's version is
-// its date, on its second line, and the sha256 of the file.
+// its date and the sha256 of the file. The privacy statement carries its
+// date on its second line; the terms are one line, dated by termsDate.
 
 import (
 	"crypto/sha256"
@@ -22,6 +23,7 @@ var privacyText string
 // Text is one of the two texts, as shipped.
 type Text struct {
 	Body   string
+	Line   string // the terms' one line, without its newline
 	Date   string // 2026-11-14
 	SHA256 string
 }
@@ -37,8 +39,18 @@ func textOf(body string) Text {
 	return t
 }
 
+// termsDate is the date of texts/terms.txt: change both together.
+const termsDate = "2026-11-17"
+
+// TermsLine is the Volunteer's terms, the one line of texts/terms.txt.
+var TermsLine = strings.TrimRight(termsText, "\n")
+
 // Terms are the Volunteer's terms.
-func Terms() Text { return textOf(termsText) }
+func Terms() Text {
+	t := textOf(termsText)
+	t.Date, t.Line = termsDate, TermsLine
+	return t
+}
 
 // Privacy is the privacy statement.
 func Privacy() Text { return textOf(privacyText) }

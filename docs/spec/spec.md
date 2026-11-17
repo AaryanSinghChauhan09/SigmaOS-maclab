@@ -783,10 +783,10 @@ All from "Terms and privacy" unless another ticket is named.
 
 ### Decisions
 
-1. **Test machines only.** A Volunteer lends only a Test machine. It is point 1 of the terms and the first thing on "Lend a Mac".
+1. **Test machines only.** A Volunteer lends only a Test machine. It is what the terms' one line says and the first thing on "Lend a Mac".
 2. **Posture.** Plain promises: what is kept, for how long, who to write to, and being Forgotten within 30 days. No law is named, no legal basis claimed, no EU or UK representative appointed.
 3. **Who is named.** The lab as a volunteer project run by its Maintainers, its server in Brisbane, Australia, kept by `@maralcbr`. No street address. One contact address, `privacy@omarchy-mac.org`, forwarded to the owner's mailbox by Cloudflare's mail forwarding.
-4. **Where the texts live.** Two public pages, `/terms` and `/privacy`, linked from the footer of every page, each showing its date. The terms are also shown on "Lend a Mac" and in the terminal at Join. Both are text files in the repository and ship with a Lab release; the server serves them and hands the terms to the Join command. The terms' version is the sha256 of the shipped text plus its date; earlier versions are the repository's history. A change of terms reaches the lab by a Deploy. ("Repository layout and release pipeline")
+4. **Where the texts live.** Two public pages, `/terms` and `/privacy`, linked from the footer of every page, each showing its date. The terms are also shown on "Lend a Mac" and in the terminal at Join. Both are text files in the repository and ship with a Lab release; the server serves them and hands the terms to the Join command. The terms are one line (owner, 2026-11-17). Their version is the sha256 of the shipped text plus its date; earlier versions are the repository's history. A change of terms reaches the lab by a Deploy. ("Repository layout and release pipeline")
 5. **No cookie or consent notice.** A signed-out page sets no cookie and runs no analytics.
 6. **Acceptance.** The typed `yes` at Join is the one acceptance, recorded with the person, the Mac, the time and the sha256 of the text, kept as long as the Mac's record. ("Volunteering a Mac")
 7. **A change of terms asks every enrolled Volunteer again.** From the moment new terms take effect, each Mac whose Volunteer has not accepted them takes nothing from the lab, as when Paused: no job, no Lease. No deadline, never an automatic Leave. The Volunteer accepts on My Macs, signed in, once for all their Macs; that is recorded as the first acceptance was. They are told on My Macs and by one Notice. `lab` says so in one line when a job or a Lease is refused for that reason.
@@ -836,50 +836,10 @@ A Retired Mac's name is left as it was typed. The lines the People record and "A
 
 ### The Volunteer's terms
 
-Accepted by the owner word for word.
+One line, dated 2026-11-17 (the owner's decision of 2026-11-17, replacing the eight-point terms of 2026-11-14). Join shows it and asks `Type yes:`; `/terms` shows it with its date, and "Lend a Mac" shows it in place of the old text and its sha256. The yes is recorded as before: the account, the Mac, the time and the sha256 of the text. Since the text changed, every enrolled Volunteer is asked again on My Macs (decision 7).
 
 ```
-OMARCHY MAC LAB: LENDING A MAC
-Terms of 2026-11-14
-
-Omarchy Mac Lab is a volunteer project. Nobody is paid and nothing is promised.
-
-1. Lend only a test machine: a Mac with nothing on it, in Omarchy or in
-   macOS, that you cannot afford to lose or to have read. It is yours to
-   lend and you are 18 or over.
-2. What the lab does. Inside the window you set, and only on AC power, it
-   restarts this Mac into test kernels and back, runs its tests, and
-   collects hardware facts, logs, test output and screenshots, without
-   asking each time. A test kernel has full control of the machine and can
-   crash it or lose what is on it. There is no warranty.
-3. Who does it. The lab's Maintainers, and members of the Omarchy M team
-   holding a Lease on this Mac. At Qualification, where every Mac starts:
-   test kernels, their own included, and the lab's tests. At Full, which
-   only you can choose, at the Mac: also commands and scripts as root. The
-   lab does not install an Omarchy release on this Mac; if that changes you
-   are asked again.
-4. What is kept and seen. Every root command run here at Full is kept by
-   the lab for 12 months, with its text and who ran it; you can read it on
-   My Macs. The Mac's name, never yours, is posted to the M team's Signal
-   group when it joins, is leased, is paused, changes its window or Access
-   level, or leaves, and in a daily summary. Its reports are published only
-   if you turn that on.
-5. What the lab never does. Force this Mac to restart from outside: a hung
-   Mac waits for its own watchdog, then for you. Act outside your window.
-   Update its own software here: you run the update at this Mac, and it
-   installs only if signed by the lab. Ask for a password or a command in a
-   Notice.
-6. If someone's access to the lab is stolen and this Mac may have been
-   touched, you are told. The lab cannot clean your Mac: reinstall it.
-7. You are in charge. Set the window, pause, choose the Access level, read
-   every record, and leave at any time: Leave on My Macs, or
-   `sudo lab-agent leave`.
-8. If these terms change, this Mac takes nothing from the lab until you
-   accept the new ones on My Macs.
-
-What the lab keeps: https://lab.omarchy-mac.org/privacy
-Your yes is recorded with your GitHub account, this Mac, the time and the
-sha256 of this text.
+This Mac is for testing: the lab may install anything on it and run any test, and its data may be lost.
 ```
 
 ### The privacy statement

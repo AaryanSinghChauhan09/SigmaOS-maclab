@@ -100,11 +100,7 @@ func acceptTerms(t *api.JoinTerms, server, accept string, tty *terminal) error {
 	if tty == nil {
 		return fmt.Errorf("accepting the lab's terms needs a terminal: run setup in one, or pass --accept-terms %s after reading them", t.SHA256)
 	}
-	version := t.SHA256
-	if t.Date != "" {
-		version = t.Date + ", " + t.SHA256
-	}
-	answer, _ := tty.ask(fmt.Sprintf("\n%s\n(terms %s)\n\nType yes to accept these terms and lend this Mac to the lab at %s; anything else stops: ", strings.TrimRight(t.Text, "\n"), version, server))
+	answer, _ := tty.ask(fmt.Sprintf("\n%s\nType yes: ", strings.TrimRight(t.Text, "\n")))
 	if answer != "yes" {
 		return errTermsDeclined
 	}

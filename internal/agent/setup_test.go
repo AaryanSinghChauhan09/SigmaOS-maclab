@@ -378,8 +378,8 @@ func TestTheEnrollmentCarriesTheTermsThePersonAccepted(t *testing.T) {
 	if run.err != nil {
 		t.Fatal(run.err)
 	}
-	if !strings.Contains(run.tty, "Only a Test machine is lent.") || !strings.Contains(run.tty, lab.terms.SHA256) || !strings.Contains(run.tty, "Type yes") {
-		t.Errorf("the terms were not shown with their sha256 and the question:\n%s", run.tty)
+	if !strings.Contains(run.tty, "Only a Test machine is lent.") || !strings.Contains(run.tty, "Only a Test machine is lent.\nType yes: ") || strings.Contains(run.tty, lab.terms.SHA256) {
+		t.Errorf("the terms were not shown as one line and the question:\n%s", run.tty)
 	}
 	if got, want := lab.heard(), []string{"GET /api/join/terms", "POST /api/join/check", "POST /api/agent/enroll"}; !slices.Equal(got, want) {
 		t.Errorf("the lab heard %q, want %q", got, want)

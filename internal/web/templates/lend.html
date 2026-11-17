@@ -23,8 +23,8 @@
 </section>
 <section class="card" id="terms">
 <h2 class="card-title">the terms</h2>
-<pre class="legal">{{.Terms.Body}}</pre>
-<p class="legal-version">Dated <time datetime="{{.Terms.Date}}">{{.Terms.Date}}</time>. sha256 of this text: {{template "copy" (copy "the sha256 of the terms" .Terms.SHA256)}}. The same text is shown in the terminal at the Mac, where you accept it by typing <code>yes</code>.</p>
+<p><b>{{.Terms.Line}}</b></p>
+<p class="legal-version">Dated <time datetime="{{.Terms.Date}}">{{.Terms.Date}}</time>. The same line is shown in the terminal at the Mac, where you accept it by typing <code>yes</code>.</p>
 </section>
 {{with .Refused}}<p class="flash flash-alert" role="alert">{{.}}</p>
 {{end}}{{if .Made}}<section class="card attention" id="join-command">
