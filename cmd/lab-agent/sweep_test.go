@@ -18,6 +18,7 @@ import (
 // "The running agent" is what the agent's own units start.
 var specTable = map[string]string{
 	"update":             "added",
+	"boot-macos-once":    "added",
 	"setup":              "changed",
 	"move":               "changed",
 	"leave":              "changed",
