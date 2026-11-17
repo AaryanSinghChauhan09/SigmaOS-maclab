@@ -26,6 +26,7 @@ Building the merged codebase and running the Cutover are a separate effort.
 18. Out of scope
 19. Where a later ticket changed an earlier one
 20. Where each ticket landed
+21. Package sets and Compare
 
 ## 1. Open conflicts
 
@@ -581,6 +582,7 @@ A first sign-in makes the lab know the person; it gives no browser session, no L
 | `installed verdict --release R --revoke --note "…"` | added | revokes it, Maintainers only |
 | `reset <mac> --prove left\|middle\|right` | added | a Proving reset, Maintainers only |
 | `agent-update <mac>` | added | updates a Lab-owned Mac's agent while it is idle, Maintainers only |
+| `macos enroll <mac>` | added | the one-time line that enrolls the Mac's macOS runner, Maintainers only ("Package sets and Compare") |
 | every command | changed | names itself in `User-Agent`; meets the minimum release; says "Omarchy Mac Lab"; while Dark says it cannot be reached and that no reset is possible until it returns; never prints an error page |
 | `login` | changed | as above; the Blocked sentence; an expired token gets a line naming the person's own page; at the Alias it fails plainly and stores nothing |
 | `exec` | changed | answered as a stream; never sent again after a cut; no serial path; needs the caller's own Lease; kept in the Exec record, its text for 12 months, and the help says never to put a secret in one |
@@ -608,6 +610,7 @@ Unchanged: `baseline`, `crashtest`, `run`, `logs`, `retry`, `gate`, `exclude`, `
 
 | Command | | What |
 |---|---|---|
+| `boot-macos-once` | added | boots macOS for one boot for a queued macOS run ("Package sets and Compare") |
 | `update` | added | `sudo lab-agent update`, at the Mac, takes the agent from the lab server; a bad signature, or an agent older than the one installed, is refused |
 | `setup` | changed | pre-checks first; finds and leaves another lab; arrives at Qualification with publishing off; asks nothing of the window and points to My Macs for it; shows the terms (`--accept-terms <sha256>` keeps its meaning); the Tailscale flags go |
 | `move` | changed | only for a change of the Lab address |
@@ -1341,3 +1344,16 @@ In each, two Answers disagreed with nothing to settle it, or a decision the spec
 | The remaining screens | 3, 5 |
 | Terms and privacy | 14, 3, 13 |
 | Operations leftovers | 8, 13, 6, 16 |
+
+## 21. Package sets and Compare
+
+### macOS runs
+
+A Compare can add the same benchmarks run in macOS on the same Mac (`--macos`). Calls made on 2026-11-17 without the owner are marked (call).
+
+- **Queue.** labd keeps one macOS run per Mac: queued, started, running, done or needs_hands. `queueMacOSRun(mac, tier)` in labd, and `POST /api/devices/{name}/macos-runs` `{tier}` for Maintainers, queue one; a second is refused while one is open; `GET` on the same path reads it. The queue and the runners' secrets live in `macos-runs.json` in labd's data directory (call: a file, not a database migration). The tier's pinned artifacts are listed in `macos-bench.json` beside it (`artifacts`, and `extended` added for Extended), each a sha256 already in the artifact store; the Compare job writes that list.
+- **Booting macOS once.** `sudo lab-agent boot-macos-once [--volume NAME]` reads `asahi-bless --list-volumes`, refuses unless the persistent default (the starred volume) is this Linux and exactly one other non-Linux volume is there (or the named one), tells labd the run started (`POST /api/agent/macos-started`; refused, nothing changed, when none is queued), then runs `asahi-bless --next --set-boot <that volume> --yes` and reboots. The boot after returns to Omarchy by itself.
+- **The runner.** `lab-macos-runner`, built for macOS arm64 and shipped as `lab-macos-runner-darwin-arm64.tar.gz` in every Lab release (the program, `install.sh`, and the LaunchDaemon `org.omarchy.maclab.macos-runner`, run at every boot). It is enrolled once per Mac: `lab macos enroll <mac>` prints a one-time line, good for 1 hour, to run in macOS (`… | sudo lab-macos-runner enroll --server <Lab address> --token-stdin`), which trades the token for the runner's own secret, kept root-only in `/Library/Application Support/Omarchy Mac Lab/`. At boot it asks labd for a run; with none it does nothing, so a person booting macOS is left alone. With one it fetches the run's artifacts by sha256 (each checked), runs the tier's list, uploads the results, and reboots with `shutdown -r now`, whatever happened.
+- **The list.** Default: Speedometer 3.1 and MotionMark 1.3 in Chrome, 7-Zip (`7zz b`, MIPS). Extended adds both in Chromium, JetStream 2.2 in Chrome and Chromium, Geekbench 6 CPU (single and multi) and GPU (Metal), and video decode through FFmpeg with VideoToolbox (fps). The web benchmarks are the pinned copies the Linux runner uses, served on loopback; each has a driver page (`driver/<name>.html`) in the bundle that posts its result to the runner; the browsers run in the enrolled GUI user's session. glmark2, vkmark, boot time, kernel compile, vkpeak (MoltenVK is not on macOS; call), clpeak and suspend/resume answer "no macOS equivalent" with no value. A tool not installed or failing says so in its note and the run goes on.
+- **Results.** The Linux runner's shape, `[{name, version, value, unit, higher_is_better, spread, seconds}]`, plus `api` where macOS uses another API than Linux (Metal, VideoToolbox: shown labelled, never compared as like for like) and `note` where there is no value. Names: `speedometer/chrome`, `motionmark/chromium`, `jetstream/chrome`, `7zip`, `geekbench6-cpu-single`, `geekbench6-cpu-multi`, `geekbench6-gpu`, `video-decode`, and the Linux names for those with no equivalent.
+- **Deadline and FileVault.** A started run must report within 30 minutes (Default) or 60 (Extended), else labd marks the run needs_hands and the Mac Needs hands. macOS with FileVault waits for its password at the screen before any LaunchDaemon runs, and labd cannot make an authenticated restart from Linux, so a macOS run on a FileVault Mac needs a person to type it; the Needs hands reason says so. Results that arrive late are still taken.
