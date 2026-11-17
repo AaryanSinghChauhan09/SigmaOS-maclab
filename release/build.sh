@@ -11,6 +11,10 @@
 #                                  the macOS runner for a lab Mac's macOS:
 #                                  unpacks to lab-macos-runner/ (bin/,
 #                                  install.sh, the LaunchDaemon's plist)
+#   OUTDIR/lab-controller-darwin-arm64.tar.gz
+#                                  a Mac lab controller; unpacks to
+#                                  lab-controller/ (bin/oobd, bin/macvdmtool,
+#                                  install, VERSION)
 #   OUTDIR/.stage/                 the bundle unpacked, for release/sign.sh
 #
 # LAB_RELEASE is the tag being built, vX.Y.Z or vX.Y.Z-rc.N. It is the one
@@ -130,5 +134,14 @@ install -m 0644 "$repo/release/macos-runner/org.omarchy.maclab.macos-runner.plis
 install -m 0644 "$repo/LICENSE" "$runner/"
 printf '%s\n' "${tag:-dev}" > "$runner/VERSION"
 pack "$out/.stage" lab-macos-runner "$epoch" > "$out/$RELEASE_MACOS_RUNNER"
+
+# A Mac lab controller: the same oobd and reset tool, and its install.
+ctl="$stage/lab-controller"
+install -D -m 0755 "$server/bin/oobd" "$ctl/bin/oobd"
+if [[ -n $tool ]]; then install -m 0755 "$tool" "$ctl/bin/macvdmtool"; fi
+install -m 0755 "$repo/scripts/controller/install" "$ctl/install"
+install -m 0644 "$repo/LICENSE" "$repo/THIRD_PARTY_NOTICES.md" "$ctl/"
+printf '%s\n' "${tag:-dev}" > "$ctl/VERSION"
+pack "$stage" lab-controller "$epoch" > "$out/$RELEASE_CONTROLLER"
 
 echo "built ${tag:-omarchy-m-test $version and a dev Lab release}, unsigned: $out"

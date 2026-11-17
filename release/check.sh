@@ -202,6 +202,17 @@ r="$t/runner/lab-macos-runner"
 cmp -s "$repo/release/macos-runner/install.sh" "$r/install.sh" && [[ -x $r/install.sh ]] || fail "the macOS runner's install.sh is missing, different or not executable"
 cmp -s "$repo/release/macos-runner/org.omarchy.maclab.macos-runner.plist" "$r/org.omarchy.maclab.macos-runner.plist" || fail "the macOS runner's LaunchDaemon plist is missing or different"
 
+# The Mac lab controller: oobd and the reset tool the bundle carries, and its install.
+mkdir "$t/ctl"
+tar -xzf "$t/dist/$RELEASE_CONTROLLER" -C "$t/ctl"
+for f in bin/oobd bin/macvdmtool install; do
+  [[ -x $t/ctl/lab-controller/$f ]] || fail "the controller has no executable $f"
+done
+cmp -s "$t/ctl/lab-controller/bin/oobd" "$t/unsigned/lab-server/bin/oobd" || fail "the controller's oobd is not the bundle's"
+cmp -s "$t/ctl/lab-controller/bin/macvdmtool" "$t/macvdmtool" || fail "the controller's reset tool is not the one given"
+cmp -s "$t/ctl/lab-controller/install" "$repo/scripts/controller/install" || fail "the controller's install is not scripts/controller/install"
+[[ "$(<"$t/ctl/lab-controller/VERSION")" == "$tag" ]] || fail "the controller's VERSION is not $tag"
+
 # The fixed lines of the release notes.
 while read -r line; do
   [[ $line =~ ^(No\ way\ back\.|Needs\ lab(-agent)?\ [0-9]+\.[0-9]+\.[0-9]+\ or\ later\.|Pins\ changed:\ needs\ a\ Maintenance\ run\.)$ ]] || fail "release/notes: not one of the fixed lines: $line"
