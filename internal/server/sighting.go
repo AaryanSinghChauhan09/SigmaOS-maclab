@@ -47,8 +47,9 @@ type sighting struct {
 
 type cables struct {
 	mu sync.Mutex
-	// none: labd was given no controller.
-	none bool
+	// fleet is every Out-of-band controller labd has; with none, no Mac
+	// has a Hard reset.
+	fleet *oob.Fleet
 	// ports are the controller's ports as it last showed them.
 	ports map[int]oob.Port
 	held  map[string]sighting
@@ -73,8 +74,8 @@ type cables struct {
 	looking sync.Mutex
 }
 
-func newCables(c *oob.Client) *cables {
-	return &cables{none: c == nil, ports: map[int]oob.Port{}, held: map[string]sighting{}, lost: map[string]string{}}
+func newCables(f *oob.Fleet) *cables {
+	return &cables{fleet: f, ports: map[int]oob.Port{}, held: map[string]sighting{}, lost: map[string]string{}}
 }
 
 // sightings are the Sightings labd's data holds.
@@ -125,7 +126,7 @@ func (s *Server) saveSightings() {
 	c.saveMu.Lock()
 	defer c.saveMu.Unlock()
 	c.mu.Lock()
-	if c.kept != nil || c.none {
+	if c.kept != nil || c.fleet.Empty() {
 		c.mu.Unlock()
 		return
 	}
@@ -164,7 +165,7 @@ func (c *cables) restoreLocked(ports map[int]oob.Port, macs []labOwned) (said []
 	for _, name := range names {
 		sg := c.kept[name]
 		p := ports[sg.rid]
-		port := "the " + oob.PortName(sg.rid) + " port"
+		port := "the " + c.fleet.PortName(sg.rid) + " port"
 		why := ""
 		switch {
 		case !known[name]:
@@ -174,7 +175,7 @@ func (c *cables) restoreLocked(ports map[int]oob.Port, macs []labOwned) (said []
 		case p.ProductID != sg.seen.ProductID:
 			why = fmt.Sprintf("%s shows product id %d, not the %d it was seen with", port, p.ProductID, sg.seen.ProductID)
 		}
-		where := name + " on " + oob.PortName(sg.rid)
+		where := name + " on " + c.fleet.PortName(sg.rid)
 		if why != "" {
 			if known[name] {
 				c.lost[name] = "its Sighting was not kept across a restart of labd: " + why
@@ -244,9 +245,9 @@ func (c *cables) onPortLocked(rid int) string {
 // them.
 func (c *cables) freeLocked() []string {
 	var out []string
-	for _, rid := range oob.RIDs {
+	for _, rid := range c.fleet.Ports() {
 		if p, ok := c.ports[rid]; ok && p.Connected && c.onPortLocked(rid) == "" {
-			out = append(out, oob.PortName(rid))
+			out = append(out, c.fleet.PortName(rid))
 		}
 	}
 	return out
@@ -262,9 +263,9 @@ func (c *cables) cable(name string) api.Cable {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if sg, ok := c.held[name]; ok {
-		return api.Cable{State: api.CableSighted, Port: oob.PortName(sg.rid), Proved: sg.proved, Since: sg.at, NoHardReset: c.down}
+		return api.Cable{State: api.CableSighted, Port: c.fleet.PortName(sg.rid), Proved: sg.proved, Since: sg.at, NoHardReset: c.down}
 	}
-	if c.none {
+	if c.fleet.Empty() {
 		return api.Cable{State: api.CableNone, NoHardReset: noController}
 	}
 	free := c.freeLocked()
@@ -287,7 +288,7 @@ func (c *cables) cable(name string) api.Cable {
 func (c *cables) status() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.down != "" || c.none {
+	if c.down != "" || c.fleet.Empty() {
 		return http.StatusServiceUnavailable
 	}
 	return http.StatusConflict
@@ -364,9 +365,6 @@ func (v *dev) labOwned() (labOwned, bool) {
 // sightLoop keeps the Sightings: it asks the controller what its ports show
 // now and then, for as long as labd runs.
 func (s *Server) sightLoop() {
-	if s.cfg.OOB == nil {
-		return
-	}
 	every := s.cfg.SightEvery
 	if every <= 0 {
 		every = sightEvery
@@ -388,8 +386,8 @@ func (s *Server) sightLoop() {
 // are dropped, and a name that belongs to exactly one Lab-owned Mac's record
 // makes one.
 func (s *Server) sight(ctx context.Context) {
-	c := s.cfg.OOB
-	if c == nil {
+	members := s.oob.Members()
+	if len(members) == 0 {
 		return
 	}
 	s.cables.looking.Lock()
@@ -398,21 +396,51 @@ func (s *Server) sight(ctx context.Context) {
 	downs := s.cables.downs
 	s.cables.mu.Unlock()
 	ports := map[int]oob.Port{}
-	for _, rid := range oob.RIDs {
-		actx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		p, err := c.Port(actx, rid)
-		cancel()
-		if err != nil {
+	for _, m := range members {
+		got, err := s.lookAt(ctx, m)
+		switch {
+		case err != nil && m.Index == 0:
 			if ctx.Err() == nil {
 				s.controllerDown(err)
 			}
 			return
+		case err != nil:
+			// A Mac lab controller that does not answer keeps its ports as
+			// last seen: its Macs keep their Sightings, and a Hard reset
+			// through it is refused when it is asked, not the mini's.
+			if ctx.Err() != nil {
+				return
+			}
+			s.log.Printf("the controller %s does not answer: %v", m.Name, err)
+			s.cables.mu.Lock()
+			for _, port := range m.Ports() {
+				if p, ok := s.cables.ports[port]; ok {
+					ports[port] = p
+				}
+			}
+			s.cables.mu.Unlock()
+			continue
 		}
-		ports[rid] = p
+		maps.Copy(ports, got)
 	}
 	if s.lookedAt(ports, downs) {
 		s.saveSightings()
 	}
+}
+
+// lookAt reads every port of one controller.
+func (s *Server) lookAt(ctx context.Context, m oob.Member) (map[int]oob.Port, error) {
+	ports := map[int]oob.Port{}
+	for _, port := range m.Ports() {
+		actx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		p, err := s.oob.Port(actx, port)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		ports[port] = p
+	}
+	return ports, nil
 }
 
 // lookedAt brings the Sightings in line with ports, read in a look begun
@@ -463,8 +491,8 @@ const (
 // port's plug count as a pull does; what tells them apart is the Mac: on a
 // restart it comes back on a new boot or is not heard again, and with a
 // cable pulled while it stayed up it is heard again on the boot it had.
-func (sg sighting) against(p oob.Port, m labOwned) (portNow, string) {
-	port := "the " + oob.PortName(p.RID) + " port"
+func (sg sighting) against(p oob.Port, m labOwned, name string) (portNow, string) {
+	port := "the " + name + " port"
 	moved := fmt.Sprintf("%s has plug count %d, not the %d it was seen with", port, p.PlugCount, sg.seen.PlugCount)
 	switch {
 	case !p.Connected:
@@ -534,11 +562,11 @@ func (c *cables) apply(ports map[int]oob.Port, macs []labOwned, now time.Time) (
 			continue
 		}
 		p := ports[sg.rid]
-		switch st, why := sg.against(p, m); st {
+		switch st, why := sg.against(p, m, c.fleet.PortName(p.RID)); st {
 		case portChanged:
 			drop(name, why)
 		case portRestarted:
-			said = append(said, fmt.Sprintf("%s is still sighted on the %s port: it restarted, and the plug count went from %d to %d", name, oob.PortName(sg.rid), sg.seen.PlugCount, p.PlugCount))
+			said = append(said, fmt.Sprintf("%s is still sighted on the %s port: it restarted, and the plug count went from %d to %d", name, c.fleet.PortName(sg.rid), sg.seen.PlugCount, p.PlugCount))
 			sg.seen.PlugCount, sg.boot, sg.rose = p.PlugCount, m.boot, time.Time{}
 			c.held[name] = sg
 		case portRising:
@@ -563,13 +591,13 @@ func (c *cables) apply(ports map[int]oob.Port, macs []labOwned, now time.Time) (
 	want := map[int]string{}
 	on := map[string][]int{}
 	conflict := map[string]string{}
-	for _, rid := range oob.RIDs {
+	for _, rid := range c.fleet.Ports() {
 		p := ports[rid]
 		shown := realName(p.Name)
 		if !p.Connected || shown == "" {
 			continue
 		}
-		port := "the " + oob.PortName(rid) + " port"
+		port := "the " + c.fleet.PortName(rid) + " port"
 		owners := recordsNamed(shown, macs)
 		switch {
 		case len(owners) > 1:
@@ -597,13 +625,13 @@ func (c *cables) apply(ports map[int]oob.Port, macs []labOwned, now time.Time) (
 		if len(rids) > 1 {
 			var ps []string
 			for _, rid := range rids {
-				ps = append(ps, oob.PortName(rid))
+				ps = append(ps, c.fleet.PortName(rid))
 			}
 			conflict[name] = "its name is on " + strings.Join(ps, " and ") + " ports at once"
 			continue
 		}
 		if sg, ok := c.held[name]; ok && sg.rid != rids[0] {
-			conflict[name] = fmt.Sprintf("its name is on the %s port, and it was sighted on the %s port", oob.PortName(rids[0]), oob.PortName(sg.rid))
+			conflict[name] = fmt.Sprintf("its name is on the %s port, and it was sighted on the %s port", c.fleet.PortName(rids[0]), c.fleet.PortName(sg.rid))
 		}
 	}
 	names := make([]string, 0, len(conflict))
@@ -617,14 +645,14 @@ func (c *cables) apply(ports map[int]oob.Port, macs []labOwned, now time.Time) (
 		}
 		drop(name, conflict[name])
 	}
-	for _, rid := range oob.RIDs {
+	for _, rid := range c.fleet.Ports() {
 		name, ok := want[rid]
 		if !ok || conflict[name] != "" {
 			continue
 		}
 		p := ports[rid]
 		if p.ProductID <= 0 || p.PlugCount <= 0 {
-			c.lost[name] = fmt.Sprintf("the %s port shows its name and no product id or plug count to remember it by", oob.PortName(rid))
+			c.lost[name] = fmt.Sprintf("the %s port shows its name and no product id or plug count to remember it by", c.fleet.PortName(rid))
 			continue
 		}
 		seen := oob.Seen{ProductID: p.ProductID, PlugCount: p.PlugCount}
@@ -637,7 +665,7 @@ func (c *cables) apply(ports map[int]oob.Port, macs []labOwned, now time.Time) (
 		}
 		c.held[name] = sighting{rid: rid, seen: seen, at: now, boot: known[name].boot}
 		delete(c.lost, name)
-		said = append(said, fmt.Sprintf("%s is sighted on the %s port (product id %d, plug count %d)", name, oob.PortName(rid), p.ProductID, p.PlugCount))
+		said = append(said, fmt.Sprintf("%s is sighted on the %s port (product id %d, plug count %d)", name, c.fleet.PortName(rid), p.ProductID, p.PlugCount))
 	}
 	return said
 }
@@ -647,8 +675,10 @@ func (c *cables) apply(ports map[int]oob.Port, macs []labOwned, now time.Time) (
 // of the lab's own parts, once the trouble has lasted (watch.go).
 func (s *Server) controllerDown(err error) {
 	why := "the Out-of-band controller is not healthy: " + err.Error()
-	if _, lerr := os.Lstat(s.cfg.OOB.TokenFile); errors.Is(lerr, os.ErrNotExist) {
-		why = "the Out-of-band controller is not set up: its token is not at " + s.cfg.OOB.TokenFile + " yet"
+	if mini := s.oob.Mini(); mini != nil {
+		if _, lerr := os.Lstat(mini.TokenFile); errors.Is(lerr, os.ErrNotExist) {
+			why = "the Out-of-band controller is not set up: its token is not at " + mini.TokenFile + " yet"
+		}
 	}
 	s.cables.mu.Lock()
 	was := s.cables.down
@@ -676,8 +706,8 @@ func (s *Server) hardReset(ctx context.Context, v *dev) (port string, err error)
 	if !ok {
 		return "", refuse(http.StatusConflict, "no Hard reset was sent: %s", s.cables.reach(name))
 	}
-	port = oob.PortName(sg.rid)
-	p, err := s.cfg.OOB.Port(ctx, sg.rid)
+	port = s.oob.PortName(sg.rid)
+	p, err := s.oob.Port(ctx, sg.rid)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.controllerDown(err)
@@ -686,7 +716,7 @@ func (s *Server) hardReset(ctx context.Context, v *dev) (port string, err error)
 	}
 	s.cables.saw(p)
 	m, _ := v.labOwned()
-	switch st, why := sg.against(p, m); st {
+	switch st, why := sg.against(p, m, port); st {
 	case portChanged:
 		s.cables.drop(name, why, s.now())
 		s.saveSightings()
@@ -709,7 +739,7 @@ func (s *Server) hardReset(ctx context.Context, v *dev) (port string, err error)
 		}
 	}
 	seen := oob.Seen{ProductID: p.ProductID, PlugCount: p.PlugCount}
-	err = s.cfg.OOB.Reset(ctx, sg.rid, &seen)
+	err = s.oob.Reset(ctx, sg.rid, &seen)
 	var moved *oob.Changed
 	var unsent *oob.NotSent
 	var maybe *oob.MaybeSent
@@ -747,7 +777,7 @@ func (v *dev) provingResetOOB(ctx context.Context, rid int, seen *oob.Seen) erro
 	v.oobCallCancel = cancel
 	v.mu.Unlock()
 	defer func() { cancel(); v.mu.Lock(); v.oobCallCancel = nil; v.mu.Unlock() }()
-	return v.s.cfg.OOB.Reset(op, rid, seen)
+	return v.s.oob.Reset(op, rid, seen)
 }
 
 // leavingLab is whether v's enrollment is ending or has ended.
@@ -763,11 +793,11 @@ func (v *dev) leavingLab() bool {
 // id.
 func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 	d := v.snapshot()
-	name, port := d.Name, "the "+oob.PortName(rid)+" port"
+	name, port := d.Name, "the "+s.oob.PortName(rid)+" port"
 	switch {
 	case d.IsVolunteer():
 		return nil, refuse(http.StatusForbidden, "no Proving reset was sent: %s", neverAVolunteers(name))
-	case s.cfg.OOB == nil:
+	case s.oob.Empty():
 		return nil, refuse(http.StatusServiceUnavailable, "no Proving reset was sent: %s", noController)
 	case d.State == api.StateBusy || d.State == api.StateRecovering:
 		return nil, refuse(http.StatusConflict, "%s is busy; cancel its job first", name)
@@ -804,11 +834,11 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 	case down != "":
 		return nil, refuse(http.StatusServiceUnavailable, "no Proving reset was sent: %s", down)
 	case sighted:
-		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s is sighted on the %s port, and a Proving reset is for a Mac the lab has no Sighting of", name, oob.PortName(sg.rid))
+		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s is sighted on the %s port, and a Proving reset is for a Mac the lab has no Sighting of", name, s.oob.PortName(sg.rid))
 	case owner != "":
 		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s is the cable of %s", port, owner)
 	}
-	p, err := s.cfg.OOB.Port(ctx, rid)
+	p, err := s.oob.Port(ctx, rid)
 	switch {
 	case err != nil:
 		return nil, refuse(http.StatusServiceUnavailable, "no Proving reset was sent: the Out-of-band controller is not healthy: %v", err)
@@ -888,7 +918,7 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 	if also := restarted(); len(also) > 0 {
 		return fail("%s restarted too, and a Proving reset counts only if every other Mac keeps its boot id", strings.Join(also, ", "))
 	}
-	p, err = s.cfg.OOB.Port(ctx, rid)
+	p, err = s.oob.Port(ctx, rid)
 	switch {
 	case err != nil:
 		return fail("the Out-of-band controller did not say what %s shows now: %v", port, err)
@@ -906,7 +936,7 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 	s.cables.mu.Unlock()
 	s.saveSightings()
 	s.log.Printf("sighting: %s is placed on %s by the Proving reset of %s (product id %d, plug count %d)", name, port, by, p.ProductID, p.PlugCount)
-	return &api.Proving{Device: name, Port: oob.PortName(rid), Cable: s.cables.cable(name)}, nil
+	return &api.Proving{Device: name, Port: s.oob.PortName(rid), Cable: s.cables.cable(name)}, nil
 }
 
 // hOOBStatus is what the lab knows of a Mac's cable, and what the
@@ -925,12 +955,12 @@ func (s *Server) hOOBStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	s.cables.mu.Lock()
 	out.Controller = orStr(s.cables.down, api.ControllerHealthy)
-	if s.cables.none {
+	if s.oob.Empty() {
 		out.Controller = noController
 	}
-	for _, rid := range oob.RIDs {
+	for _, rid := range s.oob.Ports() {
 		if p, ok := s.cables.ports[rid]; ok {
-			out.Ports = append(out.Ports, api.OOBPort{Port: oob.PortName(rid), Connected: p.Connected, Name: p.Name, ProductID: p.ProductID, PlugCount: p.PlugCount, Mac: s.cables.onPortLocked(rid)})
+			out.Ports = append(out.Ports, api.OOBPort{Port: s.oob.PortName(rid), Connected: p.Connected, Name: p.Name, ProductID: p.ProductID, PlugCount: p.PlugCount, Mac: s.cables.onPortLocked(rid)})
 		}
 	}
 	s.cables.mu.Unlock()

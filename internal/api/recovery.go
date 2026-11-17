@@ -115,3 +115,23 @@ type Proving struct {
 	Port   string `json:"port"`
 	Cable  Cable  `json:"cable"`
 }
+
+// Controller is one Out-of-band controller of the lab: the mini's own, or
+// a Mac lab controller on another Mac. Its token is never shown.
+type Controller struct {
+	Name string `json:"name"`
+	// URL is "" for the mini's own, on loopback.
+	URL         string   `json:"url,omitempty"`
+	Fingerprint string   `json:"fingerprint,omitempty"`
+	Ports       []string `json:"ports"`
+	AddedBy     string   `json:"added_by,omitempty"`
+}
+
+// ControllerAdd is `lab controller add`: the token is read from a file by
+// lab and sent here once, and labd keeps it in a file of its own.
+type ControllerAdd struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Fingerprint string `json:"fingerprint"`
+	Token       string `json:"token"`
+}

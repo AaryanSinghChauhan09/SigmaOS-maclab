@@ -245,6 +245,11 @@ type Server struct {
 	// cables are the Sightings: which Lab-owned Mac is on which of the
 	// Out-of-band controller's ports (see sighting.go).
 	cables *cables
+	// oob is every Out-of-band controller: the mini's own (cfg.OOB) and the
+	// Mac lab controllers a Maintainer added (controllers.go).
+	oob *oob.Fleet
+	// controllersMu is held to add or remove a Mac lab controller.
+	controllersMu sync.Mutex
 
 	// shippedTerms, which only a test sets, stands in for the terms shipped
 	// with this Lab release.
@@ -398,8 +403,14 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 			logger.Printf("the lab is Live, opened %s: --preview is not obeyed, and nothing closes an open lab", opened.In(brisbane).Format("2006-01-02 15:04 MST"))
 		}
 	}
-	s.cables = newCables(cfg.OOB)
-	if cfg.OOB != nil {
+	s.oob = oob.NewFleet(cfg.OOB)
+	if err := s.loadControllers(); err != nil {
+		st.db.Close()
+		rep.Close()
+		return nil, err
+	}
+	s.cables = newCables(s.oob)
+	if !s.oob.Empty() {
 		kept, err := st.sightings()
 		if err != nil {
 			st.db.Close()
@@ -767,6 +778,9 @@ func (s *Server) routes() []route {
 		{"DELETE /api/devices/{name}", maintainers, s.hForgetDevice},
 		{"POST /api/devices/{name}/end-enrollment", maintainers, s.hEndEnrollment},
 		{"GET /api/retired", maintainers, s.hRetired},
+		{"GET /api/controllers", maintainers, s.hControllers},
+		{"POST /api/controllers", maintainers, s.hAddController},
+		{"DELETE /api/controllers/{name}", maintainers, s.hRemoveController},
 		{"POST /api/devices/{name}/lease", team, s.hLease},
 		{"POST /api/devices/{name}/window", macNamed, s.hWindow},
 		{"DELETE /api/devices/{name}/lease", team, s.hRelease},
@@ -1677,10 +1691,13 @@ func (s *Server) fenceWhileWaiting(ctx context.Context, cancel context.CancelFun
 // hProve is a Proving reset, which is aimed at a port and not at a Mac:
 // Maintainers only.
 func (s *Server) hProve(w http.ResponseWriter, r *http.Request, v *dev, p Person, port string) {
-	rid, ok := oob.RIDOf(port)
+	rid, ok := s.oob.PortOf(port)
 	switch {
 	case !p.isMaintainer():
 		httpErr(w, http.StatusForbidden, "a Proving reset is a Maintainer's: it is aimed at a port, not at a Mac")
+		return
+	case !ok && len(s.oob.Members()) > 1:
+		httpErr(w, http.StatusBadRequest, "no port %q: the lab's ports are %s", port, strings.Join(s.oob.Names(), ", "))
 		return
 	case !ok:
 		httpErr(w, http.StatusBadRequest, "no port %q: the lab server's ports are left, middle and right, facing its back", port)

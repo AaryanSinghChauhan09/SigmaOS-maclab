@@ -89,6 +89,10 @@ type Client struct {
 	// reads. It is read for every request, so a token made after labd
 	// started needs no restart.
 	TokenFile string
+	// pin is the SHA-256 of a remote controller's own certificate: the
+	// one certificate its HTTPS is taken from. Nil for the mini's own,
+	// on loopback.
+	pin []byte
 }
 
 // NewClient checks that addr is on this machine: the controller never
@@ -117,7 +121,11 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, timeo
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	hc := &http.Client{Timeout: timeout}
+	if c.pin != nil {
+		hc.Transport = pinned(c.pin)
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("the Out-of-band controller does not answer: %w", err)
 	}

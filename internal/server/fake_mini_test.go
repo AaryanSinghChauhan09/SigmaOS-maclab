@@ -73,6 +73,9 @@ type fakeMini struct {
 	resetPlugs int
 	client     *oob.Client
 	log        *logBuf
+	// token, url and fingerprint are what a Maintainer adds a remote one
+	// with.
+	token, url, fingerprint string
 }
 
 // holdProbes makes the tool's next nop run until release is called: a tool
@@ -88,15 +91,20 @@ func (m *fakeMini) holdProbes(t *testing.T) (probing <-chan struct{}, release fu
 	return began, release
 }
 
-func newFakeMini(t *testing.T) *fakeMini {
+func newFakeMini(t *testing.T) *fakeMini { t.Helper(); return newFakeController(t, false, nil) }
+
+// newFakeController is newFakeMini, or with remote a Mac lab controller on
+// another Mac: HTTPS, its certificate pinned, the ports rids.
+func newFakeController(t *testing.T, remote bool, rids []int) *fakeMini {
 	t.Helper()
 	m := &fakeMini{cables: map[int]*fakeCable{}, plugs: map[int]int{portLeft: 27, portMiddle: 42, portRight: 40}, log: &logBuf{}}
 	const token = "a-token-of-the-tests-and-of-no-real-controller"
-	ctl, err := oobd.New(oobd.Config{Token: token, Tool: m, Ports: m}, log.New(m.log, "oobd: ", 0))
+	m.token = token
+	ctl, err := oobd.New(oobd.Config{Token: token, Tool: m, Ports: m, RIDs: rids, Remote: remote}, log.New(m.log, "oobd: ", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	hs := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		down := m.down
 		m.mu.Unlock()
@@ -116,12 +124,23 @@ func newFakeMini(t *testing.T) *fakeMini {
 		}
 		ctl.Handler().ServeHTTP(w, r)
 	}))
+	if remote {
+		hs.StartTLS()
+		m.url, m.fingerprint = hs.URL, oob.Fingerprint(hs.Certificate().Raw)
+	} else {
+		hs.Start()
+	}
 	t.Cleanup(hs.Close)
 	file := filepath.Join(t.TempDir(), "oobd.token")
 	if err := os.WriteFile(file, []byte(token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if m.client, err = oob.NewClient(hs.URL, file); err != nil {
+	if remote {
+		m.client, err = oob.NewRemoteClient(hs.URL, file, m.fingerprint)
+	} else {
+		m.client, err = oob.NewClient(hs.URL, file)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	return m
