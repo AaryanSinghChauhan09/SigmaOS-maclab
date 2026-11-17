@@ -9,7 +9,11 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/omacom/omarchy-maclab/internal/testhome"
 )
+
+func TestMain(m *testing.M) { testhome.Main(m) }
 
 // bundle is the unpacked lab-controller tarball: the install script and
 // stand-ins for oobd and the reset tool.
