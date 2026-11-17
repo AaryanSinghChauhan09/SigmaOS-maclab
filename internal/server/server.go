@@ -171,7 +171,10 @@ type Server struct {
 	jobRead atomic.Pointer[func(id string)]
 	cfg     Config
 	store   *store
-	reports *reports.Store
+	// macos is the macOS runs (macos.go), opened by macOS().
+	macos     *macosRuns
+	macosOnce sync.Once
+	reports   *reports.Store
 	// uploads takes reports in; nil without the machine-id key.
 	uploads   *reports.Uploads
 	catalogue *reports.Catalogue
@@ -708,7 +711,7 @@ func hashSecret(s string) string {
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
-	for _, rt := range append(s.routes(), s.exportRoutes()...) {
+	for _, rt := range append(append(s.routes(), s.exportRoutes()...), s.macosRoutes()...) {
 		s.register(m, rt)
 	}
 	// The interface's own files and pages: each page says who may open it.
