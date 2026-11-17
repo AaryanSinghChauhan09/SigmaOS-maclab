@@ -5,7 +5,8 @@
 RELEASE_SIGNER="release@omarchy-m-testing.org"
 RELEASE_NAMESPACE="omarchy-m-test-release"
 RELEASE_BUNDLE="lab-server-darwin-arm64.tar.gz"
-RELEASE_FILES=(omarchy-m-test.tar.gz VERSION lab-darwin-arm64 lab-linux-arm64 lab-linux-amd64 "$RELEASE_BUNDLE")
+RELEASE_MACOS_RUNNER="lab-macos-runner-darwin-arm64.tar.gz"
+RELEASE_FILES=(omarchy-m-test.tar.gz VERSION lab-darwin-arm64 lab-linux-arm64 lab-linux-amd64 "$RELEASE_BUNDLE" "$RELEASE_MACOS_RUNNER")
 RELEASE_AGENT="lab-server/bin/lab-agent-linux-arm64"
 RELEASE_TAG='^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'
 

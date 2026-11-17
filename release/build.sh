@@ -7,6 +7,10 @@
 #   OUTDIR/lab-darwin-arm64, lab-linux-arm64, lab-linux-amd64
 #   OUTDIR/lab-server-darwin-arm64.tar.gz
 #                                  the mini's bundle; unpacks to lab-server/
+#   OUTDIR/lab-macos-runner-darwin-arm64.tar.gz
+#                                  the macOS runner for a lab Mac's macOS:
+#                                  unpacks to lab-macos-runner/ (bin/,
+#                                  install.sh, the LaunchDaemon's plist)
 #   OUTDIR/.stage/                 the bundle unpacked, for release/sign.sh
 #
 # LAB_RELEASE is the tag being built, vX.Y.Z or vX.Y.Z-rc.N. It is the one
@@ -120,5 +124,11 @@ install -D -m 0644 "$repo/internal/web/texts/privacy.txt" "$server/texts/privacy
 done)
 printf '%s\n' "$epoch" > "$out/.stage/epoch"
 pack "$out/.stage" lab-server "$epoch" > "$out/$RELEASE_BUNDLE"
+runner="$out/.stage/lab-macos-runner"
+install -m 0755 "$repo/release/macos-runner/install.sh" "$runner/install.sh"
+install -m 0644 "$repo/release/macos-runner/org.omarchy.maclab.macos-runner.plist" "$runner/"
+install -m 0644 "$repo/LICENSE" "$runner/"
+printf '%s\n' "${tag:-dev}" > "$runner/VERSION"
+pack "$out/.stage" lab-macos-runner "$epoch" > "$out/$RELEASE_MACOS_RUNNER"
 
 echo "built ${tag:-omarchy-m-test $version and a dev Lab release}, unsigned: $out"

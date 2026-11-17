@@ -32,7 +32,11 @@ tar -xzf "$dir/$RELEASE_BUNDLE" -C "$t"
 [[ -f $t/$RELEASE_AGENT.sig ]] || fail "lab-agent has no signature of its own"
 verified "$signers" "$t/$RELEASE_AGENT" || fail "lab-agent doesn't match its own signature by the release key"
 grep -qaF -- "$(release_key "$signers")" "$t/$RELEASE_AGENT" || fail "lab-agent doesn't carry the release key"
+tar -xzf "$dir/$RELEASE_MACOS_RUNNER" -C "$t"
+macho_arm64 "$t/lab-macos-runner/bin/lab-macos-runner" || fail "the macOS runner is not a program for macOS on arm64"
+[[ -x $t/lab-macos-runner/install.sh && -f $t/lab-macos-runner/org.omarchy.maclab.macos-runner.plist ]] || fail "the macOS runner has no install.sh or LaunchDaemon plist"
 if [[ -n $tag ]]; then
+  [[ "$(<"$t/lab-macos-runner/VERSION")" == "$tag" ]] || fail "the macOS runner is $(<"$t/lab-macos-runner/VERSION"), not $tag"
   [[ "$(<"$t/lab-server/VERSION")" == "$tag" ]] || fail "the bundle is $(<"$t/lab-server/VERSION"), not $tag"
   [[ "$(<"$dir/VERSION")" == "${tag#v}" ]] || fail "VERSION is $(<"$dir/VERSION"), not ${tag#v}"
 fi
