@@ -1567,14 +1567,14 @@ Its tools follow the commands one for one, each named after its command:
 `lab_build_get`, `lab_installed_list`, `lab_installed_status`,
 `lab_installed_freeze_manifest`, `lab_installed_freeze_entry`,
 `lab_installed_verdict`, `lab_installed_promote`, `lab_agent_update`,
-`lab_builder_add`, `lab_builder_remove`, `lab_builder_list` and
+`lab_macos_enroll`, `lab_builder_add`, `lab_builder_remove`, `lab_builder_list` and
 `lab_version`. Four commands have no tool: `login` (the Lab token is typed by
 its person and never handed to an agent), `mcp` itself, and `pack` and
 `boot-test`, which work on files of your own machine and ask the lab nothing.
 
-- A tool never answers with a token. `lab_enroll` and `lab_builder_add` write
-  the Join command and the builder's token into a new file you name, and say
-  only where it is.
+- A tool never answers with a token. `lab_enroll`, `lab_macos_enroll` and
+  `lab_builder_add` write the Join command, the macOS runner's line and the
+  builder's token into a new file you name, and say only where it is.
 - `lab_installed_verdict` and `lab_installed_promote` first answer with what
   the lab is about to do, warnings included, and do it only when called again
   with `confirm`: the verdict is a person's.

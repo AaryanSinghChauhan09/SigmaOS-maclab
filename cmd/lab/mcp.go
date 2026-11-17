@@ -128,6 +128,33 @@ func newMCP(c *client.Client) *mcp.Server {
 			return text(fmt.Sprintf("%s for %s, a Lab-owned Mac, is in %s (mode 0600) and nowhere else. It joins one Mac, once, and expires %s. The person runs it in a terminal on the Mac, as themselves. Cancel it unused with lab_enroll revoke; then lab_baseline %s.",
 				what, a.Name, a.Out, t.Expires.Format(time.DateTime), a.Name)), nil, nil
 		})
+	type macosEnrollArg struct {
+		Device string `json:"device" jsonschema:"the Mac's name, e.g. m2-max"`
+		Out    string `json:"out" jsonschema:"a new file to write the line into (mode 0600). The line carries a token and is never part of the answer"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_macos_enroll", Description: "Make the one-time line that enrolls a Mac's macOS runner (Maintainers), for macOS runs of the benchmarks on the same Mac. It is written into the file out, for the person to run in macOS on the Mac after installing lab-macos-runner; the answer says only where it is and when it expires. Only when a person asks for it."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a macosEnrollArg) (*mcp.CallToolResult, any, error) {
+			if a.Out == "" {
+				return nil, nil, errors.New("name a new file in out: the line carries a token, and a tool never answers with one")
+			}
+			f, err := os.OpenFile(a.Out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err != nil {
+				return nil, nil, err
+			}
+			t, err := c.MacOSEnrollToken(ctx, a.Device)
+			if err == nil {
+				_, err = f.WriteString(t.Line + "\n")
+			}
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				os.Remove(a.Out)
+				return nil, nil, err
+			}
+			return text(fmt.Sprintf("The macOS runner's line for %s is in %s (mode 0600) and nowhere else. It enrolls one Mac's runner, once, and expires %s. The person runs it in macOS on the Mac after sudo ./install.sh from lab-macos-runner-darwin-arm64.tar.gz.",
+				a.Device, a.Out, t.Expires.Format(time.DateTime))), nil, nil
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "lab_remove", Description: "End a Mac's enrollment (Maintainers): its device secret stops working at once, its record is Retired, and lab-agent removes the lab from the Mac at its next check-in; a Volunteer is told. Only when a person asks for it: it cannot be undone, the Mac has to Join again."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a devArg) (*mcp.CallToolResult, any, error) {
 			if err := c.EndEnrollment(ctx, a.Device); err != nil {

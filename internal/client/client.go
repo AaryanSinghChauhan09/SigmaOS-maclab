@@ -134,6 +134,25 @@ func (c *Client) EnrollToken(ctx context.Context, req api.EnrollTokenRequest) (*
 	return &out, c.do(ctx, "POST", "/api/enroll-tokens", jsonBody(req), &out)
 }
 
+// MacOSEnrollToken makes a one-time token for a Mac's macOS runner, with
+// the line that enrolls it in macOS.
+func (c *Client) MacOSEnrollToken(ctx context.Context, mac string) (*api.MacOSEnrollToken, error) {
+	var out api.MacOSEnrollToken
+	return &out, c.do(ctx, "POST", "/api/macos/enroll-tokens", jsonBody(map[string]string{"mac": mac}), &out)
+}
+
+// QueueMacOSRun queues a macOS run of the tier's benchmarks on the Mac.
+func (c *Client) QueueMacOSRun(ctx context.Context, mac, tier string) (*api.MacOSRun, error) {
+	var out api.MacOSRun
+	return &out, c.do(ctx, "POST", "/api/devices/"+url.PathEscape(mac)+"/macos-runs", jsonBody(api.MacOSRunRequest{Tier: tier}), &out)
+}
+
+// MacOSRun is the Mac's latest macOS run.
+func (c *Client) MacOSRun(ctx context.Context, mac string) (*api.MacOSRun, error) {
+	var out api.MacOSRun
+	return &out, c.do(ctx, "GET", "/api/devices/"+url.PathEscape(mac)+"/macos-runs", nil, &out)
+}
+
 // RevokeEnrollTokens revokes a name's enrollment tokens, used or not, and
 // says how many there were.
 func (c *Client) RevokeEnrollTokens(ctx context.Context, name string) (int, error) {

@@ -23,6 +23,7 @@ var specTable = map[string]string{
 	"installed list":            "added",
 	"installed verdict":         "added",
 	"agent-update":              "added",
+	"macos enroll":              "added",
 	"login":                     "changed",
 	"exec":                      "changed",
 	"installed freeze-entry":    "changed",
@@ -309,6 +310,8 @@ func TestAToolNeverAnswersWithAToken(t *testing.T) {
 			io.WriteString(w, `{"name":"mini","kinds":["kernel"],"token":"bld_SECRET","generation":"g1"}`)
 		case "POST /api/enroll-tokens":
 			io.WriteString(w, `{"token":"enr_SECRET","expires":"2026-11-15T09:00:00Z","join_command":"curl … enr_SECRET"}`)
+		case "POST /api/macos/enroll-tokens":
+			io.WriteString(w, `{"mac":"m2-max","token":"mos_enr_SECRET","expires":"2026-11-15T09:00:00Z","line":"echo mos_enr_SECRET | sudo …"}`)
 		default:
 			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, 400)
 		}
@@ -326,8 +329,9 @@ func TestAToolNeverAnswersWithAToken(t *testing.T) {
 	defer session.Close()
 	dir := t.TempDir()
 	for tool, args := range map[string]map[string]any{
-		"lab_builder_add": {"name": "mini", "out": dir + "/builder.token"},
-		"lab_enroll":      {"name": "m1-pro", "out": dir + "/join.sh"},
+		"lab_builder_add":  {"name": "mini", "out": dir + "/builder.token"},
+		"lab_enroll":       {"name": "m1-pro", "out": dir + "/join.sh"},
+		"lab_macos_enroll": {"device": "m2-max", "out": dir + "/macos-runner.sh"},
 	} {
 		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 		if err != nil {

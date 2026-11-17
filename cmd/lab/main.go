@@ -49,6 +49,8 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
   lab agent-update <mac>              update a Lab-owned Mac's lab-agent to the lab's, while the Mac is idle
                                       (Maintainers). The Mac checks the new agent's signature itself. A
                                       Volunteer's Mac is never sent one: its Volunteer runs sudo lab-agent update
+  lab macos enroll <mac>              a Mac's macOS runner (Maintainers): prints the one-time line to run in macOS on
+                                      the Mac, after its install.sh, good for 1 hour; then labd's macOS runs reach it
   lab baseline <device>               prove the one-shot boot works; required once per Mac
   lab build <github-url> --device <mac> | --config <file>   build a kernel from a repo, branch, commit or PR URL (reused if built before)
   lab package <recipe-dir> [--commit <github-url>] [--pkgrel 11.14] [-o dir]
@@ -120,7 +122,7 @@ var (
 		"boot-test", "login", "builder", "status", "enroll", "remove", "device", "baseline", "build", "package",
 		"builds", "build-log", "build-get", "exec", "run", "crashtest", "pack", "jobs", "job", "wait", "cancel",
 		"logs", "gate", "exclude", "retry", "publish", "lease", "release", "installed", "reset", "oob", "audit",
-		"upload", "agent-update", "mcp", "version",
+		"upload", "agent-update", "macos", "mcp", "version",
 	}
 	atHome = []string{"boot-test", "login", "pack", "mcp", "version"}
 )
@@ -298,6 +300,20 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 			return nil
 		}
 		fmt.Printf("%s: lab-agent %s -> %s%s, its signature checked on the Mac\n", pos[0], res.From, res.To, from)
+		return nil
+
+	case "macos":
+		pos := parse(fs, args)
+		if len(pos) != 2 || pos[0] != "enroll" {
+			return fmt.Errorf("usage: lab macos enroll <mac>")
+		}
+		t, err := c.MacOSEnrollToken(ctx, pos[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("The macOS runner's line for %s (one Mac, once; expires %s). Keep it private.\n\n", t.Mac, t.Expires.Format(time.DateTime))
+		fmt.Printf("In macOS on the Mac, install lab-macos-runner-darwin-arm64.tar.gz from the Lab release (sudo ./install.sh), then run:\n\n  %s\n\n", t.Line)
+		fmt.Println("A FileVault Mac needs a person at every macOS run: macOS waits for its password at the screen.")
 		return nil
 
 	case "enroll":
