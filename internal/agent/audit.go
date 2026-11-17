@@ -169,6 +169,16 @@ func describe(c api.Command) string {
 			return "reboot once into Lab boot entry " + b.Entry
 		}
 		return "reboot once into Lab boot entry " + b.Entry + " to run " + strings.Join(tests, "; ")
+	case api.CmdCandidateStage:
+		var s api.CandidateStageArgs
+		_ = json.Unmarshal(c.Args, &s)
+		return fmt.Sprintf("snapshot your system and install Package set %s (%d packages) into the snapshot for a Candidate boot", s.Set.Name, len(s.Set.Packages))
+	case api.CmdCandidateCheck:
+		return "check the Candidate boot"
+	case api.CmdCandidateResult:
+		return "read the Candidate boot's journal"
+	case api.CmdCandidateCleanup:
+		return "remove the Candidate boot"
 	case api.CmdReboot:
 		return "reboot"
 	case api.CmdCrash:
