@@ -90,6 +90,7 @@ step_tools() {
   have python3.14 && py=python3.14
   run "lab-only-autounlock parses" bash -n scripts/lab-only-autounlock
   run "builder" "$py" -B -m unittest discover -s builder -p 'test_*.py'
+  run "bench runner" "$py" -I -B -m unittest discover -s internal/agent/tests/bench -p 'test_*.py'
   if linux; then
     run "lab-only-autounlock" "$py" scripts/test-lab-only-autounlock.py
     if "$py" -c 'import sys; sys.exit(sys.version_info < (3, 14))'; then

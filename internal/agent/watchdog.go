@@ -118,7 +118,7 @@ type labWatchdog struct {
 // desktop session can outlast a short timeout.
 func testBudget(t api.TestSpec) time.Duration {
 	b := testTimeout(t) + watchdogMargin
-	if t.GUI {
+	if t.GUI || isBench(t.Builtin) {
 		b += guiSessionWait
 	}
 	return b
