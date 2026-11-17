@@ -317,6 +317,10 @@ type Facts struct {
 	PreflightOK   bool     `json:"preflight_ok"`
 	Problems      []string `json:"problems,omitempty"` // each one holds jobs back
 	Warnings      []string `json:"warnings,omitempty"` // costs evidence, not the Mac: jobs still run
+	// Stack is the installed version (pkgver-pkgrel) of each package of the
+	// Omarchy Mac stack (StackPackage), as pacman -Q lists it: what lab set
+	// capture records.
+	Stack map[string]string `json:"stack,omitempty"`
 }
 
 // StaleKnownGood is whether a preflight problem is lab-agent's known-good

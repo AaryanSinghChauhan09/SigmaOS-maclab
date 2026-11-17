@@ -1,7 +1,7 @@
 {{define "asked"}}{{if .AskedBy}}@{{.AskedBy}}{{if .ByTeam}} <span class="badge kind-mteam">M team</span>{{end}}{{else if .ByLab}}<span class="dim">the lab</span>{{else}}<span class="dim">not recorded</span>{{end}}{{end}}
 
 {{define "main"}}{{with .Data}}<h1>Builds</h1>
-<p class="subtitle">Kernel and package builds on the lab's Builder, one at a time, and who asked for each.</p>
+<p class="subtitle">Kernel and package builds on the lab's Builder, one at a time, and who asked for each. <a href="{{href "/builds/sets"}}">Package sets</a> list packages to boot together.</p>
 <section class="card">
 <h2 class="card-title">builds ({{len .Builds}})</h2>
 {{if .Builds}}<div class="scroll"><table class="list stack">

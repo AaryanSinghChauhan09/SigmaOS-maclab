@@ -1,0 +1,18 @@
+{{define "main"}}{{with .Data}}<p class="dim"><a href="{{href "/builds"}}">Builds</a> / <a href="{{href "/builds/sets"}}">Package sets</a> /</p>
+<h1>{{.Name}}</h1>
+<p class="subtitle">Made by {{if .CreatedBy}}@{{.CreatedBy}}{{else}}the lab{{end}} on {{.When}}{{if .From}}, captured from {{.From}}{{end}}. Frozen: it never changes.</p>
+<section class="card">
+<h2 class="card-title">packages ({{.Packages}})</h2>
+<div class="scroll"><table class="list stack">
+<thead><tr><th>Package</th><th>Source</th><th>Version</th><th>sha256</th></tr></thead>
+<tbody>
+{{range .Items}}<tr>
+<td data-label="Package">{{.Package}}</td>
+<td data-label="Source">{{.Source}}{{if eq .Source "build"}} <a href="{{href (print "/builds/" .Ref)}}">{{.Ref}}</a>{{end}}{{if .File}}<br><span class="dim">{{.File}}</span>{{end}}</td>
+<td data-label="Version">{{if .Version}}{{.Version}}{{else}}<span class="dim">–</span>{{end}}</td>
+<td data-label="sha256">{{if .SHA256}}<code>{{.SHA256}}</code>{{else}}<span class="dim">from the repositories</span>{{end}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+</section>
+{{end}}{{end}}

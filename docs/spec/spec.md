@@ -583,6 +583,9 @@ A first sign-in makes the lab know the person; it gives no browser session, no L
 | `reset <mac> --prove left\|middle\|right` | added | a Proving reset, Maintainers only |
 | `agent-update <mac>` | added | updates a Lab-owned Mac's agent while it is idle, Maintainers only |
 | `macos enroll <mac>` | added | the one-time line that enrolls the Mac's macOS runner, Maintainers only ("Package sets and Compare") |
+| `set create <name> --pkg NAME=repo:V\|file:SHA[@V]\|build:ID …` | added | makes a Package set, Maintainers only ("Package sets and Compare") |
+| `set capture <name> --from <mac>` | added | a Package set of the stack a Mac last reported, Maintainers only |
+| `set list`, `set show <name>` | added | the Package sets; one set with each file's sha256 |
 | every command | changed | names itself in `User-Agent`; meets the minimum release; says "Omarchy Mac Lab"; while Dark says it cannot be reached and that no reset is possible until it returns; never prints an error page |
 | `login` | changed | as above; the Blocked sentence; an expired token gets a line naming the person's own page; at the Alias it fails plainly and stores nothing |
 | `exec` | changed | answered as a stream; never sent again after a cut; no serial path; needs the caller's own Lease; kept in the Exec record, its text for 12 months, and the help says never to put a secret in one |
@@ -1346,6 +1349,17 @@ In each, two Answers disagreed with nothing to settle it, or a decision the spec
 | Operations leftovers | 8, 13, 6, 16 |
 
 ## 21. Package sets and Compare
+
+Agreed with the owner on 2026-11-17 (night 3 plan). Compare boots a Mac on a known-good stack and on a candidate one and benchmarks both; a Package set is what each side boots.
+
+### Package sets
+
+- **What a set is.** A name, who made it, when, and a list of packages, each with one source: `repo` (a version from the Mac's configured repositories), `file` (a package file sent with `lab upload`, named by its sha256) or `build` (a Builder build: a package from `lab package`, a recipe directory or a GitHub branch, pull request or commit of a PKGBUILD repository with `--commit`; or a kernel from `lab build`). A package is in a set once.
+- **Resolved when made.** labd resolves every file to its sha256 as the set is made and stores the set in labd.db (`package_sets`); the files stay in the artifact store. A `file` must be in the store. A `build` must be done; for a package build the item is the build's file whose name, `NAME-PKGVER-PKGREL-ARCH.pkg.tar.*`, has the package's name, and its version is `PKGVER-PKGREL`; for a kernel build it is the kernel the build made, at the build's release. A `repo` item carries no sha256: the Mac's repositories hold the file. What cannot be resolved makes no set, with the reason.
+- **Frozen.** A set is never changed or deleted: a name is used once, and a changed list is a new set.
+- **Capture.** `lab set capture <name> --from <mac>` makes a set of the stack the Mac last reported: every package at its installed version, as `repo` items. lab-agent reports the stack in its Facts (`stack`, a map of package to `pkgver-pkgrel` from `pacman -Q`): `linux-aurora*` (kernel and headers), `m1n1`/`m1n1-*`, `uboot-*`, `mesa`/`mesa-*`, `vulkan-*`, `libva-v4l2_request-avd`, `libfprint`/`libfprint-*`, `asahi-fwextract`, and any package whose name has both `asahi` and `firmware`. A Mac whose agent reports no stack cannot be captured.
+- **Who.** Maintainers only make, list and read sets: on the API, the `lab set` commands and their `lab mcp` tools, and on the site under Builds (Package sets, read only).
+- **API.** `POST /api/sets` takes `{"name":"7.3-try","items":[{"package":"linux-aurora","source":"build","ref":"b-12"},{"package":"mesa-aurora","source":"file","ref":"<sha256>","version":"25.3.0-1"},{"package":"m1n1-aurora","source":"repo","ref":"1.5.2-1"}]}`; `POST /api/sets/capture` takes `{"name":"7.2","mac":"m2-max"}`; both answer the set. `GET /api/sets` lists them, newest first; `GET /api/sets/{name}` is one. A set is `{"name","created_by","created","captured_from"?,"items":[{"package","source","ref","version"?,"sha256"?,"file"?}]}`; `file` is the build's file an item resolved to. A taken name is 409; anything unresolvable 400.
 
 ### macOS runs
 

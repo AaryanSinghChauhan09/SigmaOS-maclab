@@ -50,6 +50,9 @@ type Sim struct {
 	SuspendFor  time.Duration
 	QuietFor    time.Duration
 	HangFor     time.Duration
+	// Stack is the stack's installed packages the Mac reports; nil reports
+	// simStack.
+	Stack map[string]string
 
 	mu           sync.Mutex
 	sleepFn      func(bool)
@@ -216,8 +219,16 @@ func (s *Sim) Facts() api.Facts {
 	f.Problems = append(f.Problems, s.problems...)
 	f.Warnings = append(f.Warnings, s.warnings...)
 	f.PreflightOK = len(f.Problems) == 0
+	f.Stack = maps.Clone(s.Stack)
+	if f.Stack == nil {
+		f.Stack = maps.Clone(simStack)
+	}
 	return f
 }
+
+// simStack is what a simulated Mac has installed of the stack.
+var simStack = map[string]string{"linux-aurora": "6.17.5.aurora1-1", "linux-aurora-headers": "6.17.5.aurora1-1",
+	"m1n1-aurora": "1.5.2-1", "mesa": "25.3.0-1"}
 
 // SetPreflight makes the Mac's preflight find problems and warnings, from its
 // next check-in on, as lab-agent reports them.

@@ -717,6 +717,45 @@ func newMCP(c *client.Client) *mcp.Server {
 			l, err := c.Builders(ctx)
 			return text(l), nil, err
 		})
+	type setCreateArg struct {
+		Name     string   `json:"name"`
+		Packages []string `json:"packages" jsonschema:"each NAME=repo:VERSION, NAME=file:SHA256[@VERSION] (from lab_upload) or NAME=build:ID (from lab_build or lab_package)"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_set_create", Description: "Make a Package set (Maintainers): packages to boot together, each from the Mac's repositories, an uploaded file or a build. The lab records every file's sha256; a set never changes, so a name is used once."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a setCreateArg) (*mcp.CallToolResult, any, error) {
+			req := api.SetRequest{Name: a.Name}
+			for _, p := range a.Packages {
+				it, err := api.ParseSetItem(p)
+				if err != nil {
+					return nil, nil, err
+				}
+				req.Items = append(req.Items, it)
+			}
+			set, err := c.CreateSet(ctx, req)
+			return text(set), nil, err
+		})
+	type setCaptureArg struct {
+		Name string `json:"name"`
+		From string `json:"from" jsonschema:"the Mac whose installed stack to record"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_set_capture", Description: "Make a Package set (Maintainers) of the stack a Mac last reported installed: kernel and headers, m1n1, U-Boot, Mesa and Vulkan, the AVD decoder, libfprint and the Asahi firmware, each at its version."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a setCaptureArg) (*mcp.CallToolResult, any, error) {
+			set, err := c.CaptureSet(ctx, api.SetCapture{Name: a.Name, Mac: a.From})
+			return text(set), nil, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_set_list", Description: "The Package sets, newest first: name, packages, who made each and from which Mac it was captured."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ none) (*mcp.CallToolResult, any, error) {
+			l, err := c.Sets(ctx)
+			return text(l), nil, err
+		})
+	type setShowArg struct {
+		Name string `json:"name"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_set_show", Description: "One Package set: each package with its source, version and the sha256 of its file."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a setShowArg) (*mcp.CallToolResult, any, error) {
+			set, err := c.Set(ctx, a.Name)
+			return text(set), nil, err
+		})
 
 	return s
 }

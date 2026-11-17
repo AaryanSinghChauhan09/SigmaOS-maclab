@@ -838,6 +838,11 @@ func (s *Server) routes() []route {
 		{"GET /api/builds/{id}/files/{name}", maintainers, s.hBuildFile},
 		{"POST /api/builds/{id}/cancel", maintainers, s.hCancelBuild},
 		{"GET /api/builders", maintainers, s.hBuilders},
+		// Package sets (sets.go): Maintainers only; a set is never changed.
+		{"POST /api/sets", maintainers, s.hCreateSet},
+		{"POST /api/sets/capture", maintainers, s.hCaptureSet},
+		{"GET /api/sets", maintainers, s.hSets},
+		{"GET /api/sets/{name}", maintainers, s.hSet},
 		{"POST /api/builders", maintainers, s.hAddBuilder},
 		{"DELETE /api/builders/{name}", maintainers, s.hRemoveBuilder},
 		{"POST /api/devices/{name}/exec", team, s.hExec},

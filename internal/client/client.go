@@ -468,3 +468,26 @@ func (c *Client) Exec(ctx context.Context, device string, a api.ExecArgs) (*api.
 	var out api.ExecResult
 	return &out, c.once(ctx, "POST", "/api/devices/"+url.PathEscape(device)+"/exec", jsonBody(a), &out, "the command")
 }
+
+// CreateSet makes a Package set (Maintainers); labd resolves every file to
+// its sha256 and the set never changes.
+func (c *Client) CreateSet(ctx context.Context, req api.SetRequest) (*api.PackageSet, error) {
+	var out api.PackageSet
+	return &out, c.do(ctx, "POST", "/api/sets", jsonBody(req), &out)
+}
+
+// CaptureSet makes a Package set of the stack a Mac last reported installed.
+func (c *Client) CaptureSet(ctx context.Context, req api.SetCapture) (*api.PackageSet, error) {
+	var out api.PackageSet
+	return &out, c.do(ctx, "POST", "/api/sets/capture", jsonBody(req), &out)
+}
+
+func (c *Client) Sets(ctx context.Context) ([]api.PackageSet, error) {
+	var out []api.PackageSet
+	return out, c.do(ctx, "GET", "/api/sets", nil, &out)
+}
+
+func (c *Client) Set(ctx context.Context, name string) (*api.PackageSet, error) {
+	var out api.PackageSet
+	return &out, c.do(ctx, "GET", "/api/sets/"+url.PathEscape(name), nil, &out)
+}

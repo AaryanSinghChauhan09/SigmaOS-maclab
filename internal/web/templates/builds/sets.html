@@ -1,0 +1,20 @@
+{{define "main"}}{{with .Data}}<p class="dim"><a href="{{href "/builds"}}">Builds</a> /</p>
+<h1>Package sets</h1>
+<p class="subtitle">Frozen lists of packages, each from the Mac's repositories, an uploaded file or a build, with every file's sha256. <code>lab set create</code> and <code>lab set capture</code> make one; none is ever changed.</p>
+<section class="card">
+<h2 class="card-title">sets ({{len .Sets}})</h2>
+{{if .Sets}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Set</th><th>Packages</th><th>Captured from</th><th>Made by</th><th>When</th></tr></thead>
+<tbody>
+{{range .Sets}}<tr id="set-{{.Name}}">
+<td data-label="Set" class="nowrap"><a href="{{href (print "/builds/sets/" .Name)}}">{{.Name}}</a></td>
+<td data-label="Packages">{{.Packages}}</td>
+<td data-label="Captured from">{{if .From}}{{.From}}{{else}}<span class="dim">–</span>{{end}}</td>
+<td data-label="Made by">{{if .CreatedBy}}@{{.CreatedBy}}{{else}}<span class="dim">–</span>{{end}}</td>
+<td data-label="When" class="nowrap">{{.When}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+{{else}}<p class="dim">No package set yet.</p>
+{{end}}</section>
+{{end}}{{end}}

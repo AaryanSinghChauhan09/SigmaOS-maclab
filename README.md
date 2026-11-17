@@ -1277,6 +1277,17 @@ lab builder list                                            # last seen, current
 lab builder remove mini                                     # its token stops working; what it was building fails
 ```
 
+Package sets (Maintainers) name packages to boot together, each from the
+Mac's repositories, a file sent with `lab upload`, or a build; labd records
+every file's sha256 and never changes a set:
+
+```
+lab set create 7.3-try --pkg linux-aurora=build:b-12 --pkg mesa-aurora=file:<sha256>@25.3.0-1 --pkg m1n1-aurora=repo:1.5.2-1
+lab set capture 7.2 --from m2-max                           # what the Mac last reported installed of the stack
+lab set list
+lab set show 7.2
+```
+
 **A builder's kernels boot as root on lab Macs.** What the artifact store's 20 GB budget clears is in
 [docs/builder.md](docs/builder.md).
 
@@ -1567,7 +1578,8 @@ Its tools follow the commands one for one, each named after its command:
 `lab_build_get`, `lab_installed_list`, `lab_installed_status`,
 `lab_installed_freeze_manifest`, `lab_installed_freeze_entry`,
 `lab_installed_verdict`, `lab_installed_promote`, `lab_agent_update`,
-`lab_macos_enroll`, `lab_builder_add`, `lab_builder_remove`, `lab_builder_list` and
+`lab_macos_enroll`, `lab_builder_add`, `lab_builder_remove`, `lab_builder_list`,
+`lab_set_create`, `lab_set_capture`, `lab_set_list`, `lab_set_show` and
 `lab_version`. Four commands have no tool: `login` (the Lab token is typed by
 its person and never handed to an agent), `mcp` itself, and `pack` and
 `boot-test`, which work on files of your own machine and ask the lab nothing.

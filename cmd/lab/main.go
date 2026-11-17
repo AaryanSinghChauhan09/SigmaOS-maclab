@@ -56,6 +56,11 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
   lab package <recipe-dir> [--commit <github-url>] [--pkgrel 11.14] [-o dir]
                                       build release packages from a PKGBUILD recipe with makepkg, as the release machine does
   lab builds | lab build-log <build> [-f] | lab build-get <build> [-o dir]
+  lab set create <name> --pkg NAME=repo:VERSION|file:SHA256[@VERSION]|build:ID ...
+                                      a Package set (Maintainers): packages to boot together, each from the Mac's
+                                      repositories, a file sent with lab upload, or a build. Frozen once made
+  lab set capture <name> --from <mac> a Package set of the stack a Mac last reported installed
+  lab set list | lab set show <name>  the Package sets, and one set's packages with each file's sha256
   lab exec <device> <command...>      run a command on a Mac as root, through lab-agent. It needs your own Lease on
                                       the Mac, a Maintainer's too. The command's text is kept in the Exec record
                                       for 12 months: never put a secret in a command
@@ -122,7 +127,7 @@ var (
 		"boot-test", "login", "builder", "status", "enroll", "remove", "device", "baseline", "build", "package",
 		"builds", "build-log", "build-get", "exec", "run", "crashtest", "pack", "jobs", "job", "wait", "cancel",
 		"logs", "gate", "exclude", "retry", "publish", "lease", "release", "installed", "reset", "oob", "audit",
-		"upload", "agent-update", "macos", "mcp", "version",
+		"upload", "agent-update", "macos", "mcp", "version", "set",
 	}
 	atHome = []string{"boot-test", "login", "pack", "mcp", "version"}
 )
@@ -570,6 +575,9 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 
 	case "builder":
 		return builderCmd(ctx, c, args)
+
+	case "set":
+		return setCmd(ctx, c, args)
 
 	case "builds":
 		l, err := c.Builds(ctx, 20)
