@@ -113,6 +113,8 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
   lab oob <device>                    its cable: sighted, not sighted or no cable, and what the ports show
   lab audit <device>                  labd's copy of a Volunteer's Mac's Audit log: every Maintainer action on it
   lab upload <file> [--for <mac>]     to the artifact store, in 32 MiB parts; cut, the same command resumes
+  lab bench mirror [--from <dir>]     every pinned benchmark file, downloaded, checked against its sha256 and
+                                      put in the artifact store, where lab-agent fetches it (Maintainers)
   lab mcp                             MCP server on stdio, for AI agents
   lab version                         the Lab release this lab came from, and the one Omarchy Mac Lab runs
 `
@@ -127,7 +129,7 @@ var (
 		"boot-test", "login", "builder", "status", "enroll", "remove", "device", "baseline", "build", "package",
 		"builds", "build-log", "build-get", "exec", "run", "crashtest", "pack", "jobs", "job", "wait", "cancel",
 		"logs", "gate", "exclude", "retry", "publish", "lease", "release", "installed", "reset", "oob", "audit",
-		"upload", "agent-update", "macos", "mcp", "version", "set",
+		"upload", "agent-update", "macos", "mcp", "version", "set", "bench",
 	}
 	atHome = []string{"boot-test", "login", "pack", "mcp", "version"}
 )
@@ -578,6 +580,9 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 
 	case "set":
 		return setCmd(ctx, c, args)
+
+	case "bench":
+		return benchCmd(ctx, c, args)
 
 	case "builds":
 		l, err := c.Builds(ctx, 20)

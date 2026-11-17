@@ -67,6 +67,7 @@ var specTable = map[string]string{
 	"builder remove":            "unchanged",
 	"builder list":              "unchanged",
 	"boot-test":                 "unchanged",
+	"bench mirror":              "added",
 }
 
 // The table's retired rows.
@@ -81,8 +82,8 @@ var siteOnly = []string{"people", "person", "request", "requests", "lend", "invi
 // The commands with no tool, and why: the Lab token is typed by its person
 // and never handed to an agent; `lab mcp` is the server itself; `pack` and
 // `boot-test` work on files of the person's own machine and ask the lab
-// nothing.
-var noTool = []string{"login", "mcp", "pack", "boot-test"}
+// nothing. `bench mirror` downloads gigabytes to the person's machine.
+var noTool = []string{"login", "mcp", "pack", "boot-test", "bench"}
 
 func tableCommands() (top []string, subs map[string][]string) {
 	subs = map[string][]string{}
