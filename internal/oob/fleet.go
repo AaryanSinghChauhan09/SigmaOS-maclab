@@ -61,8 +61,11 @@ func (f *Fleet) Remove(name string) bool {
 	return len(f.members) != n
 }
 
-// Members are the controllers, the mini's first.
+// Members are the controllers, the mini's first. A nil Fleet has none.
 func (f *Fleet) Members() []Member {
+	if f == nil {
+		return nil
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.members)
@@ -125,12 +128,7 @@ func (f *Fleet) PortName(port int) string {
 func (f *Fleet) PortOf(name string) (int, bool) {
 	ctl, r, found := strings.Cut(name, ":")
 	if !found {
-		if rid, ok := RIDOf(name); ok {
-			if _, _, ok := f.Of(rid); ok {
-				return rid, true
-			}
-		}
-		return 0, false
+		return RIDOf(name)
 	}
 	rid, err := strconv.Atoi(r)
 	if err != nil {
