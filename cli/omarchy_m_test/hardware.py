@@ -22,6 +22,10 @@ MAC_FIRST_BOOT_INCOMPLETE = "Some hardware setup could not finish yet"
 _MAC_FIRST_BOOT_LINE = re.compile(r"(systemd\[1\]: .*(Omarchy first boot|omarchy-mac-first-boot)|omarchy-mac-first-boot\[\d+\]: )")
 MAC_FIRST_BOOT_DONE = ("Finished Omarchy first boot", "omarchy-mac-first-boot.service: Deactivated successfully")
 ASAHI_GPU_DRIVER = "/sys/bus/platform/drivers/asahi"
+# Aurora's 7.3 kernels register the GPU driver under other names: the module's own name for the
+# M1 and M2 (aurora), and one platform driver per generation from the M3 on (aurora-g15 for the
+# M3, aurora-g16 for the M4, aurora-g18 for the M5). Read only when asahi has no GPU bound.
+AURORA_GPU_DRIVERS = tuple(f"/sys/bus/platform/drivers/{name}" for name in ("aurora", "aurora-g15", "aurora-g16", "aurora-g18"))
 VULKAN_ICDS = "/usr/share/vulkan/icd.d"
 VULKANINFO = ["vulkaninfo", "--summary"]
 EGLINFO = ["eglinfo", "-B"]
@@ -144,18 +148,38 @@ def _bound_gpus(names: list[str]) -> list[str]:
     return [name for name in names if re.fullmatch(r"[0-9a-f]+\.gpu", name)]
 
 
+def _gpu_drivers(host: Host) -> tuple[list[str], list[tuple[str, list[str]]]]:
+    """The GPU drivers loaded (by name) and the first that has a GPU bound, as [(name, GPUs)].
+
+    asahi is read first, so a kernel that names its driver asahi reads exactly as before; the
+    Aurora names are read only when asahi has no GPU bound.
+    """
+    loaded: list[str] = []
+    for path in (ASAHI_GPU_DRIVER, *AURORA_GPU_DRIVERS):
+        names = _list(host, path)
+        if names is None:
+            continue
+        name = path.rsplit("/", 1)[1]
+        loaded.append(name)
+        bound = _bound_gpus(names)
+        if bound:
+            return loaded, [(name, bound)]
+    return loaded, []
+
+
 def _gpu_bound(host: Host) -> bool:
-    return bool(_bound_gpus(_list(host, ASAHI_GPU_DRIVER) or []))
+    return bool(_gpu_drivers(host)[1])
 
 
 def gpu_driver(host: Host) -> dict:
-    names = _list(host, ASAHI_GPU_DRIVER)
-    if names is None:
-        return _result("gpu.driver", "fail", ["the asahi GPU driver isn't loaded"])
-    bound = _bound_gpus(names)
-    if not bound:
-        return _result("gpu.driver", "fail", ["the asahi GPU driver is loaded but bound to no GPU"])
-    return _result("gpu.driver", "pass", [f"asahi driver bound to {', '.join(bound)}"])
+    loaded, bound = _gpu_drivers(host)
+    if bound:
+        name, gpus = bound[0]
+        return _result("gpu.driver", "pass", [f"{name} driver bound to {', '.join(gpus)}"])
+    if not loaded:
+        return _result("gpu.driver", "fail", ["neither the asahi nor an aurora GPU driver is loaded"])
+    drivers = f"the {loaded[0]} GPU driver is" if len(loaded) == 1 else f"the {', '.join(loaded)} GPU drivers are"
+    return _result("gpu.driver", "fail", [f"{drivers} loaded but bound to no GPU"])
 
 
 def _vulkan_devices(text: str) -> list[dict[str, str]]:
@@ -167,6 +191,14 @@ def _vulkan_devices(text: str) -> list[dict[str, str]]:
             key, _, value = line.partition("=")
             devices[-1][key.strip()] = value.strip()
     return devices
+
+
+def _asahi_vulkan_device(device: dict[str, str]) -> bool:
+    # Honeykrisp, or Aurora's Borealis (vulkan-aurora, "derived from Honeykrisp"). Borealis's driver ID (35) is
+    # newer than the Vulkan headers vulkaninfo is built with, so it prints as UNKNOWN_VkDriverId_value35: match
+    # its driver name too.
+    driver_id = device.get("driverID", "").upper()
+    return "HONEYKRISP" in driver_id or "BOREALIS" in driver_id or device.get("driverName", "").strip().lower() == "borealis"
 
 
 def gpu_vulkan(host: Host, system: System) -> dict:
@@ -186,10 +218,10 @@ def gpu_vulkan(host: Host, system: System) -> dict:
             return _result("gpu.vulkan", "fail", [*installed, "no GPU is bound to the asahi GPU driver, so it has no Apple GPU to use"])
         return _result("gpu.vulkan", "pass", installed)
     devices = _vulkan_devices(info.stdout)
-    apple = [d for d in devices if "HONEYKRISP" in d.get("driverID", "").upper()]
+    apple = [d for d in devices if _asahi_vulkan_device(d)]
     if not apple:
         names = ", ".join(d.get("deviceName", "?") for d in devices) or "none"
-        evidence = [f"vulkaninfo lists no Asahi (Honeykrisp) device; devices: {names}"]
+        evidence = [f"vulkaninfo lists no Asahi (Honeykrisp or Borealis) device; devices: {names}"]
         if info.returncode != 0:
             evidence.append(f"vulkaninfo exited {info.returncode}: " + ((info.stderr.strip().splitlines() or ["no message"])[-1]))
         return _result("gpu.vulkan", "fail", evidence)

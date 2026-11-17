@@ -22,7 +22,7 @@ func TestARefusalIsAnsweredAsTheOldSiteAnsweredIt(t *testing.T) {
 	_, refusal := upload(t, put(golden(t, "m2-max-image2"), "made.up", "checks", 0, "id"))
 
 	body, _ := json.Marshal(refusal)
-	want := `{"error":"The report has checks this site doesn't know (feature catalogue v18). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["unknown check id made.up"]}`
+	want := `{"error":"The report has checks this site doesn't know (feature catalogue v19). Update omarchy-m-test (curl -fsSL http://www.example.com/install | bash) and run it again.","details":["unknown check id made.up"]}`
 	if string(body) != want {
 		t.Errorf("answer %s\nwant   %s", body, want)
 	}
@@ -114,10 +114,10 @@ func TestTheSchemaComparesAsRubyDoes(t *testing.T) {
 
 func TestTheCatalogue(t *testing.T) {
 	c := testRules(t).Catalogue()
-	if c.Version() != 18 {
-		t.Errorf("catalogue version %d, want 18", c.Version())
+	if c.Version() != 19 {
+		t.Errorf("catalogue version %d, want 19", c.Version())
 	}
-	if ids := c.CheckIDs(); len(ids) != 86 || ids[0] != "system.identity" {
+	if ids := c.CheckIDs(); len(ids) != 89 || ids[0] != "system.identity" {
 		t.Errorf("%d check ids, the first %q", len(ids), ids[0])
 	}
 	if got := c.OutcomeWords("not-in-aurora"); got != "not yet supported by Aurora" {

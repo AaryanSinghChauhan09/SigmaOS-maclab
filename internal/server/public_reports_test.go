@@ -216,7 +216,7 @@ func TestTheReportsPageListsEveryPublishedReportNewestFirst(t *testing.T) {
 		t.Error("the row lacks its stack and version")
 	}
 	// hardware.drivers and hardware.probe-errors fail where the catalogue expects it: not yet supported, not failures.
-	if !page.says(t, "tr#report-"+second+" td.nowrap", "37 pass 2 fail 2 gap 45 skip") {
+	if !page.says(t, "tr#report-"+second+" td.nowrap", "37 pass 2 fail 2 gap 48 skip") {
 		t.Errorf("the counts: %q", page.all(t, "tr#report-"+second+" td.nowrap")[1].words())
 	}
 	if got := page.sole(t, "tr#report-"+second+" td.build-cell").attr("data-build"); got != "99ace40.361571887310001" {
@@ -502,7 +502,7 @@ func TestTheReportPageReadsLikeTerminalOutputWithItsBuildAndBadge(t *testing.T) 
 		t.Error("the terminal bar or the badge")
 	}
 	// One title per check-id prefix, plus the hardware inventory.
-	sections := strings.Fields("system boot packages setup hardware gpu video display audio network sleep input sep touch-id camera ports power cpu thermal sensors storage graphics engines benchmark")
+	sections := strings.Fields("system boot packages setup hardware gpu video display audio network sleep input sep touch-id camera ports power cpu thermal sensors storage graphics engines ane benchmark")
 	if got := page.count(t, "h2.section-title"); got != len(sections)+1 {
 		t.Errorf("%d section titles, want %d", got, len(sections)+1)
 	}
@@ -761,8 +761,8 @@ func TestReportsCSVHasOneRowPerReport(t *testing.T) {
 		t.Fatalf("%d rows", len(rows))
 	}
 	row := byColumn(rows)[0]
-	for name, want := range map[string]string{"id": m2, "board": "j416c", "stack": "converged", "omarchy_version": "4.0.0-alpha", "checks": "86",
-		"pass": "37", "fail": "4", "skip": "45", "encryption": "on", "url": labAddress + "/reports/" + m2, "schema_version": "1", "expected_gaps": "2"} {
+	for name, want := range map[string]string{"id": m2, "board": "j416c", "stack": "converged", "omarchy_version": "4.0.0-alpha", "checks": "89",
+		"pass": "37", "fail": "4", "skip": "48", "encryption": "on", "url": labAddress + "/reports/" + m2, "schema_version": "1", "expected_gaps": "2"} {
 		if row[name] != want {
 			t.Errorf("%s is %q, want %q", name, row[name], want)
 		}

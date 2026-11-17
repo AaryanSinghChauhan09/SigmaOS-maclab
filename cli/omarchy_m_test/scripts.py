@@ -64,6 +64,31 @@ DISPLAY_CHECK = {
     "the ALS keyboard loop runs": "input.auto-keyboard-light",
 }
 
+# The automatic keyboard light (omarchy-brightness-keyboard-auto and its user unit) came with the omarchy-mac line;
+# Omarchy doesn't ship it yet. Without the tool, apple-display-check fails both lines that call it: the light sensor
+# is then judged by its lux reading alone. The loop is left as the script reports it, with the tool's absence noted
+# in its evidence. With the tool installed, both lines are judged as the script reports them.
+KEYBOARD_AUTO = "omarchy-brightness-keyboard-auto"
+KEYBOARD_AUTO_AVAILABLE = "ALS and keyboard LED are available"
+KEYBOARD_AUTO_LOOP = "the ALS keyboard loop runs"
+KEYBOARD_AUTO_COMMAND = ["sh", "-c", f"command -v {KEYBOARD_AUTO}"]
+KEYBOARD_AUTO_UNIT = ["systemctl", "--user", "show", f"{KEYBOARD_AUTO}.service", "--property=LoadState", "--value"]
+KEYBOARD_AUTO_MISSING = f"{KEYBOARD_AUTO} isn't installed: Omarchy doesn't ship the automatic keyboard light yet"
+
+# Lab-only auto-unlock (scripts/lab-only-autounlock, docs/encrypted-macs.md) adds one key slot for a key file
+# the initramfs carries, which omarchy-apple-silicon-boot-check counts as the throwaway provisioning slot. It is
+# on when its mkinitcpio drop-in carries /etc/cryptsetup-keys.d/<volume>.key and this boot's command line gave
+# the volume that key: rd.luks.name=<uuid>=<volume> and rd.luks.key=<uuid>=<that key>. That the key file really
+# opens the extra slot goes unchecked: that takes `cryptsetup open --test-passphrase`, and the tool runs cryptsetup
+# only for status and isLuks (safety.py), so the result says the slot wasn't verified.
+EXTRA_KEYSLOT = re.compile(r"throwaway LUKS keyslot still present after provisioning \((\d+) keyslots, expected (\d+)\)")
+AUTOUNLOCK_DROPIN = "/etc/mkinitcpio.conf.d/99-lab-only-autounlock.conf"
+AUTOUNLOCK_KEY = re.compile(r"FILES\+=\((/etc/cryptsetup-keys\.d/([A-Za-z0-9_-]+)\.key)\)")
+CMDLINE = "/proc/cmdline"
+AUTOUNLOCK_PRESENT = "lab-only auto-unlock key slot present (scripts/lab-only-autounlock)"
+AUTOUNLOCK_UNVERIFIED = ("the extra key slot wasn't verified as the lab's auto-unlock key: omarchy-m-test never opens"
+                         " the disk with a key, so only the drop-in and this boot's rd.luks.key= say it is")
+
 _MAC_CHECK_LINE = re.compile(r"^(PASS|FAIL|WARN|SKIP|INFO)\s+(\S+)\s+(.*?)\s*$")
 _AUDIO_LINE = re.compile(r"^(PASS|FAIL) (.+?)\s*$")
 _DISPLAY_LINE = re.compile(r"^(ok|FAIL) - (.+?)\s*$")
@@ -128,6 +153,72 @@ def _why_not(name: str, run) -> str:
     return f"{name} didn't run: {detail}"
 
 
+def _read(host: Host, path: str) -> str | None:
+    try:
+        return host.read_file(path).decode("utf-8", "replace")
+    except OSError:
+        return None
+
+
+def _lab_autounlock(host: Host) -> bool:
+    """Lab-only auto-unlock is enabled and unlocked this boot's root volume."""
+    dropin = (_read(host, AUTOUNLOCK_DROPIN) or "").strip()
+    found = AUTOUNLOCK_KEY.fullmatch(dropin)
+    if not found:
+        return False
+    key, volume = found.groups()
+    words = (_read(host, CMDLINE) or "").split()
+    uuids = {word.split("=")[1] for word in words if re.fullmatch(rf"rd\.luks\.name=[^=]+={re.escape(volume)}", word)}
+    return any(f"rd.luks.key={uuid}={key}" in words for uuid in uuids)
+
+
+def _boot_check(host: Host, lines: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """boot-check's lines, with the one extra key slot lab-only auto-unlock adds skipped rather than failed.
+
+    The boot check stops at its first problem, so the rest of the boot chain goes unchecked: skipped, not passed.
+    Any other extra slot still fails.
+    """
+    for i, (status, raw) in enumerate(lines):
+        extra = EXTRA_KEYSLOT.search(raw) if status == "FAIL" else None
+        if extra and _lab_autounlock(host):
+            slots, expected = int(extra[1]), int(extra[2])
+            if slots == expected + 1:
+                return [*lines[:i], ("SKIP", raw), ("SKIP", f"{AUTOUNLOCK_PRESENT}: it is the extra key slot"),
+                        ("SKIP", AUTOUNLOCK_UNVERIFIED),
+                        ("SKIP", "the boot check stops there, so the rest of the boot chain wasn't checked"), *lines[i + 1:]]
+            if slots > expected + 1:
+                return [*lines[:i + 1], (status, f"{AUTOUNLOCK_PRESENT}: it is one of the extra key slots, not all of them"), *lines[i + 1:]]
+    return lines
+
+
+def _keyboard_auto_missing(host: Host) -> bool:
+    """Neither the command nor its user unit is there; False when either is, or either can't be told."""
+    command = host.run(KEYBOARD_AUTO_COMMAND)
+    if command.returncode not in (1, 127) or command.stdout.strip():
+        return False
+    unit = host.run(KEYBOARD_AUTO_UNIT)
+    return unit.returncode == 0 and unit.stdout.strip() == "not-found"
+
+
+def _keyboard_auto(host: Host, found: dict[str, list[tuple[str, str]]]) -> dict[str, list[tuple[str, str]]]:
+    """apple-display-check's lines, with the sensor's availability line skipped rather than failed when the
+    keyboard-auto tool it calls is missing, so the lux reading alone judges input.ambient-light.
+
+    The loop's lines keep their status: a missing tool is only noted there. Only a failed `--available` line is
+    looked into: when it passed, the tool ran.
+    """
+    if not any(status == "FAIL" for status, _ in found.get(KEYBOARD_AUTO_AVAILABLE, [])):
+        return found
+    if not _keyboard_auto_missing(host):
+        return found
+    adjusted = dict(found)
+    adjusted[KEYBOARD_AUTO_AVAILABLE] = [*(("SKIP", raw) if status == "FAIL" else (status, raw)
+                                          for status, raw in found[KEYBOARD_AUTO_AVAILABLE]), ("SKIP", KEYBOARD_AUTO_MISSING)]
+    if KEYBOARD_AUTO_LOOP in found:
+        adjusted[KEYBOARD_AUTO_LOOP] = [*found[KEYBOARD_AUTO_LOOP], ("INFO", KEYBOARD_AUTO_MISSING)]
+    return adjusted
+
+
 def mac_check(host: Host) -> ScriptResults:
     run = host.run_bundled("mac-check")
     found: dict[str, list[tuple[str, str]]] = {}
@@ -141,6 +232,8 @@ def mac_check(host: Host) -> ScriptResults:
             boot_loader = "limine" if detail.startswith("Limine") else "grub" if detail.startswith("GRUB") else "unknown"
         if key in MAC_CHECK:
             found.setdefault(key, []).append(_timed_out(status, raw, timeout))
+    if "boot-check" in found:
+        found["boot-check"] = _boot_check(host, found["boot-check"])
     ran = (bool(found) or run.returncode in (0, 1)) and not run.timed_out
     results = [
         _from_lines(check_id, found.get(key, []), f"mac-check reported nothing for {key}" if ran else _why_not("mac-check", run))
@@ -149,7 +242,8 @@ def mac_check(host: Host) -> ScriptResults:
     return ScriptResults(results, boot_loader)
 
 
-def _manual_check(host: Host, system: System, name: str, args: list[str], pattern: re.Pattern, mapping: dict[str, str]) -> list[dict]:
+def _manual_check(host: Host, system: System, name: str, args: list[str], pattern: re.Pattern, mapping: dict[str, str],
+                  adjust=None) -> list[dict]:
     if system.stack != "converged":
         why = f"{name} checks the converged image's omarchy-mac integration; not run on {system.describe()}"
         return [_result(check_id, "skip", [why]) for check_id in mapping.values()]
@@ -160,6 +254,8 @@ def _manual_check(host: Host, system: System, name: str, args: list[str], patter
         if match and match.group(2) in mapping:
             status = "PASS" if match.group(1) == "ok" else match.group(1)
             found.setdefault(match.group(2), []).append(_timed_out(status, raw, timeout))
+    if adjust:
+        found = adjust(host, found)
     ran = (bool(found) or run.returncode in (0, 1)) and not run.timed_out
     # A check several descriptions map to gets one result from all their lines.
     results = []
@@ -176,4 +272,4 @@ def audio_check(host: Host, system: System) -> list[dict]:
 
 
 def display_check(host: Host, system: System) -> list[dict]:
-    return _manual_check(host, system, "apple-display-check", ["--read-only"], _DISPLAY_LINE, DISPLAY_CHECK)
+    return _manual_check(host, system, "apple-display-check", ["--read-only"], _DISPLAY_LINE, DISPLAY_CHECK, _keyboard_auto)

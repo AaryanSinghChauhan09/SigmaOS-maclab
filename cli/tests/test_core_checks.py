@@ -13,11 +13,13 @@ import json
 import os
 import unittest
 
+from omarchy_m_test import hardware
 from omarchy_m_test.app import main
 from omarchy_m_test.consent import ACCEPT_PROMPT
 from omarchy_m_test.recording import ENDED, RecordedHost
 from omarchy_m_test.host import CommandResult
 from omarchy_m_test.packages import install_command
+from omarchy_m_test.safety import refusal
 from omarchy_m_test.sections import APPLE
 from tests.desktop import recording
 from tests.live_mac import LiveMac, MacState, live_recording
@@ -97,7 +99,7 @@ class GoldenRunsTest(unittest.TestCase):
         _, _, report = run(M2_MAX)
 
         prefixes = {check["id"].split(".")[0] for check in report["checks"]}
-        self.assertEqual(prefixes, {"system", "boot", "packages", "setup", "hardware", "graphics", "thermal", "sensors", "storage", "engines", "gpu", "video", "display", "audio", "network", "sleep", "input", "sep", "touch-id", "camera", "ports", "power", "cpu", "benchmark"})
+        self.assertEqual(prefixes, {"system", "boot", "packages", "setup", "hardware", "graphics", "thermal", "sensors", "storage", "engines", "gpu", "ane", "video", "display", "audio", "network", "sleep", "input", "sep", "touch-id", "camera", "ports", "power", "cpu", "benchmark"})
         humans = {check["id"] for check in report["checks"] if check["kind"] == "human"}
         self.assertEqual(humans, {"display.notch-bar", "display.brightness-steps", "display.cursor",
                                   "audio.speaker-tone", "audio.headphone-detection", "network.bluetooth-pairing",
@@ -265,6 +267,132 @@ class RootChecksTest(unittest.TestCase):
         self.assertEqual(found["gpu.driver"]["status"], "pass")
 
 
+class LabAutoUnlockTest(unittest.TestCase):
+    """The MacBook Neo in lab job j1116-125420-8bac: scripts/lab-only-autounlock's key slot is the boot check's extra slot."""
+
+    UUID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+    LAB_CMDLINE = f"root=UUID=5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9 rw rd.luks.name={UUID}=root rd.luks.key={UUID}=/etc/cryptsetup-keys.d/root.key quiet\n"
+    DROPIN = "FILES+=(/etc/cryptsetup-keys.d/root.key)\n"
+
+    def boot_check(self, slots=2, dropin=DROPIN, cmdline=LAB_CMDLINE) -> dict:
+        rec = copy.deepcopy(M2_MAX)
+        line = f"FAIL  boot-check       throwaway LUKS keyslot still present after provisioning ({slots} keyslots, expected 1)"
+        edit_lines(rec, MAC_CHECK, lambda lines: [line if " boot-check " in l else l for l in lines])
+        rec["files"]["/etc/mkinitcpio.conf.d/99-lab-only-autounlock.conf"] = None if dropin is None else {"text": dropin}
+        rec["files"]["/proc/cmdline"] = {"text": cmdline}
+
+        _, _, report = run(rec)
+
+        self.assertEqual(errors(SCHEMA, report), [])
+        return results(report)["boot.chain"]
+
+    def test_the_lab_auto_unlock_slot_is_skipped_not_failed(self):
+        chain = self.boot_check()
+
+        self.assertEqual(chain["status"], "skip")
+        self.assertEqual(chain["evidence"][1:], [
+            "lab-only auto-unlock key slot present (scripts/lab-only-autounlock): it is the extra key slot",
+            "the extra key slot wasn't verified as the lab's auto-unlock key: omarchy-m-test never opens the disk with a key,"
+            " so only the drop-in and this boot's rd.luks.key= say it is",
+            "the boot check stops there, so the rest of the boot chain wasn't checked",
+        ])
+
+    def test_the_slot_is_not_proved_with_cryptsetup(self):
+        """Proving the key opens the slot takes `cryptsetup open --test-passphrase`, which the tool never runs."""
+        rec = copy.deepcopy(M2_MAX)
+        line = "FAIL  boot-check       throwaway LUKS keyslot still present after provisioning (2 keyslots, expected 1)"
+        edit_lines(rec, MAC_CHECK, lambda lines: [line if " boot-check " in l else l for l in lines])
+        rec["files"]["/etc/mkinitcpio.conf.d/99-lab-only-autounlock.conf"] = {"text": self.DROPIN}
+        rec["files"]["/proc/cmdline"] = {"text": self.LAB_CMDLINE}
+
+        _, mac, _ = run(rec)
+
+        self.assertEqual([argv for argv in mac.commands_run if "cryptsetup" in argv], [])
+        self.assertIsNotNone(refusal(["sudo", "-n", "cryptsetup", "open", "--test-passphrase", "--key-file",
+                                      "/etc/cryptsetup-keys.d/root.key", "/dev/nvme0n1p5"]))
+
+    def test_an_extra_slot_without_lab_auto_unlock_still_fails(self):
+        chain = self.boot_check(dropin=None)
+
+        self.assertEqual(chain["status"], "fail")
+        self.assertEqual(len(chain["evidence"]), 1)
+
+    def test_a_slot_beyond_the_lab_auto_unlock_one_still_fails(self):
+        chain = self.boot_check(slots=3)
+
+        self.assertEqual(chain["status"], "fail")
+        self.assertEqual(chain["evidence"][1], "lab-only auto-unlock key slot present (scripts/lab-only-autounlock): it is one of the extra key slots, not all of them")
+
+    def test_a_boot_not_given_the_key_still_fails(self):
+        for cmdline in (f"root=UUID=5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9 rw rd.luks.name={self.UUID}=root quiet\n",
+                        self.LAB_CMDLINE.replace(f"rd.luks.name={self.UUID}=root", "rd.luks.name=9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a=root")):
+            with self.subTest(cmdline=cmdline):
+                self.assertEqual(self.boot_check(cmdline=cmdline)["status"], "fail")
+
+
+class KeyboardAutoTest(unittest.TestCase):
+    """The MacBook Air M3 in lab job j1116-131205-2bb9: Omarchy 4.5 ships no omarchy-brightness-keyboard-auto."""
+
+    DISPLAY_CHECK = ["bundled:apple-display-check", "--read-only"]
+    COMMAND = ["sh", "-c", "command -v omarchy-brightness-keyboard-auto"]
+    UNIT = ["systemctl", "--user", "show", "omarchy-brightness-keyboard-auto.service", "--property=LoadState", "--value"]
+    MISSING = "omarchy-brightness-keyboard-auto isn't installed: Omarchy doesn't ship the automatic keyboard light yet"
+
+    def display_check(self, lux="ok", available="FAIL", loop="FAIL", command=False, unit=False) -> tuple[RecordedHost, dict]:
+        """The display check's ALS lines as the current script prints them, on a Mac with or without the tool's command and unit."""
+        rec = copy.deepcopy(M2_MAX)
+        als = [f"{lux} - the ambient light sensor reads lux", f"{available} - ALS and keyboard LED are available",
+               f"{loop} - the ALS keyboard loop runs"]
+        edit_lines(rec, self.DISPLAY_CHECK, lambda lines: [new for l in lines if "the ALS keyboard loop runs" not in l
+                                                           for new in (als if "ALS and keyboard LED" in l else [l])])
+        answer(rec, self.COMMAND, *((0, "/usr/bin/omarchy-brightness-keyboard-auto\n") if command else (1, "")))
+        answer(rec, self.UNIT, 0, "loaded\n" if unit else "not-found\n")
+
+        _, mac, report = run(rec)
+
+        self.assertEqual(errors(SCHEMA, report), [])
+        return mac, results(report)
+
+    def test_without_the_tool_a_sensor_that_reads_lux_passes_and_the_loop_still_fails(self):
+        _, found = self.display_check()
+
+        light, loop = found["input.ambient-light"], found["input.auto-keyboard-light"]
+        self.assertEqual((light["status"], light["classification"]["outcome"]), ("pass", "works"))
+        self.assertEqual(light["evidence"], ["FAIL - ALS and keyboard LED are available", self.MISSING, "ok - the ambient light sensor reads lux"])
+        self.assertEqual((loop["status"], loop["classification"]["outcome"]), ("fail", "fails"))
+        self.assertEqual(loop["evidence"], ["FAIL - the ALS keyboard loop runs", self.MISSING])
+
+    def test_without_the_tool_a_sensor_that_reads_no_lux_still_fails(self):
+        _, found = self.display_check(lux="FAIL")
+
+        self.assertEqual(found["input.ambient-light"]["status"], "fail")
+        self.assertIn("FAIL - the ambient light sensor reads lux", found["input.ambient-light"]["evidence"])
+        self.assertEqual((found["input.auto-keyboard-light"]["status"], found["input.auto-keyboard-light"]["classification"]["outcome"]),
+                         ("fail", "fails"))
+
+    def test_with_the_tool_installed_a_loop_that_isnt_running_still_fails(self):
+        _, found = self.display_check(available="ok", command=True, unit=True)
+
+        loop = found["input.auto-keyboard-light"]
+        self.assertEqual((loop["status"], loop["classification"]["outcome"]), ("fail", "fails"))
+        self.assertEqual(loop["evidence"], ["FAIL - the ALS keyboard loop runs"])
+        self.assertEqual(found["input.ambient-light"]["status"], "pass")
+
+    def test_either_the_command_or_the_unit_counts_as_installed(self):
+        for command, unit in ((True, False), (False, True)):
+            with self.subTest(command=command, unit=unit):
+                _, found = self.display_check(command=command, unit=unit)
+
+                self.assertEqual(found["input.ambient-light"]["status"], "fail")
+                self.assertEqual(found["input.auto-keyboard-light"]["evidence"], ["FAIL - the ALS keyboard loop runs"])
+
+    def test_a_working_tool_is_not_looked_for(self):
+        mac, found = self.display_check(available="ok", loop="ok")
+
+        self.assertNotIn(self.COMMAND, mac.commands_run)
+        self.assertEqual(found["input.auto-keyboard-light"]["status"], "pass")
+
+
 class ScriptFailureTest(unittest.TestCase):
     def test_mac_checks_speakerguardd_pass_fails_speaker_protection_off_the_macbook_neo(self):
         rec = copy.deepcopy(M2_MAX)
@@ -400,6 +528,19 @@ GPU1:
 \tdriverID           = DRIVER_ID_MESA_LLVMPIPE
 \tdriverName         = llvmpipe
 """
+VULKANINFO_BOREALIS = """\
+Devices:
+========
+GPU0:
+\tapiVersion         = 1.4.363
+\tdriverVersion      = 26.2.99
+\tvendorID           = 0x10005
+\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+\tdeviceName         = Apple M4 (G16G B0)
+\tdriverID           = UNKNOWN_VkDriverId_value35
+\tdriverName         = Borealis
+\tdriverInfo         = Mesa 26.3.0-devel (git-8f013bf96b), Borealis, derived from Honeykrisp
+"""
 EGLINFO_SOFTWARE = """\
 GBM platform:
 EGL API version: 1.5
@@ -409,6 +550,30 @@ OpenGL core profile version: 4.5 (Core Profile) Mesa 26.2.3
 
 
 class GpuTest(unittest.TestCase):
+    def test_aurora_borealis_vulkan_driver_counts_as_the_apple_gpu(self):
+        # vulkan-aurora's Borealis, as vulkaninfo prints it on an M4 (J604, 7.3.0-1-1.903-ARCH, 2026-11-14).
+        rec = copy.deepcopy(M2_MAX)
+        answer(rec, ["vulkaninfo", "--summary"], 0, stdout=VULKANINFO_BOREALIS)
+
+        _, _, report = run(rec)
+
+        found = results(report)
+        self.assertEqual(found["gpu.vulkan"]["status"], "pass")
+        self.assertEqual(found["gpu.vulkan"]["evidence"], [
+            "Apple M4 (G16G B0): Borealis, Mesa 26.3.0-devel (git-8f013bf96b), Borealis, derived from Honeykrisp, Vulkan 1.4.363"])
+
+    def test_a_software_vulkan_device_alone_still_fails(self):
+        rec = copy.deepcopy(M2_MAX)
+        answer(rec, ["vulkaninfo", "--summary"], 0, stdout="Devices:\n========\nGPU0:\n\tdeviceName         = llvmpipe (LLVM 21.1.0, 128 bits)\n"
+               "\tdriverID           = DRIVER_ID_MESA_LLVMPIPE\n\tdriverName         = llvmpipe\n")
+
+        _, _, report = run(rec)
+
+        found = results(report)
+        self.assertEqual(found["gpu.vulkan"]["status"], "fail")
+        self.assertEqual(found["gpu.vulkan"]["evidence"][0],
+                         "vulkaninfo lists no Asahi (Honeykrisp or Borealis) device; devices: llvmpipe (LLVM 21.1.0, 128 bits)")
+
     def test_vulkan_and_opengl_versions_are_read_when_the_tools_are_installed(self):
         rec = copy.deepcopy(M2_MAX)
         answer(rec, ["vulkaninfo", "--summary"], 0, stdout=VULKANINFO)
@@ -440,10 +605,35 @@ class GpuTest(unittest.TestCase):
     def test_no_bound_gpu_driver_fails(self):
         rec = copy.deepcopy(M2_MAX)
         rec["dirs"]["/sys/bus/platform/drivers/asahi"] = None
+        rec["dirs"].update(dict.fromkeys(hardware.AURORA_GPU_DRIVERS))
 
         _, _, report = run(rec)
 
-        self.assertEqual(results(report)["gpu.driver"]["evidence"], ["the asahi GPU driver isn't loaded"])
+        self.assertEqual(results(report)["gpu.driver"]["evidence"], ["neither the asahi nor an aurora GPU driver is loaded"])
+
+    def test_an_aurora_kernel_binds_the_gpu_under_its_own_driver_name(self):
+        """Aurora's 7.3 kernels name the GPU driver by generation (aurora-g16 on the M4): its bound GPU passes."""
+        rec = copy.deepcopy(M2_MAX)
+        gpus = [name for name in rec["dirs"]["/sys/bus/platform/drivers/asahi"] if name.endswith(".gpu")]
+        rec["dirs"]["/sys/bus/platform/drivers/asahi"] = None
+        rec["dirs"].update(dict.fromkeys(hardware.AURORA_GPU_DRIVERS))
+        rec["dirs"]["/sys/bus/platform/drivers/aurora-g16"] = ["bind", "uevent", *gpus]
+
+        _, _, report = run(rec)
+
+        driver = results(report)["gpu.driver"]
+        self.assertEqual(driver["status"], "pass")
+        self.assertEqual(driver["evidence"], [f"aurora-g16 driver bound to {', '.join(gpus)}"])
+
+    def test_a_loaded_driver_with_no_gpu_names_every_driver_read(self):
+        rec = copy.deepcopy(M2_MAX)
+        rec["dirs"]["/sys/bus/platform/drivers/asahi"] = ["bind", "uevent"]
+        rec["dirs"].update(dict.fromkeys(hardware.AURORA_GPU_DRIVERS))
+        rec["dirs"]["/sys/bus/platform/drivers/aurora"] = ["bind", "uevent"]
+
+        _, _, report = run(rec)
+
+        self.assertEqual(results(report)["gpu.driver"]["evidence"], ["the asahi, aurora GPU drivers are loaded but bound to no GPU"])
 
 
 class OpenGlToolTest(unittest.TestCase):

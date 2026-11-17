@@ -9,7 +9,7 @@ import (
 )
 
 // The table of the old site's test cases (docs/acceptance/rails-cases.md):
-// each of the 224 is held by a Go test that exists, or dropped by a section
+// each of the 225 is held by a Go test that exists, or dropped by a section
 // of the spec. While site/ is there the table is held against its tests,
 // so the Rails reference cannot be deleted with a case unaccounted for.
 
@@ -43,8 +43,8 @@ func TestEveryRailsCaseIsHeldOrDropped(t *testing.T) {
 		}
 		rows = append(rows, row{file, strings.ReplaceAll(m[1], `\|`, "|"), m[2]})
 	}
-	if len(rows) != 224 {
-		t.Errorf("the table has %d cases, want the old site's 224", len(rows))
+	if len(rows) != 225 {
+		t.Errorf("the table has %d cases, want the old site's 225", len(rows))
 	}
 
 	goTests := map[string]map[string]bool{}

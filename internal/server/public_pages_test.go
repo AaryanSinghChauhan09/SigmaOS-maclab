@@ -667,7 +667,7 @@ func TestAModelPageShowsWhatItsChipIsExpectedToDoAndEachStacksResults(t *testing
 	if page.count(t, "tr.report-row") != 2 {
 		t.Errorf("%d reports listed", page.count(t, "tr.report-row"))
 	}
-	if page.count(t, "tr.report-row .badge-community") != 2 || !page.says(t, "tr.report-row td.nowrap", "37 pass 2 fail 2 gap 45 skip") ||
+	if page.count(t, "tr.report-row .badge-community") != 2 || !page.says(t, "tr.report-row td.nowrap", "37 pass 2 fail 2 gap 48 skip") ||
 		page.count(t, `tr.report-row td.build-cell[data-build="99ace40.361571887310001"]`) != 2 {
 		t.Errorf("the report list: %s", page.sole(t, "table.list tr.report-row td.build-cell").words())
 	}
@@ -729,7 +729,7 @@ func TestAFeaturePageShowsPerChipExpectationsAndResultsPerMac(t *testing.T) {
 		t.Errorf("what is expected: %q", expected)
 	}
 
-	// A feature no check covers says so; Touch ID lists its two checks; an unknown feature is not found.
+	// A feature no check covers says so; Touch ID lists its two checks, the Neural Engine and the GPU their compute checks; an unknown feature is not found.
 	page = l.page("/features/prores-codec")
 	if !page.says(t, ".card", "no check covers it") || page.count(t, "tr#chip-m1 td.expected-none") == 0 {
 		t.Error("prores-codec does not say that no check covers it")
@@ -737,6 +737,13 @@ func TestAFeaturePageShowsPerChipExpectationsAndResultsPerMac(t *testing.T) {
 	page = l.page("/features/touch-id")
 	if !page.says(t, ".card", "touch-id.ready, touch-id.unlock") || !page.says(t, ".card", "No report has tested this yet") {
 		t.Error("touch-id does not list its checks")
+	}
+	page = l.page("/features/neural-engine")
+	if !page.says(t, ".card", "ane.enabled") || !page.says(t, ".card", "ane.works") {
+		t.Error("neural-engine does not list its compute checks")
+	}
+	if page = l.page("/features/gpu"); !page.says(t, ".card", "gpu.mlx") {
+		t.Error("gpu does not list gpu.mlx")
 	}
 	if got := l.status("/features/warp-drive"); got != http.StatusNotFound {
 		t.Errorf("/features/warp-drive: %d", got)
