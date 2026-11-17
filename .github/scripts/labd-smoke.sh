@@ -80,7 +80,7 @@ css=$(grep -oE "$PREFIX/assets/app-[0-9a-f]{16}\.css" <<<"$page" | head -n 1)
 sheet=$(head_of "${FWD[@]}" -H 'Accept-Encoding: br' "$ROOT$css")
 grep -qi '^cache-control: public, max-age=31536000, immutable$' <<<"$sheet" || fail "the stylesheet is not kept a year"
 grep -qi '^content-encoding: br$' <<<"$sheet" || fail "the stylesheet is not sent as Brotli"
-[ "$(c "${FWD[@]}" "$B/terms" | grep -c 'OMARCHY MAC LAB: LENDING A MAC')" = 1 ] || fail "/terms"
+[ "$(c "${FWD[@]}" "$B/terms" | grep -c 'This Mac is for testing: the lab may install anything on it')" = 1 ] || fail "/terms"
 [ "$(c "${FWD[@]}" "$B/privacy" | grep -c 'privacy@omarchy-mac.org')" = 1 ] || fail "/privacy"
 [ "$(code "${FWD[@]}" "$B/api/themes")" = 404 ] || fail "the old interface's themes"
 grep -qi '^x-robots-tag: noindex' <<<"$page" || fail "noindex in Preview"
