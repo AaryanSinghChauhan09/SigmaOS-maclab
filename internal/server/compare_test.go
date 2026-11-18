@@ -183,12 +183,11 @@ func TestCompareCurrentAgainstASet(t *testing.T) {
 			t.Errorf("candidate ops %q lack %q", ops, want)
 		}
 	}
-	d := l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
+	// The Lease the Compare took ends as the job frees the Mac, just after
+	// the Mac is ready again.
+	d := l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady && d.Lease == nil })
 	if d.Kernel != agent.SimKnownGood || d.Health.JobTag != "" {
 		t.Errorf("after the Compare the Mac is on %s (job tag %q)", d.Kernel, d.Health.JobTag)
-	}
-	if d.Lease != nil {
-		t.Errorf("the Lease the Compare took outlived it: %+v", d.Lease)
 	}
 }
 
