@@ -145,6 +145,7 @@ type Sim struct {
 
 	// Candidate boots and macOS boots; see sim_candidate.go.
 	candidateBehavior map[string]string // set name -> how its candidate boot goes
+	candidateSkipped  bool              // the last armed candidate was not booted
 	candidateOps      []string
 	repoMissing       map[string]bool // repo packages the simulated repositories lack
 	macOSNext         bool            // the next boot is macOS, once (asahi-bless --next)
@@ -596,7 +597,10 @@ func (s *Sim) boot(last string) {
 			e.krel = s.DefaultKernel
 		}
 		if s.armed != "" {
-			e = s.staged[strings.TrimPrefix(s.armed, entryPrefix)]
+			armed := s.staged[strings.TrimPrefix(s.armed, entryPrefix)]
+			if s.candidateSkipped = armed.behavior == "candidate-skipped"; !s.candidateSkipped {
+				e = armed
+			}
 			s.armed = "" // GRUB clears the one-shot before booting
 		}
 		s.prevBootID, s.bootID = s.bootID, newID()

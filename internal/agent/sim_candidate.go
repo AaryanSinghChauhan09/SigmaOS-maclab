@@ -17,7 +17,8 @@ import (
 // kernel when it carries a linux-aurora package (its release is the
 // package's version), else the known-good one. SetCandidateBehavior picks
 // how a set's candidate boot goes: "ok" (confirmed), "unconfirmed" (it boots
-// but never confirms: its desktop never comes up), or any kernel behavior
+// but never confirms: its desktop never comes up), "skipped" (the boot
+// loader boots the default entry instead: the candidate never runs), or any kernel behavior
 // of the Sim ("panic" falls back to known-good at once, "omt-regress"
 // confirms but fails Wi-Fi in omarchy-m-test).
 
@@ -140,7 +141,7 @@ func (s *Sim) StageCandidate(ctx context.Context, job string, a api.CandidateSta
 	s.mu.Unlock()
 	cmdline := testCmdline(base+" rootflags=subvol="+api.CandidateSubvolume, api.StageArgs{BootTimeoutSec: a.BootTimeoutSec, WatchdogOpenTimeoutSec: a.WatchdogOpenTimeoutSec}, job)
 	e := simEntry{krel: krel, behavior: behavior, cmdline: cmdline}
-	if behavior == "ok" || behavior == "unconfirmed" {
+	if behavior == "ok" || behavior == "unconfirmed" || behavior == "skipped" {
 		e.behavior = "candidate-" + behavior
 	}
 	s.mu.Lock()
@@ -173,6 +174,11 @@ func (s *Sim) CandidateResult(ctx context.Context) (api.CandidateFailure, error)
 	_, _, cmdline := s.Identity()
 	if IsCandidateBoot(cmdline) {
 		return api.CandidateFailure{}, errors.New("still on the candidate boot")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.candidateSkipped {
+		return api.CandidateFailure{State: api.CandidateBootFailed, Journal: "-- No entries --\n", NotBooted: true}, nil
 	}
 	return api.CandidateFailure{State: api.CandidateBootFailed, Journal: "sim candidate journal: gdm: no session\n"}, nil
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -244,8 +246,31 @@ func TestACandidateThatIsNotConfirmedIsBootFailed(t *testing.T) {
 	if !slices.Contains(ops, "result") || ops[len(ops)-1] != "cleanup" {
 		t.Errorf("candidate ops %v", ops)
 	}
+	if b, err := os.ReadFile(filepath.Join(l.s.jobDir(j.ID), "candidate-b", "journal.txt")); err != nil || !strings.Contains(string(b), "gdm: no session") {
+		t.Errorf("the candidate's journal is not kept with the job: %q %v", b, err)
+	}
 	if sp := rowOf(t, j.Result.Compare, "speedometer-chrome"); sp.Verdict != api.VerdictNotCompared || sp.B != nil {
 		t.Errorf("a row with no B: %+v", sp)
+	}
+	d := l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
+	if d.Kernel != agent.SimKnownGood {
+		t.Errorf("the Mac is on %s", d.Kernel)
+	}
+}
+
+// A candidate that never ran (the Mac booted another entry) is said to be
+// not booted, not to have missed its confirmation.
+func TestACandidateThatNeverRanIsNotBooted(t *testing.T) {
+	l, _ := compareLab(t, nil)
+	l.sim.SetCandidateBehavior("7.3", "skipped")
+	j := l.mustCompare(api.CompareRequest{Before: api.CompareCurrent, After: "7.3"})
+	l.expect(j, api.OutcomeBootFailed)
+	b := j.Result.Compare.Side(api.SideB)
+	if b.Boot != api.CandidateNotBooted || !strings.Contains(b.Error, "the candidate entry was not booted") || strings.Contains(b.Error, "in time") {
+		t.Errorf("B: %+v", b)
+	}
+	if !strings.Contains(j.Summary, "the candidate entry was not booted") {
+		t.Errorf("summary %q", j.Summary)
 	}
 	d := l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady })
 	if d.Kernel != agent.SimKnownGood {

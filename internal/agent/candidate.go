@@ -257,17 +257,16 @@ func candidateRoot(knownGood string) (string, error) {
 	return withDiskUnlock(strings.Join(out, " "), knownGood), nil
 }
 
-// candidateKernel is the kernel a set installs (its modules' pkgbase is one
-// of the set's packages), else the known-good kernel.
+// candidateKernel is the kernel a set installs, as pacman's database in the
+// candidate lists its files, else the known-good kernel. The candidate's
+// modules directories alone can't tell: pacman's hooks keep the running
+// kernel's modules through an upgrade (uname -r, which in pacman's chroot is
+// the known-good kernel), pkgbase and vmlinuz included.
 func candidateKernel(cand string, set api.CandidateSet, knownGood string) (string, error) {
-	dirs, _ := filepath.Glob(filepath.Join(cand, "usr/lib/modules/*/pkgbase"))
-	for _, d := range dirs {
-		base := readTrim(d)
-		for _, p := range set.Packages {
-			if p.Name == base {
-				if _, err := os.Stat(filepath.Join(filepath.Dir(d), "vmlinuz")); err == nil {
-					return filepath.Base(filepath.Dir(d)), nil
-				}
+	for _, p := range set.Packages {
+		for _, krel := range pacmanKernels(cand, p.Name) {
+			if _, err := os.Stat(filepath.Join(cand, "usr/lib/modules", krel, "vmlinuz")); err == nil {
+				return krel, nil
 			}
 		}
 	}
@@ -275,6 +274,41 @@ func candidateKernel(cand string, set api.CandidateSet, knownGood string) (strin
 		return knownGood, nil
 	}
 	return "", errors.New("the candidate has neither a kernel from the set nor the known-good kernel")
+}
+
+// pacmanKernels are the kernel releases whose vmlinuz the package installed
+// in root owns, from pacman's local database.
+func pacmanKernels(root, name string) []string {
+	dbs, _ := filepath.Glob(filepath.Join(root, "var/lib/pacman/local", name+"-*", "desc"))
+	var out []string
+	for _, desc := range dbs {
+		b, err := os.ReadFile(desc)
+		if err != nil || pacmanField(string(b), "NAME") != name {
+			continue
+		}
+		files, err := os.ReadFile(filepath.Join(filepath.Dir(desc), "files"))
+		if err != nil {
+			continue
+		}
+		for _, f := range strings.Split(string(files), "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(f), "usr/lib/modules/"); ok {
+				if krel, ok := strings.CutSuffix(rest, "/vmlinuz"); ok && krel != "" && !strings.Contains(krel, "/") {
+					out = append(out, krel)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// pacmanField is the first line of a %FIELD% section of a pacman database file.
+func pacmanField(desc, field string) string {
+	_, rest, ok := strings.Cut("\n"+desc, "\n%"+field+"%\n")
+	if !ok {
+		return ""
+	}
+	line, _, _ := strings.Cut(rest, "\n")
+	return strings.TrimSpace(line)
 }
 
 const candidateWirePlumber = `# Lab candidate boot: speakers start muted.
@@ -444,7 +478,9 @@ func contains(s []string, v string) bool {
 }
 
 // result is read back on known-good after a candidate boot that was not
-// confirmed: the candidate's journal, from its subvolume.
+// confirmed: the candidate's journal, from its subvolume, and the early
+// unit's note of the Lab boot it watched there. With neither, the candidate
+// never ran.
 func (h *candidateHost) result(ctx context.Context) (api.CandidateFailure, error) {
 	r := api.CandidateFailure{State: api.CandidateBootFailed}
 	if IsCandidateBoot(h.Cmdline) {
@@ -455,9 +491,15 @@ func (h *candidateHost) result(ctx context.Context) (api.CandidateFailure, error
 		return r, err
 	}
 	defer umount()
+	var seen labBootSeen
+	if b, err := os.ReadFile(filepath.Join(h.cand(), h.WorkDir, labBootDir, labBootSeenFile)); err == nil {
+		json.Unmarshal(b, &seen)
+	}
+	r.BootID, r.Deadline = seen.BootID, seen.Deadline
 	dir := filepath.Join(h.cand(), "var/log/journal")
 	if _, err := os.Stat(dir); err != nil {
 		r.Journal = "the candidate has no journal: " + err.Error()
+		r.NotBooted = seen.BootID == ""
 		return r, nil
 	}
 	out, err := h.Run(ctx, nil, "journalctl", "-D", dir, "--no-pager", "-o", "short-monotonic", "-n", "5000")
@@ -465,7 +507,41 @@ func (h *candidateHost) result(ctx context.Context) (api.CandidateFailure, error
 		return r, fmt.Errorf("journalctl: %v: %s", err, lastLines(string(out), 5))
 	}
 	r.Journal = string(out)
+	if j := strings.TrimSpace(r.Journal); (j == "" || j == "-- No entries --") && seen.BootID == "" {
+		r.NotBooted = true
+	}
 	return r, nil
+}
+
+// armLabBoot writes the Lab boot record boot_once arms for job into the
+// candidate as well, when job's entry is the staged candidate. The candidate
+// is a snapshot of @ from before boot_once, so it holds the last Lab boot's
+// record: its early unit would find those deadlines long past and reboot the
+// candidate as soon as it starts.
+func (h *candidateHost) armLabBoot(ctx context.Context, job string, write func(dir string) error) error {
+	var rec candidateRecord
+	b, err := os.ReadFile(filepath.Join(h.WorkDir, candidateState))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, &rec); err != nil {
+		return fmt.Errorf("%s: %w", candidateState, err)
+	}
+	if rec.Job != job {
+		return nil
+	}
+	umount, err := h.mountTop(ctx)
+	if err != nil {
+		return err
+	}
+	defer umount()
+	if _, err := os.Stat(h.cand()); err != nil {
+		return fmt.Errorf("the candidate of %s is gone: %w", job, err)
+	}
+	return write(filepath.Join(h.cand(), h.WorkDir, labBootDir))
 }
 
 // cleanup removes the candidate's entry and, unless kept, its subvolume.
@@ -564,12 +640,50 @@ func (l *Linux) CandidateResult(ctx context.Context) (api.CandidateFailure, erro
 	return h.result(ctx)
 }
 
+// ArmCandidateLabBoot hands write the candidate's Lab boot directory when
+// entry is the staged candidate's.
+func (l *Linux) ArmCandidateLabBoot(ctx context.Context, entry string, write func(dir string) error) error {
+	job, ok := strings.CutPrefix(entry, entryPrefix)
+	if !ok {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(l.WorkDir, candidateState)); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	h, err := l.candidateHost()
+	if err != nil {
+		return err
+	}
+	return h.armLabBoot(ctx, job, write)
+}
+
 func (l *Linux) CleanupCandidate(ctx context.Context, job string, keep bool) error {
 	h, err := l.candidateHost()
 	if err != nil {
 		return err
 	}
 	return h.cleanup(ctx, job, keep)
+}
+
+var reJobFileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// keepCandidateJournal uploads the candidate's journal to the job as
+// <name>/journal.txt.
+func (a *Agent) keepCandidateJournal(ctx context.Context, c api.Command, name, journal string) []string {
+	if !reJobFileName.MatchString(name) || strings.Contains(name, "..") {
+		name = "candidate"
+	}
+	dir, err := a.outDir(c)
+	if err != nil {
+		a.log.Printf("candidate journal: %v", err)
+		return nil
+	}
+	if err := os.WriteFile(filepath.Join(dir, "journal.txt"), []byte(journal), 0o644); err != nil {
+		a.log.Printf("candidate journal: %v", err)
+		os.RemoveAll(dir)
+		return nil
+	}
+	return a.uploadDir(ctx, c.JobID, name, dir)
 }
 
 // candidateSystem is a System that can boot a Package set.
@@ -610,7 +724,15 @@ func (a *Agent) candidate(ctx context.Context, c api.Command) (any, error) {
 		}
 		return cs.CheckCandidate(ctx, s)
 	case api.CmdCandidateResult:
-		return cs.CandidateResult(ctx)
+		var s api.CandidateResultArgs
+		if err := json.Unmarshal(args, &s); err != nil {
+			return nil, err
+		}
+		f, err := cs.CandidateResult(ctx)
+		if err == nil {
+			f.Files = a.keepCandidateJournal(ctx, c, s.Name, f.Journal)
+		}
+		return f, err
 	default:
 		var s api.CandidateCleanupArgs
 		if err := json.Unmarshal(args, &s); err != nil {

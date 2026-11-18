@@ -18,6 +18,7 @@ const (
 const (
 	CandidateConfirmed  = "candidate confirmed"
 	CandidateBootFailed = "boot failed"
+	CandidateNotBooted  = "not booted"
 	CandidateNotYet     = "not yet"
 )
 
@@ -79,9 +80,24 @@ type CandidateCheck struct {
 
 // CandidateFailure is read on the known-good boot after a candidate boot that
 // was not confirmed: the candidate's own journal, from its subvolume.
+// NotBooted is a candidate that never ran: its journal is empty and no early
+// unit noted a Lab boot in it, so the Mac booted another entry (or the
+// candidate's kernel stopped before its root). BootID and Deadline are the
+// early unit's note in the candidate: the boot, and the deadline it rebooted
+// it at, if one did. Files are the job files the journal was kept in.
 type CandidateFailure struct {
-	State   string `json:"state"`
-	Journal string `json:"journal"`
+	State     string   `json:"state"`
+	Journal   string   `json:"journal"`
+	NotBooted bool     `json:"not_booted,omitempty"`
+	BootID    string   `json:"boot_id,omitempty"`
+	Deadline  Deadline `json:"deadline,omitempty"`
+	Files     []string `json:"files,omitempty"`
+}
+
+// CandidateResultArgs name the job files the candidate's journal is kept
+// in: <Name>/journal.txt ("candidate" when empty).
+type CandidateResultArgs struct {
+	Name string `json:"name,omitempty"`
 }
 
 type CandidateCleanupArgs struct {

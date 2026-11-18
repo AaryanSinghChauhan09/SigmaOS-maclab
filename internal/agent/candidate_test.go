@@ -6,11 +6,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 )
@@ -24,6 +30,9 @@ type fakeCandidateMac struct {
 	envs  map[string][]string
 	fail  map[string]error
 	krel  string // the kernel the set's linux package installs
+	// journal is what the candidate's journal holds when read back: "" is a
+	// candidate that never ran.
+	journal string
 }
 
 func newCandidateMac(t *testing.T) *fakeCandidateMac {
@@ -42,7 +51,7 @@ func newCandidateMac(t *testing.T) *fakeCandidateMac {
 	esp := filepath.Join(dir, "esp")
 	os.MkdirAll(filepath.Join(esp, "m1n1"), 0o755)
 	os.WriteFile(filepath.Join(esp, "m1n1", "boot.bin"), []byte("old boot.bin"), 0o644)
-	f := &fakeCandidateMac{t: t, envs: map[string][]string{}, fail: map[string]error{}, krel: "7.3.0-cand"}
+	f := &fakeCandidateMac{t: t, envs: map[string][]string{}, fail: map[string]error{}, krel: "7.3.0-cand", journal: "candidate journal line\n"}
 	scratch := filepath.Join(dir, "scratch")
 	os.MkdirAll(scratch, 0o700)
 	f.h = &candidateHost{
@@ -93,13 +102,20 @@ func (f *fakeCandidateMac) run(ctx context.Context, env []string, name string, a
 		os.MkdirAll(mods, 0o755)
 		os.WriteFile(filepath.Join(mods, "vmlinuz"), []byte("new kernel"), 0o644)
 		os.WriteFile(filepath.Join(mods, "pkgbase"), []byte("linux-asahi\n"), 0o644)
+		db := filepath.Join(root, "var/lib/pacman/local/linux-asahi-1")
+		os.MkdirAll(db, 0o755)
+		os.WriteFile(filepath.Join(db, "desc"), []byte("%NAME%\nlinux-asahi\n\n%VERSION%\n1\n\n"), 0o644)
+		os.WriteFile(filepath.Join(db, "files"), []byte("%FILES%\nusr/\nusr/lib/\nusr/lib/modules/\nusr/lib/modules/"+f.krel+"/\nusr/lib/modules/"+f.krel+"/pkgbase\nusr/lib/modules/"+f.krel+"/vmlinuz\n\n"), 0o644)
 	case "mkinitcpio":
 		out := args[slices.Index(args, "-U")+1]
 		return nil, os.WriteFile(out, []byte("uki for "+strings.Join(args, " ")), 0o644)
 	case "update-m1n1":
 		return nil, os.WriteFile(filepath.Join(f.h.M1N1Dir, "boot.bin"), []byte("new boot.bin"), 0o644)
 	case "journalctl":
-		return []byte("candidate journal line\n"), nil
+		if f.journal == "" {
+			return []byte("-- No entries --\n"), nil
+		}
+		return []byte(f.journal), nil
 	}
 	return nil, nil
 }
@@ -405,5 +421,198 @@ func TestTheAuditLogSaysWhatACandidateBootDoes(t *testing.T) {
 	}
 	if windowGated(api.CmdCandidateCleanup) || windowGated(api.CmdCandidateResult) || !windowGated(api.CmdCandidateStage) {
 		t.Fatal("window gating")
+	}
+}
+
+// pacman's hooks keep the running kernel's modules through a kernel upgrade
+// (kernel-modules-hook: uname -r, which in pacman's chroot is the Known-good
+// kernel), so the candidate still holds the Known-good release, pkgbase and
+// vmlinuz included, and it sorts before the set's. The candidate boots the
+// kernel the set's package installed, as pacman's database lists it.
+func TestACandidateBootsTheKernelItsSetInstalledNotTheOneKeptForTheRunningSystem(t *testing.T) {
+	f := newCandidateMac(t)
+	os.WriteFile(filepath.Join(f.h.Top, "@/usr/lib/modules/7.2.11-kg/pkgbase"), []byte("linux-asahi\n"), 0o644)
+	res, err := f.h.stage(context.Background(), "j1", candidateArgs(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := f.ran("mkinitcpio")
+	if res.KernelRelease != f.krel || mk[slices.Index(mk, "-k")+1] != f.krel {
+		t.Fatalf("the candidate boots %s (mkinitcpio %q), want the set's %s", res.KernelRelease, mk, f.krel)
+	}
+}
+
+// A set without a kernel boots the Known-good kernel from the candidate.
+func TestACandidateWithoutAKernelInItsSetBootsTheKnownGoodKernel(t *testing.T) {
+	f := newCandidateMac(t)
+	res, err := f.h.stage(context.Background(), "j1", candidateArgs(t, candidatePkg(t, "mesa-aurora", "mesa bytes")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.KernelRelease != "7.2.11-kg" {
+		t.Fatalf("kernel %s", res.KernelRelease)
+	}
+}
+
+// The candidate is a snapshot of @ taken before boot_once writes the Lab
+// boot's record, so it holds the last Lab boot's: its early unit would see
+// that record's deadlines long past and reboot the candidate as soon as it
+// starts, back to the default entry. boot_once writes the record it arms
+// into the candidate too, and forgets the last boot's contact and note there.
+func TestArmingACandidateWritesItsLabBootRecordIntoTheCandidate(t *testing.T) {
+	f := newCandidateMac(t)
+	old := filepath.Join(f.h.Top, "@", f.h.WorkDir, labBootDir)
+	os.MkdirAll(old, 0o755)
+	stale := labBootDeadlines{Armed: time.Unix(1000, 0), NoContact: time.Unix(2000, 0), Ceiling: time.Unix(3000, 0)}
+	writeLabBootDeadlines(filepath.Join(old, labBootDeadlineFile), stale)
+	os.WriteFile(filepath.Join(old, labBootContactFile), []byte("old-boot\n"), 0o644)
+	os.WriteFile(filepath.Join(old, labBootSeenFile), []byte(`{"boot_id":"old-boot","deadline":"ceiling"}`), 0o644)
+	if _, err := f.h.stage(context.Background(), "j1", candidateArgs(t)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+	d := newLabBootDeadlines(now, 5*time.Minute, now.Add(time.Hour))
+	f.calls = nil
+	if err := f.h.armLabBoot(context.Background(), "j1", func(dir string) error { return writeLabBootRecord(dir, d) }); err != nil {
+		t.Fatal(err)
+	}
+	in := filepath.Join(f.h.Top, api.CandidateSubvolume, f.h.WorkDir, labBootDir)
+	got, err := readLabBootDeadlines(filepath.Join(in, labBootDeadlineFile))
+	if err != nil || !got.Ceiling.Equal(d.Ceiling) || !got.NoContact.Equal(d.NoContact) {
+		t.Fatalf("the candidate's record is %+v (%v), want %+v", got, err, d)
+	}
+	for _, n := range []string{labBootContactFile, labBootSeenFile} {
+		if _, err := os.Stat(filepath.Join(in, n)); err == nil {
+			t.Errorf("the candidate keeps the last Lab boot's %s", n)
+		}
+	}
+	if f.ran("mount") == nil || f.ran("umount") == nil {
+		t.Fatalf("calls %q", f.calls)
+	}
+	// Another job's entry is no candidate: nothing is mounted or written.
+	f.calls = nil
+	called := false
+	if err := f.h.armLabBoot(context.Background(), "j2", func(string) error { called = true; return nil }); err != nil || called || len(f.calls) != 0 {
+		t.Fatalf("armed j2: %v, wrote %v, calls %q", err, called, f.calls)
+	}
+}
+
+// Back on known-good, a candidate whose journal is empty and whose Lab boot
+// record no early unit ever noted never ran: the result says so.
+func TestACandidateThatNeverRanIsReadBackAsNotBooted(t *testing.T) {
+	f := newCandidateMac(t)
+	f.journal = ""
+	if _, err := f.h.stage(context.Background(), "j1", candidateArgs(t)); err != nil {
+		t.Fatal(err)
+	}
+	f.h.Cmdline = candidateKG
+	r, err := f.h.result(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.NotBooted || r.State != api.CandidateBootFailed {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// A candidate that ran but was rebooted by its early unit says which
+// deadline did it.
+func TestACandidateRebootedAtADeadlineSaysWhich(t *testing.T) {
+	f := newCandidateMac(t)
+	f.journal = ""
+	if _, err := f.h.stage(context.Background(), "j1", candidateArgs(t)); err != nil {
+		t.Fatal(err)
+	}
+	in := filepath.Join(f.h.Top, api.CandidateSubvolume, f.h.WorkDir, labBootDir)
+	os.MkdirAll(in, 0o755)
+	os.WriteFile(filepath.Join(in, labBootSeenFile), []byte(`{"boot_id":"cand-boot","deadline":"no_contact"}`), 0o644)
+	f.h.Cmdline = candidateKG
+	r, err := f.h.result(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.NotBooted || r.Deadline != api.DeadlineNoContact || r.BootID != "cand-boot" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// candidateArmSystem is a Sim whose staged entry is a Candidate boot with
+// its Lab boot directory at dir.
+type candidateArmSystem struct {
+	*Sim
+	dir   string
+	entry string
+	err   error
+}
+
+func (s *candidateArmSystem) ArmCandidateLabBoot(ctx context.Context, entry string, write func(string) error) error {
+	s.entry = entry
+	if s.err != nil {
+		return s.err
+	}
+	return write(s.dir)
+}
+
+// boot_once writes the same Lab boot record into the candidate as its own,
+// and fails, as a failed arm does, if it cannot.
+func TestBootOnceGivesACandidateTheLabBootRecordItArms(t *testing.T) {
+	work := t.TempDir()
+	sys := &candidateArmSystem{Sim: NewSim(t.TempDir()), dir: filepath.Join(t.TempDir(), "cand", labBootDir)}
+	os.MkdirAll(sys.dir, 0o755)
+	os.WriteFile(filepath.Join(sys.dir, labBootContactFile), []byte("old-boot\n"), 0o644)
+	a := New(&Config{Server: "http://127.0.0.1:1", Secret: "test", WorkDir: work}, sys, log.New(io.Discard, "", 0))
+	args := api.BootOnceArgs{Entry: entryPrefix + "j1", BootTimeoutSec: 300, JobSec: 3600}
+	if err := a.armLabBoot(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	mine, _ := os.ReadFile(filepath.Join(work, labBootDir, labBootDeadlineFile))
+	theirs, _ := os.ReadFile(filepath.Join(sys.dir, labBootDeadlineFile))
+	if len(mine) == 0 || string(mine) != string(theirs) || sys.entry != args.Entry {
+		t.Fatalf("own record %s, candidate's %s, entry %q", mine, theirs, sys.entry)
+	}
+	if _, err := os.Stat(filepath.Join(sys.dir, labBootContactFile)); err == nil {
+		t.Fatal("the candidate keeps the last Lab boot's contact")
+	}
+	sys.err = errors.New("the candidate subvolume is gone")
+	if err := a.armLabBoot(context.Background(), args); err == nil || !strings.Contains(err.Error(), "the candidate subvolume is gone") {
+		t.Fatalf("arm: %v", err)
+	}
+}
+
+// candidate_result keeps the candidate's journal with the job, as a job file
+// under the name labd gives (one per side of a Compare).
+func TestCandidateResultKeepsTheJournalWithTheJob(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		files = map[string]string{}
+	)
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if r.URL.Path == "/api/agent/upload" && r.URL.Query().Get("job") == "j1" {
+			mu.Lock()
+			files[r.URL.Query().Get("name")] = string(b)
+			mu.Unlock()
+		}
+		w.Write([]byte("ok"))
+	}))
+	t.Cleanup(hs.Close)
+	a := New(&Config{Server: hs.URL, Secret: "test", WorkDir: t.TempDir()}, NewSim(t.TempDir()), log.New(io.Discard, "", 0))
+	args, _ := json.Marshal(api.CandidateResultArgs{Name: "candidate-b"})
+	out, err := a.candidate(context.Background(), api.Command{ID: "c1", Kind: api.CmdCandidateResult, JobID: "j1", Args: args})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := out.(api.CandidateFailure)
+	mu.Lock()
+	got := files["candidate-b/journal.txt"]
+	mu.Unlock()
+	if !slices.Equal(f.Files, []string{"candidate-b/journal.txt"}) || !strings.Contains(got, "gdm: no session") {
+		t.Fatalf("files %q, uploaded %q", f.Files, got)
+	}
+	// A name that is no plain file name keeps the journal under "candidate".
+	args, _ = json.Marshal(api.CandidateResultArgs{Name: "../x"})
+	out, _ = a.candidate(context.Background(), api.Command{ID: "c2", Kind: api.CmdCandidateResult, JobID: "j1", Args: args})
+	if f := out.(api.CandidateFailure); !slices.Equal(f.Files, []string{"candidate/journal.txt"}) {
+		t.Fatalf("files %q", f.Files)
 	}
 }

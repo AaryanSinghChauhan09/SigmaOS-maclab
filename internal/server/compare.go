@@ -350,19 +350,31 @@ func (r *jobRun) compareSide(ctx context.Context, label, name string, set *api.P
 		cleanup()
 		return fail(api.OutcomeInfra, "back to the known-good system: "+err.Error())
 	}
+	var f api.CandidateFailure
 	if !confirmed {
-		var f api.CandidateFailure
-		if err := v.call(ctx, api.CmdCandidateResult, j.ID, nil, 2*time.Minute, &f); err != nil {
+		name := "candidate-" + strings.ToLower(label)
+		if err := v.call(ctx, api.CmdCandidateResult, j.ID, api.CandidateResultArgs{Name: name}, 2*time.Minute, &f); err != nil {
 			r.ev("side %s: reading the candidate's journal: %v", label, err)
 		} else {
 			side.Journal = f.Journal
+			if len(f.Files) > 0 {
+				r.ev("side %s: the candidate's journal is kept in %s", label, strings.Join(f.Files, ", "))
+			}
 		}
 	}
 	cleanup()
-	if !confirmed {
-		return fail(api.OutcomeBootFailed, "set "+set.Name+" did not boot to a confirmed candidate (desktop up, no failed units) in time: "+api.CandidateBootFailed)
+	switch {
+	case confirmed:
+		return run
+	case f.NotBooted:
+		side.Boot = api.CandidateNotBooted
+		return fail(api.OutcomeBootFailed, "set "+set.Name+": the candidate entry was not booted: the Mac came back on its known-good system "+
+			"and the candidate never ran (its journal is empty and it noted no Lab boot)")
+	case f.Deadline != "":
+		return fail(api.OutcomeBootFailed, "set "+set.Name+" did not boot to a confirmed candidate (desktop up, no failed units): "+
+			"the candidate's early unit rebooted it at its "+f.Deadline.String()+" deadline: "+api.CandidateBootFailed)
 	}
-	return run
+	return fail(api.OutcomeBootFailed, "set "+set.Name+" did not boot to a confirmed candidate (desktop up, no failed units) in time: "+api.CandidateBootFailed)
 }
 
 // resolveSet is every package of the set as a file with its sha256: a
