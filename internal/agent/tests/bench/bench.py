@@ -105,12 +105,17 @@ def parse_geekbench(text):
     return {"single": int(s.group(1)), "multi": int(m.group(1))}
 
 
+CLPEAK_UNITS = {"": 1.0, "MFLOPS": 1e-3, "GFLOPS": 1.0, "TFLOPS": 1e3}
+
+
 def parse_clpeak(text):
-    """The best single-precision GFLOPS of the first device."""
-    sect = re.search(r"Single-precision compute \(GFLOPS\)\n((?:\s+\w+\s*:\s*[\d.]+\n?)+)", text)
+    """The best single-precision GFLOPS of the first device. clpeak 1.x heads
+    the section "(GFLOPS)"; 3.x gives each value its own unit."""
+    sect = re.search(r"Single-precision compute(?: \(GFLOPS\))?\n((?:\s+\w+\s*:\s*[\d.]+(?: [MGT]FLOPS)?\n?)+)", text)
     if not sect:
         raise ParseError("no single-precision section from clpeak")
-    return max(float(v) for v in re.findall(r":\s*([\d.]+)", sect.group(1)))
+    return max(round(float(v) * CLPEAK_UNITS[u], 3)
+               for v, u in re.findall(r":\s*([\d.]+)\s*([MGT]FLOPS)?", sect.group(1)))
 
 
 def parse_vkpeak(text):
@@ -573,12 +578,30 @@ APPS = {
     },
 }
 
+# Headless on the Mac's GPU: a headed window draws only while the compositor
+# shows it, and a Lab boot locks the session at once (idle locks it later), so
+# a headed page never gets a frame. The screen is the same on every Mac: 1920
+# by 1080 at a device pixel ratio of 2, which gives MotionMark its large stage.
 BROWSER_FLAGS = [
     "--no-first-run", "--no-default-browser-check", "--disable-sync", "--disable-extensions",
     "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
-    "--disable-backgrounding-occluded-windows", "--ozone-platform=wayland", "--start-maximized",
+    "--headless", "--enable-gpu", "--window-size=1920,1080",
+    "--screen-info={0,0 3840x2160 devicePixelRatio=2}",
     "--remote-debugging-port=0", "--remote-allow-origins=*",
 ]
+
+GL_RENDERER = ("(() => { const gl = document.createElement('canvas').getContext('webgl2');"
+               " const e = gl && gl.getExtension('WEBGL_debug_renderer_info');"
+               " return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : null; })()")
+
+
+def software_gl(renderer):
+    """Why the browser's GL renderer is not the Mac's GPU, or None if it is."""
+    if not renderer:
+        return "the browser has no WebGL renderer"
+    if re.search(r"swiftshader|llvmpipe|softpipe|software", renderer, re.I):
+        return f"the browser draws in software ({renderer})"
+    return None
 
 
 def _wait(host, fn, timeout, step=2, what="the page"):
@@ -604,6 +627,9 @@ def browser_bench(app, browser):
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=10) as r:
                 pages = [p for p in json.load(r) if p.get("type") == "page"]
             cdp = CDP(pages[0]["webSocketDebuggerUrl"])
+            sw = software_gl(_try_for(h, lambda: cdp.eval(GL_RENDERER), 30))
+            if sw:
+                raise RuntimeError(sw)
             if "ready" in a:
                 _wait(h, lambda: cdp.eval(a["ready"]), 300, 2, "the benchmark's start button")
                 cdp.eval(a["start"])
@@ -621,6 +647,16 @@ def browser_bench(app, browser):
         ver = f"{ctx.version(app)} ({browser} {ctx.version(browser)})"
         return [Measure(f"{app}-{browser}", ver, value, a["unit"], True, spread)]
     return Bench(fn, (app, browser))
+
+
+def _try_for(host, fn, seconds, step=1):
+    """fn's first truthy value within seconds, else None."""
+    end = host.now() + seconds
+    while True:
+        v = fn()
+        if v or host.now() >= end:
+            return v
+        host.sleep(step)
 
 
 def _try(f, *a):
@@ -671,11 +707,12 @@ VKMARK_SCENES = ["vertex:device-local=true", "texture:anisotropy=0", "shading:sh
 
 def vkmark(ctx):
     pre = ctx.unpack("vkmark")
+    libs = ctx.unpack("assimp") / "usr/lib"
     cmd = [str(ctx.entry("vkmark")), "--winsys", "wayland", "--winsys-dir", str(pre / "usr/lib/vkmark"),
            "--data-dir", str(pre / "usr/share/vkmark")]
     for s in VKMARK_SCENES:
         cmd += ["-b", f"{s}:duration=5"]
-    r = _ok(ctx.host.run(cmd, timeout=300, gui=True), "vkmark")
+    r = _ok(ctx.host.run(cmd, timeout=300, gui=True, env={"LD_LIBRARY_PATH": str(libs)}), "vkmark")
     return [Measure("vkmark", ctx.version("vkmark"), parse_score(r.out, "vkmark"), "score", True)]
 
 
@@ -717,10 +754,10 @@ def vkpeak(ctx):
 
 
 def clpeak(ctx):
-    r = ctx.host.run([str(ctx.entry("clpeak")), "--compute-sp"], timeout=600,
+    r = ctx.host.run([str(ctx.entry("clpeak")), "--opencl", "--single-precision-compute"], timeout=600,
                      env={"RUSTICL_ENABLE": "asahi"}, gui=True)
-    if r.code != 0 and "no platforms" in r.out.lower():
-        raise Skip("no OpenCL platform")
+    if "no platforms" in r.out.lower():
+        raise Skip("no OpenCL platform (Mesa's rusticl is not installed)")
     return [Measure("clpeak-sp", ctx.version("clpeak"), parse_clpeak(_ok(r, "clpeak").out), "GFLOPS", True)]
 
 
@@ -755,7 +792,7 @@ BENCHES = {
     "jetstream-chrome": browser_bench("jetstream", "chrome"),
     "7zip": Bench(seven_zip, ("7zip",)),
     "glmark2": Bench(glmark2, ("glmark2",)),
-    "vkmark": Bench(vkmark, ("vkmark",)),
+    "vkmark": Bench(vkmark, ("vkmark", "assimp")),
     "boot": Bench(boot),
     "geekbench": Bench(geekbench, ("geekbench",)),
     "kernel-compile": Bench(kernel_compile, ("kernel",)),

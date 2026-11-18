@@ -4,6 +4,7 @@ import os
 import pathlib
 import socket
 import sys
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -70,6 +71,17 @@ CLPEAK = """Platform: rusticl
       half    : 9999.99
 """
 
+CLPEAK_3 = """Backend: OpenCL
+  Device 0: Apple M2 Max (G14C B1)
+    Driver version   : 26.2.99
+
+    Single-precision compute
+      float    : 9.45 TFLOPS
+      float2   : 10.2 TFLOPS
+      float4   : 980.5 GFLOPS
+
+"""
+
 VKPEAK = """device       = Apple M2 Max (G14C B1)
 
 fp32-scalar  = 3456.78 GFLOPS
@@ -111,6 +123,9 @@ class Parsers(unittest.TestCase):
 
     def test_clpeak_best_single_precision(self):
         self.assertAlmostEqual(bench.parse_clpeak(CLPEAK), 3456.78)
+
+    def test_clpeak_3_best_single_precision_in_gflops(self):
+        self.assertAlmostEqual(bench.parse_clpeak(CLPEAK_3), 10200.0)
 
     def test_vkpeak_fp32_vec4(self):
         self.assertAlmostEqual(bench.parse_vkpeak(VKPEAK), 3567.89)
@@ -293,6 +308,82 @@ class Runner(unittest.TestCase):
         self.assertEqual(out[0]["cool_down"], {"seconds": 12, "temp_c": 48.5})
 
 
+def pacman_pkg(cache, sha, files):
+    """A pacman package in the cache under sha: {path: (text, mode) or ('->', target)}."""
+    with tempfile.TemporaryDirectory() as d:
+        for rel, (a, b) in files.items():
+            p = pathlib.Path(d, rel)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if a == "->":
+                os.symlink(b, p)
+            else:
+                p.write_text(a)
+                os.chmod(p, b)
+        with tarfile.open(pathlib.Path(cache, sha), "w:xz") as t:
+            for rel in files:
+                t.add(pathlib.Path(d, rel), arcname=rel, recursive=False)
+
+
+class Packages(unittest.TestCase):
+    """Programs run from their pinned package unpacked in a temp dir, never installed."""
+
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.cache = pathlib.Path(self.d.name, "cache")
+        self.work = pathlib.Path(self.d.name, "work")
+        self.cache.mkdir()
+        self.work.mkdir()
+        self.m = bench.load_manifest(HERE / "benchmarks.json")
+        self.ctx = bench.Ctx(bench.Host(), self.m, self.cache, self.work)
+
+    def tearDown(self):
+        self.d.cleanup()
+
+    def test_7zip_runs_the_program_not_the_wrapper_that_names_usr_lib(self):
+        out = "\n".join("echo '" + l + "'" for l in SEVEN_ZIP.strip().split("\n"))
+        pacman_pkg(self.cache, self.m["7zip"]["sha256"], {
+            "usr/bin/7z": ('#!/bin/sh\nexec /usr/lib/7zip/7z "$@"\n', 0o755),
+            "usr/lib/7zip/7z": ("#!/bin/sh\n" + out + "\n", 0o755),
+            "usr/lib/7zip/7z.so": ("", 0o644),
+        })
+        ms = bench.seven_zip(self.ctx)
+        self.assertEqual(ms[0].value, 50450)
+
+    def test_vkmark_finds_the_pinned_assimp(self):
+        self.assertIn("assimp", bench.BENCHES["vkmark"].needs)
+        self.assertIn("assimp", bench.needs("default"))
+        score = "\n".join("echo '" + l + "'" for l in VKMARK.strip().split("\n"))
+        pacman_pkg(self.cache, self.m["vkmark"]["sha256"], {
+            "usr/bin/vkmark": ("#!/bin/sh\nfor d in $(echo \"$LD_LIBRARY_PATH\" | tr : ' '); do\n"
+                               "  [ -e \"$d/libassimp.so.6\" ] && { " + score.replace("\n", "; ") + "; exit 0; }\ndone\n"
+                               "echo 'error while loading shared libraries: libassimp.so.6'; exit 127\n", 0o755),
+            "usr/lib/vkmark/wayland.so": ("", 0o644),
+            "usr/share/vkmark/models/cube.ply": ("", 0o644),
+        })
+        pacman_pkg(self.cache, self.m["assimp"]["sha256"], {
+            "usr/lib/libassimp.so.6.0.6": ("", 0o755),
+            "usr/lib/libassimp.so.6": ("->", "libassimp.so.6.0.6"),
+        })
+        ms = bench.vkmark(self.ctx)
+        self.assertEqual(ms[0].value, 5127)
+
+    def clpeak_pkg(self, out):
+        lines = "\n".join("echo '" + l + "'" for l in out.strip().split("\n"))
+        pacman_pkg(self.cache, self.m["clpeak"]["sha256"], {
+            "usr/bin/clpeak": ('#!/bin/sh\n[ "$*" = "--opencl --single-precision-compute" ] || '
+                               '{ echo "clpeak: unknown option $1"; exit 1; }\n' + lines + "\n", 0o755),
+        })
+
+    def test_clpeak_3_runs_opencl_single_precision(self):
+        self.clpeak_pkg(CLPEAK_3)
+        self.assertAlmostEqual(bench.clpeak(self.ctx)[0].value, 10200.0)
+
+    def test_clpeak_with_no_opencl_platform_is_skipped(self):
+        self.clpeak_pkg("Backend: OpenCL\nclGetPlatformIDs (-1001)\nno platforms found")
+        with self.assertRaises(bench.Skip):
+            bench.clpeak(self.ctx)
+
+
 class Browser(unittest.TestCase):
     def test_websocket_round_trip(self):
         a, b = socket.socketpair()
@@ -320,6 +411,21 @@ class Browser(unittest.TestCase):
         self.assertEqual(bench.page_result({"value": 25.3, "spread": 0.4}), (25.3, 0.4))
         with self.assertRaises(bench.ParseError):
             bench.page_result({"value": None})
+
+    def test_browsers_run_headless_on_the_gpu_so_a_locked_session_still_draws(self):
+        # A Lab boot locks the session at once and idle locks it later; a
+        # headed window then gets no frames and the pages never finish.
+        f = bench.BROWSER_FLAGS
+        self.assertIn("--headless", f)
+        self.assertIn("--enable-gpu", f)
+        self.assertFalse([x for x in f if x.startswith("--ozone-platform")])
+        self.assertIn("--screen-info={0,0 3840x2160 devicePixelRatio=2}", f)
+
+    def test_software_rendering_is_refused(self):
+        self.assertIsNone(bench.software_gl("ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)"))
+        for r in ("ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)",
+                  "ANGLE (Mesa, llvmpipe (LLVM 19.1.7, 128 bits), OpenGL ES 3.2)", None):
+            self.assertTrue(bench.software_gl(r))
 
     def test_devtools_port_file(self):
         with tempfile.TemporaryDirectory() as d:

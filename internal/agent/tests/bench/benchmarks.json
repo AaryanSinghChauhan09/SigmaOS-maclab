@@ -67,7 +67,8 @@
       "url": "http://mirror.archlinuxarm.org/aarch64/extra/7zip-26.06-1-aarch64.pkg.tar.xz",
       "sha256": "7cc60b39b6ae8211622a39cf232e5e65699e9c63120bf4e91fa3903109ac8c91",
       "size": 1497888,
-      "entry": "usr/bin/7z"
+      "entry": "usr/lib/7zip/7z",
+      "note": "usr/bin/7z is a wrapper that execs /usr/lib/7zip/7z, which is not there when the package is only unpacked"
     },
     {
       "name": "glmark2",
@@ -85,7 +86,18 @@
       "url": "http://mirror.archlinuxarm.org/aarch64/extra/vkmark-1%3A2025.01-2-aarch64.pkg.tar.xz",
       "sha256": "f647e92a847297df6f08dc9eab6084a5d453fb2423190b3afcec106b2edc990f",
       "size": 747456,
-      "entry": "usr/bin/vkmark"
+      "entry": "usr/bin/vkmark",
+      "note": "links libassimp.so.6, which Omarchy does not install: the runner puts the pinned assimp on LD_LIBRARY_PATH"
+    },
+    {
+      "name": "assimp",
+      "version": "6.0.6-1",
+      "kind": "pacman",
+      "url": "http://mirror.archlinuxarm.org/aarch64/extra/assimp-6.0.6-1-aarch64.pkg.tar.xz",
+      "sha256": "b0151109d8b69f4623e010b2d882da5ca18bcee74c87e4e5b75bda57f263d291",
+      "size": 3035212,
+      "entry": "usr/lib/libassimp.so.6",
+      "note": "vkmark's one library missing from Omarchy (it needs only zlib, glibc and libstdc++ beside it)"
     },
     {
       "name": "clpeak",

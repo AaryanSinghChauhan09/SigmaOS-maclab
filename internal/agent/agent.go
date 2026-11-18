@@ -975,7 +975,7 @@ func (a *Agent) exec(ctx context.Context, c api.Command) (any, *afterAck, error)
 		if err := a.warnBeforeReboot(ctx, c, args); err != nil {
 			return nil, nil, err
 		}
-		if err := a.armLabBoot(args); err != nil {
+		if err := a.armLabBoot(ctx, args); err != nil {
 			return nil, nil, err
 		}
 		if err := a.sys.BootOnce(args.Entry); err != nil {
@@ -1165,9 +1165,16 @@ func (a *Agent) uploadScreen(ctx context.Context, path string) (string, error) {
 
 func (a *Agent) labBootDir() string { return filepath.Join(a.workDir(), labBootDir) }
 
+// candidateLabBooter is a System whose staged entry may be a Candidate
+// boot, which runs from a snapshot with its own Lab boot directory.
+type candidateLabBooter interface {
+	ArmCandidateLabBoot(ctx context.Context, entry string, write func(dir string) error) error
+}
+
 // armLabBoot writes the deadline record the early unit enforces on the Lab
-// boot labd is about to start, and forgets the last one.
-func (a *Agent) armLabBoot(args api.BootOnceArgs) error {
+// boot labd is about to start, and forgets the last one: in lab-agent's work
+// dir and, for a Candidate boot, in the candidate's.
+func (a *Agent) armLabBoot(ctx context.Context, args api.BootOnceArgs) error {
 	if args.BootTimeoutSec <= 0 || args.JobSec <= 0 {
 		return errors.New("a Lab boot needs its deadlines: boot_timeout_sec and job_sec")
 	}
@@ -1178,14 +1185,14 @@ func (a *Agent) armLabBoot(args api.BootOnceArgs) error {
 	d := newLabBootDeadlines(now, time.Duration(args.BootTimeoutSec)*time.Second, jobEnd)
 	d.WindowGated = a.volunteer()
 	d.NeedsFull = a.volunteer() && testsNeedFull(args.Tests)
-	dir := a.labBootDir()
-	for _, f := range []string{labBootContactFile, labBootSeenFile} {
-		if err := os.Remove(filepath.Join(dir, f)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("forget the last Lab boot: %w", err)
-		}
+	write := func(dir string) error { return writeLabBootRecord(dir, d) }
+	if err := write(a.labBootDir()); err != nil {
+		return err
 	}
-	if err := writeLabBootDeadlines(filepath.Join(dir, labBootDeadlineFile), d); err != nil {
-		return fmt.Errorf("deadline record: %w", err)
+	if cs, ok := a.sys.(candidateLabBooter); ok {
+		if err := cs.ArmCandidateLabBoot(ctx, args.Entry, write); err != nil {
+			return fmt.Errorf("the candidate's Lab boot record: %w", err)
+		}
 	}
 	a.log.Printf("Lab boot deadlines: no contact %s, ceiling %s", d.NoContact.Format(time.RFC3339), d.Ceiling.Format(time.RFC3339))
 	return nil

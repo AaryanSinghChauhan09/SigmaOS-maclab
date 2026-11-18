@@ -141,6 +141,20 @@ func (d labBootDeadlines) due(now time.Time, contacted bool) api.Deadline {
 	return ""
 }
 
+// writeLabBootRecord makes d the record in a Lab boot directory and forgets
+// the last Lab boot's contact and the early unit's note of it.
+func writeLabBootRecord(dir string, d labBootDeadlines) error {
+	for _, f := range []string{labBootContactFile, labBootSeenFile} {
+		if err := os.Remove(filepath.Join(dir, f)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("forget the last Lab boot: %w", err)
+		}
+	}
+	if err := writeLabBootDeadlines(filepath.Join(dir, labBootDeadlineFile), d); err != nil {
+		return fmt.Errorf("deadline record: %w", err)
+	}
+	return nil
+}
+
 func writeLabBootDeadlines(path string, d labBootDeadlines) error {
 	return writeJSONAtomic(path, d)
 }

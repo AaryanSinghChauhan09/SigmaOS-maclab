@@ -56,7 +56,8 @@ type CompareSide struct {
 	Side string `json:"side"`
 	Set  string `json:"set"` // a set's name, CompareCurrent, or "macOS"
 	// Boot is how the side booted: "known-good", CandidateConfirmed,
-	// CandidateBootFailed, or for macOS the run's state.
+	// CandidateBootFailed, CandidateNotBooted (the candidate never ran), or
+	// for macOS the run's state.
 	Boot        string             `json:"boot,omitempty"`
 	Kernel      string             `json:"kernel,omitempty"`
 	BootSeconds float64            `json:"boot_seconds,omitempty"`
