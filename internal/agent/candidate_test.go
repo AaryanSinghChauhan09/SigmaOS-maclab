@@ -809,3 +809,23 @@ func TestPreflightOnACandidateBootDoesNotCallTheKnownGoodKernelGone(t *testing.T
 		t.Errorf("unreadable known-good: %q", problem)
 	}
 }
+
+// snapper's units would fail in the candidate, whose /.snapshots is an empty
+// directory, and count as the set's failed units: they are masked there, and
+// @ is untouched.
+func TestSnapperIsMaskedInTheCandidateOnly(t *testing.T) {
+	f := newCandidateMac(t)
+	at := filepath.Join(f.h.Top, "@")
+	if _, err := f.h.stage(context.Background(), "j1", candidateArgs(t)); err != nil {
+		t.Fatal(err)
+	}
+	cand := filepath.Join(f.h.Top, api.CandidateSubvolume)
+	for _, u := range []string{"snapper-cleanup.service", "snapper-cleanup.timer", "snapper-timeline.service", "snapper-timeline.timer"} {
+		if l, err := os.Readlink(filepath.Join(cand, "etc/systemd/system", u)); err != nil || l != "/dev/null" {
+			t.Errorf("%s in the candidate: %q %v, want masked", u, l, err)
+		}
+		if _, err := os.Lstat(filepath.Join(at, "etc/systemd/system", u)); err == nil {
+			t.Errorf("%s masked in @", u)
+		}
+	}
+}

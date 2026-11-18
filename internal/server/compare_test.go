@@ -180,10 +180,17 @@ func TestCompareCurrentAgainstASet(t *testing.T) {
 	}
 	// The Candidate boot's root holds no /.snapshots subvolume: the lab's
 	// doing, not the set's.
+	seen := 0
 	for _, c := range res.Checks {
-		if c.ID == "system.snapshots" && (c.A != "pass" || c.B != "fail" || c.Change != api.CheckNotCompared || !strings.Contains(c.Note, "Candidate boot")) {
-			t.Errorf("system.snapshots: %+v", c)
+		if c.ID == "system.snapshots" || c.ID == "boot.chain" {
+			seen++
 		}
+		if (c.ID == "system.snapshots" || c.ID == "boot.chain") && (c.A != "pass" || c.B != "fail" || c.Change != api.CheckNotCompared || !strings.Contains(c.Note, "Candidate boot")) {
+			t.Errorf("%s: %+v", c.ID, c)
+		}
+	}
+	if seen != 2 {
+		t.Errorf("system.snapshots and boot.chain: %d of 2 in %+v", seen, res.Checks)
 	}
 
 	ops := strings.Join(l.sim.CandidateOps(), ", ")

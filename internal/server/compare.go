@@ -934,6 +934,7 @@ func (r *jobRun) compareReport(res *api.CompareResult, learn bool) {
 // one: the check is right about the root it sees, which is the lab's.
 var candidateFails = map[string]string{
 	"system.snapshots": "it runs from @lab-candidate, a snapshot of @, in which /.snapshots (a subvolume inside @) is an empty directory",
+	"boot.chain":       "it boots its kernel as a one-shot UKI from the ESP, not the /boot/vmlinuz-* the installed boot chain names",
 }
 
 // ---- the Mac's noise: its A-side values, kept in compare-noise.json ----

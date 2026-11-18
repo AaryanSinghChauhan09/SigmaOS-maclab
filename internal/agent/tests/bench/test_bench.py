@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -448,6 +449,38 @@ class Builds(unittest.TestCase):
         self.assertEqual(len(makes), 2)
         for _, env in makes:
             self.assertTrue(env["PATH"].startswith(str(self.work / "bc" / "usr/bin") + ":"), env)
+
+
+class Suspend(unittest.TestCase):
+    class Host(FakeHost):
+        def which(self, name):
+            return "/usr/bin/" + name
+
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.h = self.Host(self.d.name)
+        self.ctx = bench.Ctx(self.h, {}, self.d.name, self.d.name)
+
+    def tearDown(self):
+        self.d.cleanup()
+
+    def test_no_rtc_that_can_wake_the_mac_is_a_skip_not_an_error(self):
+        # Apple Silicon's macsmc RTC: no wakealarm, no power/wakeup.
+        self.h.write("sys/class/rtc/rtc0/name", "macsmc-rtc")
+        with mock.patch.object(bench.os, "geteuid", return_value=0):
+            with self.assertRaisesRegex(bench.Skip, "wake source"):
+                bench.suspend(self.ctx)
+            out = bench.run_tier(["suspend"], bench.BENCHES, self.h, self.ctx)
+        self.assertIn("wake source", out[0]["skipped"])
+        self.assertEqual(bench.exit_code(out), 0)
+        self.assertFalse([c for c in self.h.ran if c[0] == "rtcwake"])
+
+    def test_an_rtc_with_an_alarm_wakes_it(self):
+        self.h.write("sys/class/rtc/rtc0/name", "macsmc-rtc")
+        self.h.write("sys/class/rtc/rtc1/wakealarm", "")
+        self.h.write("sys/class/rtc/rtc1/device/power/wakeup", "disabled")
+        self.assertEqual(bench.wake_rtc(self.h), "rtc1")
+        self.assertEqual(self.h.read("sys/class/rtc/rtc1/device/power/wakeup"), "enabled")
 
 
 class Browser(unittest.TestCase):
