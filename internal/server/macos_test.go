@@ -152,7 +152,7 @@ func TestAMacOSRunIsQueuedByAMaintainerOnly(t *testing.T) {
 // for its password at the screen) leaves the Mac Needs hands.
 func TestAMacOSRunPastItsDeadlineNeedsHands(t *testing.T) {
 	was := macosDeadline
-	macosDeadline = func(string) time.Duration { return 3 * time.Second } // on labd's clock: past the Mac's first check-in
+	macosDeadline = func(string) time.Duration { return 300 * time.Millisecond }
 	t.Cleanup(func() { macosDeadline = was })
 	l := newLab(t, false)
 	if _, err := l.s.queueMacOSRun(l.name, api.TierDefault); err != nil {
@@ -161,6 +161,9 @@ func TestAMacOSRunPastItsDeadlineNeedsHands(t *testing.T) {
 	if resp, body := l.as(l.secret, "POST", "/api/agent/macos-started", nil); resp.StatusCode != 200 {
 		t.Fatalf("started: %d %s", resp.StatusCode, body)
 	}
+	// The Mac is in macOS now: its lab-agent is silent. A check-in from
+	// Linux would be the Mac back, which ends Needs hands.
+	l.stopAgent()
 	d := l.waitDevice(func(d api.Device) bool { return d.State == api.StateNeedsHands })
 	if !strings.Contains(d.StateReason, "macOS") || !strings.Contains(d.StateReason, "FileVault") {
 		t.Errorf("reason: %q", d.StateReason)
