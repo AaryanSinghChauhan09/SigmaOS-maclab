@@ -783,3 +783,29 @@ func TestACandidateWithoutUBootIsRefusedBeforeBuildingABootBin(t *testing.T) {
 		t.Errorf("boot.bin changed")
 	}
 }
+
+// On a Candidate boot the running root is @lab-candidate, whose kernels are
+// the set's: preflight must not call the known-good kernel gone, nor send
+// anyone to lab baseline, which would make the candidate's kernel known-good.
+func TestPreflightOnACandidateBootDoesNotCallTheKnownGoodKernelGone(t *testing.T) {
+	kg := &KnownGood{Kernel: "7.2.11-15-1-ARCH"}
+	none := func(string) bool { return false }
+	cand := "root=UUID=abcd rootflags=subvol=@lab-candidate,compress=zstd maclab.job=j1"
+	problem, note := knownGoodCheck(cand, "kernel-aurora16", kg, nil, none)
+	if problem != "" || api.StaleKnownGood(problem) {
+		t.Errorf("problem %q on a Candidate boot", problem)
+	}
+	if note != "Candidate boot of set kernel-aurora16: the known-good system is untouched in @ (known-good kernel 7.2.11-15-1-ARCH)" {
+		t.Errorf("note %q", note)
+	}
+	problem, note = knownGoodCheck(candidateKG, "", kg, nil, none)
+	if !api.StaleKnownGood(problem) || note != "" {
+		t.Errorf("on @: problem %q, note %q", problem, note)
+	}
+	if problem, _ = knownGoodCheck(candidateKG, "", kg, nil, func(string) bool { return true }); problem != "" {
+		t.Errorf("installed known-good: %q", problem)
+	}
+	if problem, _ = knownGoodCheck(candidateKG, "", nil, errors.New("no known-good.json"), none); problem != "no known-good.json" {
+		t.Errorf("unreadable known-good: %q", problem)
+	}
+}
