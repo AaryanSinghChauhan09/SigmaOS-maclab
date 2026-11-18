@@ -213,5 +213,5 @@ func (s *Server) pCompares(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	s.render(w, r, "compares", web.Page{Title: "Compares", Nav: "compares", Data: rows})
+	s.render(w, r, "compares", web.Page{Title: "Compares", Nav: "compares", Data: struct{ Compares []compareRow }{rows}})
 }
