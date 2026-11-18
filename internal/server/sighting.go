@@ -747,14 +747,14 @@ func (s *Server) hardReset(ctx context.Context, v *dev) (port string, err error)
 	case errors.As(err, &unsent):
 		return port, mayHaveGone{refuse(http.StatusServiceUnavailable, "no Hard reset was sent: %v", unsent)}
 	case errors.As(err, &maybe):
-		return port, mayHaveGone{refuse(http.StatusBadGateway, "the Hard reset of %s may have gone out: %v", name, maybe.Err)}
+		return port, mayHaveGone{refuse(http.StatusServiceUnavailable, "the Hard reset of %s may have gone out: %v", name, maybe.Err)}
 	case errors.As(err, &moved):
 		s.cables.drop(name, moved.Reason, s.now())
 		s.saveSightings()
 		s.log.Printf("sighting: %s is no longer sighted: %s", name, moved.Reason)
 		return port, refuse(http.StatusConflict, "no Hard reset was sent: %s. The Sighting of %s is dropped", moved.Reason, name)
 	case err != nil:
-		return port, refuse(http.StatusBadGateway, "no Hard reset reached %s: %v", name, err)
+		return port, refuse(http.StatusServiceUnavailable, "no Hard reset reached %s: %v", name, err)
 	}
 	s.log.Printf("%s: Hard reset sent through the %s port", name, port)
 	return port, nil
@@ -882,7 +882,7 @@ func (s *Server) prove(v *dev, rid int, by string) (*api.Proving, error) {
 	case errors.As(err, &moved):
 		return nil, refuse(http.StatusConflict, "no Proving reset was sent: %s", moved.Reason)
 	case err != nil:
-		return nil, refuse(http.StatusBadGateway, "no Proving reset reached %s: %v", port, err)
+		return nil, refuse(http.StatusServiceUnavailable, "no Proving reset reached %s: %v", port, err)
 	}
 	restarted := func() []string {
 		var out []string

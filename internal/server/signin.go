@@ -189,7 +189,7 @@ func (s *Server) hSignInCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if !s.tooManyRefused(w, r) {
-			httpErr(w, 502, "GitHub didn't sign you in (%v). %s", err, again)
+			httpErr(w, 503, "GitHub didn't sign you in (%v). %s", err, again)
 		}
 		return
 	}

@@ -94,12 +94,19 @@ func (s *Server) held(w http.ResponseWriter, r *http.Request, work func() (any, 
 	}
 }
 
+// statusOf is the status err is answered with. labd never answers 502 or
+// 504: the edge puts its own page in place of the body, and the line labd
+// wrote never reaches the caller. A Mac's own refusal is 409; anything else
+// is labd not getting its answer (a Mac gone or silent), 503.
 func statusOf(err error) int {
 	var r *refusal
 	if errors.As(err, &r) {
 		return r.code
 	}
-	return 502
+	if errors.Is(err, errAgentRefused) {
+		return 409
+	}
+	return 503
 }
 
 // waitFor is how long a call that only waits may be held: what the caller

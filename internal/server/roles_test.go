@@ -219,7 +219,7 @@ func TestAMarkWaitsForNothingButNeedsGitHub(t *testing.T) {
 	l := rolesLab(t, nil)
 	ravi := l.signedIn(maintainerID)
 	l.gh.Break(http.StatusServiceUnavailable)
-	if w := ravi.post("/people/mark", "handle", "edith", "as", "m-team"); w.Code != http.StatusBadGateway || !strings.Contains(refusalIn(w.Body.String()), "GitHub") {
+	if w := ravi.post("/people/mark", "handle", "edith", "as", "m-team"); w.Code != http.StatusServiceUnavailable || !strings.Contains(refusalIn(w.Body.String()), "GitHub") {
 		t.Errorf("with GitHub down: %d %q", w.Code, refusalIn(w.Body.String()))
 	}
 	if l.known(edithID) {

@@ -157,7 +157,7 @@ func (s *Server) hAgentUpdate(w http.ResponseWriter, r *http.Request) {
 			// update restarts nothing; hold the Mac a while for it.
 			v.holdUpdating(mark)
 		}
-		httpErr(w, 502, "%s did not update its lab-agent: %v", d.Name, err)
+		httpErr(w, statusOf(err), "%s did not update its lab-agent: %v", d.Name, err)
 		return
 	}
 	if !res.Changed {

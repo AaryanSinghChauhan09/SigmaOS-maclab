@@ -370,6 +370,7 @@ None can be turned into another. ("Data and identity")
 - Refused credentials are logged and counted: past 10 in 10 minutes from one address, further bad ones get 429 for 15 minutes and one alert goes to "Agents". A valid credential always passes. Refused enrollment tokens count with the rest.
 - The old site's limits carry over on the real address: uploads 30 an hour per address and 10 per Machine key, Mac sign-in 10, status 60.
 - labd answers 425 to any early-data request under `/api/*`.
+- labd never answers 502 or 504: the edge puts its own page in place of labd's line. A Mac's own refusal (`lab agent-update` refused, a failed identity check) is 409 with labd's line; labd not reaching a Mac, GitHub or the Out-of-band controller is 503.
 
 ("The front door"; "Terms and privacy"; "Hardening inside the lab"; "Volunteering a Mac")
 

@@ -579,7 +579,7 @@ func TestAgentUpdateRefusesWhatItCannotDo(t *testing.T) {
 	sl.waitAgent(agentUpdateMinAgent)
 	was, _ := os.ReadFile(sl.installed)
 	resp, body := sl.post("/api/devices/"+sl.name+"/agent-update", nil)
-	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "not signed by the release key") || !strings.Contains(body, "Nothing was changed") {
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, "not signed by the release key") || !strings.Contains(body, "Nothing was changed") {
 		t.Errorf("an agent signed by another key: %d %s", resp.StatusCode, body)
 	}
 	if now, _ := os.ReadFile(sl.installed); !bytes.Equal(now, was) || sl.restarts != 0 {
@@ -597,7 +597,7 @@ func TestAgentUpdateRefusesWhatItCannotDo(t *testing.T) {
 		t.Errorf("a Mac ahead of the lab is said to be behind: %q", d.LabAgent)
 	}
 	resp, body = sl.post("/api/devices/"+sl.name+"/agent-update", nil)
-	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "older than the 0.12.0 installed") {
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, "older than the 0.12.0 installed") {
 		t.Errorf("an older agent: %d %s", resp.StatusCode, body)
 	}
 

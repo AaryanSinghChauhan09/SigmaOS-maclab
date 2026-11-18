@@ -318,7 +318,7 @@ func TestFreezeEntryAnswersAsAStream(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); rec.Code != 200 || ct != "application/x-ndjson" {
 		t.Fatalf("a failed freeze: %d %q %q", rec.Code, ct, rec.Body)
 	}
-	if hl := heldLast(t, rec.Body.String()); hl.Status != 502 || !strings.Contains(hl.Error, "cannot read") || hl.Result != nil {
+	if hl := heldLast(t, rec.Body.String()); hl.Status != 409 || !strings.Contains(hl.Error, "cannot read") || hl.Result != nil {
 		t.Fatalf("a failed freeze's last line: %+v", hl)
 	}
 

@@ -250,7 +250,7 @@ func (s *Server) hScreenshot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := v.call(r.Context(), api.CmdScreen, "", api.ScreenArgs{WaitSec: 5}, 40*time.Second, &res); err != nil {
-			httpErr(w, 502, "%v", err)
+			httpErr(w, statusOf(err), "%v", err)
 			return
 		}
 		s.hub.publish("screen", v.d.Name, map[string]any{"device": v.d.Name, "name": res.Name, "time": res.Time, "width": res.Width, "height": res.Height})
@@ -331,7 +331,7 @@ func (s *Server) hLogs(w http.ResponseWriter, r *http.Request) {
 	args := api.LogsArgs{Source: q.Get("source"), Lines: lines, Unit: q.Get("unit")}
 	var out string
 	if err := v.call(r.Context(), api.CmdLogs, "", args, 45*time.Second, &out); err != nil {
-		httpErr(w, 502, "%v", err)
+		httpErr(w, statusOf(err), "%v", err)
 		return
 	}
 	// The Mac may take up to 45 s to answer: a person a Maintainer unlinked
