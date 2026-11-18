@@ -1079,8 +1079,11 @@ func (s *Sim) omtReport(t api.TestSpec, outDir, behavior string) api.TestResult 
 	// A candidate's root, a snapshot of @, holds /.snapshots (a subvolume
 	// inside @) as an empty directory, as on a Mac.
 	snapshots, snapshotsSay := "pass", "/.snapshots is a btrfs subvolume holding 2 snapshots"
+	// It boots its kernel as a UKI from the ESP, not /boot/vmlinuz-*.
+	chain, chainSay := "pass", "limine boots /boot/vmlinuz-linux-aurora"
 	if candidate {
 		snapshots, snapshotsSay = "fail", "/.snapshots is not a btrfs subvolume"
+		chain, chainSay = "fail", "boot-check /boot/vmlinuz-linux-aurora is not the "+kernel+" kernel linux-aurora installed"
 	}
 	if kernel != SimKnownGood && !packaged {
 		pkg = "fail" // a lab kernel is never an installed package
@@ -1103,7 +1106,8 @@ func (s *Sim) omtReport(t api.TestSpec, outDir, behavior string) api.TestResult 
 "checks":[{"id":"boot.kernel-package","kind":"automatic","status":%q,"evidence":["kernel package"],"classification":{"outcome":"works"}},
 {"id":"hardware.drivers","kind":"automatic","status":%q,"evidence":["nodes"],"classification":{"outcome":"works"}},
 {"id":"wifi.connected","kind":"automatic","status":%q,"evidence":["wlan0 up"],"classification":{"outcome":"works"}},
-{"id":"system.snapshots","kind":"automatic","status":%q,"evidence":[%q],"classification":{"outcome":"works"}}%s],"signature":{"public_key":"ssh-ed25519 AAAA","signature":"sim"}}`, unclaimed, kernel, pkg, drivers, wifi, snapshots, snapshotsSay, onScreen)
+{"id":"system.snapshots","kind":"automatic","status":%q,"evidence":[%q],"classification":{"outcome":"works"}},
+{"id":"boot.chain","kind":"automatic","status":%q,"evidence":[%q],"classification":{"outcome":"works"}}%s],"signature":{"public_key":"ssh-ed25519 AAAA","signature":"sim"}}`, unclaimed, kernel, pkg, drivers, wifi, snapshots, snapshotsSay, chain, chainSay, onScreen)
 	if s.OMTReport != nil {
 		report = string(s.OMTReport(kernel))
 	}
