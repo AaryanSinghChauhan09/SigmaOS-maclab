@@ -530,7 +530,7 @@ func (l *Linux) candidateHost() (*candidateHost, error) {
 			}
 			return combinedGroup(cmd)
 		},
-		Top: "/run/maclab/top", RootSource: root.Source, Lim: lim, KnownGood: kg,
+		Top: "/run/maclab-candidate", RootSource: root.Source, Lim: lim, KnownGood: kg,
 		GUIUser: l.GUIUser, M1N1Dir: filepath.Join(esp.Target, "m1n1"), WorkDir: l.WorkDir,
 		DRMDir: "/sys/class/drm", Cmdline: cmdline,
 		UKI: ukiWriter{ScratchRoot: "/var/lib/maclab",
