@@ -315,7 +315,7 @@ None can be turned into another. ("Data and identity")
 | Signed in, no role | Lend a Mac |
 | External volunteer | My Macs |
 | M team member | Macs, Jobs, Releases |
-| Maintainer | Macs, Jobs, Builds, Releases, People |
+| Maintainer | Macs, Jobs, Compares, Builds, Releases, People |
 | Admin | as Maintainer; People adds Make Maintainer and Remove Maintainer |
 
 ("Interface shell and People screen"; "Publishing, Releases and verdicts"; "The remaining screens"; "Terms and privacy")
@@ -1384,4 +1384,6 @@ Any macOS Mac on arm64 can be an Out-of-band controller for the Lab-owned Macs c
 - **omarchy-m-test.** Each check's status on A and B: `regressed` (pass on A, fail on B), `fixed` (fail on A, pass on B), else `fail` or `pass`.
 - **The report**, in the job (`result.compare`): each side's set, boot, kernel, boot time, the files it installed with their sha256, GPU firmware, SIO, Thunderbolt, failed units, omarchy-m-test counts and any error; the rows; the checks; the pause for a person. `lab compare` waits for the job and prints it (`--no-wait` prints the job and returns); `lab compare show <job>` prints it again.
 - **Private until published.** An unpublished Compare is seen by Maintainers alone: the M team and a Volunteer see neither the job nor its page, on the API or the site. `lab compare publish <job>` (`POST /api/compares/{id}/publish`), or Publish on the job's page, publishes a finished one: the job is then seen as any other, and its report has its own public page, `/compares/<job>`, a side-by-side table (not kept by the edge, like `/status`).
+- **On the site.** Compares (`/compares`, Maintainers, in the lab row after Jobs) lists every Compare, private and published, newest first: the job, the Mac, before → after, the tier with macOS and a person at the Mac, its state and the report in a line (benchmarks better, worse, no change and not compared; omarchy-m-test regressed and fixed), published with a link to its public page or private, and when it was asked. No public list of published Compares (call: the spec names only each one's page). A Compare's job page says what it was asked (before (A), after (B), tier, macOS, a person at the Mac) in place of a kernel and tests, and how long it took to its end, not to a later publish.
+- **Retry.** `lab retry <job>` or Retry on the job's page queues the same Compare again: the same Mac, the sets as the first job kept them, tier, `--macos` and `--hands`, as whoever asks, under their Lease (taken for the job when they hold none), with the first job's refusals. Only a Maintainer retries a Compare.
 

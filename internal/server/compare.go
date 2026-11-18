@@ -101,8 +101,29 @@ func (s *Server) queueCompare(p Person, req api.CompareRequest) (*api.Job, error
 	if cs.AfterSet, err = s.compareSet(cs.After); err != nil {
 		return nil, err
 	}
-	if cs.MacOS && !s.macOS().enrolled(req.Mac) {
-		return nil, refuse(409, "%s's macOS runner is not enrolled: enroll it first (lab macos enroll %s), or leave out --macos", req.Mac, req.Mac)
+	return s.submitCompare(p, v, req.Mac, cs, "")
+}
+
+// retryCompare queues old's Compare again, as p: the same Mac, the sets as
+// old kept them (a set never changes), the same tier and flags.
+func (s *Server) retryCompare(p Person, old *api.Job) (*api.Job, error) {
+	if !p.isMaintainer() {
+		return nil, refuse(403, "a Compare is for Maintainers")
+	}
+	v := s.dev(old.Spec.Device)
+	if v == nil {
+		return nil, refuse(404, "no Mac %q", old.Spec.Device)
+	}
+	cs := *old.Spec.Compare
+	cs.LeaseTaken = false
+	return s.submitCompare(p, v, old.Spec.Device, cs, old.ID)
+}
+
+// submitCompare queues the Compare cs on Mac v under p's Lease, taken for
+// the job when p holds none.
+func (s *Server) submitCompare(p Person, v *dev, mac string, cs api.CompareSpec, retryOf string) (*api.Job, error) {
+	if cs.MacOS && !s.macOS().enrolled(mac) {
+		return nil, refuse(409, "%s's macOS runner is not enrolled: enroll it first (lab macos enroll %s), or leave out --macos", mac, mac)
 	}
 	if !s.holdsLease(v, p) {
 		if _, err := s.takeLease(v, p, compareHolder, leaseDefault); err != nil {
@@ -110,7 +131,7 @@ func (s *Server) queueCompare(p Person, req api.CompareRequest) (*api.Job, error
 		}
 		cs.LeaseTaken = true
 	}
-	j, code, err := s.submit(p, api.JobSpec{Device: req.Mac, Holder: compareHolder, Compare: &cs}, "",
+	j, code, err := s.submit(p, api.JobSpec{Device: mac, Holder: compareHolder, Compare: &cs}, retryOf,
 		fmt.Sprintf("a Compare of %s (A) and %s (B), %s tier", cs.Before, cs.After, cs.Tier))
 	if err != nil {
 		if cs.LeaseTaken {

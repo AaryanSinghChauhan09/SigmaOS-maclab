@@ -104,6 +104,7 @@ var (
 	navMyMacs   = NavItem{ID: "my-macs", Label: "My Macs", Path: "/my-macs"}
 	navMacs     = NavItem{ID: "macs", Label: "Macs", Path: "/macs"}
 	navJobs     = NavItem{ID: "jobs", Label: "Jobs", Path: "/jobs"}
+	navCompares = NavItem{ID: "compares", Label: "Compares", Path: "/compares"}
 	navBuilds   = NavItem{ID: "builds", Label: "Builds", Path: "/builds"}
 	navReleases = NavItem{ID: "releases", Label: "Releases", Path: "/releases"}
 	navPeople   = NavItem{ID: "people", Label: "People", Path: "/people"}
@@ -122,7 +123,7 @@ func LabNav(k Kind) []NavItem {
 	case MTeam:
 		return []NavItem{navMacs, navJobs, navReleases}
 	case Maintainer, Admin:
-		return []NavItem{navMacs, navJobs, navBuilds, navReleases, navPeople}
+		return []NavItem{navMacs, navJobs, navCompares, navBuilds, navReleases, navPeople}
 	}
 	return nil
 }

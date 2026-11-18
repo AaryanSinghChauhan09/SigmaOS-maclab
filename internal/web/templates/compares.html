@@ -1,0 +1,21 @@
+{{define "main"}}<h1>Compares</h1>
+<p class="subtitle">Every Compare on every Mac, newest first. A Compare is private to Maintainers until one publishes it; then it has its own public page. Queue one with <code>lab compare</code>.</p>
+<section class="card">
+<h2 class="card-title">compares ({{len .Data}})</h2>
+{{if .Data}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Job</th><th>Mac</th><th>Before → after</th><th>Tier</th><th>Report</th><th>Published</th><th>When</th></tr></thead>
+<tbody>
+{{range .Data}}<tr id="job-{{.ID}}">
+<td data-label="Job" class="nowrap"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td>
+<td data-label="Mac"><a href="{{href (print "/macs/" .Mac)}}">{{.Mac}}</a></td>
+<td data-label="Before → after">{{.Before}} → {{.After}}</td>
+<td data-label="Tier">{{.Tier}}{{if .MacOS}} <span class="dim">· macOS</span>{{end}}{{if .Hands}} <span class="dim">· a person</span>{{end}}</td>
+<td data-label="Report"><span class="badge {{.StateClass}}">{{.State}}</span>{{if .Verdicts}} {{.Verdicts}}{{end}}</td>
+<td data-label="Published">{{if .Published}}<a href="{{.Href}}">published</a> <span class="dim">{{.Published}}</span>{{else}}<span class="dim">private</span>{{end}}</td>
+<td data-label="When" class="nowrap">{{.When}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+{{else}}<p class="dim">No Compare has run yet.</p>
+{{end}}</section>
+{{end}}
