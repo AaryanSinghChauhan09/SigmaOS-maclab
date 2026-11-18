@@ -242,7 +242,7 @@ func TestAnExtendedRunAddsTheRestLabellingOtherAPIs(t *testing.T) {
 	if v := got["video-decode"]; v.Value == nil || v.API != "VideoToolbox" || v.Unit != "fps" || !v.HigherIsBetter || *v.Value <= 0 {
 		t.Errorf("video decode: %+v", v)
 	}
-	for _, n := range []string{"kernel-compile", "vkpeak", "clpeak", "suspend-resume", "glmark2", "vkmark"} {
+	for _, n := range []string{"coremark", "kernel-compile", "vkpeak", "clpeak", "suspend-resume", "glmark2", "vkmark"} {
 		if g := got[n]; g.Value != nil || g.Note != api.NoMacOSEquivalent {
 			t.Errorf("%s: %+v", n, g)
 		}

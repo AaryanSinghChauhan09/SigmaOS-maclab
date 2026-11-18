@@ -45,6 +45,7 @@ var benches = []bench{
 	{name: "jetstream/chromium", extended: true, page: "jetstream", browser: "chromium", version: "2.2", run: (*Runner).browserBench},
 	{name: "geekbench6-cpu", extended: true}, // two results, see Run
 	{name: "geekbench6-gpu", extended: true, run: (*Runner).geekbenchGPU},
+	{name: "coremark", extended: true, run: noEquivalent},
 	{name: "kernel-compile", extended: true, run: noEquivalent},
 	// vkpeak would need MoltenVK, which macOS does not carry.
 	{name: "vkpeak", extended: true, run: noEquivalent},

@@ -35,7 +35,7 @@ TIERS = {
     "default": ["speedometer-chrome", "motionmark-chrome", "7zip", "glmark2", "vkmark", "boot"],
 }
 TIERS["extended"] = TIERS["default"] + [
-    "speedometer-chromium", "jetstream-chrome", "geekbench", "kernel-compile",
+    "speedometer-chromium", "jetstream-chrome", "geekbench", "coremark", "kernel-compile",
     "vkpeak", "clpeak", "ffmpeg-vaapi", "suspend",
 ]
 
@@ -732,14 +732,49 @@ def geekbench(ctx):
             Measure("geekbench-multi", v, s["multi"], "score", True)]
 
 
+COREMARK_SRCS = ["core_list_join.c", "core_main.c", "core_matrix.c", "core_state.c", "core_util.c",
+                 "linux64/core_portme.c"]
+
+
+def parse_coremark(text):
+    m = re.search(r"^CoreMark 1\.0 : ([0-9.]+)", text, re.M)
+    if not m:
+        why = re.findall(r"^ERROR!.*", text, re.M)
+        raise ParseError("no valid CoreMark result" + (": " + why[0] if why else ""))
+    return float(m.group(1))
+
+
+def coremark(ctx):
+    """CoreMark's performance run, built here with gcc -O2: once on one
+    core, once with a thread per core. Each runs about 20 s."""
+    h = ctx.host
+    if not h.which("gcc"):
+        raise Skip("no gcc on this Mac")
+    src = ctx.unpack("coremark") / ctx.manifest["coremark"]["root"]
+    n = os.cpu_count()
+    out = []
+    for name, threads in (("coremark-single", 1), ("coremark-multi", n)):
+        exe = ctx.work / f"coremark-{threads}"
+        cmd = ["gcc", "-O2", "-Ilinux64", "-I.", '-DFLAGS_STR="-O2"', "-DPERFORMANCE_RUN=1", "-DITERATIONS=0"]
+        if threads > 1:
+            cmd += [f"-DMULTITHREAD={threads}", "-DUSE_PTHREAD"]
+        _ok(h.run(cmd + COREMARK_SRCS + ["-o", str(exe), "-lrt", "-pthread"], timeout=300, cwd=str(src)), "gcc coremark")
+        r = _ok(h.run([str(exe), "0x0", "0x0", "0x66", "0", "7", "1", "2000"], timeout=600), "coremark")
+        v = f"{ctx.version('coremark')} gcc -O2" + (f" {threads} threads" if threads > 1 else "")
+        out.append(Measure(name, v, parse_coremark(r.out), "iterations/s", True))
+    return out
+
+
 def kernel_compile(ctx):
     h = ctx.host
-    missing = [t for t in ("make", "gcc", "flex", "bison", "bc", "perl") if not h.which(t)]
+    missing = [t for t in ("make", "gcc", "flex", "bison", "perl") if not h.which(t)]
     if missing:
         raise Skip("no " + ", ".join(missing) + " on this Mac")
     src = ctx.unpack("kernel") / ctx.manifest["kernel"]["root"]
-    _ok(h.run(["make", "defconfig"], timeout=300, cwd=str(src)), "make defconfig")
-    r = _ok(h.run(["make", f"-j{os.cpu_count()}", "Image"], timeout=3600, cwd=str(src)), "make Image")
+    # bc is pinned: Omarchy does not install it.
+    env = {"PATH": f"{ctx.unpack('bc') / 'usr/bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+    _ok(h.run(["make", "defconfig"], timeout=300, cwd=str(src), env=env), "make defconfig")
+    r = _ok(h.run(["make", f"-j{os.cpu_count()}", "Image"], timeout=3600, cwd=str(src), env=env), "make Image")
     shutil.rmtree(ctx.work / "kernel", ignore_errors=True)
     return [Measure("kernel-compile", f"{ctx.version('kernel')} defconfig -j{os.cpu_count()}",
                     round(r.seconds, 1), "s", False)]
@@ -795,7 +830,8 @@ BENCHES = {
     "vkmark": Bench(vkmark, ("vkmark", "assimp")),
     "boot": Bench(boot),
     "geekbench": Bench(geekbench, ("geekbench",)),
-    "kernel-compile": Bench(kernel_compile, ("kernel",)),
+    "coremark": Bench(coremark, ("coremark",)),
+    "kernel-compile": Bench(kernel_compile, ("kernel", "bc")),
     "vkpeak": Bench(vkpeak, ("vkpeak",)),
     "clpeak": Bench(clpeak, ("clpeak",)),
     "ffmpeg-vaapi": Bench(ffmpeg_vaapi, ("clip",)),
