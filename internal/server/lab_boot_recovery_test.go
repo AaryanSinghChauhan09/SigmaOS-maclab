@@ -248,6 +248,7 @@ func withoutLabBootAdditions(cmdline string) string {
 // With no Sighting the ladder skips the Hard-reset rung: the Mac's own
 // watchdog has its time, then the Mac Needs hands, with the reason shown.
 func TestWithNoSightingTheLadderSkipsTheHardResetRung(t *testing.T) {
+	wallClock(t)
 	for _, c := range []struct {
 		name string
 		// cable changes what the mini's right port holds before the job.
@@ -308,10 +309,11 @@ func TestWithNoSightingTheLadderSkipsTheHardResetRung(t *testing.T) {
 // with no Sighting and with the controller stopped, and for none while the
 // Mac is sighted, when the Hard reset is the next rung.
 func TestTheMacsOwnWatchdogGetsItsTimeWhereNoHardResetReaches(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{})
 	l.baseline()
 	go l.sim.Quiet(time.Minute)
-	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+	l.waitDevice(func(d api.Device) bool { return l.s.since(d.LastSeen) > 2*aliveWindow })
 	r := &jobRun{s: l.s, v: l.s.dev(l.name), boot: 4 * time.Second}
 	const watchdog = 2*time.Second + 4*time.Second // lab-agent's idle reset here, and a boot
 	check := func(when string, waits bool) {
@@ -370,7 +372,7 @@ func TestAfterLabdStartsAgainItRunsRecoveryOnWhateverDidNotReturn(t *testing.T) 
 	// Two Macs hang while the lab is Dark; the third stays up.
 	go l.sim.Quiet(time.Hour)
 	go uncabled.Quiet(time.Hour)
-	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+	l.waitDevice(func(d api.Device) bool { return l.s.since(d.LastSeen) > 2*aliveWindow })
 
 	logs := &logBuf{}
 	fresh, err := New(l.ctx, l.s.cfg, log.New(logs, "", 0))

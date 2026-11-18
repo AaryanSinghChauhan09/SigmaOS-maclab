@@ -247,6 +247,7 @@ func TestAfterARestartLabdHoldsNoSightingUntilItHasLookedAtThePorts(t *testing.T
 // recovery ladder, even with the Mac on one of the mini's cables under its
 // own name.
 func TestAVolunteersMacNeverGetsAHardReset(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{volunteer: true})
 	l.openForTheLab(time.Now())
 	l.baseline()
@@ -284,7 +285,7 @@ func TestAVolunteersMacNeverGetsAHardReset(t *testing.T) {
 	// The recovery ladder, for a Volunteer's Mac that went silent: network
 	// means, then its Volunteer is asked.
 	go l.sim.Quiet(time.Minute)
-	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+	l.waitDevice(func(d api.Device) bool { return l.s.since(d.LastSeen) > 2*aliveWindow })
 	steps, ok := v.ladder(context.Background(), "lost during a test", time.Second, true)
 	if ok || strings.Contains(strings.ToLower(strings.Join(steps, "|")), "hard reset") {
 		t.Fatalf("the ladder on a Volunteer's Mac: %v %v", ok, steps)
@@ -349,6 +350,7 @@ func TestAHardResetIsAMaintainersOrTheLeaseHoldersAndAProvingResetAMaintainersOn
 // A Proving reset names the port, and counts only if that Mac returns and
 // every other Mac keeps its boot id.
 func TestAProvingResetCountsOnlyIfThatMacReturnsAndEveryOtherKeepsItsBootID(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{})
 	l.baseline()
 	max, third := l.addMac("m2-max"), l.addMac("m3")
@@ -618,6 +620,7 @@ func TestTheLabSaysSightedNotSightedOrNoCable(t *testing.T) {
 // no reset through it: nothing is ever sent to an address a record carries,
 // and no record takes one any more.
 func TestAControllerNamedInAMacsRecordIsNeverAsked(t *testing.T) {
+	wallClock(t)
 	var asked atomic.Int32
 	old := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { asked.Add(1) }))
 	defer old.Close()
@@ -637,7 +640,7 @@ func TestAControllerNamedInAMacsRecordIsNeverAsked(t *testing.T) {
 		t.Fatalf("a Hard reset: %s %s", r.Status, body)
 	}
 	go l.sim.Quiet(time.Minute)
-	l.waitDevice(func(d api.Device) bool { return time.Since(d.LastSeen) > 2*aliveWindow })
+	l.waitDevice(func(d api.Device) bool { return l.s.since(d.LastSeen) > 2*aliveWindow })
 	if steps, ok := v.ladder(context.Background(), "lost during a test", time.Second, false); ok || !has(steps, "no Hard reset: labd was given no Out-of-band controller") {
 		t.Fatalf("the ladder: %v %v", ok, steps)
 	}
@@ -655,6 +658,7 @@ func TestAControllerNamedInAMacsRecordIsNeverAsked(t *testing.T) {
 // that gets its turn late in its wait is answered sent, the ladder runs and
 // the Mac is reset once.
 func TestAResetThatGetsItsTurnLateIsSentAndTheLadderRuns(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{config: func(c *Config) { c.ResetWait = time.Second }})
 	l.baseline()
 	other := l.addMac("m2-max")
@@ -868,6 +872,7 @@ func TestAMacThatRestartsWhileItsResetWaitsIsNotTakenAsRecovered(t *testing.T) {
 // controller's turn ends as the controller begins the reset, so labd hears
 // no 102 while the tool resets the Mac.
 func TestAResetCalledOffAsTheControllerBeginsItIsWatchedAsSent(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{config: func(c *Config) { c.ResetWait = 300 * time.Millisecond }})
 	l.baseline()
 	l.oob.mu.Lock()
@@ -1039,6 +1044,7 @@ func TestARetirementDuringAWaitingProvingResetSendsNoReset(t *testing.T) {
 // comes while the reset reads the controller waits for it, and is never the
 // one the reset cuts.
 func TestAJobQueuedWhileAProvingResetReadsThePortsWaitsForIt(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{})
 	l.baseline()
 	max := l.addMac("m2-max")
@@ -1110,6 +1116,7 @@ func (l *lab) heardAgain(name string) {
 // to 25 across a job's two reboots) and do not end its Sighting: a Mac placed
 // by a Proving reset still gets a Hard reset after a job.
 func TestASightingHoldsAcrossTheMacsOwnRestarts(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{})
 	l.baseline()
 	l.oob.countResets(2)
@@ -1169,6 +1176,7 @@ func TestASightingHoldsAcrossTheMacsOwnRestarts(t *testing.T) {
 // never heard on a new boot: its Sighting holds, and the Hard reset that
 // brings it back goes out.
 func TestAMacHungAfterItsRestartStillGetsItsHardReset(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{})
 	l.baseline()
 	max := l.placeOnMiddle("m2-max")
@@ -1197,6 +1205,7 @@ func TestAMacHungAfterItsRestartStillGetsItsHardReset(t *testing.T) {
 // neither ends nor places a Sighting, a Mac hung there still gets its Hard
 // reset, and a Proving reset takes it as a port that shows no name.
 func TestAPlaceholderNameIsNoOtherMac(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{})
 	l.baseline()
 	l.sight()
@@ -1242,6 +1251,7 @@ func TestAPlaceholderNameIsNoOtherMac(t *testing.T) {
 // as a restart does, but the Mac is heard again on the boot it had: that
 // ends the Sighting. Until the lab knows, no Hard reset goes out.
 func TestACablePulledWhileItsMacStaysUpEndsItsSighting(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{})
 	l.baseline()
 	max := l.placeOnMiddle("m2-max")
@@ -1316,6 +1326,7 @@ func TestASightingIsKeptAcrossARestartOfLabd(t *testing.T) {
 // A kept Sighting whose port shows another product id after the restart, or
 // nothing, is not kept, and the log says why.
 func TestASightingIsNotKeptAcrossARestartWhenItsPortChanged(t *testing.T) {
+	wallClock(t)
 	for _, c := range []struct {
 		name   string
 		change func(l *lab)
@@ -1346,6 +1357,7 @@ func TestASightingIsNotKeptAcrossARestartWhenItsPortChanged(t *testing.T) {
 // After the mini restarts its ports count plugs from the start again: a
 // kept Sighting holds by the same rule, from the port as it is then.
 func TestASightingIsKeptAcrossARestartOfTheMini(t *testing.T) {
+	wallClock(t)
 	l := sightLab(t, labConfig{})
 	l.baseline()
 	l.placeOnMiddle("m2-max")
