@@ -8,7 +8,7 @@ func TestTheManifestPinsEveryItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"speedometer", "motionmark", "jetstream", "chromium", "chrome", "7zip", "glmark2", "vkmark",
-		"clpeak", "vkpeak", "geekbench", "kernel", "clip"}
+		"assimp", "clpeak", "vkpeak", "geekbench", "kernel", "clip"}
 	have := map[string]Item{}
 	for _, it := range items {
 		have[it.Name] = it
