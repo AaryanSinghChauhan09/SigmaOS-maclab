@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -179,6 +180,9 @@ const (
 
 // labBootDeadlineUnit is the early systemd unit that enforces the record. It
 // needs only the local disk: a Lab boot without network must still reboot.
+// RemainAfterExit keeps it active once it exits at once on the Mac's own boot:
+// inactive, every later boot transaction pulling in sysinit.target starts it
+// again, and five starts in a second fail it on start-limit-hit.
 func labBootDeadlineUnit() string {
 	return `[Unit]
 Description=Omarchy Mac Lab: reboot a Lab boot that misses its deadline
@@ -189,12 +193,60 @@ Before=shutdown.target
 
 [Service]
 ExecStart=` + binPath + ` lab-boot-deadlines
+RemainAfterExit=yes
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=sysinit.target
 `
+}
+
+// RefreshLabBootUnits rewrites the Lab boot units setup installed when this
+// lab-agent writes them differently: a lab-agent update replaces only the
+// binary.
+func RefreshLabBootUnits(logf func(string, ...any)) {
+	refreshUnits(map[string]string{
+		labBootDeadlineUnitPath: labBootDeadlineUnit(),
+		labBootSessionUnitPath:  labBootSessionUnit(),
+		labBootLockUnitPath:     labBootLockUnit(),
+	}, func(args ...string) error {
+		out, err := exec.Command("systemctl", args...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("systemctl %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}, logf)
+}
+
+// refreshUnits rewrites each unit file present whose content differs, then
+// reloads systemd and clears a failed state the old file left.
+func refreshUnits(units map[string]string, systemctl func(...string) error, logf func(string, ...any)) []string {
+	var changed []string
+	for path, want := range units {
+		have, err := os.ReadFile(path)
+		if err != nil || string(have) == want {
+			continue // not installed, or current
+		}
+		if err := writeAtomic(path, []byte(want)); err != nil {
+			logf("refreshing %s: %v", path, err)
+			continue
+		}
+		changed = append(changed, filepath.Base(path))
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	slices.Sort(changed)
+	logf("rewrote %s from this lab-agent", strings.Join(changed, ", "))
+	if err := systemctl("daemon-reload"); err != nil {
+		logf("%v", err)
+		return changed
+	}
+	if err := systemctl(append([]string{"reset-failed"}, changed...)...); err != nil {
+		logf("%v", err)
+	}
+	return changed
 }
 
 // labBootSeen is the early unit's note of the Lab boot it watched.

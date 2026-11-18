@@ -155,6 +155,7 @@ func main() {
 			// This Mac left the lab; all that remains is to tell labd.
 			err = agent.Farewell(ctx, "/var/lib/maclab", &agent.Linux{WorkDir: "/var/lib/maclab"}, log.Printf)
 		} else if cfg, err = agent.LoadConfig(*cfgPath); err == nil {
+			agent.RefreshLabBootUnits(log.Printf)
 			sys := &agent.Linux{WorkDir: "/var/lib/maclab", GUIUser: cfg.GUIUser, Server: cfg.Server}
 			err = agent.New(cfg, sys, nil).Run(ctx)
 		}

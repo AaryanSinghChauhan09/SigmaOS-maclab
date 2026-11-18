@@ -252,3 +252,35 @@ func isWatchdogOpenTimeout(f string) bool {
 	}
 	return true
 }
+
+func TestDeadlineUnitStaysActiveAfterExiting(t *testing.T) {
+	if !strings.Contains(labBootDeadlineUnit(), "\nRemainAfterExit=yes\n") {
+		t.Fatalf("an exited unit wanted by sysinit.target is started again by every boot transaction until start-limit-hit:\n%s", labBootDeadlineUnit())
+	}
+}
+
+func TestRefreshUnitsRewritesOnlyStaleInstalledUnits(t *testing.T) {
+	dir := t.TempDir()
+	stale, current, absent := filepath.Join(dir, "a.service"), filepath.Join(dir, "b.service"), filepath.Join(dir, "c.service")
+	os.WriteFile(stale, []byte("old"), 0o644)
+	os.WriteFile(current, []byte("same"), 0o644)
+	var calls []string
+	systemctl := func(args ...string) error { calls = append(calls, strings.Join(args, " ")); return nil }
+	got := refreshUnits(map[string]string{stale: "new", current: "same", absent: "x"}, systemctl, t.Logf)
+	if !slices.Equal(got, []string{"a.service"}) {
+		t.Fatalf("changed %v", got)
+	}
+	if b, _ := os.ReadFile(stale); string(b) != "new" {
+		t.Errorf("stale unit now %q", b)
+	}
+	if _, err := os.Stat(absent); !os.IsNotExist(err) {
+		t.Errorf("a unit that wasn't installed was written")
+	}
+	if !slices.Equal(calls, []string{"daemon-reload", "reset-failed a.service"}) {
+		t.Errorf("systemctl calls %v", calls)
+	}
+	calls = nil
+	if got := refreshUnits(map[string]string{stale: "new"}, systemctl, t.Logf); got != nil || calls != nil {
+		t.Errorf("a current unit was refreshed: %v, %v", got, calls)
+	}
+}
