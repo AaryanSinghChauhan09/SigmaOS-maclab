@@ -810,11 +810,31 @@ def ffmpeg_vaapi(ctx):
     return [Measure("ffmpeg-vaapi", f"{ctx.version('clip')} (ffmpeg {v})", parse_ffmpeg(r.out), "fps", True)]
 
 
+def wake_rtc(h):
+    """An RTC that can wake the Mac from suspend, its alarm on and its device
+    allowed to wake; None when there is none (Apple Silicon's macsmc RTC has
+    no alarm)."""
+    for rel in h.glob("sys/class/rtc/rtc*"):
+        wakeup = rel + "/device/power/wakeup"
+        if h.read(rel + "/wakealarm") is None or h.read(wakeup) is None:
+            continue
+        if h.read(wakeup) != "enabled":
+            try:
+                h.write(wakeup, "enabled")
+            except OSError:
+                continue
+        return os.path.basename(rel)
+    return None
+
+
 def suspend(ctx):
     h = ctx.host
     if os.geteuid() != 0 or not h.which("rtcwake"):
         raise Skip("needs root and rtcwake")
-    _ok(h.run(["rtcwake", "-m", "mem", "-s", "15"], timeout=120), "rtcwake")
+    rtc = wake_rtc(h)
+    if not rtc:
+        raise Skip("suspend needs a wake source, and no RTC on this Mac has an alarm that can wake it")
+    _ok(h.run(["rtcwake", "-d", rtc, "-m", "mem", "-s", "15"], timeout=120), "rtcwake")
     sus, res = parse_suspend(_ok(h.run(["dmesg"], timeout=30), "dmesg").out)
     k = os.uname().release
     return [Measure("suspend", k, sus, "ms", False), Measure("resume", k, res, "ms", False)]
