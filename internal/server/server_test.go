@@ -1222,7 +1222,7 @@ func TestOmarchyMTest(t *testing.T) {
 	l.baseline()
 	jobs, _ := l.s.store.jobs("sim-mac", 1, false)
 	base := jobs[0]
-	if o := base.Result.OMT; o == nil || !o.KnownGood || o.Pass != 3 || o.Fail != 1 || o.Skip != 1 || o.Published != "" || o.Reference != "became the reference" {
+	if o := base.Result.OMT; o == nil || !o.KnownGood || o.Pass != 4 || o.Fail != 0 || o.Skip != 1 || o.Published != "" || o.Reference != "became the reference" {
 		t.Fatalf("baseline omt %+v", base.Result.OMT)
 	}
 

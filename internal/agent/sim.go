@@ -1073,8 +1073,15 @@ func (s *Sim) omtReport(t api.TestSpec, outDir, behavior string) api.TestResult 
 	s.mu.Lock()
 	// a candidate boot's kernel is a package of the candidate
 	kernel, packaged := s.kernel, slices.Contains(s.PackagedKernels, s.kernel) || IsCandidateBoot(s.cmdline)
+	candidate := IsCandidateBoot(s.cmdline)
 	s.mu.Unlock()
 	wifi, pkg := "pass", "pass"
+	// A candidate's root, a snapshot of @, holds /.snapshots (a subvolume
+	// inside @) as an empty directory, as on a Mac.
+	snapshots, snapshotsSay := "pass", "/.snapshots is a btrfs subvolume holding 2 snapshots"
+	if candidate {
+		snapshots, snapshotsSay = "fail", "/.snapshots is not a btrfs subvolume"
+	}
 	if kernel != SimKnownGood && !packaged {
 		pkg = "fail" // a lab kernel is never an installed package
 	}
@@ -1096,7 +1103,7 @@ func (s *Sim) omtReport(t api.TestSpec, outDir, behavior string) api.TestResult 
 "checks":[{"id":"boot.kernel-package","kind":"automatic","status":%q,"evidence":["kernel package"],"classification":{"outcome":"works"}},
 {"id":"hardware.drivers","kind":"automatic","status":%q,"evidence":["nodes"],"classification":{"outcome":"works"}},
 {"id":"wifi.connected","kind":"automatic","status":%q,"evidence":["wlan0 up"],"classification":{"outcome":"works"}},
-{"id":"system.snapshots","kind":"automatic","status":"fail","evidence":["/.snapshots is not a btrfs subvolume"],"classification":{"outcome":"fails"}}%s],"signature":{"public_key":"ssh-ed25519 AAAA","signature":"sim"}}`, unclaimed, kernel, pkg, drivers, wifi, onScreen)
+{"id":"system.snapshots","kind":"automatic","status":%q,"evidence":[%q],"classification":{"outcome":"works"}}%s],"signature":{"public_key":"ssh-ed25519 AAAA","signature":"sim"}}`, unclaimed, kernel, pkg, drivers, wifi, snapshots, snapshotsSay, onScreen)
 	if s.OMTReport != nil {
 		report = string(s.OMTReport(kernel))
 	}

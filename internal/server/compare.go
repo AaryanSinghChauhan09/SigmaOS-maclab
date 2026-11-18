@@ -896,9 +896,13 @@ func (r *jobRun) compareReport(res *api.CompareResult, learn bool) {
 		}
 	}
 	slices.Sort(ids)
+	candidate := a.Boot == api.CandidateConfirmed || b.Boot == api.CandidateConfirmed
 	for _, id := range ids {
 		c := api.CompareCheck{ID: id, A: cmpOr(a.OMT.Status[id], "-"), B: cmpOr(b.OMT.Status[id], "-")}
+		why, byLab := candidateFails[id]
 		switch {
+		case candidate && byLab && c.A != c.B:
+			c.Change, c.Note = api.CheckNotCompared, "Candidate boot: "+why
 		case c.A == "pass" && c.B == "fail":
 			c.Change = api.CheckRegressed
 			res.Regressed++
@@ -912,6 +916,13 @@ func (r *jobRun) compareReport(res *api.CompareResult, learn bool) {
 		}
 		res.Checks = append(res.Checks, c)
 	}
+}
+
+// candidateFails are the omarchy-m-test checks a Candidate boot itself
+// fails, whatever its set, with why. They are not compared when a side is
+// one: the check is right about the root it sees, which is the lab's.
+var candidateFails = map[string]string{
+	"system.snapshots": "it runs from @lab-candidate, a snapshot of @, in which /.snapshots (a subvolume inside @) is an empty directory",
 }
 
 // ---- the Mac's noise: its A-side values, kept in compare-noise.json ----

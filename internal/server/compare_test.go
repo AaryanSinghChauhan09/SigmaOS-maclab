@@ -178,6 +178,13 @@ func TestCompareCurrentAgainstASet(t *testing.T) {
 	if wifi == nil || wifi.A != "pass" || wifi.B != "fail" || wifi.Change != api.CheckRegressed || res.Regressed != 1 {
 		t.Errorf("omarchy-m-test: %+v (%d regressed)", res.Checks, res.Regressed)
 	}
+	// The Candidate boot's root holds no /.snapshots subvolume: the lab's
+	// doing, not the set's.
+	for _, c := range res.Checks {
+		if c.ID == "system.snapshots" && (c.A != "pass" || c.B != "fail" || c.Change != api.CheckNotCompared || !strings.Contains(c.Note, "Candidate boot")) {
+			t.Errorf("system.snapshots: %+v", c)
+		}
+	}
 
 	ops := strings.Join(l.sim.CandidateOps(), ", ")
 	for _, want := range []string{"resolve linux-aurora=" + candidateKernel, "stage 7.3", "check", "cleanup"} {
