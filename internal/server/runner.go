@@ -437,6 +437,14 @@ func (s *Server) runJobAsked(ctx context.Context, v *dev, j *api.Job, c *jobCanc
 		if r.serialEnabled() {
 			s.copySerial(v.d.Name, r.serial0, j.ID)
 		}
+		// The Lease a Compare took ends before the Mac is free: nobody sees
+		// it ready under that Lease. Its job is still the Mac's, so the end
+		// cancels nothing of it.
+		if c := j.Spec.Compare; c != nil && c.LeaseTaken {
+			if err := s.releaseLease(v, s.submitter(j), compareHolder, false, ""); err != nil {
+				s.log.Printf("job %s: the Lease it took: %v", j.ID, err)
+			}
+		}
 		// The job stops counting for a drain in the step that frees the
 		// Mac, as it started counting in the one that gave it the Mac.
 		v.mu.Lock()
@@ -447,13 +455,12 @@ func (s *Server) runJobAsked(ctx context.Context, v *dev, j *api.Job, c *jobCanc
 		}
 		v.sendOwedDoneLocked()
 		v.saveLocked()
+		freed := v.afterFree
 		v.mu.Unlock()
-		s.lapse(v) // a Lease extended for this job ends with it
-		if c := j.Spec.Compare; c != nil && c.LeaseTaken {
-			if err := s.releaseLease(v, s.submitter(j), compareHolder, false, ""); err != nil {
-				s.log.Printf("job %s: the Lease it took: %v", j.ID, err)
-			}
+		if freed != nil {
+			freed()
 		}
+		s.lapse(v) // a Lease extended for this job ends with it
 	}()
 
 	// A Mac still on a lab entry (an earlier job's restore failed or was cut

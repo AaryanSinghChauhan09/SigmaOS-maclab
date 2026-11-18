@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 )
@@ -53,17 +52,8 @@ func TestTheSerialConsoleIsRefusedEverywhere(t *testing.T) {
 	}
 
 	// With the Mac off the network, lab exec has no other way to it.
-	v := l.s.dev(l.name)
-	var r *http.Response
-	var body string
-	for try := 0; try < 20; try++ {
-		v.mu.Lock()
-		v.d.LastSeen = time.Time{}
-		v.mu.Unlock()
-		if r, body = l.execAs(ada, "DO_NOT_TYPE"); r.StatusCode != 200 {
-			break
-		}
-	}
+	l.offNetwork()
+	r, body := l.execAs(ada, "DO_NOT_TYPE")
 	if r.StatusCode != http.StatusConflict || !strings.Contains(body, l.name+" is offline") || !strings.Contains(body, strings.TrimSpace(noConsoleLine)) || strings.Count(body, "\n") != 1 {
 		t.Fatalf("lab exec on a Mac off the network: %s %q; want 409 and one plain line", r.Status, body)
 	}

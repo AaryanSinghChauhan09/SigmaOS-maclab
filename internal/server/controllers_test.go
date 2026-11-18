@@ -19,7 +19,7 @@ func TestHardResetsGoToTheControllerThatSeesTheMac(t *testing.T) {
 
 	bad := add
 	bad.Fingerprint = strings.Repeat("ab", 32)
-	if r, body := l.as(harnessToken, "POST", "/api/controllers", bad); r.StatusCode != http.StatusBadGateway {
+	if r, body := l.as(harnessToken, "POST", "/api/controllers", bad); r.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("a controller with the wrong certificate pinned: %d %s", r.StatusCode, body)
 	}
 	bad = add

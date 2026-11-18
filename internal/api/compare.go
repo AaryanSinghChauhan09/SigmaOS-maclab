@@ -110,6 +110,9 @@ const (
 	CheckFail      = "fail"
 	CheckRegressed = "regressed"
 	CheckFixed     = "fixed"
+	// CheckNotCompared is a check a Candidate boot itself makes fail: its
+	// Note says why.
+	CheckNotCompared = "not compared"
 )
 
 // CompareCheck is one omarchy-m-test check on both sides.
@@ -117,7 +120,8 @@ type CompareCheck struct {
 	ID     string `json:"id"`
 	A      string `json:"a"`
 	B      string `json:"b"`
-	Change string `json:"change"` // CheckPass, CheckFail, CheckRegressed or CheckFixed
+	Change string `json:"change"` // CheckPass, CheckFail, CheckRegressed, CheckFixed or CheckNotCompared
+	Note   string `json:"note,omitempty"`
 }
 
 // CompareHands is the pause for a person a Compare asked for (--hands).

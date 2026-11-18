@@ -51,6 +51,45 @@ type lab struct {
 	hc        *http.Client // the harness's client for labd; nil is apiClient
 	// changeReport edits the next reports the simulated Mac signs (labConfig.reports).
 	changeReport atomic.Pointer[func(map[string]any)]
+	// offNet keeps the simulated Mac's requests from labd (offNetwork);
+	// fromMac counts those labd is handling.
+	offNet  atomic.Bool
+	fromMac atomic.Int64
+}
+
+// offNetwork takes the simulated Mac off the network for good: nothing its
+// lab-agent sends reaches labd from now on, and labd is told it last heard
+// from the Mac never. It returns once no check-in labd was already handling
+// is left to say otherwise.
+func (l *lab) offNetwork() {
+	l.t.Helper()
+	l.offNet.Store(true)
+	for end := time.Now().Add(time.Minute); l.fromMac.Load() != 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			l.t.Fatal("labd was still handling the Mac's requests a minute after it went off the network")
+		}
+	}
+	v := l.s.dev(l.name)
+	v.mu.Lock()
+	v.d.LastSeen = time.Time{}
+	v.mu.Unlock()
+}
+
+// network is the wire between the simulated Mac and labd: offNetwork cuts it.
+func (l *lab) network(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/agent/") {
+			// counted before the cut is looked at: offNetwork waits for
+			// every request that got past it
+			l.fromMac.Add(1)
+			defer l.fromMac.Add(-1)
+			if l.offNet.Load() {
+				http.Error(w, "the Mac is off the network", http.StatusBadGateway)
+				return
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 func (l *lab) reportChange(body map[string]any) {
@@ -148,6 +187,10 @@ type labConfig struct {
 	prefix string
 	// agent adjusts the simulated Mac's lab-agent before it starts.
 	agent func(*agent.Config)
+	// silent is for a test that silences the Mac on purpose: labd writes it
+	// off after quietGrace on the lab's clock, not after the wall time a
+	// lab on the sped-up clock otherwise gives a silent Mac.
+	silent bool
 }
 
 func newLabWith(t *testing.T, c labConfig) *lab {
@@ -185,7 +228,13 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 		RebootGrace: 2 * time.Second, LabClockSkew: time.Second, WatchdogIdleReset: 2 * time.Second}
 	if sc, ok := clock.(*agent.ScaledClock); ok {
 		// A Mac comes back over real HTTP: give it the same wall time as ever.
+		// The same goes for its silences: a busy runner under -race holds up
+		// its check-ins for hundreds of milliseconds, which would be seconds
+		// of quietGrace on this clock, and a command on it would count lost.
 		cfg.BootTimeout = sc.Scaled(cfg.BootTimeout)
+		if !c.silent {
+			cfg.QuietGrace = sc.Scaled(quietGrace)
+		}
 	}
 	if withOOB {
 		cfg.OOB, cfg.SightEvery = l.oob.client, 200*time.Millisecond
@@ -219,6 +268,7 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	if c.wrap != nil {
 		handler = c.wrap(handler)
 	}
+	handler = l.network(handler)
 	hs := &httptest.Server{Listener: ln, Config: &http.Server{Handler: handler}}
 	policy := labhttp.Policy{}
 	if c.tls != nil {
@@ -1071,7 +1121,7 @@ func TestQuietSpellWindow(t *testing.T) {
 // spell it announced, so a hang in the next test is caught after quietGrace,
 // not once the spell would have ended.
 func TestQuietSpellEndsWhenTheMacIsBack(t *testing.T) {
-	l := newLab(t, false)
+	l := newLabWith(t, labConfig{silent: true})
 	l.baseline()
 	// The spell outlasts the hang, which ends in a reset that labd would
 	// otherwise see first.
@@ -1166,7 +1216,7 @@ func TestOmarchyMTest(t *testing.T) {
 	l.baseline()
 	jobs, _ := l.s.store.jobs("sim-mac", 1, false)
 	base := jobs[0]
-	if o := base.Result.OMT; o == nil || !o.KnownGood || o.Pass != 3 || o.Fail != 1 || o.Skip != 1 || o.Published != "" || o.Reference != "became the reference" {
+	if o := base.Result.OMT; o == nil || !o.KnownGood || o.Pass != 4 || o.Fail != 0 || o.Skip != 1 || o.Published != "" || o.Reference != "became the reference" {
 		t.Fatalf("baseline omt %+v", base.Result.OMT)
 	}
 
@@ -1399,7 +1449,7 @@ func TestStageNoRetryWhileItMayRun(t *testing.T) {
 			"staging failed: " + errDeviceLost.Error() + " (not tried again: the Mac may still be staging it)"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			l := newLab(t, true)
+			l := newLabWith(t, labConfig{oob: true, silent: true})
 			l.baseline()
 			if c.timeout > 0 {
 				l.s.cfg.StageTimeout = c.timeout
@@ -1741,7 +1791,7 @@ func (l *lab) cancelWhen(id, msg string) {
 // A cancel while labd waits for a Lab boot it lost, with no kernel error
 // seen, is the cancel's: the Mac may only have lost its network.
 func TestCancelWhileWaitingForALostMacIsNotTheKernels(t *testing.T) {
-	l := newLab(t, false)
+	l := newLabWith(t, labConfig{silent: true})
 	l.baseline()
 	l.sim.HangFor = 20 * time.Second // silent long enough to cancel meanwhile
 	j, _, err := l.s.Submit(api.JobSpec{Device: l.name, Kernel: l.artifact("krel=7.2-quiet behavior=hang-in-test")})
@@ -1757,7 +1807,7 @@ func TestCancelWhileWaitingForALostMacIsNotTheKernels(t *testing.T) {
 // A Lab boot that is off the network past quietGrace during its test, and
 // then back on the same boot, lost its network, not its kernel.
 func TestNetworkBackOnTheSameBootIsLostContact(t *testing.T) {
-	l := newLab(t, false)
+	l := newLabWith(t, labConfig{silent: true})
 	l.baseline()
 	l.sim.SuspendFor = 8 * time.Second // past quietGrace (3s), unannounced
 	// labd waits for the lost test's budget too: keep it seconds long
@@ -1777,7 +1827,7 @@ func TestNetworkBackOnTheSameBootIsLostContact(t *testing.T) {
 // check-in gap falls on the wait's end: labd judges by what it heard, not by
 // one look at that moment.
 func TestNetworkBackOnTheSameBootIsLostContactThoughSilentAtTheDeadline(t *testing.T) {
-	l := newLab(t, false)
+	l := newLabWith(t, labConfig{silent: true})
 	l.baseline()
 	l.sim.SuspendFor = 8 * time.Second
 	l.s.cfg.TestGrace = 2 * time.Second

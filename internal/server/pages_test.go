@@ -99,8 +99,8 @@ func TestEveryPageHasTheOneHeaderForWhoeverLooks(t *testing.T) {
 	}{
 		{"signed out", l.browser(), "", "", "", false, false},
 		{"signed in, no role", l.signedIn(nobodyID), "Lend a Mac", "nobody-yet", `<span class="badge kind-none">no role</span>`, false, false},
-		{"a Maintainer", maintainer, "Macs, Jobs, Builds, Releases, People", "ravi", `<span class="badge kind-maintainer">Maintainer</span>`, true, true},
-		{"an Admin", l.signedIn(ownerID), "Macs, Jobs, Builds, Releases, People", "owner", `<span class="badge kind-admin">Admin</span>`, true, true},
+		{"a Maintainer", maintainer, "Macs, Jobs, Compares, Builds, Releases, People", "ravi", `<span class="badge kind-maintainer">Maintainer</span>`, true, true},
+		{"an Admin", l.signedIn(ownerID), "Macs, Jobs, Compares, Builds, Releases, People", "owner", `<span class="badge kind-admin">Admin</span>`, true, true},
 	} {
 		for _, target := range []string{"/", "/terms", "/privacy", "/no-such-page"} {
 			w := c.b.do("GET", target, "")

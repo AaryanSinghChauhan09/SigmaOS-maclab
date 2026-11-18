@@ -15,7 +15,7 @@
 </table></div>
 {{if .Checks}}<p class="dim">omarchy-m-test checks that are not a pass on both sides:</p>
 <ul class="record">
-{{range .Checks}}<li><b>{{.ID}}</b> A {{.A}}, B {{.B}}: <span class="{{if eq .Change "regressed"}}job-bad{{else if eq .Change "fixed"}}job-ok{{else}}dim{{end}}">{{.Change}}</span></li>
+{{range .Checks}}<li><b>{{.ID}}</b> A {{.A}}, B {{.B}}: <span class="{{if eq .Change "regressed"}}job-bad{{else if eq .Change "fixed"}}job-ok{{else}}dim{{end}}">{{.Change}}</span>{{if .Note}} <span class="dim">({{.Note}})</span>{{end}}</li>
 {{end}}</ul>
 {{end}}<div class="scroll"><table class="list stack">
 <thead><tr><th>Side</th><th>Set</th><th>Boot</th><th>Kernel</th><th>GPU firmware</th><th>SIO</th><th>Thunderbolt</th><th>Failed units</th><th>omarchy-m-test</th></tr></thead>

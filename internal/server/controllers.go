@@ -159,7 +159,7 @@ func (s *Server) addController(ctx context.Context, in api.ControllerAdd, by str
 	cancel()
 	if err != nil {
 		os.Remove(tokenFile)
-		return savedController{}, refuse(http.StatusBadGateway, "the controller %s was not added: %v", in.Name, err)
+		return savedController{}, refuse(http.StatusServiceUnavailable, "the controller %s was not added: %v", in.Name, err)
 	}
 	sc := savedController{Name: in.Name, URL: c.URL, Fingerprint: c.Pinned(), Index: index, RIDs: rids, AddedBy: by, At: s.now()}
 	if err := s.writeControllers(append(saved, sc)); err != nil {

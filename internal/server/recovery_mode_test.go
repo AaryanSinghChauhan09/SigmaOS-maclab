@@ -249,9 +249,7 @@ func TestRecoveryTransactionIsolatesExecBeforeAnyJob(t *testing.T) {
 		t.Fatal(d)
 	}
 	// Before a job exists, an offline /exec must not fall back to foreign serial.
-	v.mu.Lock()
-	v.d.LastSeen = time.Time{}
-	v.mu.Unlock()
+	l.offNetwork()
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"command":"DO_NOT_EXECUTE"}`))
 	req.SetPathValue("name", l.name)

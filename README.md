@@ -1302,6 +1302,10 @@ lab compare show <job>
 lab compare publish <job>                                         # its page /compares/<job> is public
 ```
 
+On the site, Compares (Maintainers) lists every Compare, private and published.
+`lab retry <job>` or Retry on a Compare's page queues the same Compare again:
+the same Mac, sets, tier and flags.
+
 **A builder's kernels boot as root on lab Macs.** What the artifact store's 20 GB budget clears is in
 [docs/builder.md](docs/builder.md).
 

@@ -922,7 +922,7 @@ func (s *Server) readIdentity(ctx context.Context, v *dev, m *installed.Manifest
 		return nil, err
 	}
 	if !tr.Passed {
-		return nil, refuse(502, "the identity check on %s did not pass: %s %s", name, testVerdict(tr), lastLine(tr.Tail))
+		return nil, refuse(409, "the identity check on %s did not pass: %s %s", name, testVerdict(tr), lastLine(tr.Tail))
 	}
 	v.mu.Lock()
 	raw := read.files["test-"+t.Name+"/observed.json"]
@@ -930,11 +930,11 @@ func (s *Server) readIdentity(ctx context.Context, v *dev, m *installed.Manifest
 	var o installed.Observed
 	switch {
 	case raw == nil:
-		return nil, refuse(502, "the identity check on %s sent no observation", name)
+		return nil, refuse(409, "the identity check on %s sent no observation", name)
 	case json.Unmarshal(raw, &o) != nil:
-		return nil, refuse(502, "the identity check on %s sent an observation labd cannot read", name)
+		return nil, refuse(409, "the identity check on %s sent an observation labd cannot read", name)
 	case o.Job != read.id || o.Device != name:
-		return nil, refuse(502, "the observation %s sent is of %q for %q, not this freeze's", name, o.Device, o.Job)
+		return nil, refuse(409, "the observation %s sent is of %q for %q, not this freeze's", name, o.Device, o.Job)
 	}
 	return &o, nil
 }

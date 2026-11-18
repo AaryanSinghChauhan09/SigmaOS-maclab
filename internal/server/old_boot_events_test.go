@@ -143,7 +143,7 @@ func TestTestKernelOopsBeforeItsFirstCheckinIsItsOwn(t *testing.T) {
 // A fatal event of an earlier boot, reported while the Lab boot was up, is not
 // why that boot lost the network for a while.
 func TestLostDuringTestIgnoresEarlierBootEvent(t *testing.T) {
-	l := newLab(t, false)
+	l := newLabWith(t, labConfig{silent: true})
 	l.baseline()
 	old := l.s.dev(l.name).snapshot().BootID
 	l.sim.SuspendFor = 8 * time.Second

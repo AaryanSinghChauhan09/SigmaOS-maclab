@@ -309,7 +309,7 @@ func TestFD01FailsWithoutKeepalives(t *testing.T) {
 
 func TestFD02FreezeEntryAnswersAsAStream(t *testing.T) {
 	t.Parallel()
-	passes(t, "fd02-freeze-entry", "answered as a stream", "labd's error and its status (502)")
+	passes(t, "fd02-freeze-entry", "answered as a stream", "labd's error and its status (409)")
 	fails(t, "no-keepalives", "fd02-freeze-entry", "no Keepalive came within 5 s")
 }
 

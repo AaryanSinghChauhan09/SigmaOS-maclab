@@ -99,8 +99,8 @@ func TestRow2MatchesTheTableForEachOfTheSixViewers(t *testing.T) {
 		NoRole:     "Lend a Mac",
 		External:   "My Macs",
 		MTeam:      "Macs, Jobs, Releases",
-		Maintainer: "Macs, Jobs, Builds, Releases, People",
-		Admin:      "Macs, Jobs, Builds, Releases, People",
+		Maintainer: "Macs, Jobs, Compares, Builds, Releases, People",
+		Admin:      "Macs, Jobs, Compares, Builds, Releases, People",
 	} {
 		body, _ := page(t, s, "home", viewer(k), Page{})
 		row := between(t, body, `<div class="lab-row">`, `</div>`)

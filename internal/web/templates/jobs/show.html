@@ -13,14 +13,19 @@
 <dt>Asked</dt><dd>{{.Asked}}, by {{if .By}}@{{.By}}{{else}}the lab{{end}}{{if .UnderLease}} <span class="dim">under a Lease</span>{{end}}</dd>
 {{if .Took}}<dt>Took</dt><dd>{{.Took}}</dd>
 {{end}}{{if .BootedIn}}<dt>Booted in</dt><dd>{{.BootedIn}}</dd>
-{{end}}<dt>Kernel</dt><dd>{{if .Source}}built from {{.Source}}{{if .Build}}, build {{if .BuildOpens}}<a href="{{href (print "/builds/" .Build)}}">{{.Build}}</a>{{else}}{{.Build}}{{end}}{{end}}{{if .Kernel}}<br>{{template "copy" (copy "the kernel" .Kernel)}}{{end}}{{else if .Kernel}}{{template "copy" (copy "the kernel" .Kernel)}}{{else}}the Mac's Known-good kernel{{end}}</dd>
-{{if .Cmdline}}<dt>Arguments</dt><dd>{{template "copy" (copy "the arguments" .Cmdline)}}</dd>
+{{end}}{{with .CompareAsked}}<dt>Before (A)</dt><dd>{{if .BeforeHref}}<a href="{{.BeforeHref}}">{{.Before}}</a>{{else}}{{.Before}}{{end}}{{if .Current}}: the Mac's known-good system{{end}}</dd>
+<dt>After (B)</dt><dd>{{if .AfterHref}}<a href="{{.AfterHref}}">{{.After}}</a>{{else}}{{.After}}{{end}}</dd>
+<dt>Tier</dt><dd>{{.Tier}}</dd>
+<dt>macOS</dt><dd>{{if .MacOS}}yes{{else}}no{{end}}</dd>
+<dt>A person at the Mac</dt><dd>{{if .Hands}}yes{{else}}no{{end}}</dd>
+{{else}}<dt>Kernel</dt><dd>{{if .Source}}built from {{.Source}}{{if .Build}}, build {{if .BuildOpens}}<a href="{{href (print "/builds/" .Build)}}">{{.Build}}</a>{{else}}{{.Build}}{{end}}{{end}}{{if .Kernel}}<br>{{template "copy" (copy "the kernel" .Kernel)}}{{end}}{{else if .Kernel}}{{template "copy" (copy "the kernel" .Kernel)}}{{else}}the Mac's Known-good kernel{{end}}</dd>
+{{end}}{{if .Cmdline}}<dt>Arguments</dt><dd>{{template "copy" (copy "the arguments" .Cmdline)}}</dd>
 {{end}}{{if .Tests}}<dt>Tests</dt><dd>{{.Tests}}</dd>
 {{end}}{{if .Timeout}}<dt>Boot timeout</dt><dd>{{.Timeout}} s</dd>
 {{end}}{{if .RetryOf}}<dt>Retries</dt><dd><a href="{{href (print "/jobs/" .RetryOf)}}">{{.RetryOf}}</a></dd>
 {{end}}{{if .FellBack}}<dt>Fell back</dt><dd>the Mac came back on its Known-good kernel</dd>
 {{end}}</dl>
-{{if or .CanCancel .Retry}}<p>{{if .CanCancel}}{{template "take" ($.Take (print "/jobs/" .ID "/cancel") "Cancel" .CancelSentence)}}{{end}}{{if .Retry}}<form class="inline" method="post" action="{{href (print "/jobs/" .ID "/retry")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Retry</button></form> <span class="dim">Queues the same Mac, kernel, tests and arguments again, as you.</span>{{end}}</p>
+{{if or .CanCancel .Retry}}<p>{{if .CanCancel}}{{template "take" ($.Take (print "/jobs/" .ID "/cancel") "Cancel" .CancelSentence)}}{{end}}{{if .Retry}}<form class="inline" method="post" action="{{href (print "/jobs/" .ID "/retry")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Retry</button></form> <span class="dim">{{if .CompareAsked}}Queues the same Compare again: the same Mac, sets, tier, macOS and person at the Mac, as you, under your Lease.{{else}}Queues the same Mac, kernel, tests and arguments again, as you.{{end}}</span>{{end}}</p>
 {{end}}</section>
 {{with .Compare}}{{template "compare-report" .}}{{if or .CanPublish .Waiting}}<p>{{if .Waiting}}<form class="inline" method="post" action="{{href (print "/compares/" .ID "/done")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Done</button></form> <span class="dim">The person at the Mac is done; the Compare goes on.</span> {{end}}{{if .CanPublish}}<form class="inline" method="post" action="{{href (print "/compares/" .ID "/publish")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Publish</button></form> <span class="dim">Puts this report on its own public page.</span>{{end}}</p>
 {{end}}{{end}}{{if .Results}}<section class="card">

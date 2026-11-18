@@ -8,6 +8,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -197,6 +198,19 @@ type jobData struct {
 	Events           []jobEvent
 	Files            []string
 	Compare          *compareView
+	// CompareAsked is what a Compare was asked to do, in place of a kernel
+	// and tests.
+	CompareAsked *compareAsked
+}
+
+type compareAsked struct {
+	Before, After, Tier string
+	// Current is a side A of the Mac's own system, with no set.
+	Current      bool
+	MacOS, Hands bool
+	// BeforeHref and AfterHref are the sets' pages while whoever reads the
+	// job may open them.
+	BeforeHref, AfterHref string
 }
 
 type jobTest struct {
@@ -250,6 +264,16 @@ func (s *Server) renderJob(w http.ResponseWriter, r *http.Request, j *api.Job, p
 		Kernel: spec.Kernel, Source: spec.Source, Build: spec.Build, BuildOpens: p.isMaintainer(), Cmdline: spec.Cmdline,
 		Timeout: spec.BootTimeoutSec, RetryOf: j.RetryOf, UnderLease: j.UnderLease, FellBack: res.FellBack, Recovery: res.Recovery}
 	data.State, data.StateClass = jobState(j)
+	if cs := spec.Compare; cs != nil {
+		asked := &compareAsked{Before: cs.Before, After: cs.After, Tier: cs.Tier, Current: cs.Before == api.CompareCurrent, MacOS: cs.MacOS, Hands: cs.Hands}
+		if p.isMaintainer() {
+			asked.AfterHref = s.href("/builds/sets/" + url.PathEscape(cs.After))
+			if !asked.Current {
+				asked.BeforeHref = s.href("/builds/sets/" + url.PathEscape(cs.Before))
+			}
+		}
+		data.CompareAsked = asked
+	}
 	if data.Compare = compareViewOf(j); data.Compare != nil {
 		data.Compare.CanPublish = p.isMaintainer() && j.State == api.JobDone && j.Result.Compare.Published == nil
 		data.Compare.Waiting = data.Compare.Waiting && s.mayHands(p, j)
@@ -260,7 +284,7 @@ func (s *Server) renderJob(w http.ResponseWriter, r *http.Request, j *api.Job, p
 	}
 	done := j.State == api.JobDone
 	if done {
-		data.Took = took(j.Updated.Sub(j.Created))
+		data.Took = took(doneAt(j).Sub(j.Created))
 	} else {
 		data.Reloads = refused == nil
 		if n := len(j.Events); n > 0 {
@@ -271,7 +295,7 @@ func (s *Server) renderJob(w http.ResponseWriter, r *http.Request, j *api.Job, p
 		data.BootedIn = took(time.Duration(res.BootSeconds * float64(time.Second)))
 	}
 	data.CanCancel, data.CancelSentence = !done && mayCancel(p, j) == nil, cancelSentence(j)
-	data.Retry = done && p.OnMTeam()
+	data.Retry = done && p.OnMTeam() && (spec.Compare == nil || p.isMaintainer())
 
 	names := []string{"boot-health"}
 	for _, t := range spec.Tests {
@@ -283,7 +307,7 @@ func (s *Server) renderJob(w http.ResponseWriter, r *http.Request, j *api.Job, p
 			names = append(names, name)
 		}
 	}
-	if spec.Crash == "" && !spec.Baseline {
+	if spec.Crash == "" && !spec.Baseline && spec.Compare == nil {
 		data.Tests = strings.Join(names, ", ")
 	}
 	files := slices.Clone(res.Logs)
@@ -408,6 +432,17 @@ func (s *Server) pJobPublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.toJob(w, j.ID)
+}
+
+// doneAt is when a finished job ended: its "done" event. What comes after,
+// a Compare published or a Lease's end noted, moves Updated, not the end.
+func doneAt(j *api.Job) time.Time {
+	for i := len(j.Events) - 1; i >= 0; i-- {
+		if strings.HasPrefix(j.Events[i].Msg, "done: ") {
+			return j.Events[i].Time
+		}
+	}
+	return j.Updated
 }
 
 // toJob sends the browser to a job's page.

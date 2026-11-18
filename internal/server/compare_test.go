@@ -178,6 +178,13 @@ func TestCompareCurrentAgainstASet(t *testing.T) {
 	if wifi == nil || wifi.A != "pass" || wifi.B != "fail" || wifi.Change != api.CheckRegressed || res.Regressed != 1 {
 		t.Errorf("omarchy-m-test: %+v (%d regressed)", res.Checks, res.Regressed)
 	}
+	// The Candidate boot's root holds no /.snapshots subvolume: the lab's
+	// doing, not the set's.
+	for _, c := range res.Checks {
+		if c.ID == "system.snapshots" && (c.A != "pass" || c.B != "fail" || c.Change != api.CheckNotCompared || !strings.Contains(c.Note, "Candidate boot")) {
+			t.Errorf("system.snapshots: %+v", c)
+		}
+	}
 
 	ops := strings.Join(l.sim.CandidateOps(), ", ")
 	for _, want := range []string{"resolve linux-aurora=" + candidateKernel, "stage 7.3", "check", "cleanup"} {
@@ -185,11 +192,33 @@ func TestCompareCurrentAgainstASet(t *testing.T) {
 			t.Errorf("candidate ops %q lack %q", ops, want)
 		}
 	}
-	// The Lease the Compare took ends as the job frees the Mac, just after
-	// the Mac is ready again.
+	// The Lease the Compare took ends as the job frees the Mac.
 	d := l.waitDevice(func(d api.Device) bool { return d.State == api.StateReady && d.Lease == nil })
 	if d.Kernel != agent.SimKnownGood || d.Health.JobTag != "" {
 		t.Errorf("after the Compare the Mac is on %s (job tag %q)", d.Kernel, d.Health.JobTag)
+	}
+}
+
+// The Lease a Compare took ends before the Mac is ready again: nobody sees
+// a ready Mac still under it, however long labd takes after freeing it.
+func TestACompareEndsItsLeaseBeforeTheMacIsReady(t *testing.T) {
+	l, _ := compareLab(t, nil)
+	v := l.s.dev("sim-mac")
+	seen := make(chan api.Device, 1)
+	v.mu.Lock()
+	v.afterFree = func() {
+		seen <- v.snapshot()
+		time.Sleep(300 * time.Millisecond)
+	}
+	v.mu.Unlock()
+	l.expect(l.mustCompare(api.CompareRequest{Before: api.CompareCurrent, After: "7.3"}), api.OutcomePass)
+	select {
+	case d := <-seen:
+		if d.State == api.StateReady && d.Lease != nil {
+			t.Errorf("the Mac was ready under the Compare's Lease: %+v", d.Lease)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the job never freed the Mac")
 	}
 }
 

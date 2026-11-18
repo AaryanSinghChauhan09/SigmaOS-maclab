@@ -2,7 +2,8 @@ package server
 
 // A Compare's report on the site: on its job's page for Maintainers, with
 // Publish and, while it waits for a person, Done; once published, on its
-// own public page /compares/{id} (not kept by the edge).
+// own public page /compares/{id} (not kept by the edge). Compares lists
+// them all for Maintainers.
 
 import (
 	"fmt"
@@ -14,6 +15,7 @@ import (
 )
 
 func init() {
+	addPage("GET /compares", web.Maintainers, (*Server).pCompares)
 	addPage("GET /compares/{id}", web.Anyone, (*Server).pCompare)
 	addPage("POST /compares/{id}/publish", web.Maintainers, (*Server).pComparePublish)
 	addPage("POST /compares/{id}/done", web.SignedIn, (*Server).pCompareDone)
@@ -155,4 +157,61 @@ func (s *Server) pCompareDone(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", s.basePath()+"/macs/"+j.Spec.Device)
 	w.WriteHeader(http.StatusSeeOther)
+}
+
+type compareRow struct {
+	ID, Mac, Before, After, Tier string
+	MacOS, Hands                 bool
+	State, StateClass            string
+	// Verdicts is the report in a line; "" until there is one.
+	Verdicts string
+	// Published is when, or "" while the Compare is private; Href its
+	// public page.
+	Published, Href string
+	When            string
+}
+
+// compareJobs lists the newest Compares, up to limit.
+func (st *store) compareJobs(limit int) ([]*api.Job, error) {
+	return scanJobs(st.db.Query(`SELECT data FROM jobs WHERE json_extract(data, '$.spec.compare') IS NOT NULL ORDER BY created DESC LIMIT ?`, limit))
+}
+
+// verdictsLine is a Compare's report in a line: how many benchmarks went
+// each way, and omarchy-m-test's regressed and fixed checks.
+func verdictsLine(res *api.CompareResult) string {
+	count := map[string]int{}
+	for _, r := range res.Rows {
+		count[r.Verdict]++
+	}
+	var parts []string
+	for _, v := range []string{api.VerdictBetter, api.VerdictWorse, api.VerdictNoChange, api.VerdictNotCompared} {
+		if count[v] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", count[v], v))
+		}
+	}
+	line := orStr(strings.Join(parts, ", "), "no benchmark")
+	return fmt.Sprintf("%s; omarchy-m-test %d regressed, %d fixed", line, res.Regressed, res.Fixed)
+}
+
+func (s *Server) pCompares(w http.ResponseWriter, r *http.Request) {
+	jobs, err := s.store.compareJobs(jobsShown)
+	if err != nil {
+		s.log.Printf("compares: %v", err)
+		httpErr(w, 500, "The lab couldn't list its Compares.")
+		return
+	}
+	var rows []compareRow
+	for _, j := range jobs {
+		cs := j.Spec.Compare
+		row := compareRow{ID: j.ID, Mac: j.Spec.Device, Before: cs.Before, After: cs.After, Tier: cs.Tier, MacOS: cs.MacOS, Hands: cs.Hands, When: whenDay(j.Created)}
+		row.State, row.StateClass = jobState(j)
+		if res := j.Result.Compare; res != nil {
+			row.Verdicts = verdictsLine(res)
+			if res.Published != nil {
+				row.Published, row.Href = whenDay(*res.Published), s.href("/compares/"+j.ID)
+			}
+		}
+		rows = append(rows, row)
+	}
+	s.render(w, r, "compares", web.Page{Title: "Compares", Nav: "compares", Data: struct{ Compares []compareRow }{rows}})
 }

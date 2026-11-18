@@ -117,7 +117,11 @@ func printCompare(out io.Writer, j *api.Job) error {
 	fmt.Fprintf(out, "omarchy-m-test: %d regressed, %d fixed\n", res.Regressed, res.Fixed)
 	for _, c := range res.Checks {
 		if c.Change != api.CheckPass {
-			fmt.Fprintf(out, "  %s: A %s, B %s, %s\n", c.ID, c.A, c.B, c.Change)
+			if c.Note != "" {
+				fmt.Fprintf(out, "  %s: A %s, B %s, %s (%s)\n", c.ID, c.A, c.B, c.Change, c.Note)
+			} else {
+				fmt.Fprintf(out, "  %s: A %s, B %s, %s\n", c.ID, c.A, c.B, c.Change)
+			}
 		}
 	}
 	w = tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)

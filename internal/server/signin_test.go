@@ -623,7 +623,7 @@ func TestABrowsersWriteMustComeFromTheLabsOwnPages(t *testing.T) {
 func TestGitHubsRefusalSignsNobodyIn(t *testing.T) {
 	l := newSignInLab(t, func(c *Config) { c.GitHub.ClientSecret = "not-the-secret" })
 	b := l.browser()
-	if w := b.signIn(ownerID, ""); w.Code != http.StatusBadGateway || b.session() != nil || !strings.Contains(w.Body.String(), "GitHub didn't sign you in") {
+	if w := b.signIn(ownerID, ""); w.Code != http.StatusServiceUnavailable || b.session() != nil || !strings.Contains(w.Body.String(), "GitHub didn't sign you in") {
 		t.Errorf("GitHub refused the app's secret: %d %s", w.Code, w.Body)
 	}
 	if strings.Contains(l.browser().do("GET", "/", "").Body.String(), "GitHub didn't") {
@@ -633,7 +633,7 @@ func TestGitHubsRefusalSignsNobodyIn(t *testing.T) {
 	l = newSignInLab(t, nil)
 	l.gh.AddUser(9, "not a handle")
 	b = l.browser()
-	if w := b.signIn(9, ""); w.Code != http.StatusBadGateway || b.session() != nil {
+	if w := b.signIn(9, ""); w.Code != http.StatusServiceUnavailable || b.session() != nil {
 		t.Errorf("GitHub named %q: %d %s", "not a handle", w.Code, w.Body)
 	}
 	b = l.browser()
@@ -648,7 +648,7 @@ func TestGitHubsRefusalSignsNobodyIn(t *testing.T) {
 	u, _ = url.Parse(b.toGitHub(ownerID, ""))
 	q = u.Query()
 	q.Set("code", "not-the-code")
-	if w := b.do("GET", u.Path+"?"+q.Encode(), ""); w.Code != http.StatusBadGateway || b.session() != nil {
+	if w := b.do("GET", u.Path+"?"+q.Encode(), ""); w.Code != http.StatusServiceUnavailable || b.session() != nil {
 		t.Errorf("a callback with a code GitHub never gave: %d %s", w.Code, w.Body)
 	}
 	if n := l.count(`SELECT count(*) FROM people WHERE account_id != ?`, testAccount("ada")); n != 0 {

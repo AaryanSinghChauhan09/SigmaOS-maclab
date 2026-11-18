@@ -267,7 +267,7 @@ func (s *Server) pin(ctx context.Context, raw string) (k knownPerson, err error)
 	case errors.Is(err, errNoSuchAccount):
 		return k, refuse(http.StatusUnprocessableEntity, "GitHub knows no @%s.", handle)
 	case err != nil:
-		return k, refuse(http.StatusBadGateway, "GitHub didn't say who @%s is (%v). Nothing was changed: try again.", handle, err)
+		return k, refuse(http.StatusServiceUnavailable, "GitHub didn't say who @%s is (%v). Nothing was changed: try again.", handle, err)
 	}
 	// A Blocked person stays as the lab has them: nothing is given to one.
 	if had, err := s.subject(who.ID); err == nil && had.Blocked {

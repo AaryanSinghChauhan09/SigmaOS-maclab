@@ -1753,6 +1753,13 @@ func (s *Server) retry(by Person, id, holder string) (*api.Job, int, error) {
 	if old.State != api.JobDone {
 		return nil, 409, fmt.Errorf("job %s is still %s; only a finished job can be retried", id, old.State)
 	}
+	if old.Spec.Compare != nil {
+		j, err := s.retryCompare(by, old)
+		if err != nil {
+			return nil, statusOf(err), err
+		}
+		return j, 200, nil
+	}
 	spec := old.Spec
 	spec.Tests = slices.Clone(spec.Tests)
 	spec.CmdlineStrip = slices.Clone(spec.CmdlineStrip)
