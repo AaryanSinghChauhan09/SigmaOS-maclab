@@ -3,7 +3,8 @@
   "decisions": [
     "Chrome: Chrome for Testing has a Stable linux-arm64 build (157.0.8103.78, listed in last-known-good-versions-with-downloads.json on 2026-11-17); it is the pinned Chrome. Google's arm64 .deb has an unversioned URL, so it is not used. Chromium is the Arch Linux ARM package of the same version.",
     "vkpeak: no aarch64 build in Arch Linux ARM or upstream releases; the source is pinned and the runner uses a vkpeak found on the Mac, else records it skipped.",
-    "kernel: 7.3.5, the current stable; arm64 defconfig, make -j$(nproc) Image."
+    "kernel: 7.3.5, the current stable; arm64 defconfig, make -j$(nproc) Image.",
+    "CoreMark: the open CPU score in place of Geekbench, whose free edition uploads every result and whose --no-upload needs a paid licence (owner, 2026-11-19). Geekbench stays, skipped without a licence."
   ],
   "items": [
     {
@@ -140,6 +141,27 @@
       "root": "linux-7.3.5",
       "entry": "Makefile",
       "note": "current stable is 7.x (no 6.x stable); defconfig build"
+    },
+    {
+      "name": "bc",
+      "version": "1.08.2-1",
+      "kind": "pacman",
+      "url": "http://mirror.archlinuxarm.org/aarch64/extra/bc-1.08.2-1-aarch64.pkg.tar.xz",
+      "sha256": "46eb4cdf9e195db632780ca4185c686dd7acb37699b4b7ee35c3e8244100d354",
+      "size": 89340,
+      "entry": "usr/bin/bc",
+      "note": "the kernel build's one tool Omarchy does not install; it needs only readline beside it, and the runner puts its usr/bin on make's PATH"
+    },
+    {
+      "name": "coremark",
+      "version": "1.01",
+      "kind": "source",
+      "url": "https://codeload.github.com/eembc/coremark/tar.gz/refs/tags/v1.01",
+      "sha256": "99c5a6d63af85a281b4e4d6ccb522c446653c435dfec9455ad73ef9e71f28bde",
+      "size": 401208,
+      "root": "coremark-1.01",
+      "entry": "core_main.c",
+      "note": "EEMBC CoreMark, Apache-2.0, tag v1.01 at cfa9ab377835911f23d9b0831c7be302ed1f58de; built on the Mac with gcc -O2 (linux64 port), once single-threaded and once with a thread per core"
     },
     {
       "name": "clip",

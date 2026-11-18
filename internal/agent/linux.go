@@ -163,10 +163,17 @@ func (l *Linux) Preflight() (problems, warnings []string) {
 	if n, _ := strconv.Atoi(readTrim("/proc/sys/kernel/panic")); n <= 0 {
 		p = append(p, "kernel.panic is 0: a panic would hang instead of rebooting (run lab-agent setup)")
 	}
-	if kg, err := l.knownGood(); err != nil {
-		p = append(p, err.Error())
-	} else if _, err := os.Stat("/usr/lib/modules/" + kg.Kernel); err != nil {
-		p = append(p, "known-good kernel "+kg.Kernel+" is no longer installed")
+	_, _, cmdline := l.Identity()
+	kg, err := l.knownGood()
+	problem, note := knownGoodCheck(cmdline, readTrim("/"+candidateMarker), kg, err, func(k string) bool {
+		_, err := os.Stat("/usr/lib/modules/" + k)
+		return err == nil
+	})
+	if problem != "" {
+		p = append(p, problem)
+	}
+	if note != "" {
+		warnings = append(warnings, note)
 	}
 	if why := stageRoom(b); why != "" {
 		p = append(p, why)
@@ -783,3 +790,29 @@ func (c *capped) Write(p []byte) (int, error) {
 }
 
 func (c *capped) String() string { return string(c.b) }
+
+// knownGoodCheck is preflight's problem with the known-good kernel kg (or
+// kgErr reading it). On a Candidate boot of set the running root is the
+// snapshot @lab-candidate, whose kernels are the set's: the known-good
+// kernel stays in @, so it is not looked for, and a note says why (lab
+// baseline here would make the candidate's kernel the known-good).
+func knownGoodCheck(cmdline, set string, kg *KnownGood, kgErr error, installed func(string) bool) (problem, note string) {
+	if IsCandidateBoot(cmdline) {
+		note = "Candidate boot"
+		if set != "" {
+			note += " of set " + set
+		}
+		note += ": the known-good system is untouched in @"
+		if kg != nil {
+			note += " (known-good kernel " + kg.Kernel + ")"
+		}
+		return "", note
+	}
+	if kgErr != nil {
+		return kgErr.Error(), ""
+	}
+	if !installed(kg.Kernel) {
+		return "known-good kernel " + kg.Kernel + " is no longer installed", ""
+	}
+	return "", ""
+}

@@ -1,10 +1,14 @@
 package agent
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,16 +21,18 @@ import (
 
 // A Candidate boot runs a Package set from a snapshot of @ (see api.CmdCandidateStage).
 // @, its boot entry and the known-good kernel are never changed; only a set
-// carrying a boot loader changes the ESP's boot.bin, and only with a Sighting.
+// that changes the boot loader changes the ESP's boot.bin, only with a
+// Sighting, and candidate_cleanup puts the known-good one back.
 
 const (
 	candidateMarker = "etc/maclab-candidate"
 	candidateState  = "candidate.json"
+	bootBinPrev     = "boot-prev.bin"
+	bootBinStaged   = "boot-candidate.bin"
 )
 
 var (
 	reSHA256       = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	reBootLoader   = regexp.MustCompile(`^(m1n1|uboot-.*|u-boot.*|asahi-boot)$`)
 	reCandidatePkg = regexp.MustCompile(`^[A-Za-z0-9@._+-]+$`)
 )
 
@@ -55,6 +61,7 @@ type candidateHost struct {
 	KnownGood  *KnownGood
 	GUIUser    string
 	M1N1Dir    string // <esp>/m1n1
+	PacmanDB   string // the known-good system's pacman database: /var/lib/pacman/local
 	WorkDir    string
 	DRMDir     string // /sys/class/drm
 	Cmdline    string // this boot's
@@ -93,7 +100,7 @@ func (h *candidateHost) stage(ctx context.Context, job string, a api.CandidateSt
 		if !reCandidatePkg.MatchString(p.Name) || !reSHA256.MatchString(p.SHA256) {
 			return res, fmt.Errorf("bad package %q (sha256 %q)", p.Name, p.SHA256)
 		}
-		if reBootLoader.MatchString(p.Name) {
+		if api.IsBootLoaderPackage(p.Name) && !h.installed(p.Name, p.Version) {
 			res.BootLoader = true
 		}
 	}
@@ -166,14 +173,15 @@ func (h *candidateHost) stage(ctx context.Context, job string, a api.CandidateSt
 	if err = h.Lim.writeEntries(); err != nil {
 		return res, err
 	}
+	// The record first: candidate_cleanup reads it to put boot.bin back.
+	if err = writeJSONAtomic(filepath.Join(h.WorkDir, candidateState), candidateRecord{Job: job, Set: a.Set.Name, BootLoader: res.BootLoader}); err != nil {
+		return res, err
+	}
 	if res.BootLoader {
-		if err = h.swapBootLoader(ctx, cand); err != nil {
+		if err = h.swapBootLoader(ctx, cand, krel); err != nil {
 			return res, err
 		}
 		res.RestoreSteps = candidateRestoreSteps
-	}
-	if err = writeJSONAtomic(filepath.Join(h.WorkDir, candidateState), candidateRecord{Job: job, Set: a.Set.Name, BootLoader: res.BootLoader}); err != nil {
-		return res, err
 	}
 	res.Entry, res.KernelRelease, res.Cmdline = entryPrefix+job, krel, cmdline
 	return res, nil
@@ -214,22 +222,150 @@ func (h *candidateHost) fetchSet(ctx context.Context, job string, set api.Candid
 	return files, nil
 }
 
-// swapBootLoader keeps boot.bin as boot-prev.bin and builds the new one
-// from the candidate's m1n1, U-Boot and device trees.
-func (h *candidateHost) swapBootLoader(ctx context.Context, cand string) error {
+// installed is the known-good system holding package name at version.
+func (h *candidateHost) installed(name, version string) bool {
+	if version == "" || h.PacmanDB == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(h.PacmanDB, name+"-"+version, "desc"))
+	return err == nil
+}
+
+// swapBootLoader keeps boot.bin as boot-prev.bin, builds the candidate's
+// beside it from its m1n1, U-Boot, kernel krel's device trees and m1n1.conf
+// (update-m1n1, as pacman's hook does), checks it, and only then puts it in
+// place. A build that is not sound leaves boot.bin as it was.
+func (h *candidateHost) swapBootLoader(ctx context.Context, cand, krel string) error {
 	cur := filepath.Join(h.M1N1Dir, "boot.bin")
-	if err := copyFile(cur, filepath.Join(h.M1N1Dir, "boot-prev.bin")); err != nil {
+	prev := filepath.Join(h.M1N1Dir, bootBinPrev)
+	staged := filepath.Join(h.M1N1Dir, bootBinStaged)
+	m1n1 := filepath.Join(cand, "usr/lib/asahi-boot/m1n1.bin")
+	uboot := filepath.Join(cand, "usr/lib/asahi-boot/u-boot-nodtb.bin")
+	dtbs := filepath.Join(cand, "usr/lib/modules", krel, "dtbs", "*.dtb")
+	for _, f := range []string{m1n1, uboot} {
+		if _, err := os.Stat(f); err != nil {
+			return fmt.Errorf("the candidate has no %s, so no boot.bin can be built from it; boot.bin is unchanged", strings.TrimPrefix(f, cand+"/"))
+		}
+	}
+	if m, _ := filepath.Glob(dtbs); len(m) == 0 {
+		return fmt.Errorf("the candidate's kernel %s has no device trees (usr/lib/modules/%s/dtbs); boot.bin is unchanged", krel, krel)
+	}
+	if err := copyFile(cur, prev); err != nil {
 		return fmt.Errorf("keeping boot.bin: %w", err)
 	}
-	if err := syncFile(filepath.Join(h.M1N1Dir, "boot-prev.bin")); err != nil {
+	if err := syncFile(prev); err != nil {
 		return err
 	}
-	env := append(os.Environ(),
-		"M1N1="+filepath.Join(cand, "usr/lib/asahi-boot/m1n1.bin"),
-		"U_BOOT="+filepath.Join(cand, "usr/share/uboot-asahi/u-boot-nodtb.bin"),
-		"DTBS="+filepath.Join(cand, "boot/dtbs/*/apple/*.dtb"),
-	)
-	return h.run(ctx, env, "update-m1n1", cur)
+	os.Remove(staged)
+	env := append(os.Environ(), "M1N1="+m1n1, "U_BOOT="+uboot, "DTBS="+dtbs, "CONFIG="+filepath.Join(cand, "etc/m1n1.conf"))
+	if err := h.run(ctx, env, "update-m1n1", staged); err != nil {
+		os.Remove(staged)
+		os.Remove(staged + ".new")
+		return fmt.Errorf("%w; boot.bin is unchanged", err)
+	}
+	if err := checkBootBin(staged, m1n1, uboot); err != nil {
+		os.Remove(staged)
+		return fmt.Errorf("the boot.bin built from the candidate is not sound, so boot.bin is unchanged: %w", err)
+	}
+	if err := syncFile(staged); err != nil {
+		return err
+	}
+	if err := os.Rename(staged, cur); err != nil {
+		return err
+	}
+	return syncFile(cur)
+}
+
+// restoreBootLoader puts the known-good boot.bin, kept as boot-prev.bin by
+// swapBootLoader, back in place.
+func (h *candidateHost) restoreBootLoader() error {
+	prev := filepath.Join(h.M1N1Dir, bootBinPrev)
+	staged := filepath.Join(h.M1N1Dir, bootBinStaged)
+	if _, err := os.Stat(prev); err != nil {
+		return fmt.Errorf("putting the known-good boot loader back: %w; boot.bin is still the candidate's", err)
+	}
+	if err := copyFile(prev, staged); err != nil {
+		return err
+	}
+	if err := syncFile(staged); err != nil {
+		return err
+	}
+	if err := os.Rename(staged, filepath.Join(h.M1N1Dir, "boot.bin")); err != nil {
+		return err
+	}
+	return syncFile(filepath.Join(h.M1N1Dir, "boot.bin"))
+}
+
+// reM1N1Option is a line update-m1n1 appends from m1n1.conf.
+var reM1N1Option = regexp.MustCompile(`^(chosen\.[^=]+|display|mitigations)=.*$`)
+
+// checkBootBin checks a boot.bin update-m1n1 built, the way m1n1 stage 1
+// reads it: the candidate's m1n1 whole, then whole device trees, then
+// U-Boot gzipped and whole, then only m1n1.conf options. A cut-short or
+// empty file, or one of other parts, is refused.
+func checkBootBin(path, m1n1Path, ubootPath string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	m, err := os.ReadFile(m1n1Path)
+	if err != nil {
+		return err
+	}
+	u, err := os.ReadFile(ubootPath)
+	if err != nil {
+		return err
+	}
+	switch {
+	case len(b) == 0:
+		return errors.New("it is empty")
+	case len(m) == 0:
+		return errors.New("the candidate's m1n1.bin is empty")
+	case !bytes.HasPrefix(b, m):
+		n := min(len(b), len(m))
+		i := 0
+		for i < n && b[i] == m[i] {
+			i++
+		}
+		return fmt.Errorf("it does not start with the candidate's m1n1 (%d bytes): they differ from byte %d of %d", len(m), i, len(b))
+	}
+	rest := b[len(m):]
+	dtbs := 0
+	for len(rest) >= 8 && binary.BigEndian.Uint32(rest) == 0xd00dfeed {
+		n := binary.BigEndian.Uint32(rest[4:8])
+		if n < 40 || uint64(n) > uint64(len(rest)) {
+			return fmt.Errorf("device tree %d is cut short: %d bytes left of its %d", dtbs+1, len(rest), n)
+		}
+		rest, dtbs = rest[n:], dtbs+1
+	}
+	if dtbs == 0 {
+		return errors.New("no device tree follows m1n1")
+	}
+	if len(rest) < 2 || rest[0] != 0x1f || rest[1] != 0x8b {
+		return fmt.Errorf("no gzipped U-Boot follows the %d device trees", dtbs)
+	}
+	r := bytes.NewReader(rest)
+	z, err := gzip.NewReader(r)
+	if err != nil {
+		return fmt.Errorf("U-Boot: %w", err)
+	}
+	z.Multistream(false)
+	got, err := io.ReadAll(z)
+	if err != nil {
+		return fmt.Errorf("U-Boot is cut short or damaged: %w", err)
+	}
+	if !bytes.Equal(got, u) {
+		return fmt.Errorf("U-Boot is not the candidate's: %d bytes, want %d", len(got), len(u))
+	}
+	for _, l := range strings.Split(string(rest[len(rest)-r.Len():]), "\n") {
+		if l != "" && !reM1N1Option.MatchString(l) {
+			if len(l) > 40 {
+				l = l[:40]
+			}
+			return fmt.Errorf("unexpected bytes after U-Boot: %q", l)
+		}
+	}
+	return nil
 }
 
 // candidateRoot is the known-good cmdline booting @lab-candidate instead of @.
@@ -544,9 +680,17 @@ func (h *candidateHost) armLabBoot(ctx context.Context, job string, write func(d
 	return write(filepath.Join(h.cand(), h.WorkDir, labBootDir))
 }
 
-// cleanup removes the candidate's entry and, unless kept, its subvolume.
+// cleanup removes the candidate's entry and, unless kept, its subvolume, and
+// puts the known-good boot loader back after a set that changed it.
 func (h *candidateHost) cleanup(ctx context.Context, job string, keep bool) error {
 	var errs []error
+	var rec candidateRecord
+	restored := true
+	if b, err := os.ReadFile(filepath.Join(h.WorkDir, candidateState)); err == nil && json.Unmarshal(b, &rec) == nil && rec.BootLoader {
+		if err := h.restoreBootLoader(); err != nil {
+			errs, restored = append(errs, err), false
+		}
+	}
 	if job != "" && !strings.ContainsAny(job, "/. ") {
 		errs = append(errs, os.RemoveAll(filepath.Join(h.Lim.Stage, job)))
 	}
@@ -562,7 +706,9 @@ func (h *candidateHost) cleanup(ctx context.Context, job string, keep bool) erro
 			umount()
 		}
 	}
-	os.Remove(filepath.Join(h.WorkDir, candidateState))
+	if restored {
+		os.Remove(filepath.Join(h.WorkDir, candidateState))
+	}
 	return errors.Join(errs...)
 }
 
@@ -607,7 +753,7 @@ func (l *Linux) candidateHost() (*candidateHost, error) {
 			return combinedGroup(cmd)
 		},
 		Top: "/run/maclab-candidate", RootSource: root.Source, Lim: lim, KnownGood: kg,
-		GUIUser: l.GUIUser, M1N1Dir: filepath.Join(esp.Target, "m1n1"), WorkDir: l.WorkDir,
+		GUIUser: l.GUIUser, M1N1Dir: filepath.Join(esp.Target, "m1n1"), PacmanDB: "/var/lib/pacman/local", WorkDir: l.WorkDir,
 		DRMDir: "/sys/class/drm", Cmdline: cmdline,
 		UKI: ukiWriter{ScratchRoot: "/var/lib/maclab",
 			Lock:  func() (func(), error) { return lockBootPartition(time.Minute) },

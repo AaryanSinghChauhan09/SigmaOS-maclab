@@ -14,6 +14,11 @@ sys.path.insert(0, str(HERE))
 
 import bench  # noqa: E402
 
+COREMARK = """[3]crcfinal      : 0xa14c
+Correct operation validated. See readme.txt for run and reporting rules.
+CoreMark 1.0 : 177922.751872 / GCC14.2.1 20250207 -O2 / Heap / 4:PThreads
+"""
+
 SEVEN_ZIP = """
 7-Zip 26.06 (arm64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-05-03
       Compressing  |                  Decompressing
@@ -117,6 +122,11 @@ class Parsers(unittest.TestCase):
     def test_boot_total(self):
         self.assertAlmostEqual(bench.parse_boot(BOOT), 73.539)
         self.assertAlmostEqual(bench.parse_boot("Startup finished in 2.5s (kernel) + 820ms (userspace) = 3.320s\n"), 3.32)
+
+    def test_coremark(self):
+        self.assertEqual(bench.parse_coremark(COREMARK), 177922.751872)
+        with self.assertRaisesRegex(bench.ParseError, "at least 10 secs"):
+            bench.parse_coremark("Iterations/Sec   : 900.0\nERROR! Must execute for at least 10 secs for a valid result!\n")
 
     def test_geekbench(self):
         self.assertEqual(bench.parse_geekbench(GEEKBENCH), {"single": 2690, "multi": 14740})
@@ -267,7 +277,7 @@ class Runner(unittest.TestCase):
         self.assertEqual(bench.TIERS["default"], ["speedometer-chrome", "motionmark-chrome", "7zip", "glmark2", "vkmark", "boot"])
         ext = bench.TIERS["extended"]
         self.assertEqual(ext[:6], bench.TIERS["default"])
-        for b in ("speedometer-chromium", "jetstream-chrome", "geekbench", "kernel-compile", "vkpeak", "clpeak", "ffmpeg-vaapi", "suspend"):
+        for b in ("speedometer-chromium", "jetstream-chrome", "geekbench", "coremark", "kernel-compile", "vkpeak", "clpeak", "ffmpeg-vaapi", "suspend"):
             self.assertIn(b, ext)
         for name in ext:
             self.assertIn(name, bench.BENCHES)
@@ -382,6 +392,62 @@ class Packages(unittest.TestCase):
         self.clpeak_pkg("Backend: OpenCL\nclGetPlatformIDs (-1001)\nno platforms found")
         with self.assertRaises(bench.Skip):
             bench.clpeak(self.ctx)
+
+
+class Builds(unittest.TestCase):
+    """Benchmarks built on the Mac from pinned source, with gcc."""
+
+    class Host(bench.Host):
+        def __init__(self):
+            super().__init__()
+            self.ran = []
+
+        def which(self, name):
+            return "/usr/bin/" + name
+
+        def run(self, cmd, timeout=None, env=None, gui=False, cwd=None):
+            self.ran.append((cmd, env, cwd))
+            if cmd[0].endswith(("coremark-1", "coremark-%d" % os.cpu_count())):
+                return bench.Ran(0, COREMARK, 20.0)
+            return bench.Ran(0, "", 30.0)
+
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.cache = pathlib.Path(self.d.name, "cache")
+        self.work = pathlib.Path(self.d.name, "work")
+        self.cache.mkdir()
+        self.work.mkdir()
+        self.m = bench.load_manifest(HERE / "benchmarks.json")
+        self.h = self.Host()
+        self.ctx = bench.Ctx(self.h, self.m, self.cache, self.work)
+
+    def tearDown(self):
+        self.d.cleanup()
+
+    def source(self, item, files):
+        pacman_pkg(self.cache, self.m[item]["sha256"], {self.m[item]["root"] + "/" + f: ("", 0o644) for f in files})
+
+    def test_coremark_builds_once_single_and_once_a_thread_per_core(self):
+        self.source("coremark", ["core_main.c", "linux64/core_portme.c"])
+        ms = bench.coremark(self.ctx)
+        self.assertEqual([m.name for m in ms], ["coremark-single", "coremark-multi"])
+        self.assertTrue(all(m.higher_is_better and m.unit == "iterations/s" for m in ms))
+        builds = [c for c, _, _ in self.h.ran if c[0] == "gcc"]
+        self.assertEqual(len(builds), 2)
+        self.assertNotIn("-DUSE_PTHREAD", builds[0])
+        self.assertIn(f"-DMULTITHREAD={os.cpu_count()}", builds[1])
+        self.assertIn("-DPERFORMANCE_RUN=1", builds[1])
+        self.assertIn(f"{os.cpu_count()} threads", ms[1].version)
+
+    def test_kernel_compile_finds_the_pinned_bc(self):
+        self.assertIn("bc", bench.BENCHES["kernel-compile"].needs)
+        self.source("kernel", ["Makefile"])
+        pacman_pkg(self.cache, self.m["bc"]["sha256"], {"usr/bin/bc": ("#!/bin/sh\n", 0o755)})
+        bench.kernel_compile(self.ctx)
+        makes = [(c, e) for c, e, _ in self.h.ran if c[0] == "make"]
+        self.assertEqual(len(makes), 2)
+        for _, env in makes:
+            self.assertTrue(env["PATH"].startswith(str(self.work / "bc" / "usr/bin") + ":"), env)
 
 
 class Browser(unittest.TestCase):

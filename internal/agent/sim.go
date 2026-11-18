@@ -227,7 +227,7 @@ func (s *Sim) Facts() api.Facts {
 		Initramfs: "mkinitcpio", GUIUser: "sim", Watchdog: true, WatchdogArmed: true, PanicTimeout: 10, PreflightOK: true}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if kg := s.knownGoodLocked(); slices.Contains(s.removedKernels, kg) {
+	if kg := s.knownGoodLocked(); slices.Contains(s.removedKernels, kg) && !IsCandidateBoot(s.cmdline) {
 		f.Problems, f.PreflightOK = []string{"known-good kernel " + kg + " is no longer installed"}, false
 	}
 	f.Problems = append(f.Problems, s.problems...)

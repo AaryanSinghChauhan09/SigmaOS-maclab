@@ -1,5 +1,10 @@
 package api
 
+import (
+	"regexp"
+	"strings"
+)
+
 // A Candidate boot boots a Package set on a Mac without changing its own
 // system: lab-agent snapshots @ to @lab-candidate, installs the set's files
 // into the snapshot and boots it once through a staged entry. labd sends, in
@@ -102,4 +107,31 @@ type CandidateResultArgs struct {
 
 type CandidateCleanupArgs struct {
 	Keep bool `json:"keep,omitempty"`
+}
+
+// bootLoaderPackage matches the packages that put m1n1 or U-Boot on a Mac.
+var bootLoaderPackage = regexp.MustCompile(`^(m1n1(-.+)?|uboot-.+|u-boot.*|asahi-boot)$`)
+
+// IsBootLoaderPackage is a package that puts m1n1 or U-Boot on the Mac.
+func IsBootLoaderPackage(name string) bool { return bootLoaderPackage.MatchString(name) }
+
+// BootLoaderChanges are the set's boot loader packages at another version
+// than installed (a Mac's Stack) holds, as "name version": the set changes
+// the boot loader every boot shares. A captured set, at the Mac's own
+// versions, changes nothing.
+func BootLoaderChanges(items []SetItem, installed map[string]string) []string {
+	var out []string
+	for _, it := range items {
+		if !IsBootLoaderPackage(it.Package) {
+			continue
+		}
+		v := it.Version
+		if v == "" && it.Source == SetRepo {
+			v = it.Ref
+		}
+		if v == "" || installed[it.Package] != v {
+			out = append(out, strings.TrimSpace(it.Package+" "+v))
+		}
+	}
+	return out
 }

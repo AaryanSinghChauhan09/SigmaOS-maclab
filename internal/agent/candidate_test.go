@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -33,6 +36,9 @@ type fakeCandidateMac struct {
 	// journal is what the candidate's journal holds when read back: "" is a
 	// candidate that never ran.
 	journal string
+	// bootBin builds what update-m1n1 writes from its env's parts; nil
+	// builds it as update-m1n1 does.
+	bootBin func(m1n1, dtbs, uboot []byte) []byte
 }
 
 func newCandidateMac(t *testing.T) *fakeCandidateMac {
@@ -61,6 +67,7 @@ func newCandidateMac(t *testing.T) *fakeCandidateMac {
 		KnownGood:  &KnownGood{Kernel: "7.2.11-kg", Cmdline: candidateKG},
 		GUIUser:    "volunteer",
 		M1N1Dir:    filepath.Join(esp, "m1n1"),
+		PacmanDB:   filepath.Join(dir, "pacman-local"),
 		WorkDir:    filepath.Join(dir, "work"),
 		DRMDir:     filepath.Join(dir, "drm"),
 		Fetch: func(ctx context.Context, sha, dst string) error {
@@ -106,11 +113,44 @@ func (f *fakeCandidateMac) run(ctx context.Context, env []string, name string, a
 		os.MkdirAll(db, 0o755)
 		os.WriteFile(filepath.Join(db, "desc"), []byte("%NAME%\nlinux-asahi\n\n%VERSION%\n1\n\n"), 0o644)
 		os.WriteFile(filepath.Join(db, "files"), []byte("%FILES%\nusr/\nusr/lib/\nusr/lib/modules/\nusr/lib/modules/"+f.krel+"/\nusr/lib/modules/"+f.krel+"/pkgbase\nusr/lib/modules/"+f.krel+"/vmlinuz\n\n"), 0o644)
+		boot := filepath.Join(root, "usr/lib/asahi-boot")
+		os.MkdirAll(boot, 0o755)
+		os.WriteFile(filepath.Join(boot, "m1n1.bin"), testM1N1, 0o644)
+		os.WriteFile(filepath.Join(boot, "u-boot-nodtb.bin"), testUBoot, 0o644)
+		os.MkdirAll(filepath.Join(mods, "dtbs"), 0o755)
+		os.WriteFile(filepath.Join(mods, "dtbs", "t6021-j416c.dtb"), testDTB(100), 0o644)
+		os.WriteFile(filepath.Join(mods, "dtbs", "t6021-j414c.dtb"), testDTB(64), 0o644)
 	case "mkinitcpio":
 		out := args[slices.Index(args, "-U")+1]
 		return nil, os.WriteFile(out, []byte("uki for "+strings.Join(args, " ")), 0o644)
 	case "update-m1n1":
-		return nil, os.WriteFile(filepath.Join(f.h.M1N1Dir, "boot.bin"), []byte("new boot.bin"), 0o644)
+		get := func(k string) string {
+			for _, e := range env {
+				if v, ok := strings.CutPrefix(e, k+"="); ok {
+					return v
+				}
+			}
+			return ""
+		}
+		m, err := os.ReadFile(get("M1N1"))
+		if err != nil {
+			return nil, err
+		}
+		u, err := os.ReadFile(get("U_BOOT"))
+		if err != nil {
+			return nil, err
+		}
+		paths, _ := filepath.Glob(get("DTBS"))
+		var dtbs []byte
+		for _, p := range paths {
+			b, _ := os.ReadFile(p)
+			dtbs = append(dtbs, b...)
+		}
+		build := f.bootBin
+		if build == nil {
+			build = func(m, d, u []byte) []byte { return testBootBin(m, d, u, "chosen.foo=1\n") }
+		}
+		return nil, os.WriteFile(args[0], build(m, dtbs, u), 0o644)
 	case "journalctl":
 		if f.journal == "" {
 			return []byte("-- No entries --\n"), nil
@@ -118,6 +158,30 @@ func (f *fakeCandidateMac) run(ctx context.Context, env []string, name string, a
 		return []byte(f.journal), nil
 	}
 	return nil, nil
+}
+
+var (
+	testM1N1  = bytes.Repeat([]byte{0x09, 0x06, 0x80, 0xd2}, 256)
+	testUBoot = bytes.Repeat([]byte("u-boot "), 300)
+)
+
+// testDTB is a device tree of n bytes: its header's magic and totalsize.
+func testDTB(n int) []byte {
+	b := make([]byte, n)
+	binary.BigEndian.PutUint32(b, 0xd00dfeed)
+	binary.BigEndian.PutUint32(b[4:], uint32(n))
+	return b
+}
+
+// testBootBin is update-m1n1's boot.bin: m1n1, the device trees, U-Boot
+// gzipped and the m1n1.conf options.
+func testBootBin(m1n1, dtbs, uboot []byte, conf string) []byte {
+	var z bytes.Buffer
+	w := gzip.NewWriter(&z)
+	w.Write(uboot)
+	w.Close()
+	out := append(append(append([]byte{}, m1n1...), dtbs...), z.Bytes()...)
+	return append(out, conf...)
 }
 
 func (f *fakeCandidateMac) ran(name string) []string {
@@ -295,7 +359,7 @@ func TestAFailedInstallLeavesNoCandidateBehind(t *testing.T) {
 }
 
 func TestABootLoaderInASetNeedsASighting(t *testing.T) {
-	for _, name := range []string{"m1n1", "uboot-asahi", "uboot-aurora"} {
+	for _, name := range []string{"m1n1", "m1n1-aurora", "uboot-asahi", "uboot-aurora"} {
 		f := newCandidateMac(t)
 		a := candidateArgs(t, candidatePkg(t, "linux-asahi", "k"), candidatePkg(t, name, "b"))
 		_, err := f.h.stage(context.Background(), "j1", a)
@@ -315,13 +379,33 @@ func TestABootLoaderSwapKeepsTheOldBootBinAndSaysHowToRestoreIt(t *testing.T) {
 	}
 	prev, _ := os.ReadFile(filepath.Join(f.h.M1N1Dir, "boot-prev.bin"))
 	now, _ := os.ReadFile(filepath.Join(f.h.M1N1Dir, "boot.bin"))
-	if string(prev) != "old boot.bin" || string(now) != "new boot.bin" {
-		t.Fatalf("prev %q now %q", prev, now)
+	want := testBootBin(testM1N1, append(testDTB(64), testDTB(100)...), testUBoot, "chosen.foo=1\n")
+	if string(prev) != "old boot.bin" || !bytes.Equal(now, want) {
+		t.Fatalf("prev %q, now %d bytes, want %d", prev, len(now), len(want))
+	}
+	if _, err := os.Stat(filepath.Join(f.h.M1N1Dir, "boot-candidate.bin")); err == nil {
+		t.Error("the staged boot.bin was left behind")
 	}
 	cand := filepath.Join(f.h.Top, api.CandidateSubvolume)
 	env := strings.Join(f.envs["update-m1n1"], " ")
-	if !strings.Contains(env, "M1N1="+filepath.Join(cand, "usr/lib/asahi-boot/m1n1.bin")) {
-		t.Fatalf("update-m1n1 env %q", env)
+	for _, w := range []string{
+		"M1N1=" + filepath.Join(cand, "usr/lib/asahi-boot/m1n1.bin"),
+		"U_BOOT=" + filepath.Join(cand, "usr/lib/asahi-boot/u-boot-nodtb.bin"),
+		"DTBS=" + filepath.Join(cand, "usr/lib/modules", f.krel, "dtbs", "*.dtb"),
+		"CONFIG=" + filepath.Join(cand, "etc/m1n1.conf"),
+	} {
+		if !strings.Contains(env, w) {
+			t.Errorf("update-m1n1 env has no %s: %q", w, env)
+		}
+	}
+	if c := f.ran("update-m1n1"); len(c) != 2 || c[1] != filepath.Join(f.h.M1N1Dir, "boot-candidate.bin") {
+		t.Errorf("update-m1n1 ran as %q: it builds beside boot.bin, never over it", c)
+	}
+	if err := f.h.cleanup(context.Background(), "j1", false); err != nil {
+		t.Fatal(err)
+	}
+	if now, _ := os.ReadFile(filepath.Join(f.h.M1N1Dir, "boot.bin")); string(now) != "old boot.bin" {
+		t.Errorf("candidate_cleanup left boot.bin %d bytes, not the known-good one", len(now))
 	}
 	if !res.BootLoader || !strings.Contains(res.RestoreSteps, "cp boot-prev.bin boot.bin") || !strings.Contains(res.RestoreSteps, "diskutil mount") {
 		t.Fatalf("res = %+v", res)
@@ -614,5 +698,114 @@ func TestCandidateResultKeepsTheJournalWithTheJob(t *testing.T) {
 	out, _ = a.candidate(context.Background(), api.Command{ID: "c2", Kind: api.CmdCandidateResult, JobID: "j1", Args: args})
 	if f := out.(api.CandidateFailure); !slices.Equal(f.Files, []string{"candidate/journal.txt"}) {
 		t.Fatalf("files %q", f.Files)
+	}
+}
+
+func TestASetAtTheInstalledBootLoaderVersionDoesNotChangeTheBootLoader(t *testing.T) {
+	f := newCandidateMac(t)
+	os.MkdirAll(filepath.Join(f.h.PacmanDB, "m1n1-aurora-1"), 0o755)
+	os.WriteFile(filepath.Join(f.h.PacmanDB, "m1n1-aurora-1", "desc"), []byte("%NAME%\nm1n1-aurora\n"), 0o644)
+	a := candidateArgs(t, candidatePkg(t, "linux-asahi", "k"), candidatePkg(t, "m1n1-aurora", "b"))
+	res, err := f.h.stage(context.Background(), "j1", a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.BootLoader || f.ran("update-m1n1") != nil {
+		t.Fatalf("a captured set's own m1n1 changed the boot loader: %+v", res)
+	}
+}
+
+func TestANewBootBinThatIsNotSoundIsRefusedAndBootBinStays(t *testing.T) {
+	gz := func(u []byte) []byte {
+		var z bytes.Buffer
+		w := gzip.NewWriter(&z)
+		w.Write(u)
+		w.Close()
+		return z.Bytes()
+	}
+	for _, c := range []struct {
+		name, want string
+		build      func(m, d, u []byte) []byte
+	}{
+		{"empty", "it is empty", func(m, d, u []byte) []byte { return nil }},
+		{"cut in m1n1", "does not start with the candidate's m1n1", func(m, d, u []byte) []byte { return m[:100] }},
+		{"another m1n1", "does not start with the candidate's m1n1", func(m, d, u []byte) []byte {
+			return testBootBin(append([]byte("x"), m[1:]...), d, u, "")
+		}},
+		{"no device tree", "no device tree follows m1n1", func(m, d, u []byte) []byte { return testBootBin(m, nil, u, "") }},
+		{"cut in a device tree", "device tree 2 is cut short", func(m, d, u []byte) []byte { return append(append([]byte{}, m...), d[:100]...) }},
+		{"no U-Boot", "no gzipped U-Boot", func(m, d, u []byte) []byte { return append(append([]byte{}, m...), d...) }},
+		{"cut in U-Boot", "U-Boot is cut short", func(m, d, u []byte) []byte {
+			b := testBootBin(m, d, u, "")
+			return b[:len(b)-10]
+		}},
+		{"another U-Boot", "U-Boot is not the candidate's", func(m, d, u []byte) []byte { return testBootBin(m, d, u[:10], "") }},
+		{"junk after U-Boot", "unexpected bytes after U-Boot", func(m, d, u []byte) []byte {
+			return append(append(append([]byte{}, m...), d...), append(gz(u), "rm -rf /\n"...)...)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newCandidateMac(t)
+			f.bootBin = c.build
+			a := candidateArgs(t, candidatePkg(t, "linux-asahi", "k"), candidatePkg(t, "m1n1-aurora", "b"))
+			a.Sighting = true
+			_, err := f.h.stage(context.Background(), "j1", a)
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "boot.bin is unchanged") {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+			if now, _ := os.ReadFile(filepath.Join(f.h.M1N1Dir, "boot.bin")); string(now) != "old boot.bin" {
+				t.Errorf("boot.bin changed: %d bytes", len(now))
+			}
+			if _, err := os.Stat(filepath.Join(f.h.M1N1Dir, "boot-candidate.bin")); err == nil {
+				t.Error("the refused boot.bin was left behind")
+			}
+		})
+	}
+}
+
+func TestACandidateWithoutUBootIsRefusedBeforeBuildingABootBin(t *testing.T) {
+	f := newCandidateMac(t)
+	a := candidateArgs(t, candidatePkg(t, "linux-asahi", "k"), candidatePkg(t, "uboot-aurora", "b"))
+	a.Sighting = true
+	orig := f.h.Run
+	f.h.Run = func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+		out, err := orig(ctx, env, name, args...)
+		if name == "pacman" {
+			os.Remove(filepath.Join(args[slices.Index(args, "--sysroot")+1], "usr/lib/asahi-boot/u-boot-nodtb.bin"))
+		}
+		return out, err
+	}
+	_, err := f.h.stage(context.Background(), "j1", a)
+	if err == nil || !strings.Contains(err.Error(), "no usr/lib/asahi-boot/u-boot-nodtb.bin") || f.ran("update-m1n1") != nil {
+		t.Fatalf("err = %v, update-m1n1 %q", err, f.ran("update-m1n1"))
+	}
+	if now, _ := os.ReadFile(filepath.Join(f.h.M1N1Dir, "boot.bin")); string(now) != "old boot.bin" {
+		t.Errorf("boot.bin changed")
+	}
+}
+
+// On a Candidate boot the running root is @lab-candidate, whose kernels are
+// the set's: preflight must not call the known-good kernel gone, nor send
+// anyone to lab baseline, which would make the candidate's kernel known-good.
+func TestPreflightOnACandidateBootDoesNotCallTheKnownGoodKernelGone(t *testing.T) {
+	kg := &KnownGood{Kernel: "7.2.11-15-1-ARCH"}
+	none := func(string) bool { return false }
+	cand := "root=UUID=abcd rootflags=subvol=@lab-candidate,compress=zstd maclab.job=j1"
+	problem, note := knownGoodCheck(cand, "kernel-aurora16", kg, nil, none)
+	if problem != "" || api.StaleKnownGood(problem) {
+		t.Errorf("problem %q on a Candidate boot", problem)
+	}
+	if note != "Candidate boot of set kernel-aurora16: the known-good system is untouched in @ (known-good kernel 7.2.11-15-1-ARCH)" {
+		t.Errorf("note %q", note)
+	}
+	problem, note = knownGoodCheck(candidateKG, "", kg, nil, none)
+	if !api.StaleKnownGood(problem) || note != "" {
+		t.Errorf("on @: problem %q, note %q", problem, note)
+	}
+	if problem, _ = knownGoodCheck(candidateKG, "", kg, nil, func(string) bool { return true }); problem != "" {
+		t.Errorf("installed known-good: %q", problem)
+	}
+	if problem, _ = knownGoodCheck(candidateKG, "", nil, errors.New("no known-good.json"), none); problem != "no known-good.json" {
+		t.Errorf("unreadable known-good: %q", problem)
 	}
 }
