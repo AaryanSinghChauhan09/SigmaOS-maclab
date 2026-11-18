@@ -1,0 +1,19 @@
+Linux version 7.2.11-15-1-ARCH (linux-aurora@archlinux) (clang version 18.1.8, LLD 18.1.8) #1 SMP PREEMPT_DYNAMIC Thu, 05 Nov 2026 22:02:13 +0000
+OF: reserved mem: 0x0000010001aa0000..0x0000010001db3fff (3152 KiB) nomap non-reusable asc-firmware@10001aa0000
+OF: reserved mem: 0x00000107ca498000..0x00000107ca49bfff (16 KiB) nomap non-reusable sio-firmware-data@107ca498000
+OF: reserved mem: 0x00000107ca49c000..0x00000107ca49ffff (16 KiB) nomap non-reusable sio-firmware-data@107ca49c000
+OF: reserved mem: 0x00000107ca4a0000..0x00000107ca4bffff (128 KiB) nomap non-reusable sio-firmware-data@107ca4a0000
+OF: reserved mem: 0x00000107ca4c0000..0x00000107ca4c3fff (16 KiB) nomap non-reusable sio-firmware-data@107ca4c0000
+OF: reserved mem: 0x0000010003aec000..0x0000010004097fff (5808 KiB) map non-reusable sep-firmware
+platform 39bc00000.sio: Adding to iommu group 9
+[drm] Initialized simpledrm 1.0.0 for 107d1439c00.framebuffer on minor 0
+asahi 406400000.gpu: Probing...
+asahi 406400000.gpu: MMU: initialized
+asahi 406400000.gpu: GPU Information:
+asahi 406400000.gpu:   Type: G14C
+asahi 406400000.gpu:   Active cores: 30
+asahi 406400000.gpu: Dynamic configuration fetched
+asahi 406400000.gpu: RTKit: Initializing (protocol version 12)
+[drm] Initialized asahi 0.0.0 for 406400000.gpu on minor 1
+apple-sio 39bc00000.sio: RTKit: Initializing (protocol version 12)
+apple-sio 39bc00000.sio: SIO protocol v9
