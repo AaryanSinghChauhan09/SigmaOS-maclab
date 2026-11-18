@@ -18,6 +18,12 @@
 <a{{if eq .Tab "live"}} class="current" aria-current="page"{{end}} href="{{href (print .Path "?tab=live")}}">Live</a>
 <a{{if eq .Tab "records"}} class="current" aria-current="page"{{end}} href="{{href (print .Path "?tab=records")}}">Records</a>
 </nav>
+{{- if .Hands}}
+<div class="fence" id="compare-hands">
+<p><b>Compare {{.Hands}} waits for a person at {{.Mac.Name}}</b> (attended checks, the lid, Touch ID; the candidate's speakers stay muted). Press Done when you are.</p>
+<form class="form-inline" method="post" action="{{href (print "/compares/" .Hands "/done")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Done</button></form>
+</div>
+{{- end}}
 <p class="flash" id="mac-changed" hidden>This Mac has changed since this page was made. <a href="">Show it as it is now</a></p>
 {{- if .Fence}}
 <div class="fence" id="live-fence">

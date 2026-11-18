@@ -121,6 +121,9 @@ func volunteerLogin(raw string) (string, error) {
 // name can be taken again, by anyone, and the old enrollment's jobs stay with
 // the Maintainers.
 func (s *Server) seesJob(c caller, j *api.Job) bool {
+	if comparePrivate(j) {
+		return c.maintainer != ""
+	}
 	if c.reads() {
 		return true
 	}
@@ -240,7 +243,7 @@ func (s *Server) macInScope(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) jobInScope(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, id := callerOf(r), r.PathValue("id")
-		if !c.reads() {
+		if c.maintainer == "" {
 			if j, err := s.store.job(id); err != nil || !s.seesJob(c, j) {
 				s.log.Printf("%s asked for %s %s, a job they don't see", c.login, r.Method, r.URL.Path)
 				httpErr(w, 404, "no job %s", id)

@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/omacom/omarchy-maclab/internal/agent/tests/bench"
 	"github.com/omacom/omarchy-maclab/internal/api"
 )
 
@@ -72,16 +73,18 @@ func artifactsIn(c api.Command) []string {
 	case api.CmdRunTest:
 		var t api.TestSpec
 		json.Unmarshal(c.Args, &t)
-		shas = append(shas, t.Script)
-		for _, p := range t.Payload {
-			shas = append(shas, p.SHA256)
-		}
+		shas = append(shas, testArtifacts(t)...)
 	case api.CmdBootOnce:
 		var a api.BootOnceArgs
 		json.Unmarshal(c.Args, &a)
 		for _, t := range a.Tests {
-			shas = append(shas, t.Script)
-			for _, p := range t.Payload {
+			shas = append(shas, testArtifacts(t)...)
+		}
+	case api.CmdCandidateStage:
+		var a api.CandidateStageArgs
+		json.Unmarshal(c.Args, &a)
+		for _, p := range a.Set.Packages {
+			if !strings.HasPrefix(p.URL, "/") {
 				shas = append(shas, p.SHA256)
 			}
 		}
@@ -91,6 +94,23 @@ func artifactsIn(c api.Command) []string {
 		shas = append(shas, mesaRefs(api.JobSpec{Mesa: &a.Spec})...)
 	}
 	return slices.DeleteFunc(shas, func(sha string) bool { return !reSHA.MatchString(sha) })
+}
+
+// testArtifacts are what a test fetches from labd: its script and payload,
+// and for a benchmark builtin every pinned file of the benchmark bundle.
+func testArtifacts(t api.TestSpec) []string {
+	shas := []string{t.Script}
+	for _, p := range t.Payload {
+		shas = append(shas, p.SHA256)
+	}
+	if t.Builtin == "bench" || t.Builtin == "bench-extended" {
+		if items, err := bench.Manifest(); err == nil {
+			for _, it := range items {
+				shas = append(shas, it.SHA256)
+			}
+		}
+	}
+	return shas
 }
 
 // endJobLocked ends the Mac's authority over job: it is no longer the Mac's

@@ -722,7 +722,7 @@ func hashSecret(s string) string {
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
-	for _, rt := range append(append(s.routes(), s.exportRoutes()...), s.macosRoutes()...) {
+	for _, rt := range append(append(append(s.routes(), s.exportRoutes()...), s.macosRoutes()...), s.compareRoutes()...) {
 		s.register(m, rt)
 	}
 	// The interface's own files and pages: each page says who may open it.
@@ -1974,7 +1974,7 @@ func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...st
 				}
 			}
 		}
-		if !has && s.omtWanted(v.snapshot(), spec) {
+		if !has && spec.Compare == nil && s.omtWanted(v.snapshot(), spec) {
 			ts := omtSpec()
 			ts.SkipOnScreen = d.Enrollment.IsVolunteer()
 			spec.Tests = append(spec.Tests, ts)
@@ -2082,6 +2082,7 @@ func (s *Server) hJobs(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, "%v", err)
 		return
 	}
+	jobs = slices.DeleteFunc(jobs, func(j *api.Job) bool { return !s.seesJob(c, j) })
 	if jobs == nil {
 		jobs = []*api.Job{}
 	}

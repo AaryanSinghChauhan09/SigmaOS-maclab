@@ -22,7 +22,8 @@
 {{end}}</dl>
 {{if or .CanCancel .Retry}}<p>{{if .CanCancel}}{{template "take" ($.Take (print "/jobs/" .ID "/cancel") "Cancel" .CancelSentence)}}{{end}}{{if .Retry}}<form class="inline" method="post" action="{{href (print "/jobs/" .ID "/retry")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Retry</button></form> <span class="dim">Queues the same Mac, kernel, tests and arguments again, as you.</span>{{end}}</p>
 {{end}}</section>
-{{if .Results}}<section class="card">
+{{with .Compare}}{{template "compare-report" .}}{{if or .CanPublish .Waiting}}<p>{{if .Waiting}}<form class="inline" method="post" action="{{href (print "/compares/" .ID "/done")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Done</button></form> <span class="dim">The person at the Mac is done; the Compare goes on.</span> {{end}}{{if .CanPublish}}<form class="inline" method="post" action="{{href (print "/compares/" .ID "/publish")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><button class="button button-small" type="submit">Publish</button></form> <span class="dim">Puts this report on its own public page.</span>{{end}}</p>
+{{end}}{{end}}{{if .Results}}<section class="card">
 <h2 class="card-title">tests</h2>
 <div class="scroll"><table class="list stack">
 <thead><tr><th>Test</th><th>Result</th></tr></thead>

@@ -150,6 +150,18 @@ func (m *macosRuns) enrolSecret(mac, secret string) (string, error) {
 	return mac, m.saveLocked()
 }
 
+// enrolled is whether the Mac's macOS runner is enrolled.
+func (m *macosRuns) enrolled(mac string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, v := range m.st.Runners {
+		if v == mac {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *macosRuns) runnerOf(secret string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
