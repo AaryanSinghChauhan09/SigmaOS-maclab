@@ -148,6 +148,10 @@ type labConfig struct {
 	prefix string
 	// agent adjusts the simulated Mac's lab-agent before it starts.
 	agent func(*agent.Config)
+	// silent is for a test that silences the Mac on purpose: labd writes it
+	// off after quietGrace on the lab's clock, not after the wall time a
+	// lab on the sped-up clock otherwise gives a silent Mac.
+	silent bool
 }
 
 func newLabWith(t *testing.T, c labConfig) *lab {
@@ -191,7 +195,13 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 		RebootGrace: 2 * time.Second, LabClockSkew: time.Second, WatchdogIdleReset: 2 * time.Second}
 	if sc, ok := clock.(*agent.ScaledClock); ok {
 		// A Mac comes back over real HTTP: give it the same wall time as ever.
+		// The same goes for its silences: a busy runner under -race holds up
+		// its check-ins for hundreds of milliseconds, which would be seconds
+		// of quietGrace on this clock, and a command on it would count lost.
 		cfg.BootTimeout = sc.Scaled(cfg.BootTimeout)
+		if !c.silent {
+			cfg.QuietGrace = sc.Scaled(quietGrace)
+		}
 	}
 	if withOOB {
 		cfg.OOB, cfg.SightEvery = l.oob.client, 200*time.Millisecond
@@ -1077,7 +1087,7 @@ func TestQuietSpellWindow(t *testing.T) {
 // spell it announced, so a hang in the next test is caught after quietGrace,
 // not once the spell would have ended.
 func TestQuietSpellEndsWhenTheMacIsBack(t *testing.T) {
-	l := newLab(t, false)
+	l := newLabWith(t, labConfig{silent: true})
 	l.baseline()
 	// The spell outlasts the hang, which ends in a reset that labd would
 	// otherwise see first.
@@ -1747,7 +1757,7 @@ func (l *lab) cancelWhen(id, msg string) {
 // A cancel while labd waits for a Lab boot it lost, with no kernel error
 // seen, is the cancel's: the Mac may only have lost its network.
 func TestCancelWhileWaitingForALostMacIsNotTheKernels(t *testing.T) {
-	l := newLab(t, false)
+	l := newLabWith(t, labConfig{silent: true})
 	l.baseline()
 	l.sim.HangFor = 20 * time.Second // silent long enough to cancel meanwhile
 	j, _, err := l.s.Submit(api.JobSpec{Device: l.name, Kernel: l.artifact("krel=7.2-quiet behavior=hang-in-test")})
@@ -1763,7 +1773,7 @@ func TestCancelWhileWaitingForALostMacIsNotTheKernels(t *testing.T) {
 // A Lab boot that is off the network past quietGrace during its test, and
 // then back on the same boot, lost its network, not its kernel.
 func TestNetworkBackOnTheSameBootIsLostContact(t *testing.T) {
-	l := newLab(t, false)
+	l := newLabWith(t, labConfig{silent: true})
 	l.baseline()
 	l.sim.SuspendFor = 8 * time.Second // past quietGrace (3s), unannounced
 	// labd waits for the lost test's budget too: keep it seconds long
@@ -1783,7 +1793,7 @@ func TestNetworkBackOnTheSameBootIsLostContact(t *testing.T) {
 // check-in gap falls on the wait's end: labd judges by what it heard, not by
 // one look at that moment.
 func TestNetworkBackOnTheSameBootIsLostContactThoughSilentAtTheDeadline(t *testing.T) {
-	l := newLab(t, false)
+	l := newLabWith(t, labConfig{silent: true})
 	l.baseline()
 	l.sim.SuspendFor = 8 * time.Second
 	l.s.cfg.TestGrace = 2 * time.Second
