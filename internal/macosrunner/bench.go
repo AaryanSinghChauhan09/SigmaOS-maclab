@@ -261,6 +261,15 @@ func (r *Runner) videoDecode(ctx context.Context, b bench) api.BenchResult {
 	return api.BenchResult{Name: b.name, Value: value(float64(n) / secs), Unit: "fps", HigherIsBetter: true, Seconds: secs, API: "VideoToolbox"}
 }
 
+// browserFlags match the Linux bench's, so the two sides' browser rows compare
+// like for like: headless on the GPU at 1920 by 1080, device pixel ratio 2.
+var browserFlags = []string{
+	"--no-first-run", "--no-default-browser-check", "--disable-sync", "--disable-extensions",
+	"--disable-background-timer-throttling", "--disable-renderer-backgrounding",
+	"--headless", "--enable-gpu", "--window-size=1920,1080",
+	"--screen-info={0,0 3840x2160 devicePixelRatio=2}",
+}
+
 // browserResult is what a driver page of the web bundle posts when its
 // benchmark ends.
 type browserResult struct {
@@ -314,8 +323,7 @@ func (r *Runner) browserBench(ctx context.Context, b bench) api.BenchResult {
 	profile, _ := os.MkdirTemp(r.Dir, "profile-")
 	defer os.RemoveAll(profile)
 	u := fmt.Sprintf("http://%s/driver/%s.html?browser=%s", ln.Addr(), b.page, b.browser)
-	args := r.asGUIUser(path, "--user-data-dir="+profile, "--no-first-run", "--no-default-browser-check",
-		"--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--window-size=1920,1080", u)
+	args := r.asGUIUser(append(append([]string{path, "--user-data-dir=" + profile}, browserFlags...), u)...)
 	if profile != "" && r.Config.GUIUser != "" && os.Geteuid() == 0 {
 		if u, err := user.Lookup(r.Config.GUIUser); err == nil {
 			uid, _ := strconv.Atoi(u.Uid)

@@ -113,7 +113,8 @@ func webBundle(t *testing.T) []byte {
 // real ones do.
 func fakeTools(t *testing.T) Tools {
 	dir := t.TempDir()
-	browser := `url=""; for a in "$@"; do url="$a"; done
+	browser := `printf '%s\n' "$@" > "$0.args"
+url=""; for a in "$@"; do url="$a"; done
 base="${url%%/driver/*}"; name="${url##*/driver/}"; name="${name%%.html*}"
 curl -fsS -d '{"value":'"$VALUE"',"unit":"score","spread":1.5,"version":"9.9"}' "$base/result/$name" >/dev/null || { echo "url=$url" >&2; exit 1; }
 sleep 30
@@ -316,5 +317,25 @@ func TestSevenZipAndFFmpegOutputIsRead(t *testing.T) {
 	}
 	if n := lastFrame("frame=  100 fps=0\nframe=  600 fps=300 q=-0.0\n"); n != 600 {
 		t.Errorf("frames %d", n)
+	}
+}
+
+func TestBrowsersRunHeadlessWithTheLinuxBenchFlags(t *testing.T) {
+	lab := newFakeLab(t, &api.MacOSRun{ID: "mos-1", Mac: "m2-max", Tier: api.TierDefault, State: api.MacOSRunning},
+		map[string][]byte{"web-benchmarks": webBundle(t)})
+	tools := fakeTools(t)
+	r, _ := newRunner(t, lab, tools)
+	if err := r.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(tools.Chrome + ".args")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(b)
+	for _, f := range []string{"--headless", "--enable-gpu", "--window-size=1920,1080", "--screen-info={0,0 3840x2160 devicePixelRatio=2}"} {
+		if !strings.Contains(args, f+"\n") {
+			t.Errorf("chrome ran without %s: %s", f, args)
+		}
 	}
 }
