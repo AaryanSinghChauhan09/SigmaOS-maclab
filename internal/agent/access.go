@@ -132,7 +132,7 @@ var errAccessLevel = errors.New("refused")
 // own session), and a Lab boot for a job that runs one.
 func needsFull(c api.Command) bool {
 	switch c.Kind {
-	case api.CmdExec, api.CmdMesaStage, api.CmdCandidateStage:
+	case api.CmdExec, api.CmdMesaStage, api.CmdCandidateStage, api.CmdBootMacOS:
 		return true
 	case api.CmdRunTest:
 		var t api.TestSpec

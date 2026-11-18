@@ -173,6 +173,12 @@ func describe(c api.Command) string {
 		var s api.CandidateStageArgs
 		_ = json.Unmarshal(c.Args, &s)
 		return fmt.Sprintf("snapshot your system and install Package set %s (%d packages) into the snapshot for a Candidate boot", s.Set.Name, len(s.Set.Packages))
+	case api.CmdCandidateResolve:
+		var s api.CandidateResolveArgs
+		_ = json.Unmarshal(c.Args, &s)
+		return fmt.Sprintf("find %d packages of a Package set in pacman's cache or your repositories (pacman -Sw)", len(s.Packages))
+	case api.CmdBootMacOS:
+		return "boot macOS once for the lab's macOS benchmark run, then come back"
 	case api.CmdCandidateCheck:
 		return "check the Candidate boot"
 	case api.CmdCandidateResult:

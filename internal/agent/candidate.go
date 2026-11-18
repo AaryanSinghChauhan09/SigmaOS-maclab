@@ -574,6 +574,7 @@ func (l *Linux) CleanupCandidate(ctx context.Context, job string, keep bool) err
 
 // candidateSystem is a System that can boot a Package set.
 type candidateSystem interface {
+	ResolveCandidate(context.Context, api.CandidateResolveArgs) (api.CandidateResolved, error)
 	StageCandidate(context.Context, string, api.CandidateStageArgs, Fetcher) (api.CandidateStageResult, error)
 	CheckCandidate(context.Context, api.CandidateCheckArgs) (api.CandidateCheck, error)
 	CandidateResult(context.Context) (api.CandidateFailure, error)
@@ -590,6 +591,12 @@ func (a *Agent) candidate(ctx context.Context, c api.Command) (any, error) {
 		args = []byte("{}")
 	}
 	switch c.Kind {
+	case api.CmdCandidateResolve:
+		var s api.CandidateResolveArgs
+		if err := json.Unmarshal(args, &s); err != nil {
+			return nil, err
+		}
+		return cs.ResolveCandidate(ctx, s)
 	case api.CmdCandidateStage:
 		var s api.CandidateStageArgs
 		if err := json.Unmarshal(args, &s); err != nil {

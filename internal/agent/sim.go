@@ -143,6 +143,17 @@ type Sim struct {
 	setUps    int
 	leftLabs  int
 
+	// Candidate boots and macOS boots; see sim_candidate.go.
+	candidateBehavior map[string]string // set name -> how its candidate boot goes
+	candidateOps      []string
+	repoMissing       map[string]bool // repo packages the simulated repositories lack
+	macOSNext         bool            // the next boot is macOS, once (asahi-bless --next)
+	// MacOSFor is how long a boot into macOS lasts before the Mac is back.
+	MacOSFor time.Duration
+	// InMacOS, when set, is called as the Mac boots into macOS, where the
+	// lab's macOS runner does its run.
+	InMacOS func()
+
 	testLength time.Duration    // see SetTestLength
 	testHold   chan struct{}    // see HoldTests
 	inhibitors map[int][]string // held inhibitors' --what names, by token; a boot clears them
@@ -574,6 +585,7 @@ func (s *Sim) boot(last string) {
 	}
 	go func() {
 		s.Clock.Sleep(s.RebootDelay)
+		s.macOSBoot(gen)
 		s.mu.Lock()
 		if gen != s.gen {
 			s.mu.Unlock()
@@ -1055,7 +1067,8 @@ func (s *Sim) Exec(ctx context.Context, a api.ExecArgs) api.ExecResult {
 // omtReport writes a small omarchy-m-test report like the real tool's.
 func (s *Sim) omtReport(t api.TestSpec, outDir, behavior string) api.TestResult {
 	s.mu.Lock()
-	kernel, packaged := s.kernel, slices.Contains(s.PackagedKernels, s.kernel)
+	// a candidate boot's kernel is a package of the candidate
+	kernel, packaged := s.kernel, slices.Contains(s.PackagedKernels, s.kernel) || IsCandidateBoot(s.cmdline)
 	s.mu.Unlock()
 	wifi, pkg := "pass", "pass"
 	if kernel != SimKnownGood && !packaged {

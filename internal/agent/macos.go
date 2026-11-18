@@ -80,6 +80,28 @@ func BootMacOSOnce(ctx context.Context, cfg *Config, o MacOSBoot) error {
 	if say == nil {
 		say = func(string, ...any) {}
 	}
+	started := func() error {
+		var run api.MacOSRun
+		if err := postJSON(ctx, cfg.client(30*time.Second), strings.TrimRight(cfg.Server, "/")+"/api/agent/macos-started", cfg.Secret, struct{}{}, &run); err != nil {
+			return fmt.Errorf("labd: %w", err)
+		}
+		say("macOS run %s started: booting macOS once", run.ID)
+		return nil
+	}
+	if err := blessMacOSNext(ctx, o, started); err != nil {
+		return err
+	}
+	reboot := o.Reboot
+	if reboot == nil {
+		reboot = func() error { return exec.Command("systemctl", "reboot").Run() }
+	}
+	return reboot()
+}
+
+// blessMacOSNext finds the macOS volume, has started tell labd (refused,
+// nothing changes, when no run is queued) and sets macOS as the next boot
+// only.
+func blessMacOSNext(ctx context.Context, o MacOSBoot, started func() error) error {
 	bless := o.Bless
 	if bless == "" {
 		bless = "asahi-bless"
@@ -92,17 +114,11 @@ func BootMacOSOnce(ctx context.Context, cfg *Config, o MacOSBoot) error {
 	if err != nil {
 		return err
 	}
-	var run api.MacOSRun
-	if err := postJSON(ctx, cfg.client(30*time.Second), strings.TrimRight(cfg.Server, "/")+"/api/agent/macos-started", cfg.Secret, struct{}{}, &run); err != nil {
-		return fmt.Errorf("labd: %w", err)
+	if err := started(); err != nil {
+		return err
 	}
-	say("macOS run %s started: booting %q once", run.ID, vol.Name)
 	if b, err := exec.CommandContext(ctx, bless, "--next", "--set-boot", vol.Index, "--yes").CombinedOutput(); err != nil {
 		return fmt.Errorf("asahi-bless --next --set-boot %s: %v: %s", vol.Index, err, strings.TrimSpace(string(b)))
 	}
-	reboot := o.Reboot
-	if reboot == nil {
-		reboot = func() error { return exec.Command("systemctl", "reboot").Run() }
-	}
-	return reboot()
+	return nil
 }

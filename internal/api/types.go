@@ -916,6 +916,9 @@ type JobSpec struct {
 	// Mesa makes the job a first-class Mesa test of pinned split packages.
 	// See MesaSpec for what each mode does and does not claim.
 	Mesa *MesaSpec `json:"mesa,omitempty"`
+	// Compare makes the job a Compare: two sides on the Mac, benchmarked
+	// and checked alike (see CompareSpec).
+	Compare *CompareSpec `json:"compare,omitempty"`
 }
 
 // Mesa test modes. Staged is a diagnostic of the packages: they are unpacked
@@ -994,6 +997,7 @@ type JobResult struct {
 	OMT           *OMTResult       `json:"omt,omitempty"` // omarchy-m-test, when it ran
 	Installed     *InstalledResult `json:"installed,omitempty"`
 	Mesa          *MesaResult      `json:"mesa,omitempty"`
+	Compare       *CompareResult   `json:"compare,omitempty"`
 }
 
 // InstalledResult is an installed-mode job's verdicts. The evidence files are
