@@ -511,14 +511,32 @@ func prepareCandidate(cand, set string) error {
 		"etc/systemd/user/default.target.wants/lab-candidate-mute.service":           "/etc/systemd/user/lab-candidate-mute.service",
 		"etc/systemd/system/multi-user.target.wants/lab-candidate-alsa-mute.service": "/etc/systemd/system/lab-candidate-alsa-mute.service",
 	} {
-		p := filepath.Join(cand, link)
-		os.MkdirAll(filepath.Dir(p), 0o755)
-		os.Remove(p)
-		if err := os.Symlink(target, p); err != nil {
+		if err := relink(cand, link, target); err != nil {
+			return err
+		}
+	}
+	// snapper works on /.snapshots, a subvolume inside @ that the candidate
+	// holds as an empty directory: its units would fail there, and count as
+	// the set's failed units. Masked in the candidate only.
+	for _, u := range snapperUnits {
+		if err := relink(cand, "etc/systemd/system/"+u, "/dev/null"); err != nil {
 			return err
 		}
 	}
 	return os.MkdirAll(filepath.Join(cand, "var/log/journal"), 0o2755)
+}
+
+var snapperUnits = []string{"snapper-cleanup.service", "snapper-cleanup.timer", "snapper-timeline.service",
+	"snapper-timeline.timer", "snapper-boot.service", "snapper-boot.timer"}
+
+// relink makes link, inside root, a symlink to target.
+func relink(root, link, target string) error {
+	p := filepath.Join(root, link)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	os.Remove(p)
+	return os.Symlink(target, p)
 }
 
 func candidateFstab(path string) error {
