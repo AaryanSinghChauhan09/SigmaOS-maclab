@@ -86,6 +86,9 @@ type dev struct {
 	// beforeSend, which only a test sets (under mu), runs once a job's wait
 	// is over and before labd gives it the Mac.
 	beforeSend func()
+	// afterFree, which only a test sets (under mu), runs once a job has
+	// freed the Mac.
+	afterFree func()
 
 	// forgotten: lab forget deleted the device's row. Set under mu, which
 	// every save holds, so nothing still holding the device writes it back.
