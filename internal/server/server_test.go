@@ -51,6 +51,45 @@ type lab struct {
 	hc        *http.Client // the harness's client for labd; nil is apiClient
 	// changeReport edits the next reports the simulated Mac signs (labConfig.reports).
 	changeReport atomic.Pointer[func(map[string]any)]
+	// offNet keeps the simulated Mac's requests from labd (offNetwork);
+	// fromMac counts those labd is handling.
+	offNet  atomic.Bool
+	fromMac atomic.Int64
+}
+
+// offNetwork takes the simulated Mac off the network for good: nothing its
+// lab-agent sends reaches labd from now on, and labd is told it last heard
+// from the Mac never. It returns once no check-in labd was already handling
+// is left to say otherwise.
+func (l *lab) offNetwork() {
+	l.t.Helper()
+	l.offNet.Store(true)
+	for end := time.Now().Add(time.Minute); l.fromMac.Load() != 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			l.t.Fatal("labd was still handling the Mac's requests a minute after it went off the network")
+		}
+	}
+	v := l.s.dev(l.name)
+	v.mu.Lock()
+	v.d.LastSeen = time.Time{}
+	v.mu.Unlock()
+}
+
+// network is the wire between the simulated Mac and labd: offNetwork cuts it.
+func (l *lab) network(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/agent/") {
+			// counted before the cut is looked at: offNetwork waits for
+			// every request that got past it
+			l.fromMac.Add(1)
+			defer l.fromMac.Add(-1)
+			if l.offNet.Load() {
+				http.Error(w, "the Mac is off the network", http.StatusBadGateway)
+				return
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 func (l *lab) reportChange(body map[string]any) {
@@ -235,6 +274,7 @@ func newLabWith(t *testing.T, c labConfig) *lab {
 	if c.wrap != nil {
 		handler = c.wrap(handler)
 	}
+	handler = l.network(handler)
 	hs := &httptest.Server{Listener: ln, Config: &http.Server{Handler: handler}}
 	policy := labhttp.Policy{}
 	if c.tls != nil {
