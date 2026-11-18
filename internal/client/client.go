@@ -507,3 +507,20 @@ func (c *Client) AddController(ctx context.Context, in api.ControllerAdd) error 
 func (c *Client) RemoveController(ctx context.Context, name string) error {
 	return c.do(ctx, "DELETE", "/api/controllers/"+url.PathEscape(name), nil, nil)
 }
+
+// Compare queues a Compare (Maintainers): its job.
+func (c *Client) Compare(ctx context.Context, req api.CompareRequest) (*api.Job, error) {
+	var out api.Job
+	return &out, c.do(ctx, "POST", "/api/compares", jsonBody(req), &out)
+}
+
+// CompareDone presses Done for a Compare waiting for a person.
+func (c *Client) CompareDone(ctx context.Context, id string) error {
+	return c.do(ctx, "POST", "/api/compares/"+url.PathEscape(id)+"/done", nil, nil)
+}
+
+// ComparePublish publishes a Compare's report.
+func (c *Client) ComparePublish(ctx context.Context, id string) (*api.Job, error) {
+	var out api.Job
+	return &out, c.do(ctx, "POST", "/api/compares/"+url.PathEscape(id)+"/publish", nil, &out)
+}

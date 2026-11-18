@@ -61,6 +61,11 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
                                       repositories, a file sent with lab upload, or a build. Frozen once made
   lab set capture <name> --from <mac> a Package set of the stack a Mac last reported installed
   lab set list | lab set show <name>  the Package sets, and one set's packages with each file's sha256
+  lab compare <mac> --before <set|current> --after <set> [--macos] [--tier default|extended] [--hands] [--no-wait]
+                                      a Compare (Maintainers): A (the known-good system or a set) and B (a set, as a
+                                      Candidate boot) run the same benchmarks and omarchy-m-test; per benchmark
+                                      better, worse or no change against the Mac's noise. Private until published
+  lab compare done|publish|show <job> a person is done at the Mac; publish the report; print it
   lab exec <device> <command...>      run a command on a Mac as root, through lab-agent. It needs your own Lease on
                                       the Mac, a Maintainer's too. The command's text is kept in the Exec record
                                       for 12 months: never put a secret in a command
@@ -135,7 +140,7 @@ var (
 		"boot-test", "login", "builder", "status", "enroll", "remove", "device", "baseline", "build", "package",
 		"builds", "build-log", "build-get", "exec", "run", "crashtest", "pack", "jobs", "job", "wait", "cancel",
 		"logs", "gate", "exclude", "retry", "publish", "lease", "release", "installed", "reset", "oob", "audit",
-		"upload", "agent-update", "macos", "controller", "mcp", "version", "set", "bench",
+		"upload", "agent-update", "macos", "controller", "mcp", "version", "set", "compare", "bench",
 	}
 	atHome = []string{"boot-test", "login", "pack", "mcp", "version"}
 )
@@ -588,6 +593,9 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 
 	case "set":
 		return setCmd(ctx, c, args)
+
+	case "compare":
+		return compareCmd(ctx, c, args)
 
 	case "bench":
 		return benchCmd(ctx, c, args)
