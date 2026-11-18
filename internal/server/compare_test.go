@@ -492,3 +492,28 @@ func TestCompareNoiseLearnsFromEarlierCompares(t *testing.T) {
 }
 
 var _ = http.StatusOK
+
+// A set that changes the boot loader is refused at once on a Mac with no
+// Sighting, before side A runs: a boot loader is swapped only on a cabled
+// Mac. A set at the Mac's own m1n1 (a captured one) changes nothing.
+func TestABootLoaderSetNeedsASightingFromTheStart(t *testing.T) {
+	l, _ := compareLab(t, func(c *labConfig) { c.oob = false })
+	l.waitDevice(func(d api.Device) bool { return len(d.Facts.Stack) > 0 })
+	for _, s := range []api.SetRequest{
+		{Name: "new-m1n1", Items: []api.SetItem{{Package: "m1n1-aurora", Source: api.SetRepo, Ref: "1.6.0-1"}}},
+		{Name: "own-m1n1", Items: []api.SetItem{{Package: "m1n1-aurora", Source: api.SetRepo, Ref: "1.5.2-1"}, {Package: "linux-aurora", Source: api.SetRepo, Ref: candidateKernel}}},
+	} {
+		if code, _, body := l.set(harnessToken, s, "/api/sets"); code != 200 {
+			t.Fatalf("set: %d %s", code, body)
+		}
+	}
+	for _, req := range []api.CompareRequest{{Before: "current", After: "new-m1n1"}, {Before: "new-m1n1", After: "7.3"}} {
+		code, _, body := l.compare(harnessToken, req)
+		if code != 409 || !strings.Contains(body, "set new-m1n1 changes the boot loader (m1n1-aurora 1.6.0-1)") || !strings.Contains(body, "no Sighting") {
+			t.Errorf("%+v: %d %s", req, code, body)
+		}
+	}
+	if code, _, body := l.compare(harnessToken, api.CompareRequest{Before: "current", After: "own-m1n1"}); code != 200 {
+		t.Errorf("a set at the Mac's own m1n1: %d %s", code, body)
+	}
+}

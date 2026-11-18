@@ -125,6 +125,17 @@ func (s *Server) submitCompare(p Person, v *dev, mac string, cs api.CompareSpec,
 	if cs.MacOS && !s.macOS().enrolled(mac) {
 		return nil, refuse(409, "%s's macOS runner is not enrolled: enroll it first (lab macos enroll %s), or leave out --macos", mac, mac)
 	}
+	if _, sighted := s.cables.of(mac); !sighted {
+		for _, set := range []*api.PackageSet{cs.BeforeSet, cs.AfterSet} {
+			if set == nil {
+				continue
+			}
+			if ch := api.BootLoaderChanges(set.Items, v.snapshot().Facts.Stack); len(ch) > 0 {
+				return nil, refuse(409, "set %s changes the boot loader (%s), and %s has no Sighting: a boot loader is swapped only on a Mac cabled to a controller, never over Wi-Fi alone. Prove its port first (lab reset %s --prove <port>)",
+					set.Name, strings.Join(ch, ", "), mac, mac)
+			}
+		}
+	}
 	if !s.holdsLease(v, p) {
 		if _, err := s.takeLease(v, p, compareHolder, leaseDefault); err != nil {
 			return nil, err

@@ -103,7 +103,7 @@ func (s *Sim) StageCandidate(ctx context.Context, job string, a api.CandidateSta
 		if !reSHA256.MatchString(p.SHA256) {
 			return res, fmt.Errorf("bad package %q (sha256 %q)", p.Name, p.SHA256)
 		}
-		if reBootLoader.MatchString(p.Name) {
+		if api.IsBootLoaderPackage(p.Name) && s.stackVersion(p.Name) != p.Version {
 			res.BootLoader = true
 		}
 		dst := filepath.Join(dir, p.Name+".pkg.tar.zst")
@@ -220,4 +220,15 @@ func (s *Sim) macOSBoot(gen int) {
 		go in()
 	}
 	s.Clock.Sleep(d)
+}
+
+// stackVersion is the version of name the sim reports installed.
+func (s *Sim) stackVersion(name string) string {
+	s.mu.Lock()
+	st := s.Stack
+	s.mu.Unlock()
+	if st == nil {
+		st = simStack
+	}
+	return st[name]
 }
