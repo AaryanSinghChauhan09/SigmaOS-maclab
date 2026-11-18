@@ -152,7 +152,7 @@ func TestAMacOSRunIsQueuedByAMaintainerOnly(t *testing.T) {
 // for its password at the screen) leaves the Mac Needs hands.
 func TestAMacOSRunPastItsDeadlineNeedsHands(t *testing.T) {
 	was := macosDeadline
-	macosDeadline = func(string) time.Duration { return 300 * time.Millisecond }
+	macosDeadline = func(string) time.Duration { return 3 * time.Second } // on labd's clock: past the Mac's first check-in
 	t.Cleanup(func() { macosDeadline = was })
 	l := newLab(t, false)
 	if _, err := l.s.queueMacOSRun(l.name, api.TierDefault); err != nil {

@@ -56,11 +56,11 @@ type macosRuns struct {
 	mu     sync.Mutex
 	path   string
 	st     macosState
-	timers map[string]*time.Timer
+	timers map[string]chan struct{} // closed to stop the Mac's deadline
 }
 
 func openMacOSRuns(dir string) *macosRuns {
-	m := &macosRuns{path: filepath.Join(dir, "macos-runs.json"), timers: map[string]*time.Timer{}}
+	m := &macosRuns{path: filepath.Join(dir, "macos-runs.json"), timers: map[string]chan struct{}{}}
 	if b, err := os.ReadFile(m.path); err == nil {
 		json.Unmarshal(b, &m.st)
 	}
@@ -266,10 +266,20 @@ func (s *Server) armMacOSDeadline(mac, id string, d time.Duration) {
 	m := s.macOS()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if t := m.timers[mac]; t != nil {
-		t.Stop()
+	if stop := m.timers[mac]; stop != nil {
+		close(stop)
 	}
-	m.timers[mac] = time.AfterFunc(max(d, 0), func() { s.macOSDeadlinePassed(mac, id) })
+	stop := make(chan struct{})
+	m.timers[mac] = stop
+	at := s.clock().After(max(d, 0))
+	go func() {
+		select {
+		case <-at:
+			s.macOSDeadlinePassed(mac, id)
+		case <-stop:
+		case <-s.ctx.Done():
+		}
+	}()
 }
 
 func (s *Server) macOSDeadlinePassed(mac, id string) {
@@ -470,8 +480,9 @@ func (s *Server) hMacOSResults(w http.ResponseWriter, r *http.Request) {
 	}
 	m := s.macOS()
 	m.mu.Lock()
-	if t := m.timers[mac]; t != nil {
-		t.Stop()
+	if stop := m.timers[mac]; stop != nil {
+		close(stop)
+		delete(m.timers, mac)
 	}
 	m.mu.Unlock()
 	s.log.Printf("%s: macOS run %s done, %d results", mac, run.ID, len(run.Results))
