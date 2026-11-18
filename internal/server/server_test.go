@@ -1455,7 +1455,7 @@ func TestStageNoRetryWhileItMayRun(t *testing.T) {
 			"staging failed: " + errDeviceLost.Error() + " (not tried again: the Mac may still be staging it)"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			l := newLab(t, true)
+			l := newLabWith(t, labConfig{oob: true, silent: true})
 			l.baseline()
 			if c.timeout > 0 {
 				l.s.cfg.StageTimeout = c.timeout

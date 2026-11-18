@@ -519,7 +519,7 @@ func TestACheckInSavedSlowlyAcrossTheGraceIsNoSignTheMacStayedUp(t *testing.T) {
 // that check-in is not the last word before the deadline. It hung, is Hard
 // reset, and the test it was running is recorded as gone down with it.
 func TestOneCheckInOnTheSameBootThenSilenceIsAHangNotLostContact(t *testing.T) {
-	l := newLab(t, true)
+	l := newLabWith(t, labConfig{oob: true, silent: true})
 	l.baseline()
 	l.sim.SuspendFor = 8 * time.Second
 	l.s.cfg.TestGrace = 2 * time.Second
