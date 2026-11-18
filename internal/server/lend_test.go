@@ -137,16 +137,19 @@ func TestLendAMacOpensWithTheTestMachineRuleTheTableThenTheTerms(t *testing.T) {
 		rule := at("Lend only a Test machine: a Mac with nothing on it, in Omarchy or in macOS, that you cannot afford to lose or to have read.")
 		table := at(`<tr><td><b>Qualification</b>`)
 		full, never := at(`<tr><td><b>Full</b>`), at(`<tr><td><b>Never</b>`)
-		terms := at(html.EscapeString(web.Terms().Body))
+		terms := at(html.EscapeString(web.TermsLine))
 		if !(rule < table && table < full && full < never && never < terms) {
 			t.Errorf("%s: the rule (%d), the table (%d, %d, %d) and the terms (%d) are out of order", who, rule, table, full, never, terms)
 		}
 		for _, piece := range []string{"A Hard reset", "Anything outside the Availability window or on battery", "Publishing its reports unless you turn that on",
-			"Showing your handle to the public", "the M team's own included", web.Terms().SHA256, "never the public site"} {
+			"Showing your handle to the public", "the M team's own included", "never the public site"} {
 			if id == linusID && piece == "never the public site" || strings.Contains(body, piece) {
 				continue
 			}
 			t.Errorf("%s: the page lacks %q", who, piece)
+		}
+		if strings.Contains(body, web.Terms().SHA256) {
+			t.Errorf("%s: the page shows the terms' sha256", who)
 		}
 		if strings.Contains(body, "roll") && strings.Contains(body, "rolls the system back") {
 			t.Errorf("%s: the table offers an install with rollback", who)

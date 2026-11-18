@@ -18,14 +18,14 @@ import (
 var builtinTests embed.FS
 
 // Builtins lists the tests embedded in the agent: the scripts, and
-// suspend-devices, which is Go.
+// suspend-devices, mesa-provider and the two benchmark tiers, which are Go.
 func Builtins() []string {
 	ents, _ := builtinTests.ReadDir("tests")
 	var names []string
 	for _, e := range ents {
 		names = append(names, e.Name()[:len(e.Name())-3])
 	}
-	return append(names, suspendDevicesTest, "mesa-provider")
+	return append(names, suspendDevicesTest, "mesa-provider", benchTest, benchExtendedTest)
 }
 
 // guiSessionWait is how long a GUI test waits for the desktop session. The
@@ -37,6 +37,9 @@ const guiSessionWait = 2 * time.Minute
 func testTimeout(t api.TestSpec) time.Duration {
 	if t.TimeoutSec > 0 {
 		return time.Duration(t.TimeoutSec) * time.Second
+	}
+	if isBench(t.Builtin) {
+		return benchTimeout(t.Builtin)
 	}
 	return 5 * time.Minute
 }
@@ -52,6 +55,9 @@ func (l *Linux) RunTest(ctx context.Context, job string, t api.TestSpec, fetch F
 	}
 	if t.Builtin == suspendDevicesTest {
 		return suspendDevices(ctx, t, outDir, l.GUIUser, quiet)
+	}
+	if isBench(t.Builtin) {
+		return l.runBench(ctx, job, t, fetch, quiet, outDir)
 	}
 
 	if err := t.PayloadError(); err != nil {

@@ -193,6 +193,26 @@ bundle_check "$t/unsigned"
 [[ ! -e $t/unsigned/$RELEASE_AGENT.sig ]] || fail "an unsigned build carries a signature"
 if "$repo/release/verify.sh" "$t/dist" "$t/allowed_signers" "$tag" >/dev/null 2>&1; then fail "an unsigned build verified"; fi
 
+# The macOS runner: the program, its install script and LaunchDaemon.
+mkdir "$t/runner"
+tar -xzf "$t/dist/$RELEASE_MACOS_RUNNER" -C "$t/runner"
+r="$t/runner/lab-macos-runner"
+[[ "$(platform "$r/bin/lab-macos-runner")" == "darwin arm64" ]] || fail "the macOS runner was built for $(platform "$r/bin/lab-macos-runner")"
+[[ "$(<"$r/VERSION")" == "$tag" ]] || fail "the macOS runner's VERSION says $(<"$r/VERSION"), not $tag"
+cmp -s "$repo/release/macos-runner/install.sh" "$r/install.sh" && [[ -x $r/install.sh ]] || fail "the macOS runner's install.sh is missing, different or not executable"
+cmp -s "$repo/release/macos-runner/org.omarchy.maclab.macos-runner.plist" "$r/org.omarchy.maclab.macos-runner.plist" || fail "the macOS runner's LaunchDaemon plist is missing or different"
+
+# The Mac lab controller: oobd and the reset tool the bundle carries, and its install.
+mkdir "$t/ctl"
+tar -xzf "$t/dist/$RELEASE_CONTROLLER" -C "$t/ctl"
+for f in bin/oobd bin/macvdmtool install; do
+  [[ -x $t/ctl/lab-controller/$f ]] || fail "the controller has no executable $f"
+done
+cmp -s "$t/ctl/lab-controller/bin/oobd" "$t/unsigned/lab-server/bin/oobd" || fail "the controller's oobd is not the bundle's"
+cmp -s "$t/ctl/lab-controller/bin/macvdmtool" "$t/macvdmtool" || fail "the controller's reset tool is not the one given"
+cmp -s "$t/ctl/lab-controller/install" "$repo/scripts/controller/install" || fail "the controller's install is not scripts/controller/install"
+[[ "$(<"$t/ctl/lab-controller/VERSION")" == "$tag" ]] || fail "the controller's VERSION is not $tag"
+
 # The fixed lines of the release notes.
 while read -r line; do
   [[ $line =~ ^(No\ way\ back\.|Needs\ lab(-agent)?\ [0-9]+\.[0-9]+\.[0-9]+\ or\ later\.|Pins\ changed:\ needs\ a\ Maintenance\ run\.)$ ]] || fail "release/notes: not one of the fixed lines: $line"

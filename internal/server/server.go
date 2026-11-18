@@ -171,7 +171,10 @@ type Server struct {
 	jobRead atomic.Pointer[func(id string)]
 	cfg     Config
 	store   *store
-	reports *reports.Store
+	// macos is the macOS runs (macos.go), opened by macOS().
+	macos     *macosRuns
+	macosOnce sync.Once
+	reports   *reports.Store
 	// uploads takes reports in; nil without the machine-id key.
 	uploads   *reports.Uploads
 	catalogue *reports.Catalogue
@@ -242,6 +245,11 @@ type Server struct {
 	// cables are the Sightings: which Lab-owned Mac is on which of the
 	// Out-of-band controller's ports (see sighting.go).
 	cables *cables
+	// oob is every Out-of-band controller: the mini's own (cfg.OOB) and the
+	// Mac lab controllers a Maintainer added (controllers.go).
+	oob *oob.Fleet
+	// controllersMu is held to add or remove a Mac lab controller.
+	controllersMu sync.Mutex
 
 	// shippedTerms, which only a test sets, stands in for the terms shipped
 	// with this Lab release.
@@ -395,8 +403,14 @@ func New(ctx context.Context, cfg Config, logger *log.Logger) (*Server, error) {
 			logger.Printf("the lab is Live, opened %s: --preview is not obeyed, and nothing closes an open lab", opened.In(brisbane).Format("2006-01-02 15:04 MST"))
 		}
 	}
-	s.cables = newCables(cfg.OOB)
-	if cfg.OOB != nil {
+	s.oob = oob.NewFleet(cfg.OOB)
+	if err := s.loadControllers(); err != nil {
+		st.db.Close()
+		rep.Close()
+		return nil, err
+	}
+	s.cables = newCables(s.oob)
+	if !s.oob.Empty() {
 		kept, err := st.sightings()
 		if err != nil {
 			st.db.Close()
@@ -708,7 +722,7 @@ func hashSecret(s string) string {
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
-	for _, rt := range append(s.routes(), s.exportRoutes()...) {
+	for _, rt := range append(append(append(s.routes(), s.exportRoutes()...), s.macosRoutes()...), s.compareRoutes()...) {
 		s.register(m, rt)
 	}
 	// The interface's own files and pages: each page says who may open it.
@@ -764,6 +778,9 @@ func (s *Server) routes() []route {
 		{"DELETE /api/devices/{name}", maintainers, s.hForgetDevice},
 		{"POST /api/devices/{name}/end-enrollment", maintainers, s.hEndEnrollment},
 		{"GET /api/retired", maintainers, s.hRetired},
+		{"GET /api/controllers", maintainers, s.hControllers},
+		{"POST /api/controllers", maintainers, s.hAddController},
+		{"DELETE /api/controllers/{name}", maintainers, s.hRemoveController},
 		{"POST /api/devices/{name}/lease", team, s.hLease},
 		{"POST /api/devices/{name}/window", macNamed, s.hWindow},
 		{"DELETE /api/devices/{name}/lease", team, s.hRelease},
@@ -835,6 +852,11 @@ func (s *Server) routes() []route {
 		{"GET /api/builds/{id}/files/{name}", maintainers, s.hBuildFile},
 		{"POST /api/builds/{id}/cancel", maintainers, s.hCancelBuild},
 		{"GET /api/builders", maintainers, s.hBuilders},
+		// Package sets (sets.go): Maintainers only; a set is never changed.
+		{"POST /api/sets", maintainers, s.hCreateSet},
+		{"POST /api/sets/capture", maintainers, s.hCaptureSet},
+		{"GET /api/sets", maintainers, s.hSets},
+		{"GET /api/sets/{name}", maintainers, s.hSet},
 		{"POST /api/builders", maintainers, s.hAddBuilder},
 		{"DELETE /api/builders/{name}", maintainers, s.hRemoveBuilder},
 		{"POST /api/devices/{name}/exec", team, s.hExec},
@@ -1669,10 +1691,13 @@ func (s *Server) fenceWhileWaiting(ctx context.Context, cancel context.CancelFun
 // hProve is a Proving reset, which is aimed at a port and not at a Mac:
 // Maintainers only.
 func (s *Server) hProve(w http.ResponseWriter, r *http.Request, v *dev, p Person, port string) {
-	rid, ok := oob.RIDOf(port)
+	rid, ok := s.oob.PortOf(port)
 	switch {
 	case !p.isMaintainer():
 		httpErr(w, http.StatusForbidden, "a Proving reset is a Maintainer's: it is aimed at a port, not at a Mac")
+		return
+	case !ok && len(s.oob.Members()) > 1:
+		httpErr(w, http.StatusBadRequest, "no port %q: the lab's ports are %s", port, strings.Join(s.oob.Names(), ", "))
 		return
 	case !ok:
 		httpErr(w, http.StatusBadRequest, "no port %q: the lab server's ports are left, middle and right, facing its back", port)
@@ -1949,7 +1974,7 @@ func (s *Server) submit(by Person, spec api.JobSpec, retryOf string, notes ...st
 				}
 			}
 		}
-		if !has && s.omtWanted(v.snapshot(), spec) {
+		if !has && spec.Compare == nil && s.omtWanted(v.snapshot(), spec) {
 			ts := omtSpec()
 			ts.SkipOnScreen = d.Enrollment.IsVolunteer()
 			spec.Tests = append(spec.Tests, ts)
@@ -2057,6 +2082,7 @@ func (s *Server) hJobs(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, "%v", err)
 		return
 	}
+	jobs = slices.DeleteFunc(jobs, func(j *api.Job) bool { return !s.seesJob(c, j) })
 	if jobs == nil {
 		jobs = []*api.Job{}
 	}

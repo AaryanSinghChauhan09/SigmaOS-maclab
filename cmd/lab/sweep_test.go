@@ -23,6 +23,18 @@ var specTable = map[string]string{
 	"installed list":            "added",
 	"installed verdict":         "added",
 	"agent-update":              "added",
+	"macos enroll":              "added",
+	"set create":                "added",
+	"set capture":               "added",
+	"set list":                  "added",
+	"set show":                  "added",
+	"controller add":            "added",
+	"controller list":           "added",
+	"controller remove":         "added",
+	"compare":                   "added",
+	"compare done":              "added",
+	"compare publish":           "added",
+	"compare show":              "added",
 	"login":                     "changed",
 	"exec":                      "changed",
 	"installed freeze-entry":    "changed",
@@ -62,6 +74,7 @@ var specTable = map[string]string{
 	"builder remove":            "unchanged",
 	"builder list":              "unchanged",
 	"boot-test":                 "unchanged",
+	"bench mirror":              "added",
 }
 
 // The table's retired rows.
@@ -74,10 +87,10 @@ var siteOnly = []string{"people", "person", "request", "requests", "lend", "invi
 	"hide", "show", "delete", "maintainer", "maintainers", "forget"}
 
 // The commands with no tool, and why: the Lab token is typed by its person
-// and never handed to an agent; `lab mcp` is the server itself; `pack` and
+// and never handed to an agent, nor is a controller's token; `lab mcp` is the server itself; `pack` and
 // `boot-test` work on files of the person's own machine and ask the lab
-// nothing.
-var noTool = []string{"login", "mcp", "pack", "boot-test"}
+// nothing. `bench mirror` downloads gigabytes to the person's machine.
+var noTool = []string{"login", "mcp", "pack", "boot-test", "bench", "controller"}
 
 func tableCommands() (top []string, subs map[string][]string) {
 	subs = map[string][]string{}
@@ -309,6 +322,8 @@ func TestAToolNeverAnswersWithAToken(t *testing.T) {
 			io.WriteString(w, `{"name":"mini","kinds":["kernel"],"token":"bld_SECRET","generation":"g1"}`)
 		case "POST /api/enroll-tokens":
 			io.WriteString(w, `{"token":"enr_SECRET","expires":"2026-11-15T09:00:00Z","join_command":"curl … enr_SECRET"}`)
+		case "POST /api/macos/enroll-tokens":
+			io.WriteString(w, `{"mac":"m2-max","token":"mos_enr_SECRET","expires":"2026-11-15T09:00:00Z","line":"echo mos_enr_SECRET | sudo …"}`)
 		default:
 			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, 400)
 		}
@@ -326,8 +341,9 @@ func TestAToolNeverAnswersWithAToken(t *testing.T) {
 	defer session.Close()
 	dir := t.TempDir()
 	for tool, args := range map[string]map[string]any{
-		"lab_builder_add": {"name": "mini", "out": dir + "/builder.token"},
-		"lab_enroll":      {"name": "m1-pro", "out": dir + "/join.sh"},
+		"lab_builder_add":  {"name": "mini", "out": dir + "/builder.token"},
+		"lab_enroll":       {"name": "m1-pro", "out": dir + "/join.sh"},
+		"lab_macos_enroll": {"device": "m2-max", "out": dir + "/macos-runner.sh"},
 	} {
 		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 		if err != nil {

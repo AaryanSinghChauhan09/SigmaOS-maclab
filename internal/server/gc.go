@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/omacom/omarchy-maclab/internal/agent/tests/bench"
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/mesa"
 )
@@ -68,6 +69,12 @@ func (s *Server) gcArtifacts() {
 	}
 	pinned := map[string]bool{mesa.GLProbeSHA: true, mesa.VKProbeSHA: true, mesa.OfficialArchiveSHA: true} // immutable bootstrap assets
 	keep := map[string]bool{}                                                                              // deleted only when over budget
+	// The pinned benchmark files (lab bench mirror) are immutable too.
+	if items, err := bench.Manifest(); err == nil {
+		for _, it := range items {
+			pinned[it.SHA256] = true
+		}
+	}
 	// The references decide what may be deleted, so a reference that cannot
 	// be read stops this pass: nothing is deleted on an incomplete picture.
 	skip := func(what string, err error) {

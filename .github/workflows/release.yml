@@ -76,8 +76,16 @@ jobs:
           path: ${{ runner.temp }}/reset-tool
       - name: Build
         run: LAB_RELEASE="$GITHUB_REF_NAME" RESET_TOOL="$RUNNER_TEMP/reset-tool/macvdmtool" release/build.sh dist
-      - name: The bundle carries the reset tool
-        run: tar -tzf dist/lab-server-darwin-arm64.tar.gz | grep -qx lab-server/bin/macvdmtool
+      - name: The bundle and the controller carry the reset tool
+        run: |
+          tar -tzf dist/lab-server-darwin-arm64.tar.gz | grep -qx lab-server/bin/macvdmtool
+          tar -tzf dist/lab-controller-darwin-arm64.tar.gz | grep -qx lab-controller/bin/macvdmtool
+      - name: The macOS runner carries its install script and LaunchDaemon
+        run: |
+          tar -tzf dist/lab-macos-runner-darwin-arm64.tar.gz > "$RUNNER_TEMP/runner-files"
+          for f in bin/lab-macos-runner install.sh org.omarchy.maclab.macos-runner.plist; do
+            grep -qx "lab-macos-runner/$f" "$RUNNER_TEMP/runner-files"
+          done
       - name: One file, so the modes survive
         run: tar -cf lab-release.tar -C dist .
       - uses: actions/upload-artifact@v4

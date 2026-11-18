@@ -137,6 +137,7 @@ func (l *Linux) Facts() api.Facts {
 	f.PanicTimeout, _ = strconv.Atoi(readTrim("/proc/sys/kernel/panic"))
 	f.Problems, f.Warnings = l.Preflight()
 	f.PreflightOK = len(f.Problems) == 0
+	f.Stack = installedStack()
 	if b, err := detectBootloader(); err == nil {
 		f.Bootloader = b.name()
 	}

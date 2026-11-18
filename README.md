@@ -1277,6 +1277,31 @@ lab builder list                                            # last seen, current
 lab builder remove mini                                     # its token stops working; what it was building fails
 ```
 
+Package sets (Maintainers) name packages to boot together, each from the
+Mac's repositories, a file sent with `lab upload`, or a build; labd records
+every file's sha256 and never changes a set:
+
+```
+lab set create 7.3-try --pkg linux-aurora=build:b-12 --pkg mesa-aurora=file:<sha256>@25.3.0-1 --pkg m1n1-aurora=repo:1.5.2-1
+lab set capture 7.2 --from m2-max                           # what the Mac last reported installed of the stack
+lab set list
+lab set show 7.2
+```
+
+A Compare (Maintainers) runs the same pinned benchmarks and omarchy-m-test
+on one Mac on two sides, A (its known-good system, or a set) and B (a set,
+booted once as a Candidate boot without changing the Mac's own system), and
+says per benchmark better, worse or no change against the Mac's noise. The
+report is private to Maintainers until published:
+
+```
+lab compare m2-max --before current --after 7.3-try               # waits, then prints the report
+lab compare m2-max --before 7.2 --after 7.3-try --macos --tier extended --hands --no-wait
+lab compare done <job>                                            # the person at the Mac is done
+lab compare show <job>
+lab compare publish <job>                                         # its page /compares/<job> is public
+```
+
 **A builder's kernels boot as root on lab Macs.** What the artifact store's 20 GB budget clears is in
 [docs/builder.md](docs/builder.md).
 
@@ -1567,14 +1592,16 @@ Its tools follow the commands one for one, each named after its command:
 `lab_build_get`, `lab_installed_list`, `lab_installed_status`,
 `lab_installed_freeze_manifest`, `lab_installed_freeze_entry`,
 `lab_installed_verdict`, `lab_installed_promote`, `lab_agent_update`,
-`lab_builder_add`, `lab_builder_remove`, `lab_builder_list` and
+`lab_macos_enroll`, `lab_builder_add`, `lab_builder_remove`, `lab_builder_list`,
+`lab_set_create`, `lab_set_capture`, `lab_set_list`, `lab_set_show`,
+`lab_compare`, `lab_compare_done`, `lab_compare_publish`, `lab_compare_show` and
 `lab_version`. Four commands have no tool: `login` (the Lab token is typed by
 its person and never handed to an agent), `mcp` itself, and `pack` and
 `boot-test`, which work on files of your own machine and ask the lab nothing.
 
-- A tool never answers with a token. `lab_enroll` and `lab_builder_add` write
-  the Join command and the builder's token into a new file you name, and say
-  only where it is.
+- A tool never answers with a token. `lab_enroll`, `lab_macos_enroll` and
+  `lab_builder_add` write the Join command, the macOS runner's line and the
+  builder's token into a new file you name, and say only where it is.
 - `lab_installed_verdict` and `lab_installed_promote` first answer with what
   the lab is about to do, warnings included, and do it only when called again
   with `confirm`: the verdict is a person's.

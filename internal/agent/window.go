@@ -278,7 +278,7 @@ func describeWindow(s window.Settings, now time.Time) string {
 // cleanup, recording its Known-good kernel) runs whenever labd asks.
 func windowGated(kind string) bool {
 	switch kind {
-	case api.CmdCollect, api.CmdCollectLost, api.CmdCleanup, api.CmdRecordKnownGood:
+	case api.CmdCollect, api.CmdCollectLost, api.CmdCleanup, api.CmdRecordKnownGood, api.CmdCandidateResult, api.CmdCandidateCleanup:
 		return false
 	}
 	return true

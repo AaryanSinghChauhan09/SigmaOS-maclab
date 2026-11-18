@@ -49,11 +49,23 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
   lab agent-update <mac>              update a Lab-owned Mac's lab-agent to the lab's, while the Mac is idle
                                       (Maintainers). The Mac checks the new agent's signature itself. A
                                       Volunteer's Mac is never sent one: its Volunteer runs sudo lab-agent update
+  lab macos enroll <mac>              a Mac's macOS runner (Maintainers): prints the one-time line to run in macOS on
+                                      the Mac, after its install.sh, good for 1 hour; then labd's macOS runs reach it
   lab baseline <device>               prove the one-shot boot works; required once per Mac
   lab build <github-url> --device <mac> | --config <file>   build a kernel from a repo, branch, commit or PR URL (reused if built before)
   lab package <recipe-dir> [--commit <github-url>] [--pkgrel 11.14] [-o dir]
                                       build release packages from a PKGBUILD recipe with makepkg, as the release machine does
   lab builds | lab build-log <build> [-f] | lab build-get <build> [-o dir]
+  lab set create <name> --pkg NAME=repo:VERSION|file:SHA256[@VERSION]|build:ID ...
+                                      a Package set (Maintainers): packages to boot together, each from the Mac's
+                                      repositories, a file sent with lab upload, or a build. Frozen once made
+  lab set capture <name> --from <mac> a Package set of the stack a Mac last reported installed
+  lab set list | lab set show <name>  the Package sets, and one set's packages with each file's sha256
+  lab compare <mac> --before <set|current> --after <set> [--macos] [--tier default|extended] [--hands] [--no-wait]
+                                      a Compare (Maintainers): A (the known-good system or a set) and B (a set, as a
+                                      Candidate boot) run the same benchmarks and omarchy-m-test; per benchmark
+                                      better, worse or no change against the Mac's noise. Private until published
+  lab compare done|publish|show <job> a person is done at the Mac; publish the report; print it
   lab exec <device> <command...>      run a command on a Mac as root, through lab-agent. It needs your own Lease on
                                       the Mac, a Maintainer's too. The command's text is kept in the Exec record
                                       for 12 months: never put a secret in a command
@@ -103,9 +115,17 @@ const usage = `lab: run kernels and tests on the Macs of Omarchy Mac Lab
                                       a Proving reset (Maintainers): reset that port of the lab server to place a
                                       Mac the lab has no Sighting of. It counts only if that Mac returns and every
                                       other Mac keeps its boot id
+  lab controller add <name> --url https://ADDRESS:PORT --fingerprint SHA256 --token-file FILE
+                                      add a Mac lab controller (Maintainers): a Mac with lab-controller installed,
+                                      whose ports reset the Macs cabled to it. Its install prints the three values
+  lab controller list | lab controller remove <name>
+                                      the Out-of-band controllers, the mini's own first; remove drops the
+                                      Sightings on that controller's ports (Maintainers)
   lab oob <device>                    its cable: sighted, not sighted or no cable, and what the ports show
   lab audit <device>                  labd's copy of a Volunteer's Mac's Audit log: every Maintainer action on it
   lab upload <file> [--for <mac>]     to the artifact store, in 32 MiB parts; cut, the same command resumes
+  lab bench mirror [--from <dir>]     every pinned benchmark file, downloaded, checked against its sha256 and
+                                      put in the artifact store, where lab-agent fetches it (Maintainers)
   lab mcp                             MCP server on stdio, for AI agents
   lab version                         the Lab release this lab came from, and the one Omarchy Mac Lab runs
 `
@@ -120,7 +140,7 @@ var (
 		"boot-test", "login", "builder", "status", "enroll", "remove", "device", "baseline", "build", "package",
 		"builds", "build-log", "build-get", "exec", "run", "crashtest", "pack", "jobs", "job", "wait", "cancel",
 		"logs", "gate", "exclude", "retry", "publish", "lease", "release", "installed", "reset", "oob", "audit",
-		"upload", "agent-update", "mcp", "version",
+		"upload", "agent-update", "macos", "controller", "mcp", "version", "set", "compare", "bench",
 	}
 	atHome = []string{"boot-test", "login", "pack", "mcp", "version"}
 )
@@ -298,6 +318,20 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 			return nil
 		}
 		fmt.Printf("%s: lab-agent %s -> %s%s, its signature checked on the Mac\n", pos[0], res.From, res.To, from)
+		return nil
+
+	case "macos":
+		pos := parse(fs, args)
+		if len(pos) != 2 || pos[0] != "enroll" {
+			return fmt.Errorf("usage: lab macos enroll <mac>")
+		}
+		t, err := c.MacOSEnrollToken(ctx, pos[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("The macOS runner's line for %s (one Mac, once; expires %s). Keep it private.\n\n", t.Mac, t.Expires.Format(time.DateTime))
+		fmt.Printf("In macOS on the Mac, install lab-macos-runner-darwin-arm64.tar.gz from the Lab release (sudo ./install.sh), then run:\n\n  %s\n\n", t.Line)
+		fmt.Println("A FileVault Mac needs a person at every macOS run: macOS waits for its password at the screen.")
 		return nil
 
 	case "enroll":
@@ -554,6 +588,17 @@ func dispatch(ctx context.Context, c *client.Client, cmd string, args []string) 
 
 	case "builder":
 		return builderCmd(ctx, c, args)
+	case "controller":
+		return controllerCmd(ctx, c, args)
+
+	case "set":
+		return setCmd(ctx, c, args)
+
+	case "compare":
+		return compareCmd(ctx, c, args)
+
+	case "bench":
+		return benchCmd(ctx, c, args)
 
 	case "builds":
 		l, err := c.Builds(ctx, 20)

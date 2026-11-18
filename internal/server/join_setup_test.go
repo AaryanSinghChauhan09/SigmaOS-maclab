@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/omacom/omarchy-maclab/internal/web"
 	"net/http"
 	"strings"
 	"testing"
@@ -69,8 +70,8 @@ func TestTheTypedYesIsRecordedWithThePersonTheMacTheTimeAndTheTerms(t *testing.T
 		t.Fatalf("setup: %v\n%s", err, strings.Join(said, "\n"))
 	}
 	terms := termsSum()
-	if shown := tty.out.String(); !strings.Contains(shown, "Lend only a test machine") || !strings.Contains(shown, terms) {
-		t.Errorf("the terminal did not show the lab's terms with their sha256:\n%.400s", shown)
+	if shown := tty.out.String(); !strings.Contains(shown, "\n"+web.TermsLine+"\nType yes: ") {
+		t.Errorf("the terminal did not show the lab's terms and ask for yes:\n%.400s", shown)
 	}
 	v := l.s.dev("shelf-mac")
 	if v == nil {

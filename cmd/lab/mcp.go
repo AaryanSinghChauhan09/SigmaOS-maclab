@@ -128,6 +128,33 @@ func newMCP(c *client.Client) *mcp.Server {
 			return text(fmt.Sprintf("%s for %s, a Lab-owned Mac, is in %s (mode 0600) and nowhere else. It joins one Mac, once, and expires %s. The person runs it in a terminal on the Mac, as themselves. Cancel it unused with lab_enroll revoke; then lab_baseline %s.",
 				what, a.Name, a.Out, t.Expires.Format(time.DateTime), a.Name)), nil, nil
 		})
+	type macosEnrollArg struct {
+		Device string `json:"device" jsonschema:"the Mac's name, e.g. m2-max"`
+		Out    string `json:"out" jsonschema:"a new file to write the line into (mode 0600). The line carries a token and is never part of the answer"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_macos_enroll", Description: "Make the one-time line that enrolls a Mac's macOS runner (Maintainers), for macOS runs of the benchmarks on the same Mac. It is written into the file out, for the person to run in macOS on the Mac after installing lab-macos-runner; the answer says only where it is and when it expires. Only when a person asks for it."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a macosEnrollArg) (*mcp.CallToolResult, any, error) {
+			if a.Out == "" {
+				return nil, nil, errors.New("name a new file in out: the line carries a token, and a tool never answers with one")
+			}
+			f, err := os.OpenFile(a.Out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err != nil {
+				return nil, nil, err
+			}
+			t, err := c.MacOSEnrollToken(ctx, a.Device)
+			if err == nil {
+				_, err = f.WriteString(t.Line + "\n")
+			}
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				os.Remove(a.Out)
+				return nil, nil, err
+			}
+			return text(fmt.Sprintf("The macOS runner's line for %s is in %s (mode 0600) and nowhere else. It enrolls one Mac's runner, once, and expires %s. The person runs it in macOS on the Mac after sudo ./install.sh from lab-macos-runner-darwin-arm64.tar.gz.",
+				a.Device, a.Out, t.Expires.Format(time.DateTime))), nil, nil
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "lab_remove", Description: "End a Mac's enrollment (Maintainers): its device secret stops working at once, its record is Retired, and lab-agent removes the lab from the Mac at its next check-in; a Volunteer is told. Only when a person asks for it: it cannot be undone, the Mac has to Join again."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a devArg) (*mcp.CallToolResult, any, error) {
 			if err := c.EndEnrollment(ctx, a.Device); err != nil {
@@ -689,6 +716,85 @@ func newMCP(c *client.Client) *mcp.Server {
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ none) (*mcp.CallToolResult, any, error) {
 			l, err := c.Builders(ctx)
 			return text(l), nil, err
+		})
+	type setCreateArg struct {
+		Name     string   `json:"name"`
+		Packages []string `json:"packages" jsonschema:"each NAME=repo:VERSION, NAME=file:SHA256[@VERSION] (from lab_upload) or NAME=build:ID (from lab_build or lab_package)"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_set_create", Description: "Make a Package set (Maintainers): packages to boot together, each from the Mac's repositories, an uploaded file or a build. The lab records every file's sha256; a set never changes, so a name is used once."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a setCreateArg) (*mcp.CallToolResult, any, error) {
+			req := api.SetRequest{Name: a.Name}
+			for _, p := range a.Packages {
+				it, err := api.ParseSetItem(p)
+				if err != nil {
+					return nil, nil, err
+				}
+				req.Items = append(req.Items, it)
+			}
+			set, err := c.CreateSet(ctx, req)
+			return text(set), nil, err
+		})
+	type setCaptureArg struct {
+		Name string `json:"name"`
+		From string `json:"from" jsonschema:"the Mac whose installed stack to record"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_set_capture", Description: "Make a Package set (Maintainers) of the stack a Mac last reported installed: kernel and headers, m1n1, U-Boot, Mesa and Vulkan, the AVD decoder, libfprint and the Asahi firmware, each at its version."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a setCaptureArg) (*mcp.CallToolResult, any, error) {
+			set, err := c.CaptureSet(ctx, api.SetCapture{Name: a.Name, Mac: a.From})
+			return text(set), nil, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_set_list", Description: "The Package sets, newest first: name, packages, who made each and from which Mac it was captured."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ none) (*mcp.CallToolResult, any, error) {
+			l, err := c.Sets(ctx)
+			return text(l), nil, err
+		})
+	type setShowArg struct {
+		Name string `json:"name"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_set_show", Description: "One Package set: each package with its source, version and the sha256 of its file."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a setShowArg) (*mcp.CallToolResult, any, error) {
+			set, err := c.Set(ctx, a.Name)
+			return text(set), nil, err
+		})
+	type compareArg struct {
+		Mac    string `json:"mac"`
+		Before string `json:"before" jsonschema:"side A: a Package set's name, or current (the Mac's known-good system)"`
+		After  string `json:"after" jsonschema:"side B: a Package set's name, booted as a Candidate boot"`
+		MacOS  bool   `json:"macos,omitempty" jsonschema:"run the tier in macOS too"`
+		Tier   string `json:"tier,omitempty" jsonschema:"default or extended"`
+		Hands  bool   `json:"hands,omitempty" jsonschema:"pause on B for a person until lab_compare_done"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_compare", Description: "Queue a Compare (Maintainers): on one Mac, A (the known-good system or a set) and B (a set, as a Candidate boot) run the same pinned benchmarks and omarchy-m-test unattended; the report says per benchmark better, worse or no change against the Mac's noise. Answers the job; follow it with lab_wait, read it with lab_compare_show."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a compareArg) (*mcp.CallToolResult, any, error) {
+			j, err := c.Compare(ctx, api.CompareRequest{Mac: a.Mac, Before: a.Before, After: a.After, MacOS: a.MacOS, Tier: a.Tier, Hands: a.Hands})
+			return text(j), nil, err
+		})
+	type compareJobArg struct {
+		Job string `json:"job"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_compare_done", Description: "Say the person at the Mac is done, for a Compare asked with hands: it goes on."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a compareJobArg) (*mcp.CallToolResult, any, error) {
+			return text(map[string]string{"job": a.Job, "hands": "done"}), nil, c.CompareDone(ctx, a.Job)
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_compare_publish", Description: "Publish a finished Compare's report on its own public page (Maintainers); until then it is private to Maintainers."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a compareJobArg) (*mcp.CallToolResult, any, error) {
+			j, err := c.ComparePublish(ctx, a.Job)
+			if err != nil {
+				return nil, nil, err
+			}
+			return text(j.Result.Compare), nil, nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "lab_compare_show", Description: "A Compare's report: each side's boot and facts, each benchmark's A, B (and macOS) values, change and verdict, and omarchy-m-test's regressed and fixed checks."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a compareJobArg) (*mcp.CallToolResult, any, error) {
+			j, err := c.Job(ctx, a.Job)
+			if err != nil {
+				return nil, nil, err
+			}
+			var b strings.Builder
+			if err := printCompare(&b, j); err != nil {
+				return nil, nil, err
+			}
+			return text(b.String()), nil, nil
 		})
 
 	return s

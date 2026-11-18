@@ -58,6 +58,8 @@ type macPageData struct {
 
 	Facts macFacts
 	Jobs  []macJobRow
+	// Hands is the Compare waiting on this Mac for a person to press Done.
+	Hands string
 
 	// Fence stands in place of Live for an M team member without their own
 	// Lease on the Mac.
@@ -198,6 +200,11 @@ func (s *Server) renderMac(w http.ResponseWriter, r *http.Request, v *dev, tab s
 	}
 	if refused != nil {
 		data.Flash, page.Status = refused.Error(), statusOf(refused)
+	}
+	if id := s.handsWaiting(v); id != "" {
+		if j, err := s.store.job(id); err == nil && s.mayHands(p, j) {
+			data.Hands = id
+		}
 	}
 	switch tab {
 	case tabLive:

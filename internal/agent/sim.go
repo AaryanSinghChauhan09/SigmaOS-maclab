@@ -52,6 +52,9 @@ type Sim struct {
 	SuspendFor  time.Duration
 	QuietFor    time.Duration
 	HangFor     time.Duration
+	// Stack is the stack's installed packages the Mac reports; nil reports
+	// simStack.
+	Stack map[string]string
 
 	mu           sync.Mutex
 	sleepFn      func(bool)
@@ -140,6 +143,17 @@ type Sim struct {
 	setUps    int
 	leftLabs  int
 
+	// Candidate boots and macOS boots; see sim_candidate.go.
+	candidateBehavior map[string]string // set name -> how its candidate boot goes
+	candidateOps      []string
+	repoMissing       map[string]bool // repo packages the simulated repositories lack
+	macOSNext         bool            // the next boot is macOS, once (asahi-bless --next)
+	// MacOSFor is how long a boot into macOS lasts before the Mac is back.
+	MacOSFor time.Duration
+	// InMacOS, when set, is called as the Mac boots into macOS, where the
+	// lab's macOS runner does its run.
+	InMacOS func()
+
 	testLength time.Duration    // see SetTestLength
 	testHold   chan struct{}    // see HoldTests
 	inhibitors map[int][]string // held inhibitors' --what names, by token; a boot clears them
@@ -218,8 +232,16 @@ func (s *Sim) Facts() api.Facts {
 	f.Problems = append(f.Problems, s.problems...)
 	f.Warnings = append(f.Warnings, s.warnings...)
 	f.PreflightOK = len(f.Problems) == 0
+	f.Stack = maps.Clone(s.Stack)
+	if f.Stack == nil {
+		f.Stack = maps.Clone(simStack)
+	}
 	return f
 }
+
+// simStack is what a simulated Mac has installed of the stack.
+var simStack = map[string]string{"linux-aurora": "6.17.5.aurora1-1", "linux-aurora-headers": "6.17.5.aurora1-1",
+	"m1n1-aurora": "1.5.2-1", "mesa": "25.3.0-1"}
 
 // SetPreflight makes the Mac's preflight find problems and warnings, from its
 // next check-in on, as lab-agent reports them.
@@ -563,6 +585,7 @@ func (s *Sim) boot(last string) {
 	}
 	go func() {
 		s.Clock.Sleep(s.RebootDelay)
+		s.macOSBoot(gen)
 		s.mu.Lock()
 		if gen != s.gen {
 			s.mu.Unlock()
@@ -1044,7 +1067,8 @@ func (s *Sim) Exec(ctx context.Context, a api.ExecArgs) api.ExecResult {
 // omtReport writes a small omarchy-m-test report like the real tool's.
 func (s *Sim) omtReport(t api.TestSpec, outDir, behavior string) api.TestResult {
 	s.mu.Lock()
-	kernel, packaged := s.kernel, slices.Contains(s.PackagedKernels, s.kernel)
+	// a candidate boot's kernel is a package of the candidate
+	kernel, packaged := s.kernel, slices.Contains(s.PackagedKernels, s.kernel) || IsCandidateBoot(s.cmdline)
 	s.mu.Unlock()
 	wifi, pkg := "pass", "pass"
 	if kernel != SimKnownGood && !packaged {

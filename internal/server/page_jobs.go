@@ -104,6 +104,8 @@ func jobWhat(j *api.Job) string {
 		return "Installed run"
 	case spec.Mesa != nil:
 		return "Mesa test"
+	case spec.Compare != nil:
+		return "Compare " + spec.Compare.Before + " and " + spec.Compare.After
 	case j.Result.BootKernel != "":
 		return "Boot " + j.Result.BootKernel
 	case spec.Source != "":
@@ -194,6 +196,7 @@ type jobData struct {
 	OMT              *jobOMT
 	Events           []jobEvent
 	Files            []string
+	Compare          *compareView
 }
 
 type jobTest struct {
@@ -247,6 +250,10 @@ func (s *Server) renderJob(w http.ResponseWriter, r *http.Request, j *api.Job, p
 		Kernel: spec.Kernel, Source: spec.Source, Build: spec.Build, BuildOpens: p.isMaintainer(), Cmdline: spec.Cmdline,
 		Timeout: spec.BootTimeoutSec, RetryOf: j.RetryOf, UnderLease: j.UnderLease, FellBack: res.FellBack, Recovery: res.Recovery}
 	data.State, data.StateClass = jobState(j)
+	if data.Compare = compareViewOf(j); data.Compare != nil {
+		data.Compare.CanPublish = p.isMaintainer() && j.State == api.JobDone && j.Result.Compare.Published == nil
+		data.Compare.Waiting = data.Compare.Waiting && s.mayHands(p, j)
+	}
 	page := web.Page{Title: "Job " + j.ID, Nav: "jobs"}
 	if refused != nil {
 		data.Flash, page.Status = refused.Error(), statusOf(refused)

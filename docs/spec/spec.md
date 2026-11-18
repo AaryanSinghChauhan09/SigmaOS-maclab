@@ -26,6 +26,7 @@ Building the merged codebase and running the Cutover are a separate effort.
 18. Out of scope
 19. Where a later ticket changed an earlier one
 20. Where each ticket landed
+21. Package sets and Compare
 
 ## 1. Open conflicts
 
@@ -445,13 +446,13 @@ Recorded in the acceptance run, measured without a script in the page. ("The fro
 - **Ports.** The mini's three rear USB-C ports are three reset lines for Lab-owned Macs (left RID 1, middle RID 0, right RID 2, facing the back). Any Lab-owned Mac goes on any port; no port is written in a Mac's record. A port with a display or power on it instead, connected on CC alone with no product id, is no Mac: the controller and the port check report it so and leave it alone. One port is addressed at a time and a Mac on another port is not disturbed; a Hard reset brings a Mac back in about 36 s. ("Out-of-band wiring"; "macvdmtool port selection on the mini")
 - **Tool.** The lab's own fork, `omacom/macvdmtool`, based on the variant whose `--rid` is required and strictly parsed (`GravityLinux/macvdmtool` `d57c485`). Pinned by commit and checksum, built off the mini, installed by script.
 - **A bad RID is refused twice**: by the tool, and by the controller, which accepts only the RIDs in its own list for this host (0, 1, 2).
-- **One Out-of-band controller**: one root LaunchDaemon for all three ports, loopback only, the port named in every request, one lock so a single tool run happens at a time. Two resets asked together run one after the other.
+- **Out-of-band controllers.** The mini's own, `mini`: one root LaunchDaemon for all three ports, loopback only, the port named in every request, one lock so a single tool run happens at a time. Two resets asked together run one after the other. Beside it, any number of Mac lab controllers (see "Mac lab controller" under "Package sets and Compare"), each the same program for its own Mac's ports, each with its own lock. A Sighting names a controller's port, and a Hard reset or Proving reset goes to the controller that sees the Mac.
 - **Sighting.** While a Mac's Linux is up with a Thunderbolt link, the mini reads the Mac's name on that port; when it belongs to exactly one Lab-owned Mac's record, the lab remembers the Mac, the port, the partner's product id, the plug count and the Mac's boot id. A placeholder name a Mac's link shows before its hostname is set, early in boot or hung there (`unknown_xd_device`, the kernel's `(none)`, systemd's `localhost` or `archlinux`), is no Mac's name: it neither places, moves nor ends a Sighting, and a Proving reset takes it as a port that shows none. A Hard reset goes out only if the port is still connected with the same product id, and with the same plug count or one the Mac's own restart moved. A Mac's port counts plugs at every restart (the M2 Max's went from 21 to 25 across a job's two reboots), so a higher count keeps the Sighting while the Mac comes back on a new boot, which takes the new count, or is not heard again, as when it hangs after a restart; it ends the Sighting once the Mac is heard again on the boot it had, a cable pulled while it stayed up. While the Mac is still heard on that boot no Hard reset goes out. Anything else drops the Sighting and the reset is refused with the reason. Accepted: two Macs of one model swapped while one of them is silent are not told apart. Any conflict drops the Sightings involved. labd keeps its Sightings in its data: after labd restarts, at a Deploy or with the mini, each one holds while its port is still connected with the same product id, and the rules above go on from the port as it is then (the mini's own restart starts its plug counts again); the log says which were kept and which not. Accepted: cables swapped while labd is down between two Macs of one model are not told apart. The controller reports what it sees; labd holds the Sightings; the controller compares port state once more, under its lock, at the moment of the reset.
 - **Proving reset.** A Mac that shows no name is placed by a Maintainer naming the port; it counts only if that Mac returns and every other Mac keeps its boot id.
 - **Who.** A Hard reset: a Maintainer, a Lease holder on the Mac they hold, and the recovery ladder. A Proving reset: Maintainers only.
 - **With no Sighting** the ladder skips the Hard-reset rung: the Mac's own watchdog, then Needs hands, with the reason shown.
 - **Encrypted Macs: no remote unlock.** A Lab-owned Mac must start unattended: unencrypted, or LUKS with `lab-only-autounlock`. The owner enables it on the M2 Max, typing the passphrase, before it Joins. Accepted: whoever holds the M2 Max can read its Omarchy disk.
-- **A Mac the mini cannot reach** (beyond three ports, or no cable) gets no Hard reset: its watchdog, then Needs hands, which means the owner at the machine. No second controller host.
+- **A Mac no controller can reach** (no cable to the mini or to a Mac lab controller) gets no Hard reset: its watchdog, then Needs hands, which means the owner at the machine.
 - **While Dark** nothing can Hard reset a Mac. After the Unlock the lab runs recovery on whatever did not return and posts the result to "Agents" with the back-after-restart message. With the controller unhealthy: a reset is refused with the reason, the Mac is shown as having no Hard reset, jobs still run, and "Agents" is told.
 - **Serial console: out.** Hard reset is the only out-of-band function. `lab shell` over serial, the serial boot-stall check and serial-assisted exec are off. The server refuses the three console routes, the browser terminal and exec's serial path with one plain line. If a console returns, it returns with the Lease check and one record per session: who, which Mac, opened, closed, and what the Mac printed; raw keystrokes are never kept.
 - **Cables.** Every rear port gets a Thunderbolt-capable cable.
@@ -580,7 +581,15 @@ A first sign-in makes the lab know the person; it gives no browser session, no L
 | `installed verdict --release R qualified\|not-qualified --note "…"` | added | records the verdict; run again by a Maintainer, it changes |
 | `installed verdict --release R --revoke --note "…"` | added | revokes it, Maintainers only |
 | `reset <mac> --prove left\|middle\|right` | added | a Proving reset, Maintainers only |
+| `controller add <name> --url URL --fingerprint F --token-file F`, `controller list`, `controller remove <name>` | added | the Out-of-band controllers: a Mac lab controller added or removed, Maintainers only; no MCP tool, as it carries a token |
 | `agent-update <mac>` | added | updates a Lab-owned Mac's agent while it is idle, Maintainers only |
+| `macos enroll <mac>` | added | the one-time line that enrolls the Mac's macOS runner, Maintainers only ("Package sets and Compare") |
+| `set create <name> --pkg NAME=repo:V\|file:SHA[@V]\|build:ID …` | added | makes a Package set, Maintainers only ("Package sets and Compare") |
+| `set capture <name> --from <mac>` | added | a Package set of the stack a Mac last reported, Maintainers only |
+| `set list`, `set show <name>` | added | the Package sets; one set with each file's sha256 |
+| `compare <mac> --before <set\|current> --after <set> [--macos] [--tier default\|extended] [--hands] [--no-wait]` | added | a Compare of two sides on one Mac, Maintainers only ("Package sets and Compare") |
+| `compare done <job>`, `compare publish <job>`, `compare show <job>` | added | a person at the Mac is done; publish the report; print it |
+| `bench mirror` | added | downloads every pinned benchmark file, checks its sha256 and stores it in the artifact store; Maintainers only (Benchmarks) |
 | every command | changed | names itself in `User-Agent`; meets the minimum release; says "Omarchy Mac Lab"; while Dark says it cannot be reached and that no reset is possible until it returns; never prints an error page |
 | `login` | changed | as above; the Blocked sentence; an expired token gets a line naming the person's own page; at the Alias it fails plainly and stores nothing |
 | `exec` | changed | answered as a stream; never sent again after a cut; no serial path; needs the caller's own Lease; kept in the Exec record, its text for 12 months, and the help says never to put a secret in one |
@@ -608,6 +617,7 @@ Unchanged: `baseline`, `crashtest`, `run`, `logs`, `retry`, `gate`, `exclude`, `
 
 | Command | | What |
 |---|---|---|
+| `boot-macos-once` | added | boots macOS for one boot for a queued macOS run ("Package sets and Compare") |
 | `update` | added | `sudo lab-agent update`, at the Mac, takes the agent from the lab server; a bad signature, or an agent older than the one installed, is refused |
 | `setup` | changed | pre-checks first; finds and leaves another lab; arrives at Qualification with publishing off; asks nothing of the window and points to My Macs for it; shows the terms (`--accept-terms <sha256>` keeps its meaning); the Tailscale flags go |
 | `move` | changed | only for a change of the Lab address |
@@ -776,10 +786,10 @@ All from "Terms and privacy" unless another ticket is named.
 
 ### Decisions
 
-1. **Test machines only.** A Volunteer lends only a Test machine. It is point 1 of the terms and the first thing on "Lend a Mac".
+1. **Test machines only.** A Volunteer lends only a Test machine. It is what the terms' one line says and the first thing on "Lend a Mac".
 2. **Posture.** Plain promises: what is kept, for how long, who to write to, and being Forgotten within 30 days. No law is named, no legal basis claimed, no EU or UK representative appointed.
 3. **Who is named.** The lab as a volunteer project run by its Maintainers, its server in Brisbane, Australia, kept by `@maralcbr`. No street address. One contact address, `privacy@omarchy-mac.org`, forwarded to the owner's mailbox by Cloudflare's mail forwarding.
-4. **Where the texts live.** Two public pages, `/terms` and `/privacy`, linked from the footer of every page, each showing its date. The terms are also shown on "Lend a Mac" and in the terminal at Join. Both are text files in the repository and ship with a Lab release; the server serves them and hands the terms to the Join command. The terms' version is the sha256 of the shipped text plus its date; earlier versions are the repository's history. A change of terms reaches the lab by a Deploy. ("Repository layout and release pipeline")
+4. **Where the texts live.** Two public pages, `/terms` and `/privacy`, linked from the footer of every page, each showing its date. The terms are also shown on "Lend a Mac" and in the terminal at Join. Both are text files in the repository and ship with a Lab release; the server serves them and hands the terms to the Join command. The terms are one line (owner, 2026-11-17). Their version is the sha256 of the shipped text plus its date; earlier versions are the repository's history. A change of terms reaches the lab by a Deploy. ("Repository layout and release pipeline")
 5. **No cookie or consent notice.** A signed-out page sets no cookie and runs no analytics.
 6. **Acceptance.** The typed `yes` at Join is the one acceptance, recorded with the person, the Mac, the time and the sha256 of the text, kept as long as the Mac's record. ("Volunteering a Mac")
 7. **A change of terms asks every enrolled Volunteer again.** From the moment new terms take effect, each Mac whose Volunteer has not accepted them takes nothing from the lab, as when Paused: no job, no Lease. No deadline, never an automatic Leave. The Volunteer accepts on My Macs, signed in, once for all their Macs; that is recorded as the first acceptance was. They are told on My Macs and by one Notice. `lab` says so in one line when a job or a Lease is refused for that reason.
@@ -829,50 +839,10 @@ A Retired Mac's name is left as it was typed. The lines the People record and "A
 
 ### The Volunteer's terms
 
-Accepted by the owner word for word.
+One line, dated 2026-11-17 (the owner's decision of 2026-11-17, replacing the eight-point terms of 2026-11-14). Join shows it and asks `Type yes:`; `/terms` shows it with its date, and "Lend a Mac" shows it in place of the old text and its sha256. The yes is recorded as before: the account, the Mac, the time and the sha256 of the text. Since the text changed, every enrolled Volunteer is asked again on My Macs (decision 7).
 
 ```
-OMARCHY MAC LAB: LENDING A MAC
-Terms of 2026-11-14
-
-Omarchy Mac Lab is a volunteer project. Nobody is paid and nothing is promised.
-
-1. Lend only a test machine: a Mac with nothing on it, in Omarchy or in
-   macOS, that you cannot afford to lose or to have read. It is yours to
-   lend and you are 18 or over.
-2. What the lab does. Inside the window you set, and only on AC power, it
-   restarts this Mac into test kernels and back, runs its tests, and
-   collects hardware facts, logs, test output and screenshots, without
-   asking each time. A test kernel has full control of the machine and can
-   crash it or lose what is on it. There is no warranty.
-3. Who does it. The lab's Maintainers, and members of the Omarchy M team
-   holding a Lease on this Mac. At Qualification, where every Mac starts:
-   test kernels, their own included, and the lab's tests. At Full, which
-   only you can choose, at the Mac: also commands and scripts as root. The
-   lab does not install an Omarchy release on this Mac; if that changes you
-   are asked again.
-4. What is kept and seen. Every root command run here at Full is kept by
-   the lab for 12 months, with its text and who ran it; you can read it on
-   My Macs. The Mac's name, never yours, is posted to the M team's Signal
-   group when it joins, is leased, is paused, changes its window or Access
-   level, or leaves, and in a daily summary. Its reports are published only
-   if you turn that on.
-5. What the lab never does. Force this Mac to restart from outside: a hung
-   Mac waits for its own watchdog, then for you. Act outside your window.
-   Update its own software here: you run the update at this Mac, and it
-   installs only if signed by the lab. Ask for a password or a command in a
-   Notice.
-6. If someone's access to the lab is stolen and this Mac may have been
-   touched, you are told. The lab cannot clean your Mac: reinstall it.
-7. You are in charge. Set the window, pause, choose the Access level, read
-   every record, and leave at any time: Leave on My Macs, or
-   `sudo lab-agent leave`.
-8. If these terms change, this Mac takes nothing from the lab until you
-   accept the new ones on My Macs.
-
-What the lab keeps: https://lab.omarchy-mac.org/privacy
-Your yes is recorded with your GitHub account, this Mac, the time and the
-sha256 of this text.
+This Mac is for testing: the lab may install anything on it and run any test, and its data may be lost.
 ```
 
 ### The privacy statement
@@ -1341,3 +1311,77 @@ In each, two Answers disagreed with nothing to settle it, or a decision the spec
 | The remaining screens | 3, 5 |
 | Terms and privacy | 14, 3, 13 |
 | Operations leftovers | 8, 13, 6, 16 |
+
+## 21. Package sets and Compare
+
+Agreed with the owner on 2026-11-17 (night 3 plan). Compare boots a Mac on a known-good stack and on a candidate one and benchmarks both; a Package set is what each side boots.
+
+### Package sets
+
+- **What a set is.** A name, who made it, when, and a list of packages, each with one source: `repo` (a version from the Mac's configured repositories), `file` (a package file sent with `lab upload`, named by its sha256) or `build` (a Builder build: a package from `lab package`, a recipe directory or a GitHub branch, pull request or commit of a PKGBUILD repository with `--commit`; or a kernel from `lab build`). A package is in a set once.
+- **Resolved when made.** labd resolves every file to its sha256 as the set is made and stores the set in labd.db (`package_sets`); the files stay in the artifact store. A `file` must be in the store. A `build` must be done; for a package build the item is the build's file whose name, `NAME-PKGVER-PKGREL-ARCH.pkg.tar.*`, has the package's name, and its version is `PKGVER-PKGREL`; for a kernel build it is the kernel the build made, at the build's release. A `repo` item carries no sha256: the Mac's repositories hold the file. What cannot be resolved makes no set, with the reason.
+- **Frozen.** A set is never changed or deleted: a name is used once, and a changed list is a new set.
+- **Capture.** `lab set capture <name> --from <mac>` makes a set of the stack the Mac last reported: every package at its installed version, as `repo` items. lab-agent reports the stack in its Facts (`stack`, a map of package to `pkgver-pkgrel` from `pacman -Q`): `linux-aurora*` (kernel and headers), `m1n1`/`m1n1-*`, `uboot-*`, `mesa`/`mesa-*`, `vulkan-*`, `libva-v4l2_request-avd`, `libfprint`/`libfprint-*`, `asahi-fwextract`, and any package whose name has both `asahi` and `firmware`. A Mac whose agent reports no stack cannot be captured.
+- **Who.** Maintainers only make, list and read sets: on the API, the `lab set` commands and their `lab mcp` tools, and on the site under Builds (Package sets, read only).
+- **API.** `POST /api/sets` takes `{"name":"7.3-try","items":[{"package":"linux-aurora","source":"build","ref":"b-12"},{"package":"mesa-aurora","source":"file","ref":"<sha256>","version":"25.3.0-1"},{"package":"m1n1-aurora","source":"repo","ref":"1.5.2-1"}]}`; `POST /api/sets/capture` takes `{"name":"7.2","mac":"m2-max"}`; both answer the set. `GET /api/sets` lists them, newest first; `GET /api/sets/{name}` is one. A set is `{"name","created_by","created","captured_from"?,"items":[{"package","source","ref","version"?,"sha256"?,"file"?}]}`; `file` is the build's file an item resolved to. A taken name is 409; anything unresolvable 400.
+
+### macOS runs
+
+A Compare can add the same benchmarks run in macOS on the same Mac (`--macos`). Calls made on 2026-11-17 without the owner are marked (call).
+
+- **Queue.** labd keeps one macOS run per Mac: queued, started, running, done or needs_hands. `queueMacOSRun(mac, tier)` in labd, and `POST /api/devices/{name}/macos-runs` `{tier}` for Maintainers, queue one; a second is refused while one is open; `GET` on the same path reads it. The queue and the runners' secrets live in `macos-runs.json` in labd's data directory (call: a file, not a database migration). The tier's pinned artifacts are listed in `macos-bench.json` beside it (`artifacts`, and `extended` added for Extended), each a sha256 already in the artifact store; a Maintainer places that list (call: nothing builds the macOS bundle, `web-benchmarks` and `video-sample`, yet), and a Compare queues its run with whatever the list holds.
+- **Booting macOS once.** `sudo lab-agent boot-macos-once [--volume NAME]` reads `asahi-bless --list-volumes`, refuses unless the persistent default (the starred volume) is this Linux and exactly one other non-Linux volume is there (or the named one), tells labd the run started (`POST /api/agent/macos-started`; refused, nothing changed, when none is queued), then runs `asahi-bless --next --set-boot <that volume> --yes` and reboots. The boot after returns to Omarchy by itself.
+- **The runner.** `lab-macos-runner`, built for macOS arm64 and shipped as `lab-macos-runner-darwin-arm64.tar.gz` in every Lab release (the program, `install.sh`, and the LaunchDaemon `org.omarchy.maclab.macos-runner`, run at every boot). It is enrolled once per Mac: `lab macos enroll <mac>` prints a one-time line, good for 1 hour, to run in macOS (`… | sudo lab-macos-runner enroll --server <Lab address> --token-stdin`), which trades the token for the runner's own secret, kept root-only in `/Library/Application Support/Omarchy Mac Lab/`. At boot it asks labd for a run; with none it does nothing, so a person booting macOS is left alone. With one it fetches the run's artifacts by sha256 (each checked), runs the tier's list, uploads the results, and reboots with `shutdown -r now`, whatever happened.
+- **The list.** Default: Speedometer 3.1 and MotionMark 1.3 in Chrome, 7-Zip (`7zz b`, MIPS). Extended adds both in Chromium, JetStream 2.2 in Chrome and Chromium, Geekbench 6 CPU (single and multi) and GPU (Metal), and video decode through FFmpeg with VideoToolbox (fps). The web benchmarks are the pinned copies the Linux runner uses, served on loopback; each has a driver page (`driver/<name>.html`) in the bundle that posts its result to the runner; the browsers run in the enrolled GUI user's session. glmark2, vkmark, boot time, kernel compile, vkpeak (MoltenVK is not on macOS; call), clpeak and suspend/resume answer "no macOS equivalent" with no value. A tool not installed or failing says so in its note and the run goes on.
+- **Results.** The Linux runner's shape, `[{name, version, value, unit, higher_is_better, spread, seconds}]`, plus `api` where macOS uses another API than Linux (Metal, VideoToolbox: shown labelled, never compared as like for like) and `note` where there is no value. Names: `speedometer/chrome`, `motionmark/chromium`, `jetstream/chrome`, `7zip`, `geekbench6-cpu-single`, `geekbench6-cpu-multi`, `geekbench6-gpu`, `video-decode`, and the Linux names for those with no equivalent.
+- **Deadline and FileVault.** A started run must report within 30 minutes (Default) or 60 (Extended), else labd marks the run needs_hands and the Mac Needs hands. macOS with FileVault waits for its password at the screen before any LaunchDaemon runs, and labd cannot make an authenticated restart from Linux, so a macOS run on a FileVault Mac needs a person to type it; the Needs hands reason says so. Results that arrive late are still taken.
+
+### Benchmarks
+
+- **What runs.** The builtin tests `bench` (the default tier, about 10 minutes) and `bench-extended` (about 30). Default: Speedometer 3.1 and MotionMark 1.3 in Chrome, 7-Zip `7z b`, glmark2 (Wayland, eight scenes of 5 s), vkmark (six scenes of 5 s), and boot time from `systemd-analyze`. Extended adds Speedometer 3.1 in Chromium, JetStream 2.2 in Chrome, Geekbench 6 CPU, one kernel compile (arm64 `defconfig`, `make -j$(nproc) Image`, timed), vkpeak, clpeak, FFmpeg VA-API decode of a pinned clip (`v4l2_request` driver, frames per second) and one suspend and resume (`rtcwake -m mem -s 15`, device times from the kernel log).
+- **Pinned.** `internal/agent/tests/bench/benchmarks.json` names each file by version, download address and sha256. `lab bench mirror` (Maintainers) downloads them, checks each sha256 and stores them in the artifact store, which never collects them. lab-agent fetches what a tier needs from labd by sha256 into `/var/cache/lab-bench`; a Mac never reaches the internet for a benchmark. The browser benchmarks are served from the Mac itself on `127.0.0.1`.
+- **Chrome.** Chrome for Testing has a Stable linux-arm64 build; it is the pinned Chrome. Chromium is Arch Linux ARM's package of the same version. Both run from the pinned files, headed in the Wayland session, driven over the DevTools protocol; each benchmark's own result is read from the page.
+- **Not pinned.** vkpeak has no aarch64 build, so only its source is pinned and the runner uses a `vkpeak` installed on the Mac, else records it skipped. FFmpeg, the compiler and `rtcwake` are the Mac's own. Geekbench never uploads: without a licence that allows `--no-upload` it is recorded skipped.
+- **Conditions.** Before the run: AC power (a Mac with no battery counts), no other benchmark run, and the Mac idle (under 25% CPU over 3 s), else the run is refused (exit 3, nothing measured). The power profile is set to `balanced` and the backlight to half, and put back after. Before each benchmark, a cool-down until the hottest sensor is under 50 °C, at most 60 s (30 s when the Mac has no sensor).
+- **Output.** `bench.json`, one entry per measurement: `name`, `version`, `value`, `unit`, `higher_is_better`, `spread` (the benchmark's own 95% interval or bound where it gives one, else null), `seconds`, the `cool_down` before it, and `skipped` or `error` with a null value when it did not run. `bench-conditions.json` beside it records the conditions or why the run was refused. A skipped benchmark does not fail the test; an error does.
+
+### Candidate boot
+
+A Candidate boot runs a Package set on any Mac without changing its own system. labd sends lab-agent, in order:
+
+1. `candidate_stage` with the set as labd resolved it from the Package set: every item a file with its sha256 (each package: name, version, a path or URL, sha256), the boot timeout, and whether the Mac has a Sighting. lab-agent checks every file's sha256 before anything changes, mounts the btrfs top level, deletes an old `@lab-candidate`, snapshots `@` to `@lab-candidate`, and runs `pacman --sysroot <candidate> -U --noconfirm` on the files; `@` is not changed. In the candidate it points `/` in fstab at `@lab-candidate`, keeps the journal persistent and inside the candidate (the `/var/log` mount is commented out), and mutes the speakers from the first boot: WirePlumber starts every sink at volume 0 without restoring routes, an ALSA unit mutes each card, and a user unit re-mutes the default sink every second, which is how an unmute is refused while the boot is a candidate. It builds a UKI from the candidate's kernel (the set's, else the Known-good kernel) and an initramfs made from the candidate (`mkinitcpio -r`), with the Known-good cmdline booting `rootflags=subvol=@lab-candidate` and keeping its `rd.luks.*`, plus the Lab boot's parameters, and lists it as a staged Limine entry. The answer names the entry.
+2. `boot_once` with that entry: the usual one-shot, deadlines and watchdog.
+3. `candidate_check` on the candidate boot, until it answers `candidate confirmed` (desktop session up, the GPU bound to the DRM driver the set names, `aurora` or `asahi`, no failed units) or the deadline passes. A boot not confirmed in time is reset by the deadline or the watchdog and comes back on the Known-good kernel and `@`.
+4. Back on Known-good, `candidate_result`: lab-agent reads the candidate's journal from its subvolume (`journalctl -D`), and the job records `boot failed` with it.
+5. `candidate_cleanup`: the entry is removed, and the subvolume deleted unless the job asked to keep it.
+
+A set carrying m1n1 or U-Boot changes the boot loader every boot shares. lab-agent refuses it unless labd says the Mac has a Sighting. Allowed, it keeps `boot.bin` as `boot-prev.bin` beside it, builds the new `boot.bin` from the candidate's files, and answers with the restore steps. When that boot does not come back, labd marks the Mac Needs hands with those steps: from macOS Recovery, mount the EFI partition and copy `boot-prev.bin` to `boot.bin`. Staging a candidate needs Full access on a Volunteer's Mac.
+
+### Mac lab controller
+
+Any macOS Mac on arm64 can be an Out-of-band controller for the Lab-owned Macs cabled to its ports: a Mac lab controller.
+
+- **What ships.** Every Lab release carries `lab-controller-darwin-arm64.tar.gz`, signed like its other files: `bin/oobd` (the mini's own controller program), `bin/macvdmtool` (the reset tool) and `install`. It unpacks to `lab-controller/`.
+- **Install.** `sudo ./install --listen ADDRESS[:PORT] [--rids 0,1]` copies both programs to `/usr/local/lab-controller`, makes the controller's token (64 hex characters, root's alone) and its own self-signed TLS certificate, and installs and starts the LaunchDaemon `org.omarchy-mac.lab.controller`. With no `--listen` it takes the tailnet's address. It prints the `lab controller add` line with the address and the certificate's SHA-256; never the token. Run again, it keeps the token and the certificate. `--dry-run` changes nothing; `--root DIR` installs under DIR and starts nothing.
+- **How labd reaches it.** HTTPS on one named tailnet or LAN address, port 7780 by default, the certificate pinned by its SHA-256 and the token as a bearer token, as labd presents the mini's on loopback. The controller refuses an unspecified address (`0.0.0.0`, `::`), and any address but loopback without TLS. Call made: the token over pinned HTTPS rather than mTLS, the lab's existing pattern.
+- **Adding one.** A Maintainer runs `lab controller add NAME --url https://ADDRESS:PORT --fingerprint SHA256 --token-file FILE`, the token copied from `/usr/local/lab-controller/secrets/oobd.token`. labd asks the controller for its ports with that token and pin before it keeps anything; refused, nothing is kept. labd keeps the list in `controllers.json` in its data and each token in `controllers/NAME.token`, its own alone. `lab controller list` shows each controller with its ports; `lab controller remove NAME` drops it and every Sighting on its ports. `mini` is the mini's own, made by labd's `--oobd-token-file`, and is neither added nor removed. No MCP tool: the command carries a token.
+- **Ports.** On the mini: left, middle and right, as always. On a Mac lab controller: `NAME:RID`, such as `studio:1`; `lab reset MAC --prove studio:1` is a Proving reset there.
+- **Sighting and Hard reset.** labd looks at every controller's ports. A Mac is sighted on the controller whose port shows its name, and its Hard reset goes to that controller alone. A Mac lab controller that does not answer keeps its ports as last seen, so its Macs keep their Sightings, and a reset through it is refused with the reason; the mini's Macs are not affected. The mini's own controller not answering stops every Hard reset, as before.
+- **Boot loader.** A set that changes m1n1 or U-Boot is staged only on a Mac with a Sighting through a controller, the mini's or a Mac lab controller's.
+
+### Compare job
+
+`lab compare <mac> --before <set|current> --after <set> [--macos] [--tier default|extended] [--hands] [--no-wait]`, Maintainers only (`POST /api/compares` `{mac, before, after, macos, tier, hands}`, answering the job). Calls made on 2026-11-18 without the owner are marked (call).
+
+- **One job, one Lease.** A Compare is a job of the Mac (`spec.compare`) that runs under its person's Lease: labd takes one for them (holder `compare`) when they hold none, and releases it when the job ends. Its two sets are read when it is asked and kept in the job as they were. Refused before anything is queued: no such Mac or set, `--after current`, an unknown tier, a set with a kernel build (a lab kernel is not a package pacman can install: build its package with `lab package`), `--macos` on a Mac whose macOS runner is not enrolled, and the Lease rule's refusals. On a Volunteer's Mac it needs Full access.
+- **Side A.** `current` runs on the Mac's known-good system as it is, with no boot. A set is a Candidate boot, as B's.
+- **Side B.** A Candidate boot of the set: labd resolves the set to files (below), then `candidate_stage`, `boot_once`, `candidate_check` every 5 s until `candidate confirmed` or the boot timeout and 2 minutes more (call: the desktop session starts after the Mac reaches labd), the side's tests on the confirmed boot, then back to known-good (a reboot), `candidate_result` when it was not confirmed (its journal is kept in the report) and `candidate_cleanup` always. A set that is not confirmed is `boot failed`: the job's outcome is `boot_failed`, and the report has A alone. A set with a boot loader that does not come back leaves the Mac Needs hands with the restore steps.
+- **Resolving a set.** A `file` or `build` item is its file in the artifact store, by its sha256, which the job's `candidate_stage` lets the Mac fetch. A `repo` item is found by lab-agent on the known-good system (`candidate_resolve`): pacman's cache file `NAME-VERSION-*.pkg.tar.*` at exactly that version, else `pacman -Sw` of the package and the cache again; a repository that holds another version now leaves it unresolved, and the job fails staging saying so (call: the Mac's own cache and repositories, not labd, since only the Mac knows its repositories). The answer is each file's local path and sha256, which `candidate_stage` checks again and the report lists.
+- **Each side runs**, on its boot and in this order: `compare-facts` (the GPU firmware and SIO versions the kernel logged, the Thunderbolt devices, failed units, boot time, in `facts.json`), the tier's benchmark builtin (`bench` or `bench-extended`) and `omarchy-m-test` unattended, named `a-…` and `b-…`. The pinned benchmark versions are the agent's own manifest, the same on both sides; labd lets a benchmark test fetch every pinned file of the bundle. A benchmark whose version differs between the sides is not compared.
+- **macOS.** With `--macos`, after B: labd queues the tier's macOS run, sends `boot_macos_once` (lab-agent's `boot-macos-once`: labd is told the run started, macOS is set as the next boot only, and the Mac reboots once the command's result is in), and waits for the runner's results or for the run's deadline, which leaves the Mac Needs hands. A macOS result is matched to the Linux benchmark of the same name (`speedometer/chrome` is `speedometer-chrome`, `geekbench6-cpu-single` is `geekbench-single`, `video-decode` is `ffmpeg-vaapi`); one on another API (Metal, VideoToolbox) is shown, not compared.
+- **`--hands`.** On B's confirmed candidate boot, after its tests, the job waits up to 1 hour for a person (attended checks, the lid, Touch ID): Done on the Mac's page (a Maintainer, or the Mac's Volunteer), on the job's page, or `lab compare done <job>` (`POST /api/compares/{id}/done`) lets it go on; with no one, it goes on after the hour and says so. A candidate boot keeps its speakers muted, so what is checked by ear is not checked there (call).
+- **Verdicts.** Per benchmark: A's and B's values, the change of B against A in percent, and `better`, `worse` or `no change`, which is a change within the Mac's noise; lower is better for boot time, kernel compile and suspend/resume. The noise is twice the spread, (max − min) / mean, of the Mac's last 3 A-side values of that benchmark, this Compare's included, kept in `compare-noise.json` in labd's data directory (the last 10 per Mac and benchmark); until 3 exist, Speedometer, MotionMark and JetStream 3%, 7-Zip 2%, glmark2, vkmark and any other 5%. A benchmark that did not run on a side, was skipped or failed, is `not compared`, with the reason. macOS is compared against A the same way.
+- **omarchy-m-test.** Each check's status on A and B: `regressed` (pass on A, fail on B), `fixed` (fail on A, pass on B), else `fail` or `pass`.
+- **The report**, in the job (`result.compare`): each side's set, boot, kernel, boot time, the files it installed with their sha256, GPU firmware, SIO, Thunderbolt, failed units, omarchy-m-test counts and any error; the rows; the checks; the pause for a person. `lab compare` waits for the job and prints it (`--no-wait` prints the job and returns); `lab compare show <job>` prints it again.
+- **Private until published.** An unpublished Compare is seen by Maintainers alone: the M team and a Volunteer see neither the job nor its page, on the API or the site. `lab compare publish <job>` (`POST /api/compares/{id}/publish`), or Publish on the job's page, publishes a finished one: the job is then seen as any other, and its report has its own public page, `/compares/<job>`, a side-by-side table (not kept by the edge, like `/status`).
+

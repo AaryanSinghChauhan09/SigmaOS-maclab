@@ -134,6 +134,25 @@ func (c *Client) EnrollToken(ctx context.Context, req api.EnrollTokenRequest) (*
 	return &out, c.do(ctx, "POST", "/api/enroll-tokens", jsonBody(req), &out)
 }
 
+// MacOSEnrollToken makes a one-time token for a Mac's macOS runner, with
+// the line that enrolls it in macOS.
+func (c *Client) MacOSEnrollToken(ctx context.Context, mac string) (*api.MacOSEnrollToken, error) {
+	var out api.MacOSEnrollToken
+	return &out, c.do(ctx, "POST", "/api/macos/enroll-tokens", jsonBody(map[string]string{"mac": mac}), &out)
+}
+
+// QueueMacOSRun queues a macOS run of the tier's benchmarks on the Mac.
+func (c *Client) QueueMacOSRun(ctx context.Context, mac, tier string) (*api.MacOSRun, error) {
+	var out api.MacOSRun
+	return &out, c.do(ctx, "POST", "/api/devices/"+url.PathEscape(mac)+"/macos-runs", jsonBody(api.MacOSRunRequest{Tier: tier}), &out)
+}
+
+// MacOSRun is the Mac's latest macOS run.
+func (c *Client) MacOSRun(ctx context.Context, mac string) (*api.MacOSRun, error) {
+	var out api.MacOSRun
+	return &out, c.do(ctx, "GET", "/api/devices/"+url.PathEscape(mac)+"/macos-runs", nil, &out)
+}
+
 // RevokeEnrollTokens revokes a name's enrollment tokens, used or not, and
 // says how many there were.
 func (c *Client) RevokeEnrollTokens(ctx context.Context, name string) (int, error) {
@@ -448,4 +467,60 @@ func (c *Client) CancelBuild(ctx context.Context, id string) error {
 func (c *Client) Exec(ctx context.Context, device string, a api.ExecArgs) (*api.ExecResult, error) {
 	var out api.ExecResult
 	return &out, c.once(ctx, "POST", "/api/devices/"+url.PathEscape(device)+"/exec", jsonBody(a), &out, "the command")
+}
+
+// CreateSet makes a Package set (Maintainers); labd resolves every file to
+// its sha256 and the set never changes.
+func (c *Client) CreateSet(ctx context.Context, req api.SetRequest) (*api.PackageSet, error) {
+	var out api.PackageSet
+	return &out, c.do(ctx, "POST", "/api/sets", jsonBody(req), &out)
+}
+
+// CaptureSet makes a Package set of the stack a Mac last reported installed.
+func (c *Client) CaptureSet(ctx context.Context, req api.SetCapture) (*api.PackageSet, error) {
+	var out api.PackageSet
+	return &out, c.do(ctx, "POST", "/api/sets/capture", jsonBody(req), &out)
+}
+
+func (c *Client) Sets(ctx context.Context) ([]api.PackageSet, error) {
+	var out []api.PackageSet
+	return out, c.do(ctx, "GET", "/api/sets", nil, &out)
+}
+
+func (c *Client) Set(ctx context.Context, name string) (*api.PackageSet, error) {
+	var out api.PackageSet
+	return &out, c.do(ctx, "GET", "/api/sets/"+url.PathEscape(name), nil, &out)
+}
+
+// Controllers are the lab's Out-of-band controllers (Maintainers).
+func (c *Client) Controllers(ctx context.Context) ([]api.Controller, error) {
+	var out []api.Controller
+	return out, c.do(ctx, "GET", "/api/controllers", nil, &out)
+}
+
+// AddController adds a Mac lab controller (Maintainers).
+func (c *Client) AddController(ctx context.Context, in api.ControllerAdd) error {
+	return c.do(ctx, "POST", "/api/controllers", jsonBody(in), nil)
+}
+
+// RemoveController removes a Mac lab controller (Maintainers).
+func (c *Client) RemoveController(ctx context.Context, name string) error {
+	return c.do(ctx, "DELETE", "/api/controllers/"+url.PathEscape(name), nil, nil)
+}
+
+// Compare queues a Compare (Maintainers): its job.
+func (c *Client) Compare(ctx context.Context, req api.CompareRequest) (*api.Job, error) {
+	var out api.Job
+	return &out, c.do(ctx, "POST", "/api/compares", jsonBody(req), &out)
+}
+
+// CompareDone presses Done for a Compare waiting for a person.
+func (c *Client) CompareDone(ctx context.Context, id string) error {
+	return c.do(ctx, "POST", "/api/compares/"+url.PathEscape(id)+"/done", nil, nil)
+}
+
+// ComparePublish publishes a Compare's report.
+func (c *Client) ComparePublish(ctx context.Context, id string) (*api.Job, error) {
+	var out api.Job
+	return &out, c.do(ctx, "POST", "/api/compares/"+url.PathEscape(id)+"/publish", nil, &out)
 }

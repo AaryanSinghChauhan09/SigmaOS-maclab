@@ -449,6 +449,11 @@ func (s *Server) runJobAsked(ctx context.Context, v *dev, j *api.Job, c *jobCanc
 		v.saveLocked()
 		v.mu.Unlock()
 		s.lapse(v) // a Lease extended for this job ends with it
+		if c := j.Spec.Compare; c != nil && c.LeaseTaken {
+			if err := s.releaseLease(v, s.submitter(j), compareHolder, false, ""); err != nil {
+				s.log.Printf("job %s: the Lease it took: %v", j.ID, err)
+			}
+		}
 	}()
 
 	// A Mac still on a lab entry (an earlier job's restore failed or was cut
@@ -651,6 +656,9 @@ func (r *jobRun) finishAt(outcome, summary string, at time.Time) {
 
 func (r *jobRun) execute(ctx context.Context) (string, string) {
 	v, j := r.v, r.j
+	if j.Spec.Compare != nil {
+		return r.compare(ctx)
+	}
 
 	if j.Spec.InstalledManifest != "" {
 		ir, err := r.newInstalled()
@@ -1047,6 +1055,9 @@ func errText(msg string) string {
 
 // tests are the tests a job runs on its Lab boot.
 func (r *jobRun) tests() []api.TestSpec {
+	if c := r.j.Spec.Compare; c != nil {
+		return compareTests(api.SideB, c.Tier, false)
+	}
 	tests := testsFor(r.j.Spec)
 	if r.ir != nil {
 		tests = append(append([]api.TestSpec{r.ir.test(installed.PhaseBooted)}, tests...), r.ir.test(installed.PhaseAfter))
@@ -1073,6 +1084,9 @@ func (r *jobRun) labBootJob() time.Duration {
 	for _, t := range r.tests() {
 		d += r.testTimeout(t)
 	}
+	if c := r.j.Spec.Compare; c != nil && c.Hands {
+		d += compareHandsLimit
+	}
 	return d
 }
 
@@ -1083,6 +1097,12 @@ func (r *jobRun) labBootJob() time.Duration {
 // Reboot warning's wait.
 func (r *jobRun) expectedLength() time.Duration {
 	d := r.s.cfg.StageTimeout + r.labBootJob()
+	if c := r.j.Spec.Compare; c != nil {
+		d *= 2
+		if c.MacOS {
+			d += macosDeadline(c.Tier)
+		}
+	}
 	if r.v.snapshot().IsVolunteer() {
 		d += r.s.cfg.RebootWarning
 	}

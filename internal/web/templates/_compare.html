@@ -1,0 +1,37 @@
+{{define "compare-report"}}<section class="card" id="compare">
+<h2 class="card-title">compare</h2>
+<p>{{.Before}} (A) against {{.After}} (B), {{.Tier}} tier. omarchy-m-test: {{.Regressed}} regressed, {{.Fixed}} fixed.{{if .Hands}} A person: {{.Hands}}.{{end}}{{if .Published}} <span class="dim">Published {{.Published}}.</span>{{else}} <span class="dim">Private to Maintainers until published.</span>{{end}}</p>
+<div class="scroll"><table class="list stack">
+<thead><tr><th>Benchmark</th><th>A</th><th>B</th><th>Change</th><th>Verdict</th>{{if .MacOS}}<th>macOS</th><th>macOS against A</th>{{end}}<th>Noise</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr>
+<td data-label="Benchmark">{{.Name}}{{if .Unit}} <span class="dim">{{.Unit}}</span>{{end}}{{if .Note}}<br><span class="dim">{{.Note}}</span>{{end}}</td>
+<td data-label="A">{{.A}}</td><td data-label="B">{{.B}}</td><td data-label="Change">{{.Delta}}</td>
+<td data-label="Verdict"><span class="{{.Class}}">{{.Verdict}}</span></td>
+{{if $.MacOS}}<td data-label="macOS">{{.MacOS}}</td><td data-label="macOS against A">{{.MacOSDelta}} <span class="{{.MacOSClass}}">{{.MacOSVerdict}}</span></td>
+{{end}}<td data-label="Noise" class="dim">{{.Noise}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+{{if .Checks}}<p class="dim">omarchy-m-test checks that are not a pass on both sides:</p>
+<ul class="record">
+{{range .Checks}}<li><b>{{.ID}}</b> A {{.A}}, B {{.B}}: <span class="{{if eq .Change "regressed"}}job-bad{{else if eq .Change "fixed"}}job-ok{{else}}dim{{end}}">{{.Change}}</span></li>
+{{end}}</ul>
+{{end}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Side</th><th>Set</th><th>Boot</th><th>Kernel</th><th>GPU firmware</th><th>SIO</th><th>Thunderbolt</th><th>Failed units</th><th>omarchy-m-test</th></tr></thead>
+<tbody>
+{{range .Sides}}<tr>
+<td data-label="Side">{{.Side}}</td><td data-label="Set">{{.Set}}</td><td data-label="Boot">{{.Boot}}{{if .BootIn}} <span class="dim">in {{.BootIn}}</span>{{end}}{{if .Error}}<br><span class="job-warn">{{.Error}}</span>{{end}}</td>
+<td data-label="Kernel">{{.Kernel}}</td><td data-label="GPU firmware">{{.GPUFirmware}}</td><td data-label="SIO">{{.SIO}}</td><td data-label="Thunderbolt">{{.Thunderbolt}}</td>
+<td data-label="Failed units">{{.FailedUnits}}</td><td data-label="omarchy-m-test">{{.OMT}}</td>
+</tr>
+{{end}}</tbody>
+</table></div>
+{{range .Sides}}{{if .Packages}}<p class="dim">{{.Side}} installed:</p>
+<ul class="record">
+{{range .Packages}}<li>{{.Name}} {{.Version}} <span class="dim">{{.SHA256}}</span></li>
+{{end}}</ul>
+{{end}}{{if .Journal}}<p class="dim">{{.Side}}'s candidate journal, its end:</p>
+<pre class="command log">{{.Journal}}</pre>
+{{end}}{{end}}</section>
+{{end}}

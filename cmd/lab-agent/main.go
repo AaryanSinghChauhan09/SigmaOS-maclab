@@ -51,6 +51,9 @@ const usage = `lab-agent: the Mac side of Omarchy Mac Lab
                                   to your own kernel, removes the lab's boot entries, units and device secret,
                                   tells labd, and lists what is left to remove by hand
   sudo lab-agent uninstall [--dry-run] [--force]   tell labd the Mac is leaving, then undo everything setup did
+  sudo lab-agent boot-macos-once [--volume NAME]
+                                  boot macOS once for the macOS run labd queued (asahi-bless --next): refused,
+                                  changing nothing, when none is queued; the boot after returns to Omarchy
   sudo lab-agent preflight        what makes this Mac unsafe to test on
   sudo lab-agent known-good       the kernel setup would record as known-good (read-only)
   lab-agent run                   the daemon (started by lab-agent.service)
@@ -132,6 +135,13 @@ func main() {
 		if len(p) > 0 {
 			os.Exit(1)
 		}
+	case "boot-macos-once":
+		vol := fs.String("volume", "", "the macOS volume's name in asahi-bless --list-volumes, when there are more than one")
+		fs.Parse(os.Args[2:])
+		var cfg *agent.Config
+		if cfg, err = agent.LoadConfig(agent.ConfigPath); err == nil {
+			err = agent.BootMacOSOnce(ctx, cfg, agent.MacOSBoot{Volume: *vol, Log: func(f string, a ...any) { fmt.Printf("  "+f+"\n", a...) }})
+		}
 	case "known-good":
 		var out string
 		if out, err = agent.DescribeKnownGood(); err == nil {
@@ -145,6 +155,7 @@ func main() {
 			// This Mac left the lab; all that remains is to tell labd.
 			err = agent.Farewell(ctx, "/var/lib/maclab", &agent.Linux{WorkDir: "/var/lib/maclab"}, log.Printf)
 		} else if cfg, err = agent.LoadConfig(*cfgPath); err == nil {
+			agent.RefreshLabBootUnits(log.Printf)
 			sys := &agent.Linux{WorkDir: "/var/lib/maclab", GUIUser: cfg.GUIUser, Server: cfg.Server}
 			err = agent.New(cfg, sys, nil).Run(ctx)
 		}

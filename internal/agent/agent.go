@@ -954,6 +954,12 @@ func (a *Agent) exec(ctx context.Context, c api.Command) (any, *afterAck, error)
 		}
 		res, err := ms.StageMesa(ctx, c.JobID, args, fetch)
 		return res, nil, err
+	case api.CmdBootMacOS:
+		after, err := a.bootMacOS(ctx)
+		return nil, after, err
+	case api.CmdCandidateResolve, api.CmdCandidateStage, api.CmdCandidateCheck, api.CmdCandidateResult, api.CmdCandidateCleanup:
+		res, err := a.candidate(ctx, c)
+		return res, nil, err
 	case api.CmdStage:
 		var args api.StageArgs
 		if err := json.Unmarshal(c.Args, &args); err != nil {

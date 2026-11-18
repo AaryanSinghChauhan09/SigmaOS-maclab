@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Make this Mac a Mac lab controller: sudo ./install --listen ADDRESS[:PORT] [--rids 0,1]
+#
+# Run from the unpacked lab-controller-darwin-arm64.tar.gz. Copies oobd and
+# the reset tool to /usr/local/lab-controller, makes the controller's token
+# (root's alone) and its own TLS certificate, and installs and starts the
+# LaunchDaemon org.omarchy-mac.lab.controller, which answers labd over HTTPS
+# on that one address with the token. ADDRESS is this Mac's tailnet or LAN
+# address; 0.0.0.0 and :: are refused. With no --listen, the tailnet's
+# address (tailscale ip -4).
+#
+# Then, on the lab server, as a Maintainer, with a copy of the token:
+#   lab controller add NAME --url https://ADDRESS:PORT --fingerprint SHA256 --token-file FILE
+# which this prints with its values.
+#
+# --root DIR installs under DIR instead of / and starts nothing (tests);
+# --dry-run says what it would do and changes nothing.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root=""
+listen=""
+rids="0,1,2"
+dry=0
+LABEL="org.omarchy-mac.lab.controller"
+PORT=7780
+
+die() { echo "install: $*" >&2; exit 1; }
+say() { echo "$*"; }
+do_() { if (( dry )); then say "would: $*"; else "$@"; fi; }
+
+while (( $# )); do
+  case $1 in
+    --listen) listen="${2:-}"; shift 2 ;;
+    --rids) rids="${2:-}"; shift 2 ;;
+    --root) root="${2:-}"; shift 2 ;;
+    --dry-run) dry=1; shift ;;
+    -h|--help) sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument $1" ;;
+  esac
+done
+
+[[ $(uname -s) == Darwin || -n $root ]] || die "a Mac lab controller is a Mac"
+[[ -n $root || $(id -u) == 0 ]] || die "run it with sudo: the controller runs as root, as the reset tool needs"
+[[ $rids =~ ^[0-9]{1,2}(,[0-9]{1,2})*$ ]] || die "--rids $rids is not a list of the reset tool's port numbers, such as 0,1"
+for f in bin/oobd bin/macvdmtool; do
+  [[ -x $here/$f ]] || die "no $f beside this script: run it from the unpacked lab-controller bundle"
+done
+
+if [[ -z $listen ]]; then
+  listen="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+  [[ -n $listen ]] || die "no --listen and no tailnet address: name this Mac's tailnet or LAN address"
+fi
+if [[ $listen == \[*\]:* ]]; then host="${listen%]:*}"; host="${host#[}"
+elif [[ $listen == \[*\] ]]; then host="${listen#[}"; host="${host%]}"; listen="$listen:$PORT"
+elif [[ $listen == *:*:* ]]; then host="$listen"; listen="[$listen]:$PORT"
+elif [[ $listen == *:* ]]; then host="${listen%:*}"
+else host="$listen"; listen="$listen:$PORT"
+fi
+case $host in
+  ""|0.0.0.0|::|"*") die "$listen would answer on every network this Mac joins: name one address" ;;
+  127.*|::1|localhost) die "$listen is this Mac alone: labd is on another machine, so name a tailnet or LAN address" ;;
+esac
+[[ $host =~ ^[0-9.]+$ || $host =~ ^[0-9a-fA-F:]+$ ]] || die "$host is not an IP address"
+url="https://$listen"
+
+prefix="$root/usr/local/lab-controller"
+secrets="$prefix/secrets"
+plist="$root/Library/LaunchDaemons/$LABEL.plist"
+token="$secrets/oobd.token"
+cert="$secrets/tls.crt"
+key="$secrets/tls.key"
+# Paths as the LaunchDaemon sees them: on this Mac, not under --root.
+real="/usr/local/lab-controller"
+
+owned() { [[ -n $root ]] || chown "$@"; }
+
+do_ install -d -m 0755 "$prefix/bin" "$(dirname "$plist")"
+do_ install -d -m 0700 "$secrets"
+do_ install -m 0755 "$here/bin/oobd" "$here/bin/macvdmtool" "$prefix/bin/"
+[[ -f $here/VERSION ]] && do_ install -m 0644 "$here/VERSION" "$prefix/VERSION"
+
+if [[ ! -s $token ]]; then
+  say "making the controller's token at $token, which only root reads"
+  if (( ! dry )); then
+    (umask 077 && openssl rand -hex 32 > "$token")
+    owned root:wheel "$token"
+  fi
+fi
+if [[ ! -s $cert || ! -s $key ]]; then
+  say "making the controller's own certificate at $cert: labd pins it"
+  if (( ! dry )); then
+    (umask 077 && openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+      -subj "/CN=lab-controller" -keyout "$key" -out "$cert" >/dev/null 2>&1) || die "openssl could not make the certificate"
+    chmod 0644 "$cert"
+    owned root:wheel "$key" "$cert"
+  fi
+fi
+
+write_plist() {
+  cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A Mac lab controller: oobd as root, the reset tool needs it, answering
+     labd over HTTPS on one address with its token. Nothing here is a
+     secret: the token and key are in the files named, which only root reads. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$real/bin/oobd</string>
+    <string>--listen</string><string>$listen</string>
+    <string>--token-file</string><string>$real/secrets/oobd.token</string>
+    <string>--tool</string><string>$real/bin/macvdmtool</string>
+    <string>--tls-cert</string><string>$real/secrets/tls.crt</string>
+    <string>--tls-key</string><string>$real/secrets/tls.key</string>
+    <string>--rids</string><string>$rids</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/empty</string>
+  <key>Umask</key><integer>63</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/var/log/lab-controller.log</string>
+  <key>StandardErrorPath</key><string>/var/log/lab-controller.log</string>
+</dict>
+</plist>
+PLIST
+  chmod 0644 "$plist"
+  owned root:wheel "$plist"
+}
+say "installing $plist: oobd on $url, ports $rids"
+(( dry )) || write_plist
+
+if [[ -z $root ]] && (( ! dry )); then
+  launchctl bootout "system/$LABEL" 2>/dev/null || true
+  launchctl enable "system/$LABEL" || true
+  launchctl bootstrap system "$plist" || die "launchd did not take $plist"
+  launchctl print "system/$LABEL" >/dev/null 2>&1 || die "$LABEL is not loaded: see /var/log/lab-controller.log"
+  say "started $LABEL"
+fi
+
+fp="(made at install)"
+if [[ -s $cert ]]; then
+  fp="$(openssl x509 -in "$cert" -noout -fingerprint -sha256 | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f')"
+fi
+cat <<DONE
+
+This Mac is a Mac lab controller. Copy its token (sudo cat $real/secrets/oobd.token)
+to a file only you read on the lab server's side, then as a Maintainer:
+
+  lab controller add $(hostname -s 2>/dev/null | tr 'A-Z_' 'a-z-' || echo NAME) --url $url --fingerprint $fp --token-file FILE
+
+Cable each Mac to one of this Mac's ports; labd sights it there by its name.
+DONE

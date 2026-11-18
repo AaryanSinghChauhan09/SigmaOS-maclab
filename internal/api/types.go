@@ -317,6 +317,10 @@ type Facts struct {
 	PreflightOK   bool     `json:"preflight_ok"`
 	Problems      []string `json:"problems,omitempty"` // each one holds jobs back
 	Warnings      []string `json:"warnings,omitempty"` // costs evidence, not the Mac: jobs still run
+	// Stack is the installed version (pkgver-pkgrel) of each package of the
+	// Omarchy Mac stack (StackPackage), as pacman -Q lists it: what lab set
+	// capture records.
+	Stack map[string]string `json:"stack,omitempty"`
 }
 
 // StaleKnownGood is whether a preflight problem is lab-agent's known-good
@@ -912,6 +916,9 @@ type JobSpec struct {
 	// Mesa makes the job a first-class Mesa test of pinned split packages.
 	// See MesaSpec for what each mode does and does not claim.
 	Mesa *MesaSpec `json:"mesa,omitempty"`
+	// Compare makes the job a Compare: two sides on the Mac, benchmarked
+	// and checked alike (see CompareSpec).
+	Compare *CompareSpec `json:"compare,omitempty"`
 }
 
 // Mesa test modes. Staged is a diagnostic of the packages: they are unpacked
@@ -990,6 +997,7 @@ type JobResult struct {
 	OMT           *OMTResult       `json:"omt,omitempty"` // omarchy-m-test, when it ran
 	Installed     *InstalledResult `json:"installed,omitempty"`
 	Mesa          *MesaResult      `json:"mesa,omitempty"`
+	Compare       *CompareResult   `json:"compare,omitempty"`
 }
 
 // InstalledResult is an installed-mode job's verdicts. The evidence files are

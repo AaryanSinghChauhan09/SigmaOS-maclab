@@ -174,7 +174,6 @@ func TestNoRequestGoesWithoutAPort(t *testing.T) {
 		{"GET", "/v1/status"},
 		{"POST", "/v1/ports/reset"},
 		{"GET", "/v1/ports/status"},
-		{"GET", "/v1/ports"},
 		{"POST", "/v1/serial/arm"},
 		{"GET", "/v1/serial"},
 		{"GET", "/v1/serial/raw"},
@@ -591,5 +590,46 @@ func TestAResetIsWaitedForOnceTheControllerBeganIt(t *testing.T) {
 	case run := <-r.tool.started:
 		t.Fatalf("%v was sent after its caller stopped waiting", run)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A Mac lab controller on another Mac answers labd across the lab's network,
+// with the token, and says which ports it has; it never listens on every
+// address, and off loopback only with TLS.
+func TestARemoteControllerAnswersOtherMachinesWithTheTokenOnly(t *testing.T) {
+	r := newRig(t)
+	s, _ := New(Config{Token: testToken, Tool: r.tool, Ports: r.ports, RIDs: []int{0, 1}, Remote: true}, log.New(io.Discard, "", 0))
+	ask := func(path, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.RemoteAddr = "100.64.0.1:50000"
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := ask("/v1/ports/0/status", testToken); rec.Code != 200 {
+		t.Fatalf("labd across the tailnet: %d %s", rec.Code, rec.Body)
+	}
+	if rec := ask("/v1/ports/0/status", "wrong"); rec.Code != 401 {
+		t.Fatalf("a wrong token across the tailnet: %d", rec.Code)
+	}
+	if rec := ask("/v1/ports", testToken); rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"rids":[0,1]}` {
+		t.Fatalf("the controller's ports: %d %s", rec.Code, rec.Body)
+	}
+	if rec := ask("/v1/ports", ""); rec.Code != 401 {
+		t.Fatalf("the ports with no token: %d", rec.Code)
+	}
+	for _, addr := range []string{"0.0.0.0:7780", "[::]:7780", ":7780", "localhost:7780"} {
+		if err := Listen(addr, true); err == nil {
+			t.Errorf("%q was taken", addr)
+		}
+	}
+	if err := Listen("100.64.0.1:7780", false); err == nil {
+		t.Error("a tailnet address without TLS was taken")
+	}
+	for _, addr := range []string{"100.64.0.1:7780", "192.168.1.20:7780", "127.0.0.1:7780"} {
+		if err := Listen(addr, true); err != nil {
+			t.Errorf("%s with TLS: %v", addr, err)
+		}
 	}
 }

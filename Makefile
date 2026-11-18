@@ -47,6 +47,7 @@ release-binaries:
 	GOOS=darwin GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS)" -o "$(SERVER_BIN)/oobd" ./cmd/oobd
 	GOOS=darwin GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS)" -o "$(SERVER_BIN)/lab-builder" ./cmd/lab-builder
 	GOOS=linux GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS) $(AGENT_STAMP)" -o "$(SERVER_BIN)/lab-agent-linux-arm64" ./cmd/lab-agent
+	GOOS=darwin GOARCH=arm64 $(RELEASE_BUILD) -ldflags "$(LDFLAGS)" -o "$(RELEASE_OUT)/.stage/lab-macos-runner/bin/lab-macos-runner" ./cmd/lab-macos-runner
 
 .PHONY: release-binaries
 

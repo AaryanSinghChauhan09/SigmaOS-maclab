@@ -65,7 +65,7 @@ func TestTheControllersLaunchDaemon(t *testing.T) {
 	}
 
 	main := read(t, filepath.Join(repo(t), "cmd", "oobd", "main.go"))
-	for _, flag := range []string{"listen", "token-file", "tool"} {
+	for _, flag := range []string{"listen", "token-file", "tool", "tls-cert", "tls-key", "rids"} {
 		if !regexp.MustCompile(`flag\.\w+\("` + flag + `"`).MatchString(main) {
 			t.Errorf("oobd has no flag --%s", flag)
 		}
@@ -75,8 +75,8 @@ func TestTheControllersLaunchDaemon(t *testing.T) {
 			t.Errorf("oobd still has %s", gone)
 		}
 	}
-	if n := len(regexp.MustCompile(`flag\.\w+\("`).FindAllString(main, -1)); n != 3 {
-		t.Errorf("oobd has %d flags, want 3", n)
+	if n := len(regexp.MustCompile(`flag\.\w+\("`).FindAllString(main, -1)); n != 6 {
+		t.Errorf("oobd has %d flags, want 6: the mini's three and a Mac lab controller's TLS and ports", n)
 	}
 }
 

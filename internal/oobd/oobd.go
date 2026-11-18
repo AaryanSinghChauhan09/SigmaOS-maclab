@@ -48,6 +48,10 @@ type Config struct {
 	RIDs  []int
 	Tool  Tool
 	Ports Ports
+	// Remote answers callers on other machines too: a Mac lab controller
+	// that labd reaches over the lab's network. It is served over HTTPS
+	// only (Listen), so the token never crosses the network in the clear.
+	Remote bool
 }
 
 type Server struct {
@@ -87,6 +91,29 @@ func New(cfg Config, logger *log.Logger) (*Server, error) {
 	return &Server{cfg: cfg, log: logger, tool: make(chan struct{}, 1)}, nil
 }
 
+// Listen checks where the controller may listen: on loopback, or with tls
+// on one named address of this machine (a tailnet or LAN address). An
+// unspecified address such as 0.0.0.0 is never taken: it would answer on
+// every network the machine joins.
+func Listen(addr string, tls bool) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return fmt.Errorf("%q is not ADDRESS:PORT", addr)
+	}
+	ip := net.ParseIP(host)
+	switch {
+	case ip == nil:
+		return fmt.Errorf("%q is not an IP address and a port", addr)
+	case ip.IsUnspecified():
+		return fmt.Errorf("%q would answer on every network this machine joins: name one address, a tailnet or LAN one", addr)
+	case ip.IsLoopback():
+		return nil
+	case !tls:
+		return fmt.Errorf("%q is not a loopback address: the controller answers another machine over HTTPS only (--tls-cert, --tls-key)", addr)
+	}
+	return nil
+}
+
 // Loopback reports whether addr is a loopback address and a port, which is
 // the only place the controller listens.
 func Loopback(addr string) error {
@@ -104,6 +131,10 @@ func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /v1/ports/{rid}/status", s.port(s.hStatus))
 	m.HandleFunc("POST /v1/ports/{rid}/reset", s.port(s.hReset))
+	m.HandleFunc("GET /v1/ports", s.authed(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string][]int{"rids": s.cfg.RIDs})
+	}))
 	return m
 }
 
@@ -118,17 +149,7 @@ func (s *Server) rids() string {
 // port lets a request through when it comes from this machine, carries the
 // token and names one of this machine's ports, written as the plain number.
 func (s *Server) port(h func(http.ResponseWriter, *http.Request, int)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-			http.Error(w, "the Out-of-band controller answers this machine only", http.StatusForbidden)
-			return
-		}
-		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.Token)) != 1 {
-			http.Error(w, "bad token", http.StatusUnauthorized)
-			return
-		}
+	return s.authed(func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("rid")
 		for _, rid := range s.cfg.RIDs {
 			if name == strconv.Itoa(rid) {
@@ -138,6 +159,24 @@ func (s *Server) port(h func(http.ResponseWriter, *http.Request, int)) http.Hand
 		}
 		s.log.Printf("refused RID %q", name)
 		http.Error(w, fmt.Sprintf("no port with RID %q: this machine's are %s", name, s.rids()), http.StatusBadRequest)
+	})
+}
+
+// authed lets a request through when it carries the token and comes from
+// this machine, or from anywhere for a Remote controller.
+func (s *Server) authed(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip := net.ParseIP(host); !s.cfg.Remote && (ip == nil || !ip.IsLoopback()) {
+			http.Error(w, "the Out-of-band controller answers this machine only", http.StatusForbidden)
+			return
+		}
+		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.Token)) != 1 {
+			http.Error(w, "bad token", http.StatusUnauthorized)
+			return
+		}
+		h(w, r)
 	}
 }
 

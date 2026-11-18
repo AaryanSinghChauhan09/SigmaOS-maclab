@@ -65,8 +65,8 @@ func TestTheTermsMustBeAcceptedExplicitly(t *testing.T) {
 		if !c.ok && !errors.Is(err, errTermsDeclined) {
 			t.Errorf("answer %q: %v, want declined", c.answer, err)
 		}
-		if !strings.Contains(tty.out.String(), "Joining hands the lab your Mac.") || !strings.Contains(tty.out.String(), terms.SHA256) {
-			t.Errorf("the terms weren't shown with their sha256: %q", tty.out.String())
+		if got := tty.out.String(); got != "\nJoining hands the lab your Mac.\nType yes: " {
+			t.Errorf("the terms weren't shown as their line and the question: %q", got)
 		}
 	}
 	if err := acceptTerms(terms, "https://lab", "", nil); err == nil || !strings.Contains(err.Error(), "--accept-terms "+terms.SHA256) {
