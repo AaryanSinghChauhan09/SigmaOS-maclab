@@ -495,9 +495,10 @@ func TestFD15SwitchesTheTunnelMeasuresBothAndPutsItBack(t *testing.T) {
 	env, state = l.mini(l.url)
 	os.WriteFile(filepath.Join(state, "http2-fails"), nil, 0o644)
 	dir, _, routes = deployCopy(t)
+	deployed := setting(t, protocolLine, routes)
 	out, code = run(t, env, "", frontDoor(t, "fd15-transport"), "--lab", "--mini", "owner@mini", "--job", job, "--size", fmt.Sprint(40*mib), "--deploy", dir, "--records", t.TempDir())
 	got := calls(t, state)
-	if code == 0 || got[len(got)-1] != transport+"deployed" || setting(t, protocolLine, routes) != "quic" || strings.Contains(out, ": pass") {
+	if code == 0 || got[len(got)-1] != transport+"deployed" || setting(t, protocolLine, routes) != deployed || strings.Contains(out, ": pass") {
 		t.Errorf("exit %d, the mini was asked %v\n%s", code, got, out)
 	}
 }
