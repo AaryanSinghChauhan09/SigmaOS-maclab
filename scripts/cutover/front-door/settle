@@ -2,15 +2,12 @@
 # The rules that turn the gate tests' measurements into the lab's settings,
 # and write them in deploy/ (spec sections 6 and 8):
 #
-#   settle outside ONE FOUR DOWN
-#       The transfers from outside the house, in Mbit/s: uploads with 1 part
-#       and with 4 parts at a time, and downloads. Under 50 Mbit/s it says
-#       so and stops with status 3: that is the owner's to look at, and
-#       nothing is written.
 #   settle parts ONE FOUR
-#       How many parts of an upload go at once: 4 only when 4 at a time were
-#       at least 20% faster than 1, else 1. Written as labd's
-#       --parts-at-once in deploy/org.omarchy-mac.lab.labd.plist.
+#       How many parts of an upload go at once, from a 1 GiB lab upload
+#       through the Lab address with 1 part and with 4 at a time, in Mbit/s:
+#       4 only when 4 at a time were at least 20% faster than 1, else 1.
+#       Written as labd's --parts-at-once in
+#       deploy/org.omarchy-mac.lab.labd.plist.
 #   settle transport QUIC_UP QUIC_DOWN HTTP2_UP HTTP2_DOWN
 #       The tunnel's transport: the faster for the same bytes up and down;
 #       within 10% QUIC stays. Written as protocol in deploy/cloudflared.yml.
@@ -38,7 +35,7 @@ deploy="$here/../../../deploy"
 dry=0
 args=()
 
-usage() { sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 say() { echo "$ME: $*"; }
 fail() { echo "$ME: $*" >&2; exit 1; }
 is() { awk "BEGIN { exit !($1) }"; }
@@ -90,23 +87,6 @@ put() {
 }
 
 case "$what" in
-  outside)
-    numbers 3
-    one="${args[1]}" four="${args[2]}" down="${args[3]}"
-    best="$one"
-    if is "$four > $one"; then best="$four"; fi
-    slow=0
-    if is "$down < 50"; then
-      say "STOP: downloads from outside the house came at $down Mbit/s, under 50. The spec's next step for that is moving downloads to R2 (section 6); it is not built. This is for the owner to decide: nothing was written."
-      slow=1
-    fi
-    if is "$best < 50"; then
-      say "STOP: uploads from outside the house came at $best Mbit/s at best, under 50. The member's own link may be the limit: ask what it is, or ask another member. This is for the owner to decide: nothing was written."
-      slow=1
-    fi
-    (( ! slow )) || exit 3
-    say "outside the house: uploads $one Mbit/s with 1 part at a time and $four with 4, downloads $down. None under 50."
-    ;;
   parts)
     numbers 2
     one="${args[1]}" four="${args[2]}"

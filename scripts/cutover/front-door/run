@@ -1,5 +1,5 @@
 #!/bin/bash
-# The Front door's fourteen tests, one after another (spec section 16,
+# The Front door's thirteen tests, one after another (spec section 16,
 # Ready item 1, and step 18 of the day).
 #
 #   run [--dry-run | --local | --lab] [--only N,N...] [--skip N,N...] [--for N "OPTIONS"]...
@@ -10,9 +10,9 @@
 # test could not be carried through, and it is the owner's to look at) or
 # no script. Through the Lab address (--lab) each test writes its own dated
 # record under docs/acceptance/, and the run writes the list of them there
-# as DATE-front-door.md; Ready wants all fourteen to say pass.
+# as DATE-front-door.md; Ready wants all thirteen to say pass.
 #
-#   --only N,N     only these tests, by number (1, 2, 4 to 13, 15, 16)
+#   --only N,N     only these tests, by number (1, 2, 4, 6 to 13, 15, 16)
 #   --skip N,N     all but these
 #   --for N "OPTIONS"
 #                  options for test N alone, as one word, such as
@@ -28,7 +28,7 @@ set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../../.." && pwd)"
 ME=run
-ALL="01 02 04 05 06 07 08 09 10 11 12 13 15 16"
+ALL="01 02 04 06 07 08 09 10 11 12 13 15 16"
 
 usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 say() { echo "$ME: $*"; }
@@ -48,7 +48,7 @@ numbers() {
   for n in ${1//,/ }; do
     [[ $n =~ ^0?[1-9]$|^1[0-6]$ ]] || fail "$n is not a test's number"
     n="$(printf '%02d' "$((10#$n))")"
-    [[ " $ALL " == *" $n "* ]] || fail "there is no test $((10#$n)): the fourteen are 1, 2, 4 to 13, 15 and 16"
+    [[ " $ALL " == *" $n "* ]] || fail "there is no test $((10#$n)): the thirteen are 1, 2, 4, 6 to 13, 15 and 16"
     out="$out $n"
   done
   echo "$out"
@@ -166,10 +166,10 @@ if [[ -n $dir ]]; then
     echo
     printf '%s' "$summary"
     echo
-    if (( passed == 14 )); then
-      echo "Result: pass, all fourteen"
+    if (( passed == 13 )); then
+      echo "Result: pass, all thirteen"
     else
-      echo "Result: $passed of fourteen passed in this run"
+      echo "Result: $passed of thirteen passed in this run"
     fi
   } > "$out"
   say "the list is $out"

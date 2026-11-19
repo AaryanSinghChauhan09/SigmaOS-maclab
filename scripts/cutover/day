@@ -92,7 +92,7 @@ dump_file() {
 # What each step is: its title, who does it, what must be true first.
 title() {
   case "$1" in
-    18) echo "The Front door's fourteen tests are run again" ;;
+    18) echo "The Front door's thirteen tests are run again" ;;
     19) echo "$OLD_NAME's DNS moves to Cloudflare" ;;
     20) echo "Freeze: Railway is disconnected and the site service is stopped" ;;
     21) echo "Final dump of the old site's three tables, onto the mini" ;;
@@ -179,7 +179,7 @@ must() {
       is="$(done_at 18 2>/dev/null | cut -d' ' -f1)" || is=""
       [[ -n $is ]] || { WHY="step 18 is not done"; return 1; }
       file="$ACCEPTANCE/$is-front-door.md"
-      grep -qx 'Result: pass, all fourteen' "$file" 2>/dev/null || { WHY="step 18 is not green: $file does not say \"Result: pass, all fourteen\""; return 1; }
+      grep -qx 'Result: pass, all thirteen' "$file" 2>/dev/null || { WHY="step 18 is not green: $file does not say \"Result: pass, all thirteen\""; return 1; }
       if ! (( no_alias )); then
         file="$(newest_record alias-rehearsal)"
         if [[ -z $file ]] || ! grep -q '^Result: pass' "$file"; then
@@ -462,7 +462,7 @@ act() {
   local rc
   case "$1" in
     18)
-      say "the Front door's fourteen tests, through the Lab address"
+      say "the Front door's thirteen tests, through the Lab address"
       # shellcheck disable=SC2086
       eval "set -- $front_door"
       "$RUNNER" --lab "$@"

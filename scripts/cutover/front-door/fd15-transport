@@ -4,7 +4,7 @@
 # section 6, "The tunnel").
 #
 #   fd15-transport [--dry-run]
-#   fd15-transport --lab --mini USER@HOST --job ID [--size BYTES]
+#   fd15-transport --lab --mini USER@HOST [--job ID] [--size BYTES]
 #   fd15-transport --local [--size BYTES]
 #
 # Under the saved login, from a machine in the house. For each transport it
@@ -17,8 +17,8 @@
 # stays (scripts/cutover/front-door/settle transport).
 #
 #   --mini USER@HOST   the mini, as the owner reaches it over SSH with a key
-#   --job ID           the job whose file is downloaded: fd05-outside-transfers
-#                      --lab --prepare makes and names it
+#   --job ID           the job whose file is downloaded; without it a job is
+#                      run on the Mac first, which leaves that file
 #
 # The lab is Dark for a few seconds at each restart of the tunnel: three in
 # all. --local runs the same steps against a labd on this machine's
@@ -61,9 +61,9 @@ if [[ $MODE == local ]]; then
   settle+=(--dry-run)
 else
   [[ -n $MINI ]] || fail "--lab needs --mini USER@HOST"
-  [[ -n $JOB ]] || fail "--lab needs --job ID: fd05-outside-transfers --lab --prepare makes the job and names it"
   [[ -n $SIZE ]] || SIZE=$GIB
   logged_in
+  [[ -n $JOB ]] || transfer_job
 fi
 record_start 15 "QUIC against HTTP/2 on the tunnel, the same bytes each way, cloudflared's CPU recorded"
 

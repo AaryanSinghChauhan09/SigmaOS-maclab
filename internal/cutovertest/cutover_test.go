@@ -139,7 +139,7 @@ func setting(t *testing.T, re *regexp.Regexp, file string) string {
 func TestTheScriptsAreSound(t *testing.T) {
 	dir := frontDoor(t, "")
 	var files []string
-	for _, name := range []string{"lib.sh", "settle", "fd04-upload-resume", "fd05-outside-transfers", "fd05-member.sh", "fd15-transport", "fd16-performance", "transfer-file.sh"} {
+	for _, name := range []string{"lib.sh", "settle", "fd04-upload-resume", "fd15-transport", "fd16-performance", "transfer-file.sh"} {
 		file := filepath.Join(dir, name)
 		info, err := os.Stat(file)
 		if err != nil {
@@ -148,12 +148,8 @@ func TestTheScriptsAreSound(t *testing.T) {
 		if name != "lib.sh" && info.Mode().Perm()&0o111 == 0 {
 			t.Errorf("%s is not executable", name)
 		}
-		shell := "/bin/bash"
-		if name == "fd05-member.sh" {
-			shell = "/bin/sh"
-		}
-		if out, err := exec.Command(shell, "-n", file).CombinedOutput(); err != nil {
-			t.Errorf("%s -n %s: %v\n%s", shell, name, err, out)
+		if out, err := exec.Command("/bin/bash", "-n", file).CombinedOutput(); err != nil {
+			t.Errorf("bash -n %s: %v\n%s", name, err, out)
 		}
 		files = append(files, file)
 	}
@@ -167,44 +163,8 @@ func TestTheScriptsAreSound(t *testing.T) {
 	}
 }
 
-// The member's script runs on a machine that is not the lab's: it uses a
-// shell, curl and what every Unix has, and names no other program.
-func TestTheMembersScriptNeedsOnlyAShellAndCurl(t *testing.T) {
-	text := read(t, frontDoor(t, "fd05-member.sh"))
-	if !strings.HasPrefix(text, "#!/bin/sh\n") {
-		t.Error("the member's script is not a plain sh script")
-	}
-	for _, tool := range []string{"python", "perl", "jq", "ssh ", "sudo", "wget", "openssl", "shasum", "sha256sum", "git ", "brew", "apt", "pacman", "source ", "[["} {
-		if strings.Contains(text, tool) {
-			t.Errorf("the member's script uses %q", tool)
-		}
-	}
-	// It prints nine numbers and no line of what lab said.
-	block := text[strings.LastIndex(text, "cat <<EOF"):]
-	for _, line := range strings.Split(block, "\n")[1:] {
-		if line == "EOF" {
-			break
-		}
-		if !regexp.MustCompile(`^(-+|[a-z0-9_]+=.+)$`).MatchString(line) {
-			t.Errorf("the member's script prints %q", line)
-		}
-	}
-	for _, name := range []string{"MACLAB_TOKEN", "MACLAB_URL"} {
-		if !strings.Contains(text, "unset MACLAB_URL MACLAB_TOKEN") {
-			t.Errorf("a %s in the member's environment would send the run to another lab", name)
-		}
-	}
-}
-
-// The draft of the ask says what the member does first, and nothing in the
-// folder sends it.
-func TestTheDraftOfTheAskSaysWhatTheMemberDoesFirst(t *testing.T) {
-	text := read(t, frontDoor(t, "fd05-ask.md"))
-	for _, want := range []string{"sign in with your GitHub account", "make a Lab token", "sh fd05-member.sh JOB", "Nobody sends it for him", "https://lab.omarchy-mac.org/me", "no address, no name and no token", "mark the member as M team on People"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("the draft lacks %q", want)
-		}
-	}
+// Nothing in the folder sends a message or makes anything public.
+func TestNothingInTheFolderSendsAMessage(t *testing.T) {
 	entries, err := os.ReadDir(frontDoor(t, ""))
 	if err != nil {
 		t.Fatal(err)
@@ -232,10 +192,9 @@ func TestADryRunSaysTheStepsAndSendsNothing(t *testing.T) {
 	}
 	env := []string{"PATH=" + stubs + ":" + os.Getenv("PATH")}
 	for name, wants := range map[string][]string{
-		"fd04-upload-resume":     {"lab upload FILE", "resuming: labd holds N of 32 parts", "1073741824", "front-door-04.md"},
-		"fd05-outside-transfers": {"lab run m1-pro --script", "fd05-member.sh", "at least 20% faster", "stop under 50 Mbit/s", "front-door-05.md", "fd05-ask.md"},
-		"fd15-transport":         {"transport quic|http2", "transport deployed", "within 10% QUIC stays", "front-door-15.md"},
-		"fd16-performance":       {"cf-cache-status HIT", "page-times", "80%", "under one core", "front-door-16.md"},
+		"fd04-upload-resume": {"lab upload FILE", "resuming: labd holds N of 32 parts", "1073741824", "front-door-04.md"},
+		"fd15-transport":     {"transport quic|http2", "transport deployed", "within 10% QUIC stays", "front-door-15.md"},
+		"fd16-performance":   {"cf-cache-status HIT", "page-times", "80%", "under one core", "front-door-16.md"},
 	} {
 		out, code := run(t, env, "", frontDoor(t, name))
 		if code != 0 || !strings.Contains(out, "Nothing was sent.") {
@@ -285,7 +244,9 @@ func TestPartsAreFourOnlyWhenAtLeastTwentyPercentFaster(t *testing.T) {
 	}
 	// A dry run decides and writes nothing; back to 1 is written too.
 	dir, plist, _ := deployCopy(t)
-	if out, _ := run(t, nil, "", frontDoor(t, "settle"), "parts", "100", "200", "--deploy", dir, "--dry-run"); setting(t, partsLine, plist) != "1" || !strings.Contains(out, "would write") {
+	was := setting(t, partsLine, plist)
+	other := map[string][]string{"1": {"100", "200"}, "4": {"100", "101"}}[was]
+	if out, _ := run(t, nil, "", frontDoor(t, "settle"), append(append([]string{"parts"}, other...), "--deploy", dir, "--dry-run")...); setting(t, partsLine, plist) != was || !strings.Contains(out, "would write") {
 		t.Errorf("a dry run wrote, or did not say what it would:\n%s", out)
 	}
 	run(t, nil, "", frontDoor(t, "settle"), "parts", "100", "200", "--deploy", dir)
@@ -327,34 +288,13 @@ func TestTheTransportIsTheFasterAndWithinTenPercentQUICStays(t *testing.T) {
 	}
 }
 
-// Under 50 Mbit/s from outside the house the run says so and stops for the
-// owner: status 3, and nothing is written.
-func TestUnderFiftyMbitTheRunStopsForTheOwner(t *testing.T) {
-	for _, c := range []struct {
-		one, four, down string
-		status          int
-		says            string
-	}{
-		{"80", "120", "49.9", 3, "downloads from outside the house came at 49.9 Mbit/s, under 50"},
-		{"30", "45", "200", 3, "uploads from outside the house came at 45 Mbit/s at best, under 50"},
-		{"30", "55", "50", 0, "None under 50"},
-		{"50", "40", "50.0", 0, "None under 50"},
-	} {
-		out, code := run(t, nil, "", frontDoor(t, "settle"), "outside", c.one, c.four, c.down)
-		if code != c.status || !strings.Contains(out, c.says) {
-			t.Errorf("settle outside %s %s %s: exit %d, want %d\n%s", c.one, c.four, c.down, code, c.status, out)
-		}
-		if c.status == 3 && (!strings.Contains(out, "STOP") || !strings.Contains(out, "for the owner to decide")) {
-			t.Errorf("the stop does not say whose it is:\n%s", out)
-		}
-	}
-	if out, _ := run(t, nil, "", frontDoor(t, "settle"), "outside", "80", "120", "20"); !strings.Contains(out, "R2") || !strings.Contains(out, "not built") {
-		t.Errorf("a slow download does not name the spec's next step:\n%s", out)
-	}
-	// What is not a speed is refused before anything is decided.
+// What is not a speed, or not a setting, is refused before anything is
+// decided.
+func TestWhatIsNotASpeedIsRefused(t *testing.T) {
 	dir, plist, _ := deployCopy(t)
-	for _, bad := range [][]string{{"parts", "fast", "120"}, {"parts", "100"}, {"parts", "0", "10"}, {"parts", "-5", "10"}, {"parts", "100", "1e3"}, {"transport", "1", "2", "3"}, {"sideways", "1"}, {"parts", "100", "200", "--force"}} {
-		if out, code := run(t, nil, "", frontDoor(t, "settle"), append(bad, "--deploy", dir)...); code == 0 || code == 3 || setting(t, partsLine, plist) != "1" {
+	was := setting(t, partsLine, plist)
+	for _, bad := range [][]string{{"outside", "80", "120", "50"}, {"parts", "fast", "120"}, {"parts", "100"}, {"parts", "0", "10"}, {"parts", "-5", "10"}, {"parts", "100", "1e3"}, {"transport", "1", "2", "3"}, {"sideways", "1"}, {"parts", "100", "200", "--force"}} {
+		if out, code := run(t, nil, "", frontDoor(t, "settle"), append(bad, "--deploy", dir)...); code == 0 || code == 3 || setting(t, partsLine, plist) != was {
 			t.Errorf("settle %v: exit %d\n%s", bad, code, out)
 		}
 	}

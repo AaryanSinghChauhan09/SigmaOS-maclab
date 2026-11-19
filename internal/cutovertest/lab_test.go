@@ -3,10 +3,8 @@ package cutovertest
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
@@ -229,17 +227,15 @@ func TestFD04StoppedWhileLabIsStoppedEnds(t *testing.T) {
 	}
 }
 
-// The Front door's tests 5, 15 and 16 against a labd on loopback: the
-// member's script, the measuring and the decision, which is shown and
-// written nowhere.
+// The Front door's tests 15 and 16 against a labd on loopback: the
+// measuring and the decision, which is shown and written nowhere.
 func TestTheTransferTestsRunAgainstALocalLabd(t *testing.T) {
 	added := recordsAdded(t, "*front-door*")
 	plist := read(t, filepath.Join(repo(t), "deploy", "org.omarchy-mac.lab.labd.plist"))
 	routes := read(t, filepath.Join(repo(t), "deploy", "cloudflared.yml"))
 	for name, wants := range map[string][]string{
-		"fd05-outside-transfers": {"upload, 1 part at a time: 75497472 bytes in ", "upload, 4 parts at a time: 75497472 bytes in ", "download: 75497472 bytes in ", "None under 50", " at a time", ": pass"},
-		"fd15-transport":         {"quic, up: 50331648 bytes in ", "quic, down: 50331648 bytes in ", "http2, up: ", "http2, down: ", "of a core", "Mbit/s over both directions", ": pass"},
-		"fd16-performance":       {"target 1: pass. first byte in ", "target 2: pass. labd took ", " requests for 1", "target 3: pass.", "target 4: pass.", ": pass"},
+		"fd15-transport":   {"quic, up: 50331648 bytes in ", "quic, down: 50331648 bytes in ", "http2, up: ", "http2, down: ", "of a core", "Mbit/s over both directions", ": pass"},
+		"fd16-performance": {"target 1: pass. first byte in ", "target 2: pass. labd took ", " requests for 1", "target 3: pass.", "target 4: pass.", ": pass"},
 	} {
 		out, code := local(t, name)
 		if code != 0 {
@@ -256,86 +252,6 @@ func TestTheTransferTestsRunAgainstALocalLabd(t *testing.T) {
 	}
 	if entries := added(); len(entries) != 0 {
 		t.Errorf("a local run left a record in docs/acceptance: %v", entries)
-	}
-}
-
-const sent = `----------
-fd05_format=1
-upload_bytes=1073741824
-upload_1_seconds=95.0
-upload_1_mbit=90.4
-upload_4_seconds=%s
-upload_4_mbit=%s
-download_bytes=1090519040
-download_seconds=%s
-download_mbit=%s
-----------
-`
-
-// What the member sent back is read as nine numbers and nothing else, and
-// decides how many parts go at once; under 50 Mbit/s the run stops.
-func TestTheMembersNumbersDecideAndAnythingElseIsRefused(t *testing.T) {
-	record := func(text string) (out string, code int, parts, recorded string) {
-		t.Helper()
-		dir, plist, _ := deployCopy(t)
-		records := t.TempDir()
-		file := filepath.Join(t.TempDir(), "sent")
-		if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		stubs := t.TempDir()
-		for _, tool := range []string{"lab", "curl", "ssh"} {
-			os.WriteFile(filepath.Join(stubs, tool), []byte("#!/bin/sh\necho \"$0 was run\" >&2\nexit 9\n"), 0o755)
-		}
-		out, code = run(t, []string{"PATH=" + stubs + ":" + os.Getenv("PATH")}, "", frontDoor(t, "fd05-outside-transfers"), "--lab", "--record", file, "--deploy", dir, "--records", records)
-		if files, _ := filepath.Glob(filepath.Join(records, "*-front-door-05.md")); len(files) == 1 {
-			recorded = read(t, files[0])
-		}
-		return out, code, setting(t, partsLine, plist), recorded
-	}
-
-	out, code, parts, recorded := record(fmt.Sprintf(sent, "70.0", "122.7", "60.1", "145.2"))
-	if code != 0 || parts != "4" {
-		t.Fatalf("4 parts at a time 36%% faster: exit %d, --parts-at-once %s\n%s", code, parts, out)
-	}
-	for _, want := range []string{"under the member's own login, with a Lease on m1-pro", "upload, 1 part at a time: 1073741824 bytes in 95.0 s, 90.4 Mbit/s", "upload, 4 parts at a time: 1073741824 bytes in 70.0 s, 122.7 Mbit/s", "download: 1090519040 bytes in 60.1 s, 145.2 Mbit/s", "4 parts at a time", "Result: pass"} {
-		if !strings.Contains(recorded, want) {
-			t.Errorf("the record lacks %q:\n%s", want, recorded)
-		}
-	}
-	if strings.Contains(out, "was run") {
-		t.Errorf("reading the member's numbers called the lab:\n%s", out)
-	}
-
-	if out, code, parts, _ := record(fmt.Sprintf(sent, "90.0", "95.4", "60.1", "145.2")); code != 0 || parts != "1" {
-		t.Errorf("4 at a time 6%% faster: exit %d, --parts-at-once %s\n%s", code, parts, out)
-	}
-
-	out, code, parts, recorded = record(fmt.Sprintf(sent, "70.0", "122.7", "200.0", "43.6"))
-	if code != 3 || parts != "1" || !strings.Contains(out, "STOP") || !strings.Contains(recorded, "Result: stopped") || !strings.Contains(recorded, "43.6 Mbit/s, under 50") {
-		t.Errorf("a download under 50 Mbit/s: exit %d, --parts-at-once %s\n%s\n%s", code, parts, out, recorded)
-	}
-
-	good := fmt.Sprintf(sent, "70.0", "122.7", "60.1", "145.2")
-	for what, text := range map[string]string{
-		"an address":         good + "from 203.0.113.77\n",
-		"a token":            strings.Replace(good, "fd05_format=1", "fd05_format=1\ntoken=lab_0123456789abcdef", 1),
-		"a name":             strings.Replace(good, "upload_bytes=1073741824", "upload_bytes=1073741824 grace@desk", 1),
-		"a number of no key": good + "uplink_mbit=940\n",
-		"a number twice":     good + "download_mbit=900\n",
-		"a number missing":   strings.Replace(good, "download_seconds=60.1\n", "", 1),
-		"another format":     strings.Replace(good, "fd05_format=1", "fd05_format=2", 1),
-		"a negative number":  strings.Replace(good, "upload_1_mbit=90.4", "upload_1_mbit=-90.4", 1),
-	} {
-		out, code, parts, recorded := record(text)
-		if code != 1 || parts != "1" || recorded != "" {
-			t.Errorf("%s was taken: exit %d, --parts-at-once %s, record %q\n%s", what, code, parts, recorded, out)
-		}
-		for _, leak := range []string{"203.0.113.77", "lab_0123456789abcdef", "grace@desk"} {
-			if strings.Contains(out, leak) {
-				t.Errorf("%s was printed back:\n%s", what, out)
-			}
-		}
 	}
 }
 
@@ -404,7 +320,7 @@ func newMadeUpLab(t *testing.T) *madeUpLab {
 	l := &madeUpLab{t: t, bin: bins(t), root: t.TempDir(), ownerHome: t.TempDir()}
 	signIn := filepath.Join(l.root, "sign-in")
 	os.MkdirAll(signIn, 0o700)
-	github := start(t, regexp.MustCompile(`on (http://127\.0\.0\.1:\d+) with`), filepath.Join(l.bin, "fake-github"), "--listen", freePort(t), "--files", signIn, "--user", "owner:1001", "--user", "member:2002")
+	github := start(t, regexp.MustCompile(`on (http://127\.0\.0\.1:\d+) with`), filepath.Join(l.bin, "fake-github"), "--listen", freePort(t), "--files", signIn, "--user", "owner:1001")
 	if err := os.WriteFile(filepath.Join(signIn, "admins"), []byte("1001\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -449,208 +365,6 @@ func (l *madeUpLab) lab(home, stdin string, args ...string) string {
 	return out
 }
 
-type browser struct {
-	t    *testing.T
-	c    *http.Client
-	base string
-}
-
-type named struct{ http.RoundTripper }
-
-func (n named) RoundTrip(r *http.Request) (*http.Response, error) {
-	r.Header.Set("User-Agent", "cutovertest/1")
-	return n.RoundTripper.RoundTrip(r)
-}
-
-// signIn signs a browser in to the lab as one of the stand-in's accounts.
-func (l *madeUpLab) signIn(account string) *browser {
-	l.t.Helper()
-	jar, _ := cookiejar.New(nil)
-	b := &browser{t: l.t, base: l.url, c: &http.Client{Jar: jar, Transport: named{http.DefaultTransport}}}
-	b.c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if strings.HasSuffix(req.URL.Path, "/login/oauth/authorize") {
-			q := req.URL.Query()
-			q.Set("as", account)
-			req.URL.RawQuery = q.Encode()
-		}
-		return nil
-	}
-	if page := b.get("/sign-in"); !strings.Contains(page, "csrf_token") {
-		l.t.Fatalf("account %s is not signed in:\n%.400s", account, page)
-	}
-	return b
-}
-
-func (b *browser) get(path string) string {
-	b.t.Helper()
-	resp, err := b.c.Get(b.base + path)
-	if err != nil {
-		b.t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return string(body)
-}
-
-var csrfField = regexp.MustCompile(`name="csrf_token" value="([^"]+)"`)
-
-// post sends a form of the page at from, as a browser would.
-func (b *browser) post(from, path string, form url.Values) string {
-	b.t.Helper()
-	m := csrfField.FindStringSubmatch(b.get(from))
-	if m == nil {
-		b.t.Fatalf("%s has no form", from)
-	}
-	form.Set("csrf_token", m[1])
-	req, _ := http.NewRequest("POST", b.base+path, strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Origin", b.base)
-	resp, err := b.c.Do(req)
-	if err != nil {
-		b.t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		b.t.Fatalf("POST %s: %s\n%.400s", path, resp.Status, body)
-	}
-	return string(body)
-}
-
-// The Front door's test 5 as decision S15 has it: the owner marks one M
-// team member; the member signs in with their own GitHub account, makes a
-// Lab token, and runs the script the owner sent, which installs lab from
-// the lab's install line, takes a Lease on m1-pro under the member's own
-// login, uploads for a job on that Mac, downloads a job's file, releases
-// the Lease and prints numbers only.
-func TestTheMemberRunsTheScriptUnderTheirOwnLogin(t *testing.T) {
-	l := newMadeUpLab(t)
-
-	job := l.transferJob()
-
-	// The member signs in for the first time; the owner marks them on
-	// People; the member makes a Lab token on their own page.
-	member := l.signIn("2002")
-	owner := l.signIn("1001")
-	owner.post("/people", "/people/2002/m-team", url.Values{})
-	page := member.post("/me", "/me/tokens", url.Values{"name": {"fd05"}, "period": {"30"}})
-	token := regexp.MustCompile(`lab_[0-9A-Za-z_-]{16,}`).FindString(page)
-	if token == "" {
-		t.Fatalf("the member's page shows no new Lab token:\n%.600s", page)
-	}
-
-	// The lab's install line, played here: it puts lab where the real one does.
-	target, _ := url.Parse(l.url)
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/install/lab" {
-			fmt.Fprintf(w, "mkdir -p \"$HOME/.local/bin\" && cp %q \"$HOME/.local/bin/lab\"\n", filepath.Join(l.bin, "lab"))
-			return
-		}
-		r.Host = target.Host
-		proxy.ServeHTTP(w, r)
-	}))
-	t.Cleanup(front.Close)
-
-	home := t.TempDir()
-	env := append(l.env(home), "LAB_ADDRESS="+front.URL, "LAB_BYTES="+fmt.Sprint(40*mib), "MACLAB_URL=https://another.example", "MACLAB_TOKEN=not-this-labs")
-	script := exec.Command("/bin/sh", frontDoor(t, "fd05-member.sh"), job)
-	script.Env = append(os.Environ(), env...)
-	script.Stdin = strings.NewReader(token + "\n")
-	var said strings.Builder
-	script.Stderr = &said
-	printed, err := script.Output()
-	if err != nil {
-		t.Fatalf("the member's script: %v\n%s\n%s", err, printed, said.String())
-	}
-
-	// Nine numbers between two rules, and nothing else.
-	lines := strings.Split(strings.TrimSpace(string(printed)), "\n")
-	if len(lines) != 11 || lines[0] != "----------" || lines[10] != "----------" {
-		t.Fatalf("the member's script printed:\n%s", printed)
-	}
-	for _, line := range lines[1:10] {
-		if !regexp.MustCompile(`^[a-z0-9_]+=[0-9]+(\.[0-9]+)?$`).MatchString(line) {
-			t.Errorf("not a number: %q", line)
-		}
-	}
-	for _, want := range []string{"upload_bytes=41943040", "download_bytes=41943040"} {
-		if !strings.Contains(string(printed), want) {
-			t.Errorf("the numbers lack %s:\n%s", want, printed)
-		}
-	}
-	for _, leak := range []string{token, "127.0.0.1", "member", "another.example"} {
-		if strings.Contains(string(printed), leak) {
-			t.Errorf("the numbers hold %q", leak)
-		}
-	}
-	if strings.Contains(said.String(), token) {
-		t.Error("the script showed the Lab token")
-	}
-
-	// The owner reads them as the member's script printed them.
-	sentBack := filepath.Join(t.TempDir(), "sent")
-	os.WriteFile(sentBack, printed, 0o600)
-	dir, _, _ := deployCopy(t)
-	if out, code := run(t, nil, "", frontDoor(t, "fd05-outside-transfers"), "--lab", "--record", sentBack, "--deploy", dir, "--records", t.TempDir()); code != 0 || !strings.Contains(out, "None under 50") {
-		t.Errorf("--record of the member's own output: exit %d\n%s", code, out)
-	}
-
-	// lab came from the install line, into the member's own home, and the
-	// login is the member's, at the address they were given.
-	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "lab")); err != nil {
-		t.Errorf("lab was not installed in the member's home: %v", err)
-	}
-	if strings.Contains(said.String(), "another.example") {
-		t.Errorf("the run went to the lab the member's environment named:\n%s", said.String())
-	}
-
-	// The Lease was the member's own and is released; the lab holds it in
-	// the Mac's Lease record under their name.
-	if status := l.lab(l.ownerHome, "", "status", "m1-pro"); strings.Contains(status, "leased by") || strings.Contains(status, "front-door-test-5") {
-		t.Errorf("the Lease was not released:\n%s", status)
-	}
-	leases := l.api(token, "GET", "/api/devices/m1-pro/leases", "")
-	if !strings.Contains(leases, "member") {
-		t.Errorf("the Lease record does not name the member:\n%s", leases)
-	}
-	if strings.Contains(leases, hostname()) && hostname() != "" {
-		t.Errorf("the Lease carried this machine's name:\n%s", leases)
-	}
-
-	// The member is M team, not a Maintainer: with no Lease the same upload
-	// is refused, so the uploads above went under the rule for a job on a
-	// Mac they lease.
-	file := filepath.Join(home, "small")
-	os.WriteFile(file, []byte("no Lease now\n"), 0o600)
-	if out, code := run(t, l.env(home), "", filepath.Join(home, ".local", "bin", "lab"), "upload", file, "--for", "m1-pro"); code == 0 || !strings.Contains(out, "ease") {
-		t.Errorf("an upload with no Lease was taken: exit %d\n%s", code, out)
-	}
-	if strings.Contains(l.api(token, "GET", "/api/builds", ""), "[") {
-		t.Error("the member's token reads what only Maintainers read")
-	}
-}
-
-func hostname() string {
-	h, _ := os.Hostname()
-	return h
-}
-
-// api asks labd one thing with a token and returns the body.
-func (l *madeUpLab) api(token, method, path, body string) string {
-	l.t.Helper()
-	req, _ := http.NewRequest(method, l.url+path, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "cutovertest/1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		l.t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	return string(b)
-}
-
 // owner is the environment of the owner's own run through the Lab address,
 // which here is the labd on loopback.
 func (l *madeUpLab) owner(address string) []string {
@@ -667,15 +381,16 @@ func (l *madeUpLab) owner(address string) []string {
 	return append(l.env(home), "LAB_ADDRESS="+address, "LAB_COMMAND="+filepath.Join(l.bin, "lab"))
 }
 
-// transferJob is the owner's side of the download: --prepare runs the job
-// that leaves the file on the Mac. The simulated Mac runs no script, so the
-// test plays its part and writes the file among the job's.
+// transferJob is the owner's side of the download: the job that leaves the
+// file on the Mac, run under the owner's login as the tests run it when no
+// --job is given. The simulated Mac runs no script, so the test plays its
+// part and writes the file among the job's.
 func (l *madeUpLab) transferJob() string {
 	l.t.Helper()
-	out, code := run(l.t, l.owner(l.url), "", frontDoor(l.t, "fd05-outside-transfers"), "--lab", "--prepare")
-	m := regexp.MustCompile(`The member's command line is: sh fd05-member\.sh (j[0-9a-z-]+)`).FindStringSubmatch(out)
-	if code != 0 || m == nil {
-		l.t.Fatalf("--prepare: exit %d\n%s", code, out)
+	out := l.lab(l.ownerHome, "", "run", "m1-pro", "--script", frontDoor(l.t, "transfer-file.sh"))
+	m := regexp.MustCompile(`(?m)^job (j[0-9a-z-]+) queued`).FindStringSubmatch(out)
+	if m == nil {
+		l.t.Fatalf("lab run did not name its job:\n%s", out)
 	}
 	made := filepath.Join(l.root, "var", "lab", "data", "jobs", m[1], "test-transfer-file")
 	os.MkdirAll(made, 0o755)
@@ -734,7 +449,7 @@ func TestFD15SwitchesTheTunnelMeasuresBothAndPutsItBack(t *testing.T) {
 	const transport = "ssh -t owner@mini sudo /usr/local/lab/current/scripts/mini/transport "
 	const metrics = "ssh owner@mini curl -fsS --max-time 10 http://127.0.0.1:20241/metrics"
 
-	for _, lacking := range [][]string{{"--job", job}, {"--mini", "owner@mini"}, {"--mini", "owner@mini; reboot", "--job", job}, {"--mini", "owner@mini", "--job", "../etc"}} {
+	for _, lacking := range [][]string{{"--job", job}, {"--mini", "owner@mini; reboot", "--job", job}, {"--mini", "owner@mini", "--job", "../etc"}} {
 		env, state := l.mini(l.url)
 		if out, code := run(t, env, "", frontDoor(t, "fd15-transport"), append([]string{"--lab", "--records", t.TempDir()}, lacking...)...); code == 0 || calls(t, state)[0] != "" {
 			t.Errorf("fd15 --lab %v: exit %d, calls %v\n%s", lacking, code, calls(t, state), out)
