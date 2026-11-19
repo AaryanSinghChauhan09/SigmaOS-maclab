@@ -357,9 +357,9 @@ None can be turned into another. ("Data and identity")
 
 ### Uploads and downloads
 
-- Uploads go in numbered parts of 32 MiB; anything smaller is one request. Resume asks the server which parts it holds; each part is retried up to 8 times; a SHA-256 closes the upload; unfinished uploads are deleted after 24 h. How many parts go at once (1 or 4) is set by the measurement from outside the house: 4 only if at least 20% faster.
+- Uploads go in numbered parts of 32 MiB; anything smaller is one request. Resume asks the server which parts it holds; each part is retried up to 8 times; a SHA-256 closes the upload; unfinished uploads are deleted after 24 h. How many parts go at once (1 or 4) is set by a measurement: 4 only if at least 20% faster. It is settled at 4 from the owner's home measurement of 2026-11-19 (Brisbane): a 1 GiB `lab upload` through the Lab address took 137.2 Mbit/s with 1 part and 170.5 Mbit/s with 4 at a time, 24% faster (`settle parts`). The measurement from outside the house that was to set it went with the Front door's test 5, dropped by the owner on 2026-11-19 (Brisbane).
 - labd refuses any single body over 90 MB, and a client never sends a body without `Content-Length`. An agent's job file over 90 MB is refused.
-- Downloads come from the mini, through the tunnel, resumable, never cached at the edge. No object storage. They move to R2 when the outside-the-house test measures under 50 Mbit/s, downloads fill the home uplink, or Cloudflare sends a large-file notice.
+- Downloads come from the mini, through the tunnel, resumable, never cached at the edge. No object storage. They move to R2 when downloads fill the home uplink, or Cloudflare sends a large-file notice. (A third trigger, the outside-the-house test measuring under 50 Mbit/s, went with the Front door's test 5, dropped by the owner on 2026-11-19 (Brisbane).)
 
 ("The front door")
 
@@ -962,7 +962,7 @@ In one line: the lab runs closed at its own name until every test is green; then
 
 **Who.** The owner does every step that needs a password, an account, a purchase, a cable or a message. Everything else is a script the owner starts; the day itself is one script that stops at each owner step and checks what must be true first.
 
-**What Preview serves.** The real lab with the rehearsal copy of the old site's reports; public pages carry a banner naming `omarchy-m-testing.org` as the live site, and `noindex`; uploads and Mac sign-in are refused with a line pointing at the old site; the lab publishes no report; browser sign-in uses the development OAuth app; nobody is invited, with one exception: the M team member who runs the Front door's outside transfer test, whom the owner marks in Preview (decision S15).
+**What Preview serves.** The real lab with the rehearsal copy of the old site's reports; public pages carry a banner naming `omarchy-m-testing.org` as the live site, and `noindex`; uploads and Mac sign-in are refused with a line pointing at the old site; the lab publishes no report; browser sign-in uses the development OAuth app; nobody is invited. (Decision S15 made one exception, the M team member who was to run the Front door's outside transfer test; it went with that test, dropped by the owner on 2026-11-19 (Brisbane).)
 
 ### Before Preview (in the build)
 
@@ -992,7 +992,7 @@ The Release candidate carries: streamed `lab exec`, numbered-part upload, its ow
 | 13a | If the owner's router allows it, the Lab-owned Macs go on a network of their own before they Join ("Hardening inside the lab") | owner |
 | 14 | The heads-up line goes to the M team's Signal group; the owner ends `m1pro` in Chris's lab with `lab remove`; the M1 Pro Joins as `m1-pro` by the Maintainer's enroll path and is accepted | owner |
 | 14a | The M2 Max as a Volunteer's Mac (decision S12). The owner enables `lab-only-autounlock` on it, typing its passphrase, since the Join command stops on a disk that waits for one; signs in and Joins it as their own Volunteer's Mac by the Join command; the Volunteer's side is checked on a real Mac (the Join command end to end through the Front door; Hardening's test 14); it Leaves | owner |
-| 14b | For the Front door's test 5 (decisions S13 and S15): the owner asks one M team member and marks them on People; they sign in with their own GitHub account and take a Lease on `m1-pro`; the script the owner sends uploads and downloads through the real path, under their own login. It comes after step 14, since it needs `m1-pro` Joined | owner; the member |
+| 14b | Dropped by the owner on 2026-11-19 (Brisbane), with the Front door's test 5. It was: the owner asks one M team member and marks them on People; they sign in with their own GitHub account and take a Lease on `m1-pro`; the script the owner sends uploads and downloads through the real path, under their own login (decisions S13 and S15) | nobody |
 | 15 | The M2 Max, its auto-unlock enabled in step 14a, Joins as `m2-max` by the Maintainer's enroll path and is accepted | owner |
 | 16 | Each Lab-owned Mac shows a Configuration after its baseline, set by a Maintainer where the kernel log gives no GPU count | owner |
 | 17 | Each Lab-owned Mac's Machine key is signed in at the old site, if it is not already | owner |
@@ -1005,11 +1005,10 @@ The Alias rehearsal: the certificate is issued with nothing but the CNAME in pla
 
 All green, with dated output committed under `docs/acceptance/`:
 
-1. **The Front door's fourteen tests**, through the Lab address with the final edge settings, run by a script in the repository. The run sets the tunnel's transport and how many upload parts go at once. Numbers are the ticket's; 3 and 14 fell with the serial console. ("The front door"; "CLI changes")
+1. **The Front door's thirteen tests**, through the Lab address with the final edge settings, run by a script in the repository. The run sets the tunnel's transport; how many upload parts go at once is settled from the owner's home measurement (section 6). Numbers are the ticket's; 3 and 14 fell with the serial console, and 5 was dropped by the owner on 2026-11-19 (Brisbane). ("The front door"; "CLI changes")
    - 1: one-hour silent `lab exec` on a real Mac, Keepalive every 30 s, from labd itself.
    - 2: `freeze-entry` on a real Mac.
    - 4: 1 GB upload in parts, cut mid-part, resumes, checksum matches.
-   - 5: large upload and download from a wired host outside the house; parts 1 and 4 at a time. The host is an M team member's machine: the owner asks, the member runs a script the owner sends; a draft of the ask is owed and nobody sends it for him (decision S13). It runs under the member's own login, with a Lease on `m1-pro`, after step 14 (step 14b; decision S15).
    - 6: ten clients at once (check-ins, three streams, a download): no cut, no throttle.
    - 7: Go CLI, Python CLI, agent and `curl … /install` pass the edge unchallenged; an exec body full of shell text is not blocked.
    - 8: a forged `CF-Connecting-IP` from outside does not change the logged address.
@@ -1029,7 +1028,7 @@ All green, with dated output committed under `docs/acceptance/`:
    - 6: the M2 Max with auto-unlock: three Hard resets, back with no passphrase, timed.
    - 7: the controller as a root LaunchDaemon: after labd restarts alone, after an Unlock and after a planned restart, every Sighting is kept.
    - 8: refusals: a Mac with no Sighting, and the controller stopped (status page and "Agents").
-3. **Operations**: one Restore drill, the off-site database copy and the PBS restore included; the Dead-man switch seen to fire and clear; an Unlock from outside the house, through `omarchy-gpu`; the planned-restart rehearsal; the grid-switch test. ("Operations bar")
+3. **Operations**: one Restore drill, the off-site database copy and the PBS restore included; the Dead-man switch seen to fire and clear; the planned-restart rehearsal; the grid-switch test. ("Operations bar")
 4. **The rehearsal import** and its three acceptance checks (step 11), read signed in.
 5. **One Lease** taken, extended past its end by a running job, and ended by a Maintainer, the first and the last seen in the Lab group, the extension in the Lease record (decision S5). ("Leases for the M team")
 6. **Both Lab-owned Macs accepted**, each showing a Configuration.
@@ -1057,7 +1056,7 @@ Ready waits for both Macs. **Accepted** in Preview means: checked in, baseline p
 
 | # | Step | Who | Must be true first |
 |---|---|---|---|
-| 18 | The Front door's fourteen tests are run again | scripts | Ready |
+| 18 | The Front door's thirteen tests are run again | scripts | Ready |
 | 19 | `omarchy-m-testing.org`'s DNS moves to Cloudflare: the zone is added to the same account with the same records, still pointing at Railway, and the nameservers are changed at Porkbun. DNSSEC is turned on once it is active | owner | step 18 green. The Alias rehearsal needs this name still on Porkbun's nameservers, so it has run before this step |
 | 20 | **Freeze.** Railway is disconnected from the old repository and the `site` service is stopped. `Postgres` stays up | owner | Cloudflare shows the old zone active and its certificate issued |
 | 21 | Final dump: the import command reads Railway's Postgres, its address and the rehearsal's CA file typed at prompts, and writes the three tables to a file on the mini (decision S9) | owner | step 20 |
@@ -1122,7 +1121,7 @@ Everything a ticket marked "Not verified", "not tested" or left as a test, with 
 | A Keepalive patch inside labd itself; a real Mac as target; an hour-long `lab exec` | Tunnel spike | Ready 1, FD 1 |
 | `freeze-entry` through the tunnel | Tunnel spike | Ready 1, FD 2 |
 | Whether labd cancels a job when its waiter is cut | Tunnel spike | Ready 1, FD 11 |
-| Large transfers from outside the house; parts 1 or 4 at a time | Tunnel spike; The front door | Ready 1, FD 5, from an M team member's machine under their own login (decisions S13 and S15; step 14b); the draft of the ask is owed |
+| Large transfers from outside the house; parts 1 or 4 at a time | Tunnel spike; The front door | not gating: FD 5 dropped by the owner on 2026-11-19 (Brisbane); parts at once settled at 4 from the owner's home measurement that day (section 6) |
 | More than one client at a time | Tunnel spike | Ready 1, FD 6 |
 | The Join command end to end through the Front door | Volunteering a Mac | Ready 1, FD 7; on a real Mac at step 14a (decision S12) |
 | An open console blocking a Hard reset | The front door | dropped with the serial console |
@@ -1144,7 +1143,7 @@ Everything a ticket marked "Not verified", "not tested" or left as a test, with 
 | A hang inside m1n1 or U-Boot; the mini's front ports | Out-of-band wiring | accepted as unknown |
 | Why the M2 Max came up on a lab kernel after its reset | macvdmtool port selection on the mini | not investigated |
 | The grid main switch: the mini and network gear stay up; the Sigenergy backup is whole-home | Operations bar | Ready 3; if it fails, the UPS question reopens |
-| Unlock from outside the house | Operations bar; `container` without a login session | Ready 3 |
+| Unlock from outside the house | Operations bar; `container` without a login session | not gating: dropped by the owner on 2026-11-19 (Brisbane) from Ready 3 |
 | The Dead-man switch fires and clears | Operations bar | Ready 3 |
 | First Restore drill, restic against R2 and the PBS restore of the guest included | Operations bar | Ready 3 |
 | Litestream on the mini under launchd beside labd; `fullfsync` in the darwin build | SQLite consolidation and replication | Preview, step 7; Ready 3 |
@@ -1219,7 +1218,7 @@ The later ticket won in every row. The earlier Answers are unedited: the change 
 | No UPS; off-site backups for the databases only; backups to the guest on `pve2` and R2, not B2 | map; SQLite consolidation and replication | Operations bar |
 | Keepalive every 30 s (was at least every 60 s); numbered 32 MiB parts (was 30 MB) | Tunnel spike | The front door |
 | The tunnel's route file lists two names (was one) | The front door | Serving maclab.omarchy.org |
-| Fourteen Front door tests gate (was sixteen) | The front door; Cutover and shutting the old site down | CLI changes |
+| Thirteen Front door tests gate (was sixteen, then fourteen; test 5 dropped by the owner on 2026-11-19 (Brisbane)) | The front door; Cutover and shutting the old site down | CLI changes |
 | The caller log is kept 30 days | The front door | Terms and privacy |
 | The old host's API need not keep answering: a plain 308, an old CLI's upload fails | Site parity inventory | Cutover and shutting the old site down |
 | A Lab token expires by disuse and can be renewed (was a date from creation) | Data and identity | The remaining screens |
@@ -1272,9 +1271,9 @@ In each, two Answers disagreed with nothing to settle it, or a decision the spec
 | S10 | "Operations bar" (decision 10) has no Homebrew on the mini and every tool pinned by version and checksum; the owner has since installed Homebrew there | Any tool with a Homebrew formula comes from Homebrew: `cloudflared`, `tailscaled`, Litestream, restic, `signal-cli` with its Java. Versions follow Homebrew and are checked in the Maintenance run. `container` and the lab's reset tool stay as they were. The owner can be at the mini's screen for the first set-up if required; the lab's own scripts still need no `python3`, `git` or `cc` in normal running | Operations bar; Repository layout and release pipeline; Cutover and shutting the old site down; Hardening inside the lab |
 | S11 | "`container` without a login session" left "nothing restarts the server if it dies" as a choice for the build | The root LaunchDaemon that starts it at boot also checks it every minute and starts it again through the same wrapper; "Agents" gets a line on each change | `container` without a login session; Operations bar; Operations leftovers |
 | S12 | Hardening's test 14 and the real-Mac side of Joining need a Volunteer's Mac in Preview, when nobody is invited | The M2 Max first Joins as the owner's own Volunteer's Mac by the Join command, the Volunteer's checks run, it Leaves, then it Joins as `m2-max`, Lab-owned: step 14a, before step 15 | Cutover and shutting the old site down; Hardening inside the lab; Moving the fleet; Volunteering a Mac |
-| S13 | The Front door's test 5 needs "a wired host outside the house"; no ticket says whose | An M team member's machine; the member runs a script the owner sends. The owner asks; a draft message is owed, and nobody sends for him | The front door; Cutover and shutting the old site down |
+| S13 | The Front door's test 5 needs "a wired host outside the house"; no ticket says whose | An M team member's machine; the member runs a script the owner sends. The owner asks; a draft message is owed, and nobody sends for him. Dropped by the owner on 2026-11-19 (Brisbane), with the Front door's test 5 | The front door; Cutover and shutting the old site down |
 | S14 | With S10 daemons would run as root or as `lab` from `/opt/homebrew`, a prefix the admin account can write | Set-up and each Maintenance run copy the Homebrew tools the lab uses (`tailscaled`, `cloudflared`, Litestream, `restic`, `signal-cli` with its Java) into a root-owned folder; every daemon runs from there, never from `/opt/homebrew`. The previous copy is kept, so a bad upgrade has a way back. Accepted: versions follow Homebrew, so gates do not bind tool versions and a rebuilt mini gets newer ones | Operations bar; Repository layout and release pipeline; Cutover and shutting the old site down; Hardening inside the lab |
-| S15 | S13 named whose machine runs the Front door's test 5, not whose login, while "nobody is invited" in Preview | The member's own: in Preview the owner marks that M team member; they sign in with their GitHub account, take a Lease on `m1-pro`, and the script uploads and downloads through the real path. The test comes after step 14. The member is the one exception to "nobody is invited" | The front door; Cutover and shutting the old site down; Leases for the M team |
+| S15 | S13 named whose machine runs the Front door's test 5, not whose login, while "nobody is invited" in Preview | The member's own: in Preview the owner marks that M team member; they sign in with their GitHub account, take a Lease on `m1-pro`, and the script uploads and downloads through the real path. The test comes after step 14. The member is the one exception to "nobody is invited". Dropped by the owner on 2026-11-19 (Brisbane), with the Front door's test 5 | The front door; Cutover and shutting the old site down; Leases for the M team |
 
 ## 20. Where each ticket landed
 

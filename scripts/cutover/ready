@@ -14,11 +14,10 @@
 # dated record, DATE-NAME.md, whose last line that starts "Result:" says
 # pass. A record the owner files by hand gets that line from the owner.
 #
-#   1 the Front door's fourteen tests     DATE-front-door.md, "pass, all fourteen"
+#   1 the Front door's thirteen tests     DATE-front-door.md, "pass, all thirteen"
 #   2 Out-of-band wiring's eight tests    out-of-band.results, 01 to 08
 #   3 operations                          DATE-restore-drill.md, DATE-dead-man.md,
-#                                         DATE-unlock-outside.md, DATE-planned-restart.md,
-#                                         DATE-grid-switch.md
+#                                         DATE-planned-restart.md, DATE-grid-switch.md
 #   4 the rehearsal import                DATE-rehearsal-import.md
 #   5 one Lease                           DATE-lease.md
 #   6 both Lab-owned Macs accepted        DATE-macs-accepted.md
@@ -32,7 +31,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ME=ready
 records="$here/../../docs/acceptance"
 
-usage() { sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 while (( $# )); do
   case "$1" in
@@ -101,7 +100,7 @@ listed() {
 
 operations() {
   local part seen="" bad=""
-  for part in restore-drill dead-man unlock-outside planned-restart grid-switch; do
+  for part in restore-drill dead-man planned-restart grid-switch; do
     if dated "$part"; then seen="$seen $WHY"; else bad="$bad $WHY;"; fi
   done
   if [[ -n $bad ]]; then
@@ -109,7 +108,7 @@ operations() {
     WHY="${WHY%;}"
     return 1
   fi
-  WHY="five records"
+  WHY="four records"
   return 0
 }
 
@@ -125,7 +124,7 @@ item() {
   fi
 }
 
-item 1 "the Front door's fourteen tests" dated front-door "all fourteen"
+item 1 "the Front door's thirteen tests" dated front-door "all thirteen"
 item 2 "Out-of-band wiring's eight tests" listed out-of-band.results 01 02 03 04 05 06 07 08
 item 3 "operations" operations
 item 4 "the rehearsal import" dated rehearsal-import

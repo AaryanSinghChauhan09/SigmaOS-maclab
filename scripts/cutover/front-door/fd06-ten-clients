@@ -19,8 +19,7 @@
 #
 #   --seconds N   how long the ten run: 120 through the Lab address, 40
 #                 against a local labd
-#   --job ID      the job whose file is downloaded (fd05-outside-transfers
-#                 --lab --prepare makes and names it); without it a job is
+#   --job ID      the job whose file is downloaded; without it a job is
 #                 run on the Mac first, which leaves that file
 set -euo pipefail
 # shellcheck source=scripts/cutover/front-door/lib.sh

@@ -64,7 +64,7 @@ const runnerStub = `#!/bin/bash
 echo "runner $*" >> "$DAY_RUNNER_LOG"
 code="$(cat "$DAY_RUNNER_CODE" 2>/dev/null || echo 0)"
 if [[ $code == 0 ]]; then
-  printf '# The Front door'"'"'s tests\n\nResult: pass, all fourteen\n' > "$DAY_ACCEPTANCE/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door.md"
+  printf '# The Front door'"'"'s tests\n\nResult: pass, all thirteen\n' > "$DAY_ACCEPTANCE/$(TZ=Australia/Brisbane date +%Y-%m-%d)-front-door.md"
 fi
 exit "$code"
 `
@@ -370,10 +370,10 @@ func (d *day) record(name, text string) {
 // ready files the nine items' records, all green.
 func (d *day) ready() {
 	d.t.Helper()
-	for _, name := range []string{"front-door", "restore-drill", "dead-man", "unlock-outside", "planned-restart", "grid-switch", "rehearsal-import", "lease", "macs-accepted", "release-candidate"} {
+	for _, name := range []string{"front-door", "restore-drill", "dead-man", "planned-restart", "grid-switch", "rehearsal-import", "lease", "macs-accepted", "release-candidate"} {
 		result := "Result: pass\n"
 		if name == "front-door" {
-			result = "Result: pass, all fourteen\n"
+			result = "Result: pass, all thirteen\n"
 		}
 		d.record("2026-11-10-"+name+".md", "# "+name+"\n\n"+result)
 	}
@@ -497,7 +497,7 @@ func TestTheDressRunOfTheDay(t *testing.T) {
 	}
 	write(t, filepath.Join(m.base, "home", "machine-key.pub"), read(t, public), 0o644)
 
-	// Step 18: Ready first, then the fourteen tests.
+	// Step 18: Ready first, then the thirteen tests.
 	d.stops(1, "", nil, "step 18 stops here: not Ready", "Ready 1")
 	if exists(d.runLog) || d.done() != "" {
 		t.Fatal("the Front door's tests ran before Ready, or a step was written down")
@@ -752,10 +752,10 @@ func TestEachStepBeforeTheOpeningStopsWhenItsCheckIsFalse(t *testing.T) {
 	}
 	// Step 19 without the Alias rehearsal goes on only when the owner says so.
 	d.days("18")
-	d.record("2026-11-20-front-door.md", "Result: pass, all fourteen\n")
+	d.record("2026-11-20-front-door.md", "Result: pass, all thirteen\n")
 	d.stops(1, "", nil, "step 19 stops here: no passed Alias rehearsal")
 	d.stops(3, "", []string{"--without-alias-rehearsal"}, "step 19 is yours")
-	d.record("2026-11-20-front-door.md", "Result: 13 of fourteen passed in this run\n")
+	d.record("2026-11-20-front-door.md", "Result: 12 of thirteen passed in this run\n")
 	d.stops(1, "", []string{"--without-alias-rehearsal"}, "step 19 stops here: step 18 is not green")
 }
 
@@ -841,8 +841,8 @@ func TestTheReadyReportSaysWhichOfTheNineAreGreen(t *testing.T) {
 		t.Fatalf("with every record: exit %d\n%s", code, out)
 	}
 	for _, c := range []struct{ file, text, says string }{
-		{"2026-11-11-front-door.md", "Result: 13 of fourteen passed in this run\n", `Ready 1, the Front door's fourteen tests: not green: 2026-11-11-front-door.md says "13 of fourteen`},
-		{"2026-11-11-front-door.md", "Result: pass\n", "Ready 1, the Front door's fourteen tests: not green"},
+		{"2026-11-11-front-door.md", "Result: 12 of thirteen passed in this run\n", `Ready 1, the Front door's thirteen tests: not green: 2026-11-11-front-door.md says "12 of thirteen`},
+		{"2026-11-11-front-door.md", "Result: pass\n", "Ready 1, the Front door's thirteen tests: not green"},
 		{"out-of-band.results", "01 pass 2026-11-10 x.md\n02 fail 2026-11-10 y.md\n", "Ready 2, Out-of-band wiring's eight tests: not green: out-of-band.results: 02:fail 03:missing"},
 		{"2026-11-11-dead-man.md", "it fired\n", "Ready 3, operations: not green: 2026-11-11-dead-man.md has no Result line"},
 		{"2026-11-11-lease.md", "Result: fail\n", "Ready 5, one Lease: not green"},

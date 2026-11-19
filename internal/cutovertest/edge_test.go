@@ -13,7 +13,7 @@ import (
 )
 
 // The Front door's stream and edge tests (1, 2, 6 to 13) and the runner of
-// all fourteen. A local run starts labd with its tunnel socket and the
+// all thirteen. A local run starts labd with its tunnel socket and the
 // probe's stand-in for the edge in front of it.
 
 var edgeTests = []string{
@@ -206,16 +206,16 @@ func TestARunThroughTheLabAddressSaysWhatItLacks(t *testing.T) {
 	}
 }
 
-// The runner runs all fourteen in the order of their numbers and passes its
+// The runner runs all thirteen in the order of their numbers and passes its
 // options on.
-func TestTheRunnerRunsTheFourteenInOrder(t *testing.T) {
+func TestTheRunnerRunsTheThirteenInOrder(t *testing.T) {
 	env, log := stubs(t)
 	out, code := run(t, env, "", frontDoor(t, "run"))
-	if code != 0 || !strings.Contains(out, "14 test(s)") || !strings.Contains(out, "Nothing was sent.") {
+	if code != 0 || !strings.Contains(out, "13 test(s)") || !strings.Contains(out, "Nothing was sent.") {
 		t.Fatalf("run: exit %d\n%s", code, out)
 	}
 	last := -1
-	for _, n := range []string{"1", "2", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "15", "16"} {
+	for _, n := range []string{"1", "2", "4", "6", "7", "8", "9", "10", "11", "12", "13", "15", "16"} {
 		at := strings.Index(out, "run: test "+n+": fd")
 		if at <= last {
 			t.Errorf("test %s is missing or out of order:\n%s", n, out)
@@ -230,10 +230,10 @@ func TestTheRunnerRunsTheFourteenInOrder(t *testing.T) {
 	if code != 0 || strings.Count(out, "run: test ") != 2 || !strings.Contains(out, "freeze-entry m2-max --release 9.9") || !strings.Contains(out, "fd13-cache --dry-run --mac m2-max") {
 		t.Errorf("run --only 2,13: exit %d\n%s", code, out)
 	}
-	if out, _ := run(t, env, "", frontDoor(t, "run"), "--skip", "1,16"); strings.Count(out, "run: test ") != 12 || strings.Contains(out, "fd01-") {
+	if out, _ := run(t, env, "", frontDoor(t, "run"), "--skip", "1,16"); strings.Count(out, "run: test ") != 11 || strings.Contains(out, "fd01-") {
 		t.Errorf("run --skip 1,16:\n%s", out)
 	}
-	for _, bad := range [][]string{{"--only", "3"}, {"--only", "17"}, {"--everything"}, {"--for", "2"}} {
+	for _, bad := range [][]string{{"--only", "3"}, {"--only", "5"}, {"--only", "17"}, {"--everything"}, {"--for", "2"}} {
 		if out, code := run(t, env, "", frontDoor(t, "run"), bad...); code != 2 || strings.Contains(out, "run: test ") {
 			t.Errorf("run %v: exit %d\n%s", bad, code, out)
 		}
@@ -256,26 +256,26 @@ func TestTheRunnerListsEachResultAndShowsNoPage(t *testing.T) {
 	script("fd01-good", `echo "fd01-good: pass. The record is `+records+`/x-front-door-01.md"; echo "got: $*"`)
 	script("fd02-page", `echo '<!DOCTYPE html><html><body>error code: 1015 from 192.0.2.9</body></html>'; echo "fd02-page: an error page (status 1015, ray id 0123456789abcdef)"; exit 1`)
 	script("fd04-owner", `echo "fd04-owner: stopped"; exit 3`)
-	script("fd05-member.sh", `echo "the member's script was run"; exit 1`)
-	out, code := run(t, nil, "", filepath.Join(dir, "run"), "--local", "--only", "1,2,4,5", "--records", records, "--for", "1", "--seconds 70")
+	script("fd06-helper.sh", `echo "the helper was run"; exit 1`)
+	out, code := run(t, nil, "", filepath.Join(dir, "run"), "--local", "--only", "1,2,4,6", "--records", records, "--for", "1", "--seconds 70")
 	if code != 1 {
 		t.Errorf("exit %d, want 1 for a failed test\n%s", code, out)
 	}
-	for _, want := range []string{"run: test 1: pass", "run: test 2: fail", "run: test 4: stopped", "run: test 5: no script", "1 of 4 passed",
+	for _, want := range []string{"run: test 1: pass", "run: test 2: fail", "run: test 4: stopped", "run: test 6: no script", "1 of 4 passed",
 		"got: --local --records " + records + " --seconds 70", "status 1015, ray id 0123456789abcdef"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the run does not say %q:\n%s", want, out)
 		}
 	}
-	if page.MatchString(out) || strings.Contains(out, "192.0.2.9") || strings.Contains(out, "the member's script was run") {
-		t.Errorf("the run showed a page, or ran the member's script:\n%s", out)
+	if page.MatchString(out) || strings.Contains(out, "192.0.2.9") || strings.Contains(out, "the helper was run") {
+		t.Errorf("the run showed a page, or ran a helper beside a test:\n%s", out)
 	}
 	lists, _ := filepath.Glob(filepath.Join(records, "*-front-door.md"))
 	if len(lists) != 1 {
 		t.Fatalf("the list: %v", lists)
 	}
 	list := read(t, lists[0])
-	for _, want := range []string{"- Test 1: pass (`x-front-door-01.md`)", "- Test 2: fail", "- Test 4: stopped", "- Test 5: no script", "Result: 1 of fourteen passed in this run", "It proves the scripts, not the Front door."} {
+	for _, want := range []string{"- Test 1: pass (`x-front-door-01.md`)", "- Test 2: fail", "- Test 4: stopped", "- Test 6: no script", "Result: 1 of thirteen passed in this run", "It proves the scripts, not the Front door."} {
 		if !strings.Contains(list, want) {
 			t.Errorf("the list lacks %q:\n%s", want, list)
 		}

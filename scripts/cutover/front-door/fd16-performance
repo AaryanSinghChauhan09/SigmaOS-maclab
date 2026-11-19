@@ -4,7 +4,7 @@
 # Ready item 1).
 #
 #   fd16-performance [--dry-run]
-#   fd16-performance --lab --mini USER@HOST --job ID --link-up MBIT --link-down MBIT [--size BYTES]
+#   fd16-performance --lab --mini USER@HOST [--job ID] --link-up MBIT --link-down MBIT [--size BYTES]
 #   fd16-performance --local [--size BYTES]
 #
 #   1. A signed-out public page is an edge HIT and its first byte comes in
@@ -22,8 +22,8 @@
 #      those two transfers, from its metrics on the mini's loopback.
 #
 #   --mini USER@HOST   the mini, as the owner reaches it over SSH with a key
-#   --job ID           the job whose file is downloaded (fd05-outside-transfers
-#                      --lab --prepare makes and names it)
+#   --job ID           the job whose file is downloaded; without it a job is
+#                      run on the Mac first, which leaves that file
 #   --link-up MBIT     the slower of the two ends' links for an upload: this
 #                      machine's up or the mini's down, from a speed test
 #   --link-down MBIT   the same for a download: the mini's up or this machine's down
@@ -75,10 +75,10 @@ if [[ $MODE == local ]]; then
   transfer_job
 else
   [[ -n $MINI ]] || fail "--lab needs --mini USER@HOST"
-  [[ -n $JOB ]] || fail "--lab needs --job ID: fd05-outside-transfers --lab --prepare makes the job and names it"
   [[ -n $link_up && -n $link_down ]] || fail "--lab needs --link-up and --link-down: the slower end's link speed each way, in Mbit/s"
   [[ -n $SIZE ]] || SIZE=$GIB
   logged_in
+  [[ -n $JOB ]] || transfer_job
 fi
 record_start 16 "the four performance targets"
 failed=0
