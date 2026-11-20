@@ -465,7 +465,7 @@ a.badge-regression { text-decoration: none; }
 .matrix-view-switch a:hover { color: var(--white); }
 .matrix-view-switch a[aria-current="page"] { background: var(--storm); box-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset; color: var(--white); font-weight: 600; }
 
-/* the matrix fits the window where it can; else it scrolls in a box no taller than the window, names held in place */
+/* the matrix fills the window's width where it fits; else it scrolls in a box no taller than the window, names held in place */
 
 .matrix-scroll {
   max-height: calc(100dvh - 2rem);
@@ -481,6 +481,7 @@ a.badge-regression { text-decoration: none; }
   border-collapse: separate;
   border-spacing: var(--gap);
   font-size: 0.85rem;
+  width: 100%;
 }
 
 .matrix thead th { background: var(--surface); position: sticky; top: 0; z-index: 2; }
@@ -496,6 +497,8 @@ a.badge-regression { text-decoration: none; }
   position: sticky;
   text-align: left;
   vertical-align: bottom;
+  /* the names keep their own width: what the grid has spare goes to the features */
+  width: 1px;
   z-index: 1;
 }
 
@@ -511,10 +514,10 @@ a.badge-regression { text-decoration: none; }
 
 .feature-head {
   height: 11.5rem;
+  min-width: var(--cell);
   padding: 0 0 0.4rem;
   vertical-align: bottom;
   white-space: nowrap;
-  width: var(--cell);
 }
 
 .feature-head a {
@@ -538,12 +541,15 @@ a.badge-regression { text-decoration: none; }
   height: var(--cell);
   min-width: var(--cell);
   padding: 0;
-  width: var(--cell);
 }
 
 @media (min-width: 761px) and (max-width: 1919px) {
   .matrix { --cell: clamp(1.25rem, calc((100vw - 30rem) / 52), 1.9rem); --gap: 2px; font-size: 0.8rem; }
   .matrix .row-head { min-width: 12.5rem; }
+}
+
+@media (min-width: 2200px) {
+  .matrix:has(.row-build) .row-head { min-width: 24rem; }
 }
 
 /* lists */
