@@ -237,6 +237,10 @@ a.badge-regression { text-decoration: none; }
 }
 
 .site-main-wide { max-width: none; }
+/* on a wide page, what is read keeps the reading width, once the window is clearly wider than it */
+@media (min-width: 104rem) {
+  .reading { margin-inline: auto; max-width: 82rem; }
+}
 
 .site-footer {
   border-top: 1px solid var(--border);

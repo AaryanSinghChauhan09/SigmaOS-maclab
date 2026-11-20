@@ -307,7 +307,7 @@ None can be turned into another. ("Data and identity")
 - A page a role may not open answers as not found; signed out, it leads to sign-in.
 - People carries a count of pending requests in the navigation.
 - Phone width: each row scrolls sideways; tables turn into stacked label-and-value rows.
-- The matrix fills the window's whole width: its squares shrink on a laptop so the whole grid shows, and on a wider screen its columns widen to the window's edge; where it still cannot fit it scrolls in a box no taller than the window, the feature names and Mac names held in place.
+- The matrix fills the window's whole width, on its own page and on the home page, where the text around it keeps the reading width: its squares shrink on a laptop so the whole grid shows, and on a wider screen its columns widen to the window's edge; where it still cannot fit it scrolls in a box no taller than the window, the feature names and Mac names held in place.
 - The footer of every page links `/terms` and `/privacy`. No cookie or consent notice.
 
 | Viewing as | Row 2 |
