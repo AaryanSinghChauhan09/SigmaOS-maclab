@@ -236,6 +236,8 @@ a.badge-regression { text-decoration: none; }
   width: 100%;
 }
 
+.site-main-wide { max-width: none; }
+
 .site-footer {
   border-top: 1px solid var(--border);
   color: var(--comment);
@@ -463,17 +465,27 @@ a.badge-regression { text-decoration: none; }
 .matrix-view-switch a:hover { color: var(--white); }
 .matrix-view-switch a[aria-current="page"] { background: var(--storm); box-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset; color: var(--white); font-weight: 600; }
 
+/* the matrix fits the window where it can; else it scrolls in a box no taller than the window, names held in place */
+
 .matrix-scroll {
+  max-height: calc(100dvh - 2rem);
   max-width: 100%;
-  overflow-x: auto;
+  overflow: auto;
+  overscroll-behavior-x: contain;
   position: relative;
 }
 
 .matrix {
+  --cell: 1.9rem;
+  --gap: 3px;
   border-collapse: separate;
-  border-spacing: 3px;
+  border-spacing: var(--gap);
   font-size: 0.85rem;
 }
+
+.matrix thead th { background: var(--surface); position: sticky; top: 0; z-index: 2; }
+.matrix thead .row-head { z-index: 3; }
+.matrix thead th, .matrix .row-head { box-shadow: 0 0 0 var(--gap) var(--surface); }
 
 .matrix .row-head {
   background: var(--surface);
@@ -502,7 +514,7 @@ a.badge-regression { text-decoration: none; }
   padding: 0 0 0.4rem;
   vertical-align: bottom;
   white-space: nowrap;
-  width: 1.9rem;
+  width: var(--cell);
 }
 
 .feature-head a {
@@ -523,9 +535,15 @@ a.badge-regression { text-decoration: none; }
 
 .matrix .cell {
   border-radius: 3px;
-  height: 1.9rem;
-  min-width: 1.9rem;
+  height: var(--cell);
+  min-width: var(--cell);
   padding: 0;
+  width: var(--cell);
+}
+
+@media (min-width: 761px) and (max-width: 1919px) {
+  .matrix { --cell: clamp(1.25rem, calc((100vw - 30rem) / 52), 1.9rem); --gap: 2px; font-size: 0.8rem; }
+  .matrix .row-head { min-width: 12.5rem; }
 }
 
 /* lists */

@@ -166,6 +166,9 @@ type Page struct {
 	// Public marks a page anyone may open: in Preview it carries the banner
 	// naming the live site.
 	Public bool
+	// Wide lets the page use the window's whole width, for a grid wider
+	// than reading width.
+	Wide bool
 	// Data is whatever the page's template reads as .Data.
 	Data any
 }
