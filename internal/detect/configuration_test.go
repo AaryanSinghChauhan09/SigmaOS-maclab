@@ -54,6 +54,13 @@ Sep 27 00:34:31 omarchy-m2-max kernel: asahi 406400000.gpu:   Active cores: 30
 	if cpu, gpu := CoreCounts(monotonic); cpu != 10 || gpu != 16 {
 		t.Fatalf("an M1 Pro's log: %d CPU, %d GPU", cpu, gpu)
 	}
+	const m3air = `[    0.268877] archlinux kernel: smp: Brought up 1 node, 8 CPUs
+[    2.719048] archlinux kernel: aurora 292400000.gpu: Probing...
+[    2.719265] archlinux kernel: aurora 292400000.gpu: G15G: T8122 revision 2.0 identity admitted (10 active / 10 slots)
+`
+	if cpu, gpu := CoreCounts(m3air); cpu != 8 || gpu != 10 {
+		t.Fatalf("an M3 Air's log: %d CPU, %d GPU", cpu, gpu)
+	}
 	if cpu, gpu := CoreCounts("[    0.4] smp: Brought up 1 node, 8 CPUs\n"); cpu != 8 || gpu != 0 {
 		t.Fatalf("a log with no GPU line: %d CPU, %d GPU", cpu, gpu)
 	}

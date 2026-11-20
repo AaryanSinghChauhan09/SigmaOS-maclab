@@ -92,8 +92,11 @@ func TestAReleaseIsListedFromTheMomentItsManifestIsFrozen(t *testing.T) {
 		t.Fatalf("a Release nobody judged: state %q, verdicts %v, coverage %d of %d", r.State, r.Verdicts, r.Passed, r.Configurations)
 	}
 
-	// Its Macs are fixed at that moment: a Configuration set later changes nothing.
-	l.s.setConfiguration(l.s.dev("sim-mac"), harnessMaintainer, 12, 38)
+	// Its Macs are fixed at that moment: a Configuration read later changes nothing.
+	sim := l.s.dev("sim-mac")
+	sim.mu.Lock()
+	sim.d.Configuration = &api.Configuration{CPU: 12, GPU: 38}
+	sim.mu.Unlock()
 	if now := l.release(grace.Token, "9.9"); now.Macs[0].Configuration != r.Macs[0].Configuration {
 		t.Fatalf("the Release's Mac changed after the freeze: %q, was %q", now.Macs[0].Configuration, r.Macs[0].Configuration)
 	}

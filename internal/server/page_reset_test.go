@@ -64,7 +64,7 @@ func TestMacsShowsEachLabOwnedMacAsSightedNotSightedOrNoCable(t *testing.T) {
 
 	mini.unplug(portLeft)
 	l.s.sight(context.Background())
-	if got := kind("m2-max"); !strings.Contains(got, " no cable ") {
+	if got := kind("m2-max"); !strings.Contains(got+" ", " no cable ") {
 		t.Errorf("m2-max with nothing on the left port: %q", got)
 	}
 	mini.stop(true)

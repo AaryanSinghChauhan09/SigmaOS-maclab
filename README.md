@@ -161,7 +161,7 @@ and GPU core counts): a second Lease is refused, naming the one held. A
 Maintainer is warned and goes on. The lab works the Configuration out: from a
 table for a board sold with one, otherwise from the kernel log of the Mac's
 latest job on its Known-good kernel. Macs of one board whose counts it cannot
-read count as the same Configuration until a Maintainer sets them, on Macs.
+read yet count as the same Configuration.
 
 A Lease fences jobs, `lab exec`, screenshots, the live journal and reset. An
 M team member needs their own Lease on the Mac for each, cancels only their

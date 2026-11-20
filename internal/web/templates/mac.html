@@ -41,7 +41,7 @@
 <p class="card-tools"><a class="button button-small" href="{{href (print "/boot?mac=" .Mac.Name)}}">Boot a kernel</a></p>
 {{- end}}
 <dl class="facts">
-<dt>Configuration</dt><dd>{{.Mac.Configuration}}{{if .Mac.SetBy}} <span class="dim">set by @{{.Mac.SetBy}}</span>{{end}}</dd>
+<dt>Configuration</dt><dd>{{.Mac.Configuration}}</dd>
 <dt>Kind</dt><dd>{{.Mac.Kind}}{{if .Mac.Volunteer}} of @{{.Mac.Volunteer}}{{end}}</dd>
 {{- if .Facts.Cable}}
 <dt>Cable</dt><dd>{{.Facts.Cable}}{{if .Facts.NoHardReset}} <span class="dim">No Hard reset: {{.Facts.NoHardReset}}.</span>{{end}}</dd>

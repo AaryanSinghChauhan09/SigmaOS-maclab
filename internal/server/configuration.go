@@ -12,8 +12,7 @@ import (
 // A Mac's Configuration is its board with its CPU and GPU core counts, and
 // labd works it out: the board from the Mac's check-in; the counts from the
 // repository's table for a board sold with one Configuration, otherwise
-// from the kernel log of the Mac's latest job on its Known-good kernel. A
-// Maintainer can set or correct the counts, and that stands over both.
+// from the kernel log of the Mac's latest job on its Known-good kernel.
 // lab-agent reports no core count and is not asked to.
 
 // kernelLogRead is how much of a kernel log labd reads for the two lines:
@@ -32,8 +31,19 @@ func (s *Server) configuration(v *dev) api.Configuration {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.coresLooked = true
-	if kept := v.d.Configuration; cpu+gpu > 0 && (kept == nil || kept.SetBy == "" && (kept.CPU != cpu || kept.GPU != gpu)) {
-		v.d.Configuration = &api.Configuration{CPU: cpu, GPU: gpu}
+	// A count the latest log lacks keeps the one an earlier log gave.
+	kept, read := v.d.Configuration, api.Configuration{}
+	if kept != nil {
+		read = *kept
+	}
+	if cpu > 0 {
+		read.CPU = cpu
+	}
+	if gpu > 0 {
+		read.GPU = gpu
+	}
+	if read.CPU+read.GPU > 0 && (kept == nil || *kept != read) {
+		v.d.Configuration = &read
 		v.saveLocked()
 	}
 	c, _ = v.configurationLocked()
@@ -42,20 +52,15 @@ func (s *Server) configuration(v *dev) api.Configuration {
 
 // configurationLocked is the Configuration from what labd holds, and
 // whether the Mac's jobs should be looked through for its core counts
-// first: the table has no row for the board, no Maintainer set them, and
-// nothing has looked since the Mac's last job. Caller holds v.mu.
+// first: the table has no row for the board, and nothing has looked since
+// the Mac's last job. Caller holds v.mu.
 func (v *dev) configurationLocked() (c api.Configuration, look bool) {
 	c.Board = detect.Board(v.d.Facts.Compatible)
-	kept := v.d.Configuration
-	if kept != nil && kept.SetBy != "" {
-		c.CPU, c.GPU, c.SetBy = kept.CPU, kept.GPU, kept.SetBy
-		return c, false
-	}
 	if cpu, gpu, ok := detect.OneConfiguration(c.Board); ok {
 		c.CPU, c.GPU = cpu, gpu
 		return c, false
 	}
-	if kept != nil {
+	if kept := v.d.Configuration; kept != nil {
 		c.CPU, c.GPU = kept.CPU, kept.GPU
 	}
 	return c, !v.coresLooked && v.d.KnownGood != ""
@@ -94,20 +99,4 @@ func (s *Server) forgetCoreCounts(v *dev) {
 	v.mu.Lock()
 	v.coresLooked = false
 	v.mu.Unlock()
-}
-
-// setConfiguration is a Maintainer setting or correcting v's core counts.
-// Both 0 hands the Configuration back to labd.
-func (s *Server) setConfiguration(v *dev, by string, cpu, gpu int) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if cpu == 0 && gpu == 0 {
-		v.d.Configuration, v.coresLooked = nil, false
-		s.log.Printf("%s: @%s handed its Configuration back to the lab", v.d.Name, by)
-	} else {
-		v.d.Configuration = &api.Configuration{CPU: cpu, GPU: gpu, SetBy: by}
-		s.log.Printf("%s: @%s set its Configuration to %d CPU and %d GPU cores", v.d.Name, by, cpu, gpu)
-	}
-	v.saveLocked()
-	v.publishLocked()
 }

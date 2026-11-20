@@ -66,16 +66,20 @@ func Board(compatible []string) string {
 var (
 	reCPUs     = regexp.MustCompile(`(?m)\bsmp: Brought up \d+ nodes?, (\d+) CPUs?\s*$`)
 	reGPUCores = regexp.MustCompile(`(?m)\basahi [0-9a-f]+\.gpu:\s+Active cores: (\d+)\s*$`)
+	// aurora is the M3's GPU driver: "(10 active / 10 slots)".
+	reAuroraCores = regexp.MustCompile(`(?m)\baurora [0-9a-f]+\.gpu: .*\((\d+) active / \d+ slots\)\s*$`)
 )
 
 // CoreCounts reads a Mac's CPU and GPU core counts from the kernel log of
 // one boot. A count the log does not carry is 0: the GPU's line is there
-// only where the asahi driver is bound.
+// only where the asahi or aurora driver is bound.
 func CoreCounts(kernelLog string) (cpu, gpu int) {
 	if m := reCPUs.FindStringSubmatch(kernelLog); m != nil {
 		cpu, _ = strconv.Atoi(m[1])
 	}
 	if m := reGPUCores.FindStringSubmatch(kernelLog); m != nil {
+		gpu, _ = strconv.Atoi(m[1])
+	} else if m := reAuroraCores.FindStringSubmatch(kernelLog); m != nil {
 		gpu, _ = strconv.Atoi(m[1])
 	}
 	return cpu, gpu
