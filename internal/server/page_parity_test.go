@@ -29,9 +29,10 @@ type pinnedElement struct {
 }
 
 // portOnly are the data- attributes the port marks and the old site never
-// had: data-copy is the value a Copy button beside it copies. An element
-// pinned by one of them alone is not pinned; one with an id still is.
-var portOnly = map[string]bool{"data-copy": true}
+// had: data-copy is the value a Copy button beside it copies, data-label a
+// cell's name when its table stacks at phone width. An element pinned by
+// one of them alone is not pinned; one with an id still is.
+var portOnly = map[string]bool{"data-copy": true, "data-label": true}
 
 func pinnedIn(main *node) []pinnedElement {
 	var list []pinnedElement
@@ -214,9 +215,9 @@ func TestThePagesPinWhatTheOldSitesPin(t *testing.T) {
 func TestACopyMarkIsNotAPinnedElement(t *testing.T) {
 	main := parseHTML(t, `<main><div class="copyable copyable-block"><pre class="command"><code data-copy id="install">curl</code></pre> <button class="copy-button" type="button" aria-label="Copy the install command" hidden>Copy</button></div>`+
 		`<span class="dim">report <span class="copyable"><code data-copy>preview-1</code></span></span>`+
-		`<tr data-build="b1" data-copy><td data-label="sha256">x</td></tr></main>`).children[0]
+		`<tr data-build="b1" data-copy><td data-label="sha256" data-state="ok">x</td></tr></main>`).children[0]
 	got, _ := json.Marshal(pinnedIn(main))
-	want := `[{"tag":"code","id":"install","class":[],"data":{}},{"tag":"tr","id":"","class":[],"data":{"data-build":"b1"}},{"tag":"td","id":"","class":[],"data":{"data-label":"sha256"}}]`
+	want := `[{"tag":"code","id":"install","class":[],"data":{}},{"tag":"tr","id":"","class":[],"data":{"data-build":"b1"}},{"tag":"td","id":"","class":[],"data":{"data-state":"ok"}}]`
 	if string(got) != want {
 		t.Errorf("pinned:\n%s\nwant:\n%s", got, want)
 	}
