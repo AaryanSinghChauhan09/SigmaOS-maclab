@@ -36,7 +36,7 @@
 </div>
 {{end}}</header>
 {{if .Banner}}<p class="preview-banner" role="status">Preview: this lab is not open yet. The live site is <a href="https://{{.LiveSite}}">{{.LiveSite}}</a>.</p>
-{{end}}<main class="site-main">
+{{end}}<main class="site-main{{if .Wide}} site-main-wide{{end}}">
 {{template "main" .}}
 </main>
 <footer class="site-footer">

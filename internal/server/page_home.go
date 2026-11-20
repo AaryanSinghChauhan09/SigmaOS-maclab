@@ -84,5 +84,5 @@ func (s *Server) pMatrix(w http.ResponseWriter, r *http.Request) {
 	if !page.Empty {
 		page.Matrix = s.matrixTable(matrix, history)
 	}
-	s.render(w, r, "matrix", web.Page{Title: "Compatibility matrix", Nav: "matrix", Data: page})
+	s.render(w, r, "matrix", web.Page{Title: "Compatibility matrix", Nav: "matrix", Wide: true, Data: page})
 }
