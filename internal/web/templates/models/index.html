@@ -15,10 +15,10 @@
 {{range .Statuses}}<td class="lineup-status" data-area="{{.Area}}" data-state="{{.State}}" data-source="{{.Source}}"{{if .Title}} title="{{.Title}}"{{end}}>
 <span class="badge badge-{{.Badge.State}}">{{.Badge.Label}}</span>{{if .Unconfirmed}} (unconfirmed){{end}}
 {{if .Note}}<span class="dim lineup-note">{{.Note}}</span>
-{{end}}{{range .Boards}}<div class="lineup-tested" data-board="{{.Board}}" data-state="{{.State}}" title="{{.Title}}">{{.Name}}: <span class="badge badge-{{.Badge.State}}">{{.Badge.Label}}</span>{{if .Unconfirmed}} (unconfirmed){{end}}</div>
+{{end}}{{range .Boards}}<div class="lineup-tested" data-board="{{.Board}}" data-state="{{.State}}" title="{{.Title}}"><span class="nowrap">{{.Name}}: <span class="badge badge-{{.Badge.State}}">{{.Badge.Label}}</span></span>{{if .Unconfirmed}} (unconfirmed){{end}}</div>
 {{end}}</td>
 {{end}}<td class="lineup-testing">
-{{range .Testing}}<div data-board="{{.Board}}">{{if .Tested}}<a href="{{.Href}}">{{.Name}}</a>: {{.Runs}}{{if .Verified}}, {{.Verified}} verified{{end}}, <span class="dim">last {{.Last}}</span>{{else}}{{.Name}}: <span class="badge badge-not-tested">needs testing</span>{{end}}</div>
+{{range .Testing}}<div data-board="{{.Board}}">{{if .Tested}}<span class="nowrap"><a href="{{.Href}}">{{.Name}}</a>: {{.Runs}}</span>{{if .Verified}}, <span class="nowrap">{{.Verified}} verified</span>{{end}}, <span class="dim nowrap">last {{.Last}}</span>{{else}}<span class="nowrap">{{.Name}}: <span class="badge badge-not-tested">needs testing</span></span>{{end}}</div>
 {{end}}</td>
 </tr>
 {{end}}</tbody>
@@ -29,18 +29,18 @@
 
 <section class="card">
 <h2 class="card-title">macs with reports</h2>
-{{if .Models}}<table class="list">
+{{if .Models}}<div class="scroll"><table class="list stack">
 <thead><tr><th>Mac</th><th>Chip</th><th>Board</th><th>Stacks / versions</th><th>Reports</th></tr></thead>
 <tbody>
 {{range .Models}}<tr class="model-row" id="model-{{.Board}}">
 <td><a href="{{.Href}}">{{.Name}}</a></td>
-<td>{{.Chip}}</td>
-<td class="dim">{{.Board}} · {{.SoC}}</td>
-<td>{{.Labels}}</td>
-<td>{{.Reports}}</td>
+<td data-label="Chip">{{.Chip}}</td>
+<td data-label="Board" class="dim">{{.Board}} · {{.SoC}}</td>
+<td data-label="Stacks">{{.Labels}}</td>
+<td data-label="Reports">{{.Reports}}</td>
 </tr>
 {{end}}</tbody>
-</table>
+</table></div>
 {{else}}<p class="dim">No reports yet.</p>
 {{end}}</section>
 {{end}}{{end}}

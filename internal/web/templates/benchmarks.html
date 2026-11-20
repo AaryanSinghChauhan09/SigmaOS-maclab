@@ -3,7 +3,7 @@
 {{with .Data}}{{if .Benchmarks}}{{range .Benchmarks}}{{$benchmark := .}}<section class="card benchmark" id="benchmark-{{.ID}}">
 <h2 class="card-title">{{.Title}}</h2>
 <p class="dim">{{.How}}; {{.Unit}}, higher is better.</p>
-<table class="list benchmark-table">
+<div class="scroll"><table class="list benchmark-table">
 <thead><tr><th>Mac</th>{{if .ByCapacity}}<th>SSD</th>{{end}}<th>Stack / version</th><th class="score-head">{{.Unit}}</th>{{if .MacOS}}<th>macOS</th>{{end}}<th>Machines</th><th>Tool</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr class="score-row" data-board="{{.Board}}" data-stack="{{.Stack}}" data-version="{{.Version}}" data-build="{{.BuildID}}">
@@ -16,7 +16,7 @@
 <td class="dim nowrap">{{.Tools}}</td>
 </tr>
 {{end}}</tbody>
-</table>
+</table></div>
 </section>
 {{end}}{{else}}<section class="card">
 <h2 class="card-title">scores</h2>

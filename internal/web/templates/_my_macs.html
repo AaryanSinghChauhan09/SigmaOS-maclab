@@ -22,7 +22,7 @@
 {{end}}</section>
 {{if not .Cards}}<p class="dim">You lend no Mac.</p>
 {{end}}{{range $card := .Cards}}<section class="card mac-card" id="mac-{{.Name}}">
-<h2 class="card-title">{{.Name}}</h2>
+<h2 class="card-title mono">{{.Name}}</h2>
 <p class="card-tools"><a href="{{href .Page}}">Its page</a> · <a href="{{href (print .Page "?tab=live")}}">Live</a></p>
 {{with .Hands}}<div class="fence" id="hands-{{$card.Name}}">
 <p><b>{{.Title}}</b>{{if .Since}} <span class="dim">since {{.Since}}</span>{{end}}</p>
@@ -63,7 +63,7 @@
 <table class="stack">
 <thead><tr><th>Job</th><th>What</th><th>Asked by</th><th>State</th><th>When</th></tr></thead>
 <tbody>
-{{range .Jobs}}<tr><td data-label="Job"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td><td data-label="What">{{.What}}</td><td data-label="Asked by">{{if .By}}@{{.By}}{{else}}<span class="dim">the lab</span>{{end}}</td><td data-label="State">{{.State}}</td><td data-label="When" class="nowrap">{{.When}}</td></tr>
+{{range .Jobs}}<tr><td data-label="Job"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td><td data-label="What">{{.What}}</td><td data-label="Asked by">{{if .By}}@{{.By}}{{else}}<span class="dim">the lab</span>{{end}}</td><td data-label="State"><span class="badge {{.StateClass}}">{{.State}}</span></td><td data-label="When" class="nowrap">{{.When}}</td></tr>
 {{end}}</tbody>
 </table>
 </div>

@@ -300,7 +300,7 @@ None can be turned into another. ("Data and identity")
 
 ### The interface
 
-**One header, today's site look.** Tokyo Night, JetBrains Mono, green brand, terminal cards, outline badges for kind and state. Dark only; no theme picker; `/api/themes*` is gone. Lab pages are ordinary scrolling pages. ("Interface shell and People screen"; "The remaining screens")
+**One header, one look: Console.** Graphite neutrals with Tokyo Night's accents and the green brand. Inter for words; JetBrains Mono for what a machine prints (Mac names, commands, versions, ids, logs). Raised cards with their title as the first line, tinted pill badges for kind, state and outcome, one filled primary button. Dark only; no theme picker; `/api/themes*` is gone. Lab pages are ordinary scrolling pages. ("Interface shell and People screen"; "The remaining screens")
 
 - **Row 1, the same for everyone:** brand; Matrix, Models, Features, Kernel gaps, Aurora, Benchmarks, Candidates, Reports, Data; Install. Signed out, a Sign in link at its end.
 - **Row 2, only when signed in:** a "lab" tag, the lab pages the role allows, then the fleet status (M team and up) and the person's handle (the link to their own page), kind and Sign out.

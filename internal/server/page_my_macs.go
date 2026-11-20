@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
@@ -276,10 +275,8 @@ func (s *Server) macCard(v *dev, p Person) macCard {
 			continue
 		}
 		if len(c.Jobs) < cardJobsShown {
-			job := macJobRow{ID: j.ID, What: jobWhat(j), By: j.Maintainer, State: string(j.State), When: whenDay(j.Created)}
-			if j.State == api.JobDone {
-				job.State = strings.ReplaceAll(j.Outcome, "_", " ")
-			}
+			job := macJobRow{ID: j.ID, What: jobWhat(j), By: j.Maintainer, When: whenDay(j.Created)}
+			job.State, job.StateClass = jobState(j)
 			c.Jobs = append(c.Jobs, job)
 		}
 		if id, state := s.labReportOf(j); id != "" {

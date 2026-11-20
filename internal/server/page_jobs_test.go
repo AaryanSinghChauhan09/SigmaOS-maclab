@@ -354,7 +354,7 @@ func TestBootAKernelIsReachedFromJobsAndFromAMacsPage(t *testing.T) {
 		t.Errorf("from m4-mini's page, %q is chosen", chosen)
 	}
 	page = ravi.page("/boot?mac=m2-max")
-	if _, chosen := bootMacs(page); chosen == "m2-max" || !strings.Contains(rowText(page), "m2-max is leased by grace@laptop (grace)") {
+	if _, chosen := bootMacs(page); chosen != "" || !strings.Contains(page, `<option value="" selected disabled>Choose a Mac</option>`) || !strings.Contains(rowText(page), "m2-max is leased by grace@laptop (grace)") {
 		t.Errorf("from the page of a Mac grace holds, a Maintainer has %q chosen", chosen)
 	}
 

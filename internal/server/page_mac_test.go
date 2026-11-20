@@ -97,7 +97,7 @@ func TestAMacsPageIsForWhoeverSeesTheMac(t *testing.T) {
 	if got := cards(grace.macPage("m1-pro", "no-such-tab")); got != "mac-facts mac-jobs" {
 		t.Errorf("a tab the page lacks shows %q, want Overview", got)
 	}
-	if !strings.Contains(page, `<a href="/macs">Macs</a>`) || !strings.Contains(page, "<h1>m1-pro</h1>") {
+	if !strings.Contains(page, `<a href="/macs">Macs</a>`) || !strings.Contains(page, `<h1 class="mono">m1-pro</h1>`) {
 		t.Errorf("an M team member's page does not lead back to Macs under the Mac's name: %s", page)
 	}
 	if own := linus.macPage("vol-air", ""); !strings.Contains(own, `<a href="/my-macs">My Macs</a>`) || strings.Contains(own, `href="/macs"`) {
@@ -129,7 +129,7 @@ func TestOverviewHasTheFactsTheLeaseItsButtonsTheJobsAndBootAKernel(t *testing.T
 	}
 	facts := part(t, page, `id="mac-facts"`, "</section>")
 	text := rowText(facts)
-	for _, want := range []string{"Configuration j316s, 10 CPU and 16 GPU cores", "Kind Lab-owned", "State free", "Access level Full",
+	for _, want := range []string{"Configuration j316s, 10 CPU and 16 GPU cores", "Kind Lab-owned", "State Free", "Access level Full",
 		"Known-good kernel " + lrKnownGood, "Running " + lrKnownGood, "lab-agent 0.2.0", "Lease none"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the facts lack %q: %s", want, text)
@@ -146,7 +146,7 @@ func TestOverviewHasTheFactsTheLeaseItsButtonsTheJobsAndBootAKernel(t *testing.T
 	if newer < 0 || older < newer || strings.Contains(jobs, "j-air") {
 		t.Errorf("the Mac's jobs, newest first, each a link: %s", jobs)
 	}
-	if text := rowText(jobs); !strings.Contains(text, "@grace") || !strings.Contains(text, "pass") || !strings.Contains(text, "Boot kernel abababababab") {
+	if text := rowText(jobs); !strings.Contains(text, "@grace") || !strings.Contains(text, "Passed") || !strings.Contains(text, "Boot kernel abababababab") {
 		t.Errorf("a job's row says who asked, what and how it ended: %s", text)
 	}
 
@@ -156,7 +156,7 @@ func TestOverviewHasTheFactsTheLeaseItsButtonsTheJobsAndBootAKernel(t *testing.T
 	}
 	lease := l.leaseOn("m1-pro")
 	facts = part(t, grace.macPage("m1-pro", ""), `id="mac-facts"`, "</section>")
-	if text := rowText(facts); !strings.Contains(text, "Lease @grace M team until "+when(lease.Expires)) || !strings.Contains(text, "State leased") {
+	if text := rowText(facts); !strings.Contains(text, "Lease @grace M team until "+when(lease.Expires)) || !strings.Contains(text, "State Leased") {
 		t.Errorf("the facts of a leased Mac: %s", text)
 	}
 	if got := buttons(facts); got != "Renew, Release" {
@@ -168,7 +168,7 @@ func TestOverviewHasTheFactsTheLeaseItsButtonsTheJobsAndBootAKernel(t *testing.T
 		t.Errorf("a Maintainer on a Mac grace holds: buttons %q: %s", got, rowText(facts))
 	}
 	if w := ravi.form("/macs/m1-pro/lease", "back", "mac"); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `role="alert"`) ||
-		!strings.Contains(w.Body.String(), "m1-pro is leased by grace until") || !strings.Contains(w.Body.String(), "<h1>m1-pro</h1>") {
+		!strings.Contains(w.Body.String(), "m1-pro is leased by grace until") || !strings.Contains(w.Body.String(), `<h1 class="mono">m1-pro</h1>`) {
 		t.Fatalf("a refused Lease is said on the Mac's page: %d %s", w.Code, w.Body)
 	}
 	l.clock.Advance(time.Hour)

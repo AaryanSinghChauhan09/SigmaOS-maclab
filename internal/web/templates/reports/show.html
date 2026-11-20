@@ -97,14 +97,14 @@
       <h3>Kernel build options</h3>
       <p>{{.Options}} differ from Asahi's {{.Reference}}{{.Listed}}.</p>
       {{- if .Differences}}
-      <table class="kernel-config">
+      <div class="scroll"><table class="kernel-config">
         <thead><tr><th>option</th><th>Asahi</th><th>this kernel</th></tr></thead>
         <tbody>
           {{- range .Differences}}
           <tr><td><code>{{.Option}}</code></td><td>{{.Asahi}}</td><td>{{.Kernel}}</td></tr>
           {{- end}}
         </tbody>
-      </table>
+      </table></div>
       {{- end}}
       {{- end}}
     </section>

@@ -1726,7 +1726,7 @@ calls and big files cross it, and what a client checks.
 ## License
 
 MIT; see [LICENSE](LICENSE). The interface bundles third-party files under their own
-licenses: JetBrains Mono (SIL OFL 1.1) and the Omarchy logo (MIT). See
+licenses: Inter and JetBrains Mono (SIL OFL 1.1) and the Omarchy logo (MIT). See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Omarchy Mac Lab isn't an official
 Asahi Linux project, and it isn't affiliated with Apple.
 

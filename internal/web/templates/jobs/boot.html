@@ -2,7 +2,8 @@
 <h1>Boot a kernel</h1>
 <p class="subtitle">Stage, boot once, test, restore. The job appears under Jobs.</p>
 {{if .Flash}}<p class="flash flash-alert" role="alert">{{.Flash}}</p>
-{{end}}<section class="card narrow">
+{{end}}<div class="boot-layout">
+<section class="card">
 <h2 class="card-title">boot a kernel</h2>
 {{if .NotOffered}}<p class="job-warn">{{.NotOffered}}</p>
 {{end}}{{if not .Macs}}{{if .Maintainer}}<p><b>No Mac takes a job now.</b> Each is leased, outside its Availability window or has not passed its baseline.</p>
@@ -11,8 +12,9 @@
 {{else}}<form class="boot" method="post" action="{{href "/boot"}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}">
 <fieldset>
 <legend>Mac <span class="dim">{{if .Maintainer}}free, or leased by you{{else}}those you lease{{end}}</span></legend>
-<select name="mac">
-{{range .Macs}}<option value="{{.Name}}"{{if .Chosen}} selected{{end}}>{{.Name}} · {{.About}}</option>
+<select name="mac" required>
+{{if .Unchosen}}<option value="" selected disabled>Choose a Mac</option>
+{{end}}{{range .Macs}}<option value="{{.Name}}"{{if .Chosen}} selected{{end}}>{{.Name}} · {{.About}}</option>
 {{end}}</select>
 </fieldset>
 <fieldset>
@@ -50,12 +52,13 @@
 <p class="boot-actions"><button class="button" type="submit">Boot it</button>{{if .Maintainer}} <button class="button button-danger button-small" type="submit" name="crash" value="panic" data-sentence="{{.CrashSentence}}">Crash test</button>{{end}}</p>
 </form>
 {{end}}</section>
-<section class="card narrow">
+<section class="card">
 <h2 class="card-title">artifacts and agents</h2>
 <p class="dim">A kernel artifact is a tarball with one <code>usr/lib/modules/&lt;release&gt;/</code>. The same from a terminal or an agent:</p>
-<pre class="command"><span class="prompt" aria-hidden="true">$ </span>{{template "copy" (copy "the lab pack command" "lab pack --build ~/aurora-build/…/build/base")}}
-<span class="prompt" aria-hidden="true">$ </span>{{template "copy" (copy "the lab run command" (print "lab run " .GuideMac " --kernel kernel-7.2.0-lab1.tar.zst --gui-test gui-smoke"))}}
-<span class="prompt" aria-hidden="true">$ </span>{{template "copy" (copy "lab mcp" "lab mcp")}}</pre>
+{{template "copy-block" (copy "the lab pack command" "lab pack --build ~/aurora-build/…/build/base")}}
+{{template "copy-block" (copy "the lab run command" (print "lab run " .GuideMac " --kernel kernel-7.2.0-lab1.tar.zst --gui-test gui-smoke"))}}
+{{template "copy-block" (copy "lab mcp" "lab mcp")}}
 <p class="dim"><code>lab run</code> uploads the file and waits for the job. <code>lab mcp</code> gives an agent the same commands as tools.</p>
 </section>
+</div>
 {{end}}{{end}}

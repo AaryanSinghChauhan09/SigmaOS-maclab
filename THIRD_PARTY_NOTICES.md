@@ -11,6 +11,7 @@ The interface under `internal/web/static` bundles these third-party files, which
 | Files | What | License |
 |---|---|---|
 | `JetBrainsMono-*.woff2` | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | SIL OFL 1.1, see `JetBrainsMono-OFL.txt` beside them |
+| `Inter-*.woff2` | [Inter](https://github.com/rsms/inter) 4.1 | SIL OFL 1.1, see `Inter-OFL.txt` beside them |
 | `omarchy-logo.svg`, `icon.png`, `icon.svg` | The Omarchy logo from [Omarchy](https://github.com/basecamp/omarchy) | MIT, below |
 
 ## The test tool and the Rails reference

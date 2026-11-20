@@ -8,7 +8,7 @@
 {{define "main" -}}
 {{with .Data -}}
 <p class="crumb"><a href="{{href .Back}}">{{.BackLabel}}</a> /</p>
-<h1>{{.Mac.Name}}</h1>
+<h1 class="mono">{{.Mac.Name}}</h1>
 <p class="subtitle">{{.Mac.Configuration}} · {{.Mac.Kind}}{{if .Mac.Volunteer}} of @{{.Mac.Volunteer}}{{end}} · {{.Mac.State}}{{if .Mac.Holder}} · Lease of @{{.Mac.Holder}} until {{.Mac.Until}}{{end}}</p>
 {{- if .Flash}}
 <p class="flash flash-alert" role="alert">{{.Flash}}</p>
@@ -84,7 +84,7 @@
 <thead><tr><th>Job</th><th>What</th><th>By</th><th>State</th><th>When</th></tr></thead>
 <tbody>
 {{- range .Jobs}}
-<tr><td data-label="Job"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td><td data-label="What">{{.What}}</td><td data-label="By">{{if .By}}@{{.By}}{{else}}<span class="dim">the lab</span>{{end}}</td><td data-label="State">{{.State}}</td><td data-label="When" class="nowrap">{{.When}}</td></tr>
+<tr><td data-label="Job"><a href="{{href (print "/jobs/" .ID)}}">{{.ID}}</a></td><td data-label="What">{{.What}}</td><td data-label="By">{{if .By}}@{{.By}}{{else}}<span class="dim">the lab</span>{{end}}</td><td data-label="State"><span class="badge {{.StateClass}}">{{.State}}</span></td><td data-label="When" class="nowrap">{{.When}}</td></tr>
 {{- end}}
 </tbody>
 </table>

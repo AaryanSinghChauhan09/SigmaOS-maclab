@@ -110,7 +110,7 @@ func TestRow2MatchesTheTableForEachOfTheSixViewers(t *testing.T) {
 		if got := labels(between(t, row, `<nav class="lab-nav"`, `</nav>`)); got != want {
 			t.Errorf("%s: row 2 is %q, want %q", k, got, want)
 		}
-		if got := strings.Contains(row, `<span class="fleet">4/9 Macs free · 1 job running · <b class="bad">1 needs hands</b></span>`); got != MTeamUp.Allows(k) {
+		if got := strings.Contains(row, `<span class="fleet">4/9 Macs free · 1 job running · <a class="bad" href="/macs#needs-hands">1 needs hands</a></span>`); got != MTeamUp.Allows(k) {
 			t.Errorf("%s: the fleet status in row 2: %v", k, got)
 		}
 		for _, piece := range []string{
@@ -376,8 +376,8 @@ func TestTheStylesheetLoadsItsFontsByFingerprint(t *testing.T) {
 	s := site(t, "")
 	css := string(s.assets["app.css"].body)
 	refs := reCSSURL.FindAllStringSubmatch(css, -1)
-	if len(refs) != 3 {
-		t.Fatalf("the stylesheet loads %d files, want the three weights of JetBrains Mono", len(refs))
+	if len(refs) != 4 {
+		t.Fatalf("the stylesheet loads %d files, want Inter and JetBrains Mono, two weights each", len(refs))
 	}
 	for _, m := range refs {
 		if w := get(s, "/assets/"+m[1]); w.Code != 200 || w.Header().Get("Content-Type") != "font/woff2" {
@@ -389,7 +389,7 @@ func TestTheStylesheetLoadsItsFontsByFingerprint(t *testing.T) {
 		".header-row .site-nav { flex-wrap: nowrap; order: 5; overflow-x: auto;",
 		"overflow-x: auto;\n  padding: 0.45rem clamp(1rem, 4vw, 3rem);",
 		".stack td[data-label]::before",
-		".stack tr { border-bottom: 1px solid rgb(65 72 104 / 0.35); display: block;",
+		".stack tr { border-bottom: 1px solid var(--line-soft); display: flex;",
 	} {
 		if !strings.Contains(css, rule) {
 			t.Errorf("the stylesheet lacks %q: at phone width each row scrolls sideways and tables stack", rule)

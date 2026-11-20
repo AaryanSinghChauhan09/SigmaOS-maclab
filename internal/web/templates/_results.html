@@ -89,18 +89,18 @@
 
 {{define "run_links"}}{{range .Links}}<a href="{{.Href}}"{{if .Title}} title="{{.Title}}"{{end}}>{{.Name}}</a> {{end}}{{if .More}}+{{.More}}{{end}}{{end}}
 
-{{define "report_list"}}<table class="list">
-<thead><tr><th>Uploaded</th><th>Mac</th><th>Stack / version</th><th>Build</th><th>Kernel</th><th>Results</th><th></th></tr></thead>
+{{define "report_list"}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Uploaded</th><th>Mac</th><th>Stack / version</th><th>Build</th><th>Kernel</th><th>Results</th><th><span class="visually-hidden">Run</span></th></tr></thead>
 <tbody>
 {{range .}}<tr class="report-row" id="report-{{.PublicID}}">
-<td class="nowrap">{{.Uploaded}}</td>
-<td><a href="{{.Href}}">{{.Model}}</a></td>
-<td>{{.Label}}</td>
-<td class="build-cell" data-build="{{.BuildID}}">{{template "build_summary" .Build}}</td>
-<td class="dim">{{.Kernel}}</td>
-<td class="nowrap">{{template "result_counts" .Counts}}</td>
-<td>{{template "run_badge" .Verified}}</td>
+<td data-label="Uploaded" class="nowrap">{{.Uploaded}}</td>
+<td class="lead"><a href="{{.Href}}">{{.Model}}</a></td>
+<td data-label="Stack">{{.Label}}</td>
+<td data-label="Build" class="build-cell" data-build="{{.BuildID}}">{{template "build_summary" .Build}}</td>
+<td data-label="Kernel" class="dim">{{.Kernel}}</td>
+<td data-label="Results" class="nowrap">{{template "result_counts" .Counts}}</td>
+<td data-label="Run">{{template "run_badge" .Verified}}</td>
 </tr>
 {{end}}</tbody>
-</table>
+</table></div>
 {{end}}
