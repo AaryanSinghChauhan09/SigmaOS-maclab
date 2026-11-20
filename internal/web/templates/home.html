@@ -1,6 +1,6 @@
 {{define "head"}}{{template "results_scripts" .}}{{template "model_scripts" .}}{{end}}
 
-{{define "main"}}{{with .Data}}{{if .MovedHere}}<p class="preview-banner moved-here" role="status">{{.OldSite}} is now here. Old links still work.</p>
+{{define "main"}}<div class="reading">{{with .Data}}{{if .MovedHere}}<p class="preview-banner moved-here" role="status">{{.OldSite}} is now here. Old links still work.</p>
 {{end}}{{end}}<section class="hero">
 <img class="hero-logo" src="{{asset "omarchy-logo.svg"}}" alt="Omarchy" width="96" height="96">
 <div>
@@ -15,6 +15,7 @@
 {{template "copy-block" (copy "the install command" (print "curl -fsSL " .InstallURL " | bash") "install")}}
 <p class="dim">The installer downloads the latest release of <code>omarchy-m-test</code>, verifies its signature and installs it for your user. Then run {{template "copy" (copy "omarchy-m-test" "omarchy-m-test")}}. <a href="https://github.com/omacom/omarchy-maclab">Source, releases and the release signing key</a>.</p>
 </section>
+</div>
 
 <section class="card">
 <h2 class="card-title">compatibility matrix</h2>
@@ -22,7 +23,7 @@
 {{else}}<p class="matrix-note">Latest results by model. Expand a row to see its builds, or <a href="{{href "/matrix"}}">filter and compare results</a>.</p>
 {{template "matrix" .Matrix}}{{end}}{{template "legend" .Legend}}</section>
 
-<div class="grid">
+<div class="grid reading">
 <section class="card">
 <h2 class="card-title">explore</h2>
 <ul class="links">
