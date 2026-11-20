@@ -135,7 +135,7 @@ func TestAboveTheCardsAreTheJoinCommandAndLendAnotherMac(t *testing.T) {
 		t.Errorf("the page's parts, in order: %q", got)
 	}
 	// A Mac that just Joined: its stage in the words of the flow, and none of labd's notes to Maintainers.
-	if facts := factsOf(t, page.sole(t, "#mac-shelf-mac")); !strings.Contains(facts, "State "+ArrivalNoWindow+" Availability window none yet") || strings.Contains(facts, "run a baseline") {
+	if facts := factsOf(t, page.sole(t, "#mac-shelf-mac")); !strings.Contains(facts, "State "+upperFirst(ArrivalNoWindow)+" Availability window none yet") || strings.Contains(facts, "run a baseline") {
 		t.Errorf("a Mac that just Joined: %s", facts)
 	}
 
@@ -218,7 +218,7 @@ func TestACardShowsEverythingItsVolunteerMaySeeAndDo(t *testing.T) {
 	facts := factsOf(t, card)
 	for _, want := range []string{
 		"Configuration j313, core counts unknown",
-		"State leased",
+		"State Leased",
 		"Availability window mon-fri 19:00-07:00 (Australia/Brisbane) open until " + windowEnd.In(brisbane).Format("Mon 2 Jan 15:04 MST"),
 		"Access level Full",
 		"Publishing on",
@@ -232,7 +232,7 @@ func TestACardShowsEverythingItsVolunteerMaySeeAndDo(t *testing.T) {
 		}
 	}
 	jobs := texts(card.all(t, "#jobs-vol-air tbody tr"))
-	if len(jobs) != 2 || !has(jobs[:1], "j-air", "@ravi", "pass") || !has(jobs[1:], "j-first", "Baseline", "the lab", "tests failed") {
+	if len(jobs) != 2 || !has(jobs[:1], "j-air", "@ravi", "Passed") || !has(jobs[1:], "j-first", "Baseline", "the lab", "Tests failed") {
 		t.Errorf("the card's jobs, who asked and how each ended, of this enrollment only: %q", jobs)
 	}
 	if href := card.all(t, "#jobs-vol-air tbody tr a")[0].attr("href"); href != "/jobs/j-air" {
@@ -345,7 +345,7 @@ func TestACardOfAMacThatNeedsHandsHasTheStepsTheReasonAndTheLastLogLine(t *testi
 	v.mu.Unlock()
 
 	card := linus.myMacs().sole(t, "#mac-vol-air")
-	if facts := factsOf(t, card); !strings.Contains(facts, "State needs hands") {
+	if facts := factsOf(t, card); !strings.Contains(facts, "State Needs hands") {
 		t.Errorf("the state: %s", facts)
 	}
 	hands := card.sole(t, "#hands-vol-air")

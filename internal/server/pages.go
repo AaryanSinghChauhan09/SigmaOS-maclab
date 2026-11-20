@@ -95,7 +95,9 @@ func (s *Server) fleet() *web.Fleet {
 		f.Macs++
 		switch d.State {
 		case api.StateReady:
-			if !s.leased(v) {
+			// Free is what a person could lease now: not held, past its
+			// baseline and, for a Volunteer's Mac, inside its window.
+			if !s.leased(v) && d.KnownGood != "" && !v.windowClosed() {
 				f.Free++
 			}
 		case api.StateBusy:

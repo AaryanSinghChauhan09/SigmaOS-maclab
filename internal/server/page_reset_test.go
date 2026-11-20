@@ -37,15 +37,15 @@ func TestMacsShowsEachLabOwnedMacAsSightedNotSightedOrNoCable(t *testing.T) {
 	kind := func(mac string) string {
 		t.Helper()
 		rows, _ := macRows(ravi.macsPage(""))
-		return rowText(part(t, rows[mac], `<td data-label="Kind">`, `</td>`))
+		return rowText(part(t, rows[mac], `<span class="sub">`, `</td>`))
 	}
-	if got := kind("m1-pro"); got != "Lab-owned sighted" {
+	if got := kind("m1-pro"); !strings.HasPrefix(got, "Lab-owned ·") || !strings.Contains(got, " sighted") || strings.Contains(got, "not sighted") {
 		t.Errorf("m1-pro: %q", got)
 	}
-	if got := kind("m2-max"); got != "Lab-owned not sighted" {
+	if got := kind("m2-max"); !strings.HasPrefix(got, "Lab-owned ·") || !strings.Contains(got, " not sighted") {
 		t.Errorf("m2-max: %q", got)
 	}
-	if got := kind("vol-air"); got != "Volunteer's" {
+	if got := kind("vol-air"); !strings.HasPrefix(got, "Volunteer's ·") || strings.Contains(got, "sighted") {
 		t.Errorf("a Volunteer's Mac: %q", got)
 	}
 	facts := func(mac string) string {
@@ -64,12 +64,12 @@ func TestMacsShowsEachLabOwnedMacAsSightedNotSightedOrNoCable(t *testing.T) {
 
 	mini.unplug(portLeft)
 	l.s.sight(context.Background())
-	if got := kind("m2-max"); got != "Lab-owned no cable" {
+	if got := kind("m2-max"); !strings.Contains(got, " no cable ") {
 		t.Errorf("m2-max with nothing on the left port: %q", got)
 	}
 	mini.stop(true)
 	l.s.sight(context.Background())
-	if got := kind("m1-pro"); got != "Lab-owned sighted no Hard reset" {
+	if got := kind("m1-pro"); !strings.Contains(got, " sighted no Hard reset") {
 		t.Errorf("m1-pro with the controller stopped: %q", got)
 	}
 	if got := facts("m1-pro"); !strings.Contains(got, "sighted on the right port No Hard reset: the Out-of-band controller is not healthy") {

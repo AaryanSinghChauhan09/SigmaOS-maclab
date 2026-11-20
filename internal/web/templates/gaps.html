@@ -1,14 +1,14 @@
-{{define "catalogue_gaps"}}<table class="list">
-<thead><tr><th>Feature</th><th>Layer</th><th>Chips</th>{{if .Issues}}<th></th>{{end}}</tr></thead>
+{{define "catalogue_gaps"}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Feature</th><th>Layer</th><th>Chips</th>{{if .Issues}}<th><span class="visually-hidden">Issue</span></th>{{end}}</tr></thead>
 <tbody>
 {{range .Gaps}}<tr class="gap-row" data-feature="{{.Feature}}">
 <td><a href="{{.Href}}">{{.Name}}</a></td>
-<td><span class="layer layer-{{.Layer}}">{{.Layer}}</span></td>
-<td>{{.Chips}}</td>
-{{if $.Issues}}<td>{{template "issue_link" .Issue}}</td>
+<td data-label="Layer"><span class="layer layer-{{.Layer}}">{{.Layer}}</span></td>
+<td data-label="Chips">{{.Chips}}</td>
+{{if $.Issues}}<td data-label="Issue">{{template "issue_link" .Issue}}</td>
 {{end}}</tr>
 {{end}}</tbody>
-</table>
+</table></div>
 {{end}}
 
 {{define "main"}}<h1>Kernel gaps</h1>
@@ -17,57 +17,57 @@
 <section class="card" id="regressions">
 <h2 class="card-title">regressions</h2>
 <p class="dim">Features that stopped working: the newest run on that model and stack fails where an earlier Verified run on the same model and stack found it working.</p>
-{{if .Regressions}}<table class="list">
-<thead><tr><th>Feature</th><th>Mac</th><th>Stack</th><th>Last verified pass</th><th>Runs with it</th>{{if $issues}}<th></th>{{end}}</tr></thead>
+{{if .Regressions}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Feature</th><th>Mac</th><th>Stack</th><th>Last verified pass</th><th>Runs with it</th>{{if $issues}}<th><span class="visually-hidden">Issue</span></th>{{end}}</tr></thead>
 <tbody>
 {{range .Regressions}}<tr class="regression-row" data-feature="{{.Feature}}" data-board="{{.Board}}" data-stack="{{.Stack}}">
 <td><a href="{{.FeatureHref}}">{{.FeatureName}}</a> <span class="layer layer-{{.Layer}}">{{.Layer}}</span></td>
-<td><a href="{{.BoardHref}}">{{.Model}}</a></td>
-<td>{{.On}}</td>
-<td class="pass"><a href="{{.PassHref}}">{{.PassWords}}</a></td>
-<td>{{template "run_links" .Runs}}</td>
-{{if $issues}}<td>{{template "issue_link" .Issue}}</td>
+<td data-label="Mac"><a href="{{.BoardHref}}">{{.Model}}</a></td>
+<td data-label="Stack">{{.On}}</td>
+<td data-label="Last pass" class="pass"><a href="{{.PassHref}}">{{.PassWords}}</a></td>
+<td data-label="Runs">{{template "run_links" .Runs}}</td>
+{{if $issues}}<td data-label="Issue">{{template "issue_link" .Issue}}</td>
 {{end}}</tr>
 {{end}}</tbody>
-</table>
+</table></div>
 {{else}}<p class="dim">None open.</p>
 {{end}}</section>
 
 <section class="card" id="reported">
 <h2 class="card-title">found on real macs</h2>
 {{range .Reported}}<h3 id="reported-{{.Outcome}}">{{.Title}}</h3>
-{{if .Gaps}}<table class="list">
-<thead><tr><th>Feature</th><th>Chip</th><th>Macs</th><th>Reports</th>{{if $issues}}<th></th>{{end}}</tr></thead>
+{{if .Gaps}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Feature</th><th>Chip</th><th>Macs</th><th>Reports</th>{{if $issues}}<th><span class="visually-hidden">Issue</span></th>{{end}}</tr></thead>
 <tbody>
 {{range .Gaps}}<tr class="gap-row" data-outcome="{{.Outcome}}" data-feature="{{.Feature}}">
 <td><a href="{{.FeatureHref}}">{{.FeatureName}}</a></td>
-<td>{{.Chip}} <span class="dim">({{.SoC}})</span></td>
-<td>{{.Models}}</td>
-<td>{{template "run_links" .Runs}}</td>
-{{if $issues}}<td>{{template "issue_link" .Issue}}</td>
+<td data-label="Chip">{{.Chip}} <span class="dim">({{.SoC}})</span></td>
+<td data-label="Macs">{{.Models}}</td>
+<td data-label="Reports">{{template "run_links" .Runs}}</td>
+{{if $issues}}<td data-label="Issue">{{template "issue_link" .Issue}}</td>
 {{end}}</tr>
 {{end}}</tbody>
-</table>
+</table></div>
 {{else}}<p class="dim">None reported.</p>
 {{end}}{{end}}</section>
 
 <section class="card" id="unclaimed-hardware">
 <h2 class="card-title">hardware no driver claims</h2>
 <p class="dim">Enabled device-tree nodes whose device no driver claimed, from the reports' hardware inventory. Unknown hardware is what the feature catalogue doesn't know yet.</p>
-{{if .Unclaimed}}<table class="list">
-<thead><tr><th>Hardware</th><th>What it is</th><th>Chip</th><th>Macs</th><th>Machines</th><th>Reports</th>{{if $issues}}<th></th>{{end}}</tr></thead>
+{{if .Unclaimed}}<div class="scroll"><table class="list stack">
+<thead><tr><th>Hardware</th><th>What it is</th><th>Chip</th><th>Macs</th><th>Machines</th><th>Reports</th>{{if $issues}}<th><span class="visually-hidden">Issue</span></th>{{end}}</tr></thead>
 <tbody>
 {{range .Unclaimed}}<tr class="unclaimed-row" data-compatible="{{.Compatible}}" data-outcome="{{.Outcome}}">
 <td><code>{{.Compatible}}</code></td>
-<td>{{if .FeatureHref}}<a href="{{.FeatureHref}}">{{.FeatureName}}</a>: {{end}}{{.What}}</td>
-<td>{{.Chips}}</td>
-<td>{{.Models}}</td>
-<td class="machines">{{.Machines}}</td>
-<td>{{template "run_links" .Runs}}</td>
-{{if $issues}}<td>{{template "issue_link" .Issue}}</td>
+<td data-label="What">{{if .FeatureHref}}<a href="{{.FeatureHref}}">{{.FeatureName}}</a>: {{end}}{{.What}}</td>
+<td data-label="Chips">{{.Chips}}</td>
+<td data-label="Macs">{{.Models}}</td>
+<td data-label="Machines" class="machines">{{.Machines}}</td>
+<td data-label="Reports">{{template "run_links" .Runs}}</td>
+{{if $issues}}<td data-label="Issue">{{template "issue_link" .Issue}}</td>
 {{end}}</tr>
 {{end}}</tbody>
-</table>
+</table></div>
 {{else}}<p class="dim">None reported.</p>
 {{end}}</section>
 

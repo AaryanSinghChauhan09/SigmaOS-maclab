@@ -6,10 +6,13 @@ package server
 
 import (
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
 	"github.com/omacom/omarchy-maclab/internal/web"
@@ -38,6 +41,8 @@ type macsData struct {
 	// of a Lease.
 	Maintainer bool
 	Macs       []macRow
+	// NeedsHands are the Macs waiting for a person, said above the table.
+	NeedsHands []handsRow
 	// Empty is said in place of the table.
 	Empty string
 	// Mine, under the filter of that name, is the cards of the Macs the
@@ -57,7 +62,8 @@ type macRow struct {
 	// CPU and GPU are the counts a Maintainer set, for the control.
 	CPU, GPU string
 	SetBy    string
-	State    string
+	// State is the Mac's state in plain words and StateClass its colour.
+	State, StateClass string
 	// OldAgent is the Mac's lab-agent when it is older than the lab's,
 	// which is LabAgent.
 	OldAgent, LabAgent string
@@ -69,6 +75,9 @@ type macRow struct {
 	// beside a Lease they may still take.
 	Why, Warning string
 }
+
+// handsRow is a Mac that waits for a person, and why.
+type handsRow struct{ Name, Why string }
 
 func showOf(raw string) string {
 	if raw == showMine || raw == showLeased {
@@ -117,7 +126,18 @@ func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string,
 	for _, v := range s.allDevs() {
 		macs = append(macs, mac{v, s.view(v)})
 	}
-	sort.Slice(macs, func(i, j int) bool { return macs[i].d.Name < macs[j].d.Name })
+	rank := map[string]int{}
+	for _, m := range macs {
+		_, class := s.macState(m.v, m.d)
+		rank[m.d.Name] = slices.Index(macStateOrder, class)
+	}
+	sort.Slice(macs, func(i, j int) bool {
+		a, b := macs[i].d, macs[j].d
+		if rank[a.Name] != rank[b.Name] {
+			return rank[a.Name] < rank[b.Name]
+		}
+		return a.Name < b.Name
+	})
 	for _, m := range macs {
 		v, d := m.v, m.d
 		if d.State == api.StateLeft {
@@ -128,6 +148,9 @@ func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string,
 			continue
 		}
 		data.Macs = append(data.Macs, s.macRow(v, d, p, mine))
+		if d.State == api.StateNeedsHands {
+			data.NeedsHands = append(data.NeedsHands, handsRow{d.Name, d.StateReason})
+		}
 	}
 	if len(data.Macs) == 0 {
 		data.Empty = map[string]string{showAll: "No Mac is enrolled.", showLeased: "You hold no Lease."}[show]
@@ -137,7 +160,8 @@ func (s *Server) renderMacs(w http.ResponseWriter, r *http.Request, show string,
 }
 
 func (s *Server) macRow(v *dev, d DeviceView, p Person, mine bool) macRow {
-	row := macRow{Name: d.Name, Kind: "Lab-owned", State: s.macState(v, d), Mine: mine}
+	row := macRow{Name: d.Name, Kind: "Lab-owned", Mine: mine}
+	row.State, row.StateClass = s.macState(v, d)
 	if d.LabAgent != "" {
 		row.OldAgent, row.LabAgent = d.Facts.AgentVersion, d.LabAgent
 	}
@@ -194,25 +218,46 @@ func (s *Server) macRow(v *dev, d DeviceView, p Person, mine bool) macRow {
 	return row
 }
 
-// macState is a Mac's state in plain words.
-func (s *Server) macState(v *dev, d DeviceView) string {
+// macStateOrder is the order of the Macs table's rows by state: a Mac
+// waiting for a person first, one that left the lab last.
+var macStateOrder = []string{"hands", "recovering", "running", "baseline", "ready", "paused", "offline", "left"}
+
+// macState is a Mac's state in plain words, and the class that colours it.
+func (s *Server) macState(v *dev, d DeviceView) (words, class string) {
 	switch {
+	case d.State == api.StateNeedsHands:
+		return "Needs hands", "hands"
+	case d.State == api.StateRecovering:
+		return "Recovering", "recovering"
 	case d.ActiveJob != "" || d.State == api.StateBusy:
-		return "running a job"
+		return "Running a job", "running"
 	case d.Arrival != "" && d.Arrival != ArrivalReady:
-		return d.Arrival
+		return upperFirst(d.Arrival), "baseline"
+	case d.State == api.StateNew || d.KnownGood == "":
+		return "Needs baseline", "baseline"
 	case d.SitePause != nil:
-		return "Paused"
+		return "Paused", "paused"
 	case d.IsVolunteer() && v.windowClosed():
-		return "outside its window"
+		return "Outside its window", "paused"
 	case d.State == api.StateReady && d.Lease != nil:
-		return "leased"
+		return "Leased", "ready"
 	case d.State == api.StateReady:
-		return "free"
+		return "Free", "ready"
 	case d.State == api.StateOffline:
-		return "not seen"
+		return "Not seen", "offline"
+	case d.State == api.StateLeft:
+		return "Left the lab", "left"
 	}
-	return strings.ReplaceAll(string(d.State), "_", " ")
+	return upperFirst(strings.ReplaceAll(string(d.State), "_", " ")), "offline"
+}
+
+// upperFirst is words with its first letter a capital.
+func upperFirst(words string) string {
+	if words == "" {
+		return ""
+	}
+	r, n := utf8.DecodeRuneInString(words)
+	return string(unicode.ToUpper(r)) + words[n:]
 }
 
 // macOr404 is the Mac a button of Macs names.

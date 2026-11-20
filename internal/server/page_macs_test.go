@@ -246,11 +246,11 @@ func TestAMacsRowThatTakesNoLeaseSaysWhy(t *testing.T) {
 
 	rows, _ := macRows(grace.macsPage(""))
 	for mac, why := range map[string]string{
-		"new-mac":    "has not passed its baseline",
+		"new-mac":    "once its baseline passes",
 		"vol-closed": "outside its Availability window",
 		"pro-b":      "you hold pro-a, the same Configuration",
 		"max-b":      "you hold max-a, and its core counts are unknown",
-		"free":       "leased by @linus",
+		"free":       "@linus",
 	} {
 		if text := rowText(rows[mac]); !strings.Contains(text, why) || buttons(rows[mac]) != "" {
 			t.Errorf("%s: buttons %q, and the row does not say %q: %s", mac, buttons(rows[mac]), why, text)
@@ -267,7 +267,36 @@ func TestAMacsRowThatTakesNoLeaseSaysWhy(t *testing.T) {
 	if text := rowText(rows["pro-c"]); buttons(rows["pro-c"]) != "Set, Lease" || !strings.Contains(text, "you hold pro-b, the same Configuration") {
 		t.Errorf("a Maintainer's row for a Configuration they hold: buttons %q: %s", buttons(rows["pro-c"]), text)
 	}
-	if text := rowText(rows["new-mac"]); !strings.Contains(text, "has not passed its baseline") || buttons(rows["new-mac"]) != "Set" {
+	if text := rowText(rows["new-mac"]); !strings.Contains(text, "once its baseline passes") || buttons(rows["new-mac"]) != "Set" {
 		t.Errorf("a Maintainer's row for a Mac with no baseline: %s", text)
+	}
+}
+
+// Macs puts what needs a person first: the Macs waiting for hands are said
+// above the table and lead it, then the rest by state, then by name.
+func TestMacsLeadWithTheMacsThatNeedHands(t *testing.T) {
+	l := leaseLab(t)
+	l.lrMac("a-free", "j473", nil)
+	l.lrMac("b-new", "j274", func(d *api.Device) { d.KnownGood = "" })
+	l.lrMac("c-stuck", "j316s", func(d *api.Device) {
+		d.State, d.StateReason = api.StateNeedsHands, "did not come back after a Hard reset"
+	})
+	l.lrMac("d-recovering", "j414c", func(d *api.Device) { d.State = api.StateRecovering })
+	page := l.lrMaintainer().macsPage("")
+	if _, order := macRows(page); strings.Join(order, " ") != "c-stuck d-recovering b-new a-free" {
+		t.Errorf("the Macs table's order: %v", order)
+	}
+	card := part(t, page, `<section class="needs-hands" id="needs-hands"`, "</section>")
+	if !strings.Contains(card, "1 Mac needs hands") || !strings.Contains(card, `href="/macs/c-stuck"`) || !strings.Contains(card, "did not come back after a Hard reset") {
+		t.Errorf("the Needs hands card: %s", card)
+	}
+	rows, _ := macRows(page)
+	for mac, state := range map[string]string{"c-stuck": "Needs hands", "d-recovering": "Recovering", "b-new": "Needs baseline", "a-free": "Free"} {
+		if !strings.Contains(rows[mac], `<span class="state state-`) || !strings.Contains(rowText(rows[mac]), state) {
+			t.Errorf("%s does not read %q: %s", mac, state, rowText(rows[mac]))
+		}
+	}
+	if fleet := part(t, page, `<span class="fleet">`, "</span>"); !strings.Contains(fleet, "1/4 Macs free") {
+		t.Errorf("only a-free is free, the lab bar says: %s", fleet)
 	}
 }

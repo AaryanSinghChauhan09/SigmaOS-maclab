@@ -30,7 +30,7 @@
 
 {{if .Scores}}<section class="card" id="benchmarks">
 <h2 class="card-title">benchmarks</h2>
-<table class="list benchmark-table">
+<div class="scroll"><table class="list benchmark-table">
 <thead><tr><th>Benchmark</th><th>Stack / version</th><th class="score-head">Score</th><th>Machines</th><th>Tool</th></tr></thead>
 <tbody>
 {{range .Scores}}<tr class="score-row" data-benchmark="{{.Benchmark}}" data-stack="{{.Stack}}" data-version="{{.Version}}" data-build="{{.BuildID}}">
@@ -41,7 +41,7 @@
 <td class="dim nowrap">{{.Tools}}</td>
 </tr>
 {{end}}</tbody>
-</table>
+</table></div>
 <p class="dim">Bars are against the best Mac on the same benchmark. <a href="{{href "/benchmarks"}}">Compare every Mac</a>.</p>
 </section>
 

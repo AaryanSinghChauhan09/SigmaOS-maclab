@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/omacom/omarchy-maclab/internal/api"
@@ -86,7 +85,7 @@ type macFacts struct {
 }
 
 type macJobRow struct {
-	ID, What, By, State, When string
+	ID, What, By, State, StateClass, When string
 }
 
 type liveFence struct {
@@ -269,10 +268,8 @@ func (s *Server) macJobs(c caller, d DeviceView) []macJobRow {
 		if !c.reads() && (j.DeviceID == "" || j.DeviceID != d.ID) {
 			continue
 		}
-		row := macJobRow{ID: j.ID, What: jobWhat(j), By: j.Maintainer, State: string(j.State), When: whenDay(j.Created)}
-		if j.State == api.JobDone {
-			row.State = strings.ReplaceAll(j.Outcome, "_", " ")
-		}
+		row := macJobRow{ID: j.ID, What: jobWhat(j), By: j.Maintainer, When: whenDay(j.Created)}
+		row.State, row.StateClass = jobState(j)
 		out = append(out, row)
 	}
 	return out

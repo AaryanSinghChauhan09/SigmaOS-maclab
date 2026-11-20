@@ -5,12 +5,12 @@
 <title>{{if .Title}}{{.Title}} · {{end}}Omarchy Mac Lab</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="description" content="What works on each Apple Silicon Mac under Omarchy, tested by omarchy-m-test.">
-<meta name="theme-color" content="#1a1b26">
+<meta name="theme-color" content="#0e1015">
 {{if .Preview}}<meta name="robots" content="noindex">
 {{end}}<link rel="icon" href="{{asset "icon.png"}}" type="image/png">
 <link rel="icon" href="{{asset "icon.svg"}}" type="image/svg+xml">
 <link rel="apple-touch-icon" href="{{asset "icon.png"}}">
-<link rel="preload" href="{{asset "JetBrainsMono-Regular.woff2"}}" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{{asset "Inter-Regular.woff2"}}" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{{asset "app.css"}}">
 <script src="{{asset "app.js"}}" defer></script>
 {{block "head" .}}{{end}}</head>
@@ -30,7 +30,7 @@
 {{range .}}<a href="{{href .Path}}"{{if eq .ID $.Nav}} class="current" aria-current="page"{{end}}>{{.Label}}{{if .Count}}<b class="count">{{.Count}}</b>{{end}}</a>
 {{end}}</nav>
 {{end}}<span class="grow"></span>
-{{with .ShowFleet}}<span class="fleet">{{.Free}}/{{.Macs}} Macs free · {{.JobsRunning}} {{if eq .JobsRunning 1}}job{{else}}jobs{{end}} running{{if .NeedsHands}} · <b class="bad">{{.NeedsHands}} {{if eq .NeedsHands 1}}needs{{else}}need{{end}} hands</b>{{end}}</span>
+{{with .ShowFleet}}<span class="fleet">{{.Free}}/{{.Macs}} Macs free · {{.JobsRunning}} {{if eq .JobsRunning 1}}job{{else}}jobs{{end}} running{{if .NeedsHands}} · <a class="bad" href="{{href "/macs"}}#needs-hands">{{.NeedsHands}} {{if eq .NeedsHands 1}}needs{{else}}need{{end}} hands</a>{{end}}</span>
 {{end}}<span class="viewer"><a class="handle" href="{{.OwnPage}}">@{{.Viewer.Handle}}</a> <span class="badge {{.Viewer.Kind.BadgeClass}}">{{.Viewer.Kind.Badge}}</span>
 <form class="inline" method="post" action="{{href "/sign-out"}}"><input type="hidden" name="csrf_token" value="{{.Viewer.CSRF}}"><button class="link-button" type="submit">Sign out</button></form></span>
 </div>
@@ -42,7 +42,7 @@
 <footer class="site-footer">
 <p>Published data: <a href="{{href "/data"}}">CC0</a>. <a href="https://github.com/omacom/omarchy-maclab">Source</a>.</p>
 <p><a href="{{href "/terms"}}">Terms</a> · <a href="{{href "/privacy"}}">Privacy</a></p>
-<p class="dim">The Omarchy name and logo belong to the Omarchy project and are used with permission. JetBrains Mono is under the SIL Open Font License.</p>
+<p class="dim">The Omarchy name and logo belong to the Omarchy project and are used with permission. Inter and JetBrains Mono are under the SIL Open Font License.</p>
 </footer>
 </body>
 </html>

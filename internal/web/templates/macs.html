@@ -12,40 +12,47 @@
 {{- if .Mine}}
 {{template "my-macs" ($.With .Mine)}}
 {{- else if .Empty}}
-<p class="dim">{{.Empty}}</p>
+<div class="empty"><p>{{.Empty}}</p>{{if eq .Show "leased"}}<p><a href="{{href "/macs"}}">All Macs</a> lists those you could lease.</p>{{end}}</div>
 {{- else}}
+{{- with .NeedsHands}}
+<section class="needs-hands" id="needs-hands" aria-labelledby="needs-hands-title">
+<span class="needs-hands-title" id="needs-hands-title">{{len .}} {{if eq (len .) 1}}Mac needs{{else}}Macs need{{end}} hands</span>
+<ul>
+{{- range .}}
+<li><a href="{{href (print "/macs/" .Name)}}">{{.Name}}</a>{{with .Why}} <span class="dim">{{.}}</span>{{end}}</li>
+{{- end}}
+</ul>
+</section>
+{{- end}}
+<section class="card">
 <div class="scroll">
-<table class="stack">
-<thead><tr><th>Mac</th><th>Kind</th><th>Configuration</th><th>State</th><th>Lease</th><th>Actions</th></tr></thead>
+<table class="list stack macs-table">
+<thead><tr><th>Mac</th><th>State</th><th>Lease</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
 <tbody>
 {{- range .Macs}}
 <tr id="mac-{{.Name}}">
-<td data-label="Mac"><a href="{{href (print "/macs/" .Name)}}">{{.Name}}</a></td>
-<td data-label="Kind">{{.Kind}}{{if .Volunteer}} of @{{.Volunteer}}{{end}}{{if .Cable}} <span class="badge">{{.Cable}}</span>{{if and .NoHardReset (eq .Cable "sighted")}} <span class="dim">no Hard reset</span>{{end}}{{end}}</td>
-<td data-label="Configuration">{{.Configuration}}{{if .SetBy}} <span class="dim">set by @{{.SetBy}}</span>{{end}}
+<td data-label="Mac"><a href="{{href (print "/macs/" .Name)}}">{{.Name}}</a>
+<span class="sub">{{.Kind}}{{if .Volunteer}} of @{{.Volunteer}}{{end}} · {{.Configuration}}{{if .SetBy}} · set by @{{.SetBy}}{{end}}{{if .Cable}} <span class="badge">{{.Cable}}</span>{{if and .NoHardReset (eq .Cable "sighted")}} no Hard reset{{end}}{{end}}</span>
 {{- if $.Data.Maintainer}}
-<form class="form-inline" method="post" action="{{href (print "/macs/" .Name "/configuration")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><label>CPU <input name="cpu" inputmode="numeric" size="3" value="{{.CPU}}"></label> <label>GPU <input name="gpu" inputmode="numeric" size="3" value="{{.GPU}}"></label> <button class="button button-small button-plain" type="submit">Set</button></form>
+<details><summary>Set core counts</summary><form class="form-inline" method="post" action="{{href (print "/macs/" .Name "/configuration")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><label>CPU <input name="cpu" inputmode="numeric" size="3" value="{{.CPU}}"></label> <label>GPU <input name="gpu" inputmode="numeric" size="3" value="{{.GPU}}"></label> <button class="button button-small button-plain" type="submit">Set</button></form></details>
 {{- end}}</td>
-<td data-label="State">{{.State}}{{if .OldAgent}} <span class="dim">lab-agent {{.OldAgent}}, older than the lab's {{.LabAgent}}</span>{{end}}</td>
-<td data-label="Lease">{{if .Holder}}@{{.Holder}}{{if .HolderKind}} <span class="badge {{.HolderClass}}">{{.HolderKind}}</span>{{end}} <span class="nowrap">until {{.Until}}</span>{{else}}<span class="dim">none</span>{{end}}</td>
-<td data-label="Actions">
+<td data-label="State"><span class="state state-{{.StateClass}}">{{.State}}</span>{{if .OldAgent}}<span class="sub">lab-agent {{.OldAgent}}, older than the lab's {{.LabAgent}}</span>{{end}}</td>
+<td data-label="Lease">{{if .Holder}}@{{.Holder}}{{if .HolderKind}} <span class="badge {{.HolderClass}}">{{.HolderKind}}</span>{{end}} <span class="dim nowrap">until {{.Until}}</span>{{else if and (eq .StateClass "baseline") (not .CanLease)}}<span class="dim">Leasable once its baseline passes</span>{{else if .Why}}<span class="dim">{{.Why}}</span>{{else}}<span class="dim">Free</span>{{end}}
+{{- if .Warning}}<span class="sub">{{.Warning}}</span>{{end}}</td>
+<td data-label="Actions"><div class="actions">
 {{- if .Mine}}
-<form class="inline" method="post" action="{{href (print "/macs/" .Name "/renew")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><button class="button button-small" type="submit">Renew</button></form>
+<form class="inline" method="post" action="{{href (print "/macs/" .Name "/renew")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><button class="button button-small button-plain" type="submit">Renew</button></form>
 {{template "take" ($.Take (print "/macs/" .Name "/release") "Release" (print "Release: your Lease on " .Name " ends now") "show" $.Data.Show)}}
 {{- else if .CanLease}}
 <form class="form-inline" method="post" action="{{href (print "/macs/" .Name "/lease")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}">{{if $.Data.Maintainer}}<label><input name="hours" inputmode="numeric" size="2" value="4"> hours</label> {{end}}<button class="button button-small" type="submit">Lease</button></form>
-{{- if .Warning}}
-<p class="dim">{{.Warning}}</p>
-{{- end}}
-{{- else}}
-<span class="dim">{{.Why}}</span>
-{{- end}}
-</td>
+{{- end -}}
+</div></td>
 </tr>
 {{- end}}
 </tbody>
 </table>
 </div>
+</section>
 {{- end}}
 {{- end}}
 {{- end}}

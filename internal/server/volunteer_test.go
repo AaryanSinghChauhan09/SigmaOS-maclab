@@ -675,7 +675,7 @@ func TestAFailedFirstBaselineIsShownAndPosted(t *testing.T) {
 	if got := macRecordOf(t, l.s, d.ID); !has(got, "failed its first baseline (job "+first) {
 		t.Errorf("the Mac's record: %q", got)
 	}
-	if got := l.s.macState(l.s.dev(l.name), l.s.view(l.s.dev(l.name))); got != "first check failed: a Maintainer looks" {
+	if got, _ := l.s.macState(l.s.dev(l.name), l.s.view(l.s.dev(l.name))); got != "First check failed: a Maintainer looks" {
 		t.Errorf("Macs shows the Mac as %q", got)
 	}
 

@@ -66,8 +66,10 @@ type bootData struct {
 	// Maintainer adds the build from source and the Crash test.
 	Maintainer bool
 	Macs       []bootMac
-	// NotOffered is why the Mac asked for is not among them.
+	// NotOffered is why the Mac asked for is not among them, and Unchosen
+	// that no other is chosen in its place.
 	NotOffered string
+	Unchosen   bool
 	// GuideMac is the Mac the guide's commands name.
 	GuideMac      string
 	Offered       []bootTest
@@ -135,7 +137,10 @@ func (s *Server) renderBoot(w http.ResponseWriter, r *http.Request, form bootFor
 		data.Macs = append(data.Macs, bootMac{Name: d.Name, About: about, Chosen: d.Name == form.Mac})
 		chosen = chosen || d.Name == form.Mac
 	}
-	if !chosen && len(data.Macs) > 0 {
+	// A Mac asked for and not offered leaves the choice to the person:
+	// preselecting another would boot a Mac they did not name.
+	data.Unchosen = !chosen && form.Mac != ""
+	if !chosen && !data.Unchosen && len(data.Macs) > 0 {
 		data.Macs[0].Chosen = true
 	}
 	data.GuideMac = "MAC"
