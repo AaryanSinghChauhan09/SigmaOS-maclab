@@ -66,8 +66,13 @@ func (v *dev) configurationLocked() (c api.Configuration, look bool) {
 	return c, !v.coresLooked && v.d.KnownGood != ""
 }
 
-// coreCountsFromJobs reads the core counts from the kernel log of v's
-// latest job that booted its Known-good kernel, in this enrollment.
+// kernelLogsRead is how many of a Mac's kernel logs labd reads, newest
+// first, for a count the newer ones lack.
+const kernelLogsRead = 10
+
+// coreCountsFromJobs reads each core count from the kernel log of v's
+// latest job that booted its Known-good kernel, in this enrollment, and
+// carries it: a count that log lacks comes from an older one.
 func (s *Server) coreCountsFromJobs(v *dev) (cpu, gpu int) {
 	d := v.snapshot()
 	jobs, err := s.store.jobs(d.Name, 200, false)
@@ -75,7 +80,11 @@ func (s *Server) coreCountsFromJobs(v *dev) (cpu, gpu int) {
 		s.log.Printf("%s: its Configuration: %v", d.Name, err)
 		return 0, 0
 	}
+	read := 0
 	for _, j := range jobs {
+		if (cpu > 0 && gpu > 0) || read == kernelLogsRead {
+			break
+		}
 		if j.DeviceID != d.ID || !j.Result.Booted || j.Result.BootKernel != d.KnownGood {
 			continue
 		}
@@ -88,9 +97,16 @@ func (s *Server) coreCountsFromJobs(v *dev) (cpu, gpu int) {
 		if err != nil {
 			continue
 		}
-		return detect.CoreCounts(string(b))
+		read++
+		c, g := detect.CoreCounts(string(b))
+		if cpu == 0 {
+			cpu = c
+		}
+		if gpu == 0 {
+			gpu = g
+		}
 	}
-	return 0, 0
+	return cpu, gpu
 }
 
 // forgetCoreCounts has labd look through v's jobs again the next time its

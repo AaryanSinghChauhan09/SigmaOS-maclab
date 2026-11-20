@@ -459,6 +459,14 @@ func TestTheConfigurationComesFromTheTableElseTheKernelLog(t *testing.T) {
 		t.Errorf("a still later log without the GPU line: %q", got)
 	}
 	grace.mustLease("max-b", "grace@laptop", 0)
+	// A Mac whose latest log lacks the GPU's line takes it from an older log,
+	// though nothing read that older log before.
+	l.lrMac("max-d", "j414c", nil)
+	l.lrKernelLog("max-d", "j-d1", lrKnownGood, t0, lrLog("12", "38"))
+	l.lrKernelLog("max-d", "j-d2", lrKnownGood, t0.Add(time.Hour), lrLog("12", ""))
+	if got := conf("max-d"); got != "j414c, 12 CPU and 38 GPU cores" {
+		t.Errorf("the GPU count from an older log: %q", got)
+	}
 }
 
 // A leased Mac refuses a Maintainer's jobs, naming the holder and the end

@@ -613,7 +613,7 @@ A first sign-in makes the lab know the person; it gives no browser session, no L
 | `forget` | retired | |
 | `maintainer add\|remove\|list` | retired | Maintainer is a mark on People |
 
-Unchanged: `baseline`, `crashtest`, `run`, `logs`, `retry`, `gate`, `exclude`, `builds`, `build-get`, `pack`, `audit`, `installed freeze-manifest`, `builder add|remove|list`, `boot-test`. On the site only: People, Requests to lend, Invites, Block, "End all access", revoking another person's token, a Configuration override, Pause, Limit, making and renewing a Lab token, Hide, Show and Delete of a report. ("CLI changes"; "Hardening inside the lab")
+Unchanged: `baseline`, `crashtest`, `run`, `logs`, `retry`, `gate`, `exclude`, `builds`, `build-get`, `pack`, `audit`, `installed freeze-manifest`, `builder add|remove|list`, `boot-test`. On the site only: People, Requests to lend, Invites, Block, "End all access", revoking another person's token, Pause, Limit, making and renewing a Lab token, Hide, Show and Delete of a report. ("CLI changes"; "Hardening inside the lab")
 
 ### `lab-agent`
 
