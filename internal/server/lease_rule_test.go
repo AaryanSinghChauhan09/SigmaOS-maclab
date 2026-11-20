@@ -395,8 +395,8 @@ func lrLog(cpus, gpu string) string {
 
 // The Configuration comes from the table for a board with one, else from
 // the kernel log of the Mac's latest job on its Known-good kernel. Unknown
-// counts on one board count as the same Configuration, until a Maintainer
-// sets them.
+// counts on one board count as the same Configuration, until the lab reads
+// them.
 func TestTheConfigurationComesFromTheTableElseTheKernelLog(t *testing.T) {
 	l := leaseLab(t)
 	l.lrMac("pro-16", "j316s", nil)
@@ -431,7 +431,7 @@ func TestTheConfigurationComesFromTheTableElseTheKernelLog(t *testing.T) {
 		t.Errorf("a kernel log with no GPU line: %q", got)
 	}
 	// What labd read stays with the Mac across a restart of labd.
-	if c := l.s.dev("max-a").snapshot().Configuration; c == nil || c.CPU != 12 || c.GPU != 30 || c.SetBy != "" {
+	if c := l.s.dev("max-a").snapshot().Configuration; c == nil || c.CPU != 12 || c.GPU != 30 {
 		t.Errorf("the counts labd read are not kept with the Mac: %+v", c)
 	}
 	// The view carries the Configuration as labd works it out.
@@ -445,45 +445,27 @@ func TestTheConfigurationComesFromTheTableElseTheKernelLog(t *testing.T) {
 	// one Configuration for an M team member, and the refusal says why.
 	grace := l.lrMember(lrGrace)
 	grace.mustLease("max-a", "grace@laptop", 0)
-	grace.refusedLease("max-b", "grace@laptop", 0, http.StatusConflict, "max-a", "GPU cores unknown", "until a Maintainer sets")
-	grace.refusedLease("max-c", "grace@laptop", 0, http.StatusConflict, "max-a", "core counts unknown", "until a Maintainer sets")
+	grace.refusedLease("max-b", "grace@laptop", 0, http.StatusConflict, "max-a", "GPU cores unknown", "until the lab reads")
+	grace.refusedLease("max-c", "grace@laptop", 0, http.StatusConflict, "max-a", "core counts unknown", "until the lab reads")
 
-	// A Maintainer sets or corrects it, on the site.
-	if w := grace.form("/macs/max-c/configuration", "cpu", "12", "gpu", "38"); w.Code != http.StatusNotFound {
-		t.Errorf("an M team member setting a Configuration: %d", w.Code)
+	// A later log gives the count an earlier one lacked, and a log without
+	// the GPU's line keeps the count an earlier one gave.
+	l.lrKernelLog("max-b", "j-b2", lrKnownGood, t0.Add(time.Hour), lrLog("12", "38"))
+	if got := conf("max-b"); got != "j414c, 12 CPU and 38 GPU cores" {
+		t.Errorf("a later log with the GPU line: %q", got)
 	}
-	if w := ravi.form("/macs/max-c/configuration", "cpu", "12", "gpu", "38"); w.Code != http.StatusSeeOther {
-		t.Fatalf("a Maintainer setting a Configuration: %d %s", w.Code, w.Body)
+	l.lrKernelLog("max-b", "j-b3", lrKnownGood, t0.Add(2*time.Hour), lrLog("12", ""))
+	if got := conf("max-b"); got != "j414c, 12 CPU and 38 GPU cores" {
+		t.Errorf("a still later log without the GPU line: %q", got)
 	}
-	if got := conf("max-c"); got != "j414c, 12 CPU and 38 GPU cores" {
-		t.Errorf("set by a Maintainer: %q", got)
-	}
-	if c := l.s.dev("max-c").snapshot().Configuration; c == nil || c.SetBy != "ravi" {
-		t.Errorf("who set it is not kept: %+v", c)
-	}
-	grace.mustLease("max-c", "grace@laptop", 0)
-	// A Maintainer's correction stands over the table and over a later log.
-	if w := ravi.form("/macs/max-a/configuration", "cpu", "12", "gpu", "38"); w.Code != http.StatusSeeOther {
-		t.Fatalf("correcting a Configuration: %d %s", w.Code, w.Body)
-	}
-	l.lrKernelLog("max-a", "j-newest", lrKnownGood, t0.Add(5*time.Hour), lrLog("12", "30"))
-	if got := conf("max-a"); got != "j414c, 12 CPU and 38 GPU cores" {
-		t.Errorf("a Maintainer's correction after a later job: %q", got)
-	}
-	if w := ravi.form("/macs/pro-16/configuration", "cpu", "10", "gpu", "14"); w.Code != http.StatusSeeOther || conf("pro-16") != "j316s, 10 CPU and 14 GPU cores" {
-		t.Errorf("a Maintainer's correction of a board in the table: %d, %q", w.Code, conf("pro-16"))
-	}
-	// Emptied, the control hands the Configuration back to labd.
-	if w := ravi.form("/macs/max-a/configuration", "cpu", "", "gpu", ""); w.Code != http.StatusSeeOther {
-		t.Fatalf("clearing a Configuration: %d %s", w.Code, w.Body)
-	}
-	if got := conf("max-a"); got != "j414c, 12 CPU and 30 GPU cores" {
-		t.Errorf("after the correction is taken back: %q", got)
-	}
-	for _, bad := range [][2]string{{"12", ""}, {"0", "30"}, {"twelve", "30"}, {"12", "-1"}, {"4096", "30"}} {
-		if w := ravi.form("/macs/max-b/configuration", "cpu", bad[0], "gpu", bad[1]); w.Code != http.StatusBadRequest {
-			t.Errorf("core counts %q and %q: %d", bad[0], bad[1], w.Code)
-		}
+	grace.mustLease("max-b", "grace@laptop", 0)
+	// A Mac whose latest log lacks the GPU's line takes it from an older log,
+	// though nothing read that older log before.
+	l.lrMac("max-d", "j414c", nil)
+	l.lrKernelLog("max-d", "j-d1", lrKnownGood, t0, lrLog("12", "38"))
+	l.lrKernelLog("max-d", "j-d2", lrKnownGood, t0.Add(time.Hour), lrLog("12", ""))
+	if got := conf("max-d"); got != "j414c, 12 CPU and 38 GPU cores" {
+		t.Errorf("the GPU count from an older log: %q", got)
 	}
 }
 

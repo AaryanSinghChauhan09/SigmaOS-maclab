@@ -97,9 +97,6 @@ type Configuration struct {
 	Board string `json:"board,omitempty"`
 	CPU   int    `json:"cpu,omitempty"`
 	GPU   int    `json:"gpu,omitempty"`
-	// SetBy is the Maintainer who set or corrected the counts; labd then
-	// leaves them as they are.
-	SetBy string `json:"set_by,omitempty"`
 }
 
 // Known is whether both counts are known.
@@ -107,7 +104,7 @@ func (c Configuration) Known() bool { return c.CPU > 0 && c.GPU > 0 }
 
 // Same is whether c and o count as one Configuration: the same board, and
 // no count known on both sides that differs. So Macs of one board whose
-// counts are unknown are the same Configuration until a Maintainer sets it.
+// counts are unknown are the same Configuration until the lab reads them.
 func (c Configuration) Same(o Configuration) bool {
 	if c.Board != o.Board {
 		return false
@@ -166,7 +163,7 @@ type Device struct {
 	Health                Health       `json:"health"`
 	Lease                 *Lease       `json:"lease,omitempty"`
 	// Configuration is what labd read of the Mac's core counts from a
-	// kernel log, or a Maintainer set. In a view it is the Configuration as
+	// kernel log. In a view it is the Configuration as
 	// labd works it out, with the board and the repository's table.
 	Configuration *Configuration `json:"configuration,omitempty"`
 	ActiveJob     string         `json:"active_job,omitempty"`

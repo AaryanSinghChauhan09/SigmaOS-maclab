@@ -96,11 +96,11 @@ func TestMacsShowsTheFleetAndWhoHoldsWhat(t *testing.T) {
 	if got := buttons(rows["m1-pro"]); got != "Renew, Release" {
 		t.Errorf("the holder's buttons: %q", got)
 	}
-	// A Maintainer sees the same, with the Configuration control.
+	// A Maintainer sees the same; nobody sets a Configuration by hand.
 	page := ravi.macsPage("")
 	rows, _ = macRows(page)
-	if !strings.Contains(rows["m2-max"], `name="cpu"`) || !strings.Contains(rows["m2-max"], `name="gpu"`) {
-		t.Errorf("a Maintainer's control to set a Configuration: %s", rows["m2-max"])
+	if strings.Contains(rows["m2-max"], `name="cpu"`) || strings.Contains(rows["m2-max"], `name="gpu"`) {
+		t.Errorf("a control to set a Configuration: %s", rows["m2-max"])
 	}
 	if got := buttons(rows["m1-pro"]); strings.Contains(got, "Lease") || strings.Contains(got, "Renew") || strings.Contains(got, "Release") {
 		t.Errorf("a Maintainer's buttons on a Mac grace holds: %q", got)
@@ -264,10 +264,10 @@ func TestAMacsRowThatTakesNoLeaseSaysWhy(t *testing.T) {
 	ravi.mustLease("pro-b", "ravi@mini", 0)
 	l.lrMac("pro-c", "j316s", nil)
 	rows, _ = macRows(ravi.macsPage(""))
-	if text := rowText(rows["pro-c"]); buttons(rows["pro-c"]) != "Set, Lease" || !strings.Contains(text, "you hold pro-b, the same Configuration") {
+	if text := rowText(rows["pro-c"]); buttons(rows["pro-c"]) != "Lease" || !strings.Contains(text, "you hold pro-b, the same Configuration") {
 		t.Errorf("a Maintainer's row for a Configuration they hold: buttons %q: %s", buttons(rows["pro-c"]), text)
 	}
-	if text := rowText(rows["new-mac"]); !strings.Contains(text, "once its baseline passes") || buttons(rows["new-mac"]) != "Set" {
+	if text := rowText(rows["new-mac"]); !strings.Contains(text, "once its baseline passes") || buttons(rows["new-mac"]) != "" {
 		t.Errorf("a Maintainer's row for a Mac with no baseline: %s", text)
 	}
 }

@@ -177,7 +177,7 @@ func (s *Server) heldOfConfiguration(v *dev, p Person) (held, same string) {
 		if mine.Known() && theirs.Known() {
 			return name, fmt.Sprintf("%s, the same Configuration (%s)", name, theirs)
 		}
-		return name, fmt.Sprintf("%s (%s), and %s (%s) counts as the same Configuration until a Maintainer sets the core counts", name, theirs, v.snapshot().Name, mine)
+		return name, fmt.Sprintf("%s (%s), and %s (%s) counts as the same Configuration until the lab reads the core counts", name, theirs, v.snapshot().Name, mine)
 	}
 	return "", ""
 }

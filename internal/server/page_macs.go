@@ -2,7 +2,7 @@ package server
 
 // Macs: the fleet with who holds each Lease, for the M team and the
 // Maintainers. Lease, Renew and Release are its buttons, and a row that
-// takes no Lease says why. A Maintainer sets a Mac's Configuration here.
+// takes no Lease says why.
 
 import (
 	"net/http"
@@ -23,7 +23,6 @@ func init() {
 	addPage("POST /macs/{name}/lease", web.MTeamUp, (*Server).pMacsLease)
 	addPage("POST /macs/{name}/renew", web.MTeamUp, (*Server).pMacsRenew)
 	addPage("POST /macs/{name}/release", web.MTeamUp, (*Server).pMacsRelease)
-	addPage("POST /macs/{name}/configuration", web.Maintainers, (*Server).pMacsConfiguration)
 }
 
 // macsShow are the filters of Macs.
@@ -37,8 +36,7 @@ type macsData struct {
 	Show string
 	// Flash is a refusal, said above the table.
 	Flash string
-	// Maintainer adds the control that sets a Configuration, and the hours
-	// of a Lease.
+	// Maintainer adds the hours of a Lease.
 	Maintainer bool
 	Macs       []macRow
 	// NeedsHands are the Macs waiting for a person, said above the table.
@@ -59,9 +57,6 @@ type macRow struct {
 	// NoHardReset why no Hard reset can reach it now.
 	Cable, NoHardReset string
 	Configuration      string
-	// CPU and GPU are the counts a Maintainer set, for the control.
-	CPU, GPU string
-	SetBy    string
 	// State is the Mac's state in plain words and StateClass its colour.
 	State, StateClass string
 	// OldAgent is the Mac's lab-agent when it is older than the lab's,
@@ -175,10 +170,7 @@ func (s *Server) macRow(v *dev, d DeviceView, p Person, mine bool) macRow {
 		}
 	}
 	conf := s.configuration(v)
-	row.Configuration, row.SetBy = conf.String(), conf.SetBy
-	if conf.SetBy != "" {
-		row.CPU, row.GPU = strconv.Itoa(conf.CPU), strconv.Itoa(conf.GPU)
-	}
+	row.Configuration = conf.String()
 	if l := d.Lease; l != nil {
 		row.Holder, row.Until = orStr(l.Owner(), l.Holder), when(l.Expires)
 		if l.Extended {
@@ -211,7 +203,7 @@ func (s *Server) macRow(v *dev, d DeviceView, p Person, mine bool) macRow {
 		if held, _ := s.heldOfConfiguration(v, p); held != "" {
 			row.Why = "you hold " + held + ", the same Configuration"
 			if !conf.Known() || !s.configuration(s.dev(held)).Known() {
-				row.Why = "you hold " + held + ", and its core counts are unknown: the two count as the same Configuration until a Maintainer sets them"
+				row.Why = "you hold " + held + ", and its core counts are unknown: the two count as the same Configuration until the lab reads them"
 			}
 		}
 	}
@@ -363,27 +355,4 @@ func (s *Server) pMacsRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.backToMacs(w, r, s.releaseLease(v, p, "", false, ""))
-}
-
-// coreCountMax is above any Mac's count; it only keeps nonsense out.
-const coreCountMax = 256
-
-func (s *Server) pMacsConfiguration(w http.ResponseWriter, r *http.Request) {
-	v := s.macOr404(w, r)
-	if v == nil {
-		return
-	}
-	rawCPU, rawGPU := strings.TrimSpace(r.PostFormValue("cpu")), strings.TrimSpace(r.PostFormValue("gpu"))
-	var cpu, gpu int
-	if rawCPU != "" || rawGPU != "" {
-		var errCPU, errGPU error
-		cpu, errCPU = strconv.Atoi(rawCPU)
-		gpu, errGPU = strconv.Atoi(rawGPU)
-		if errCPU != nil || errGPU != nil || cpu < 1 || gpu < 1 || cpu > coreCountMax || gpu > coreCountMax {
-			s.backToMacs(w, r, refuse(400, "a Configuration is set with both core counts, each a number from 1; leave both empty to hand it back to the lab"))
-			return
-		}
-	}
-	s.setConfiguration(v, leaser(r).Handle, cpu, gpu)
-	s.backToMacs(w, r, nil)
 }

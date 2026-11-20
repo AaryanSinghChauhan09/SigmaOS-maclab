@@ -179,7 +179,7 @@ Installing a Release and rolling back is not offered on a Volunteer's Mac until 
 - **How long.** 4 hours by default for everyone. A Maintainer may ask for up to 24 hours; the M team may not. On a Volunteer's Mac it is cut to the window's end.
 - **Renewal.** At any time; the end becomes 4 hours from now. No count limit and no idle rule.
 - **One per Configuration** for the M team, counted per person; a second is refused, naming the one held. Maintainers are warned and may go on.
-- **The Configuration** is worked out by labd: the board from check-in; for a board with one Configuration, from a table in the repository; otherwise both core counts from the kernel log of the Mac's latest job on its Known-good kernel. A Maintainer can set or correct it. Macs of one board whose counts are unknown count as the same Configuration until a Maintainer sets it.
+- **The Configuration** is worked out by labd: the board from check-in; for a board with one Configuration, from a table in the repository; otherwise both core counts from the kernel log of the Mac's latest job on its Known-good kernel: the CPUs from `smp`, the GPU cores from the asahi driver's `Active cores` line or, on M3, the aurora driver's `active / slots` line. A count a later log lacks keeps the one an earlier log gave. Nobody sets it by hand. Macs of one board whose counts are unknown count as the same Configuration until the lab reads them.
 - **What it fences.** Jobs, `lab exec`, screenshots, the live journal and reset. An M team member needs their own Lease for each and cancels only their own jobs. A Maintainer acts without a Lease on a free Mac, except `lab exec`; under another person's Lease a Maintainer is refused jobs and exec, and may still cancel a job or end the Lease.
 - **Maintainers wait.** A leased Mac refuses a Maintainer's jobs, naming the holder and the end time, and labd's scheduled refresh skips it. A Maintainer who needs the Mac ends the Lease, which is recorded.
 - **Hard reset.** A Lease holder may Hard reset the Lab-owned Mac they hold. ("Out-of-band wiring")
@@ -327,7 +327,7 @@ None can be turned into another. ("Data and identity")
 
 **A person's own page.** You (handle, kind, what it allows); Lab tokens ("n of 10", Make, Revoke, Renew); Browsers (a count, "Sign out everywhere", "End all access"); Macs signed in as you (Sign out on each); "Ask to be forgotten". ("The remaining screens"; "Hardening inside the lab"; "Terms and privacy")
 
-**Macs.** The fleet with who holds each Lease; Lease, Renew, Release on Macs at either Access level; filters All, Mine, Leased by me; each Mac's Configuration with a Maintainer's control to set it; each Lab-owned Mac as sighted, not sighted or no cable; an agent older than the lab's, with its version. A row that takes no Lease says why. Enroll a Mac (Maintainers, Lab-owned Macs) is reached from here. ("Interface shell and People screen"; "Leases for the M team"; "Out-of-band wiring"; "CLI changes")
+**Macs.** The fleet with who holds each Lease; Lease, Renew, Release on Macs at either Access level; filters All, Mine, Leased by me; each Mac's Configuration; each Lab-owned Mac as sighted, not sighted or no cable; an agent older than the lab's, with its version. A row that takes no Lease says why. Enroll a Mac (Maintainers, Lab-owned Macs) is reached from here. ("Interface shell and People screen"; "Leases for the M team"; "Out-of-band wiring"; "CLI changes")
 
 **A Mac's page**: Overview (facts, its Lease and Lease buttons, its jobs, "Boot a kernel"); Live (Screen, Logs, and for a Lab-owned Mac Hard reset, asking twice); Records (the Lease record, the Mac's record, the Audit log for Maintainers and the Mac's Volunteer, and the Exec record for Maintainers, the person who ran the command and the Mac's Volunteer). An M team member sees Live only under their own Lease. A Volunteer on their own Mac's page sees Overview, Live (view only) and Records. There is no serial console panel and no console record. ("The remaining screens", as changed by "Hardening inside the lab"; "Out-of-band wiring")
 
@@ -613,7 +613,7 @@ A first sign-in makes the lab know the person; it gives no browser session, no L
 | `forget` | retired | |
 | `maintainer add\|remove\|list` | retired | Maintainer is a mark on People |
 
-Unchanged: `baseline`, `crashtest`, `run`, `logs`, `retry`, `gate`, `exclude`, `builds`, `build-get`, `pack`, `audit`, `installed freeze-manifest`, `builder add|remove|list`, `boot-test`. On the site only: People, Requests to lend, Invites, Block, "End all access", revoking another person's token, a Configuration override, Pause, Limit, making and renewing a Lab token, Hide, Show and Delete of a report. ("CLI changes"; "Hardening inside the lab")
+Unchanged: `baseline`, `crashtest`, `run`, `logs`, `retry`, `gate`, `exclude`, `builds`, `build-get`, `pack`, `audit`, `installed freeze-manifest`, `builder add|remove|list`, `boot-test`. On the site only: People, Requests to lend, Invites, Block, "End all access", revoking another person's token, Pause, Limit, making and renewing a Lab token, Hide, Show and Delete of a report. ("CLI changes"; "Hardening inside the lab")
 
 ### `lab-agent`
 
@@ -995,7 +995,7 @@ The Release candidate carries: streamed `lab exec`, numbered-part upload, its ow
 | 14a | The M2 Max as a Volunteer's Mac (decision S12). The owner enables `lab-only-autounlock` on it, typing its passphrase, since the Join command stops on a disk that waits for one; signs in and Joins it as their own Volunteer's Mac by the Join command; the Volunteer's side is checked on a real Mac (the Join command end to end through the Front door; Hardening's test 14); it Leaves | owner |
 | 14b | Dropped by the owner on 2026-11-19 (Brisbane), with the Front door's test 5. It was: the owner asks one M team member and marks them on People; they sign in with their own GitHub account and take a Lease on `m1-pro`; the script the owner sends uploads and downloads through the real path, under their own login (decisions S13 and S15) | nobody |
 | 15 | The M2 Max, its auto-unlock enabled in step 14a, Joins as `m2-max` by the Maintainer's enroll path and is accepted | owner |
-| 16 | Each Lab-owned Mac shows a Configuration after its baseline, set by a Maintainer where the kernel log gives no GPU count | owner |
+| 16 | Each Lab-owned Mac shows a Configuration after its baseline, from the table or its kernel log | owner |
 | 17 | Each Lab-owned Mac's Machine key is signed in at the old site, if it is not already | owner |
 | 17a | The owner enters payment details on Cloudflare; the Alias rehearsal runs on a throwaway subdomain of `omarchy-m-testing.org`, while that name is still on Porkbun's nameservers. Not a gate for Ready or the day; it gates the ask ("Serving maclab.omarchy.org") | owner, then scripts |
 | 17b | Recorded, not gates: what a signed-out visitor gets for a cached public page with `cloudflared` stopped, then labd alone stopped ("Operations leftovers"); that a signed-out page load sets no cookie, Cloudflare's included ("Terms and privacy") | scripts |
@@ -1185,7 +1185,6 @@ Everything a ticket marked "Not verified", "not tested" or left as a test, with 
 | The `MACLAB_URL` rule against an address differing by a trailing slash or case | CLI changes | the build |
 | What `lab` prints today on an edge 530 | Operations leftovers | the build |
 | The M4 Pro builder's current limits | Operations leftovers | not readable |
-| The GPU core-count line on M3 and later | Leases for the M team | out of scope; a Maintainer sets the Configuration |
 | The limits of Cloudflare's mail forwarding on Free | Terms and privacy | step 24a, one test message |
 | How long Cloudflare and ntfy.sh keep their own logs; the iPhone Notice path; Signal's 24 hours | Terms and privacy | not checkable; the statement is worded for it |
 | Whether collected files are ever cleared by the artifact store's 20 GB budget | Terms and privacy | the build |
@@ -1201,7 +1200,6 @@ From the map.
 - A promised uptime, a second site or cloud failover.
 - Rewriting the lab core (agent, recovery ladder, ESP handling).
 - Porting `omarchy-m-test` to Go.
-- Checking the GPU core-count line in the kernel log of an M3 or later Mac: needs such a Mac in the lab. Until one Joins, a Maintainer sets its Configuration, as "Leases for the M team" decided.
 - Reading the house battery (Sigenergy), for an "on battery" line or a shutdown before it runs flat: the owner ruled it out in "Operations leftovers".
 - Building the merged codebase and running the cutover: the map ends at the spec.
 

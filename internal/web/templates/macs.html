@@ -32,10 +32,8 @@
 {{- range .Macs}}
 <tr id="mac-{{.Name}}">
 <td data-label="Mac"><a href="{{href (print "/macs/" .Name)}}">{{.Name}}</a>
-<span class="sub">{{.Kind}}{{if .Volunteer}} of @{{.Volunteer}}{{end}} · {{.Configuration}}{{if .SetBy}} · set by @{{.SetBy}}{{end}}{{if .Cable}} <span class="badge">{{.Cable}}</span>{{if and .NoHardReset (eq .Cable "sighted")}} no Hard reset{{end}}{{end}}</span>
-{{- if $.Data.Maintainer}}
-<details><summary>Set core counts</summary><form class="form-inline" method="post" action="{{href (print "/macs/" .Name "/configuration")}}"><input type="hidden" name="csrf_token" value="{{$.Viewer.CSRF}}"><input type="hidden" name="show" value="{{$.Data.Show}}"><label>CPU <input name="cpu" inputmode="numeric" size="3" value="{{.CPU}}"></label> <label>GPU <input name="gpu" inputmode="numeric" size="3" value="{{.GPU}}"></label> <button class="button button-small button-plain" type="submit">Set</button></form></details>
-{{- end}}</td>
+<span class="sub">{{.Kind}}{{if .Volunteer}} of @{{.Volunteer}}{{end}} · {{.Configuration}}{{if .Cable}} <span class="badge">{{.Cable}}</span>{{if and .NoHardReset (eq .Cable "sighted")}} no Hard reset{{end}}{{end}}</span>
+</td>
 <td data-label="State"><span class="state state-{{.StateClass}}">{{.State}}</span>{{if .OldAgent}}<span class="sub">lab-agent {{.OldAgent}}, older than the lab's {{.LabAgent}}</span>{{end}}</td>
 <td data-label="Lease">{{if .Holder}}@{{.Holder}}{{if .HolderKind}} <span class="badge {{.HolderClass}}">{{.HolderKind}}</span>{{end}} <span class="dim nowrap">until {{.Until}}</span>{{else if and (eq .StateClass "baseline") (not .CanLease)}}<span class="dim">Leasable once its baseline passes</span>{{else if .Why}}<span class="dim">{{.Why}}</span>{{else}}<span class="dim">Free</span>{{end}}
 {{- if .Warning}}<span class="sub">{{.Warning}}</span>{{end}}</td>
