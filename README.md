@@ -1,4 +1,6 @@
-# Omarchy Mac Lab
+# fk-omarchy-maclab
+
+> Forked from omacom/omarchy-maclab (MIT). See `SIGMAOS_FORK.md`.
 
 Omarchy Mac Lab tests Omarchy on real Apple Silicon Macs and publishes what it finds. This repository, `omarchy-maclab`, holds all of it.
 
