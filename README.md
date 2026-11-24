@@ -1,16 +1,16 @@
-# fk-omarchy-maclab
+# SigmaOS maclab
 
 > Forked from AaryanSinghChauhan09/SigmaOS-maclab (MIT). See `SIGMAOS_FORK.md`.
 
-SigmaOS Mac Lab tests SigmaOS on real Apple Silicon Macs and publishes what it finds. This repository, `omarchy-maclab`, holds all of it.
+SigmaOS Mac Lab tests SigmaOS on real Apple Silicon Macs and publishes what it finds. This repository, `sigmaos-maclab`, holds all of it.
 
-The code began as [maclab](https://github.com/chriskearney/maclab) by Chris Kearney and as omarchy-m-testing; both histories are kept here.
+The code began as [maclab](https://github.com/chriskearney/maclab) by Chris Kearney and as sigmaos-m-testing; both histories are kept here.
 
 | Path | Holds |
 |---|---|
 | `cmd/`, `internal/` | the lab's Go programs: `labd`, `lab`, `lab-agent`, `lab-builder`, `oobd` and the rest |
 | `builder/`, `specs/`, `tools/` | the Builder's images, the TLA+ specs, the boot-test tools |
-| `cli/` | the `omarchy-m-test` command ([docs/omarchy-m-test.md](docs/omarchy-m-test.md)) |
+| `cli/` | the `sigmaos-m-test` command ([docs/sigmaos-m-test.md](docs/sigmaos-m-test.md)) |
 | `schema/`, `catalogue/` | the report schema with its golden reports, and the feature catalogue |
 | `installer/`, `release/` | the install line's script and the release build |
 | `deploy/`, `scripts/` | what is installed on the lab's server, and what is run |
@@ -94,7 +94,7 @@ AI agents get the same operations over MCP (`lab mcp`).
    a suspend that didn't finish in time never settles, it stays at `devices`
    until the next boot, so a later suspend is a test one too. SigmaOS locks the
    desktop before every suspend, and only the user's password unlocks it, so
-   the test stops the GUI user's `omarchy-sleep-lock.service` for the cycle and
+   the test stops the GUI user's `sigmaos-sleep-lock.service` for the cycle and
    starts it again after. All of it, putting things back too, ends within the
    test's timeout (5 minutes by default). The Mac goes quiet for 10-15 s
    (NetworkManager takes Wi-Fi down for the suspend), so just before it
@@ -360,12 +360,12 @@ is stopped (`systemctl stop lab-agent`).
 
 ## Setup
 
-SigmaOS Mac Lab answers at `https://lab.omarchy-mac.org`, the Lab address.
+SigmaOS Mac Lab answers at `https://lab.sigmaos-mac.org`, the Lab address.
 The site is for everyone; `lab` is for the M team and Maintainers.
 
 ```sh
-curl -fsSL https://lab.omarchy-mac.org/install/lab | bash   # the latest Lab release, into ~/.local/bin/lab, no root
-lab login https://lab.omarchy-mac.org    # asks for a Lab token; it is never an argument
+curl -fsSL https://lab.sigmaos-mac.org/install/lab | bash   # the latest Lab release, into ~/.local/bin/lab, no root
+lab login https://lab.sigmaos-mac.org    # asks for a Lab token; it is never an argument
 lab status
 ```
 
@@ -380,7 +380,7 @@ refuses a `lab` older than its minimum release in one line, with the install
 line, and `lab status` and `lab login` add a line when the lab runs a newer
 release.
 
-`lab` keeps one login, in its own file `maclab/omarchy-mac-lab.json` under
+`lab` keeps one login, in its own file `maclab/sigmaos-mac-lab.json` under
 your config directory, and never reads or writes `maclab/client.json`. A
 command always goes to the saved login. `MACLAB_URL` and `MACLAB_TOKEN` given
 together reach another address for one call; `MACLAB_URL` alone, naming
@@ -425,7 +425,7 @@ while the lab is in Preview.
 The lab opens once (the Cutover's step 25). `scripts/cutover/open`, on the
 server, asks labd on its ops socket: from that answer reports and Mac sign-in
 are accepted, Preview's banner and `noindex` are gone, the home page says for
-30 days that `omarchy-m-testing.org` is now here, and the install lines serve
+30 days that `sigmaos-m-testing.org` is now here, and the install lines serve
 the latest Lab release. labd keeps the opening in `labd.db`: an open lab stays
 open whatever `--preview` says, and nothing closes it again. `labd stage
 --data DIR` says whether a data directory's lab has opened. The day around
@@ -471,7 +471,7 @@ enroll <name> --revoke` withdraws a token.
 On the Mac, the Join command is one short line:
 
 ```sh
- curl -fsSL https://lab.omarchy-mac.org/join | LAB_JOIN=enr_... bash
+ curl -fsSL https://lab.sigmaos-mac.org/join | LAB_JOIN=enr_... bash
 ```
 
 `/join` is a script that holds no secret, made by labd for its current
@@ -481,7 +481,7 @@ signature against the release key written into the script, and runs
 terminal. By hand:
 
 ```sh
-printf '%s\n' enr_... | sudo ./lab-agent setup --server https://lab.omarchy-mac.org --token-stdin --gui-user <you> --autologin
+printf '%s\n' enr_... | sudo ./lab-agent setup --server https://lab.sigmaos-mac.org --token-stdin --gui-user <you> --autologin
 ```
 
 With a token, `setup` is what the Join command runs on the Mac, in this
@@ -520,11 +520,11 @@ order:
    takes nothing from the lab.
 
 A system counts as SigmaOS when pacman's records of installed packages
-(`/var/lib/pacman/local`) hold `omarchy` or `omarchy-mac` (a converged
-image), `omarchy-dev` (the omarchy-mx-mac fork) or `omarchy-mac-keyring` (a
-legacy omarchy-mac install), or when SigmaOS's own `omarchy-version` is in
+(`/var/lib/pacman/local`) hold `omarchy` or `sigmaos-mac` (a converged
+image), `sigmaos-dev` (the sigmaos-mx-mac fork) or `sigmaos-mac-keyring` (a
+legacy sigmaos-mac install), or when SigmaOS's own `sigmaos-version` is in
 `/usr/share/omarchy/bin` or in `~/.local/share/omarchy/bin` of whoever ran the
-Join command (a legacy install from a checkout). It is `omarchy-m-test`'s
+Join command (a legacy install from a checkout). It is `sigmaos-m-test`'s
 rule, read from files, since the pre-checks run nothing
 (`TestHowASystemIsRecognisedAsSigmaOS`).
 
@@ -733,13 +733,13 @@ sudo lab-agent access qualification   # the default: no lab exec, --script or --
 sudo lab-agent access full            # everything a Lab-owned Mac allows
 sudo lab-agent log                    # every Maintainer action on this Mac (works offline)
 sudo lab-agent jobs                   # the lab's jobs on this Mac
-sudo lab-agent publish on|off         # omarchy-m-test publishing; on lists the deletion links
+sudo lab-agent publish on|off         # sigmaos-m-test publishing; on lists the deletion links
 ```
 
 At Qualification labd rejects `lab exec`, `--script` and `--gui-script` at
 submit (`403`, naming the Access level), and lab-agent refuses them at run
 whatever labd sends: Qualification still takes baselines, crash tests,
-built-in tests, omarchy-m-test and lab-kernel runs. Like the window commands,
+built-in tests, sigmaos-m-test and lab-kernel runs. Like the window commands,
 `access` takes effect on the Mac at once, with labd down too. Lowering it ends
 a lease at once, and a job running a Maintainer's script ends `incomplete`:
 its Lab boot reboots to the Known-good kernel within a second or two. A job it
@@ -896,7 +896,7 @@ baseline, a new weekly window, Pause, Open now, Resume, Access level, Limit,
 publishing, leaving) is a line of the Mac's record and for the Lab group. A
 window opening or closing on schedule is no event.
 
-Publishing omarchy-m-test reports is off on a Volunteer's Mac until its
+Publishing sigmaos-m-test reports is off on a Volunteer's Mac until its
 Volunteer runs `publish on`, whatever `--omt-publish` or a job's `--publish`
 asks; `lab publish` is refused too. Turning it off again leaves the reports
 already published up. Each `publish on` lists the deletion link of every
@@ -1102,7 +1102,7 @@ line goes at most once, and a send that fails holds nothing up. The lab only
 sends: it reads nothing from a group and keeps no phone number.
 
 - The sender is `signal-cli`, a LaunchDaemon of the `lab` account
-  (`deploy/org.omarchy-mac.lab.signal-cli.plist`), run from the root-owned
+  (`deploy/org.sigmaos-mac.lab.signal-cli.plist`), run from the root-owned
   copy of the Homebrew tools. labd reaches it over a socket only `lab` can
   open (`--signal-socket`). Its number is the lab's own, linked to nobody's
   phone; its keys are files of the `lab` account.
@@ -1290,7 +1290,7 @@ lab set list
 lab set show 7.2
 ```
 
-A Compare (Maintainers) runs the same pinned benchmarks and omarchy-m-test
+A Compare (Maintainers) runs the same pinned benchmarks and sigmaos-m-test
 on one Mac on two sides, A (its known-good system, or a set) and B (a set,
 booted once as a Candidate boot without changing the Mac's own system), and
 says per benchmark better, worse or no change against the Mac's noise. The
@@ -1311,7 +1311,7 @@ the same Mac, sets, tier and flags.
 **A builder's kernels boot as root on lab Macs.** What the artifact store's 20 GB budget clears is in
 [docs/builder.md](docs/builder.md).
 
-## omarchy-m-test: hardware checks in every job
+## sigmaos-m-test: hardware checks in every job
 
 Unattended reports retain the IDs of skipped on-screen video checks and checks
 that passed in their reference but were not run. This missing coverage survives
@@ -1319,7 +1319,7 @@ known-good reference updates. Such a run may pass its executed tests, but it
 cannot qualify as a fully compared release-gate pass until those checks run.
 
 On a Mac with a desktop user, every job also runs
-[omarchy-m-test](docs/omarchy-m-test.md) in the desktop
+[sigmaos-m-test](docs/sigmaos-m-test.md) in the desktop
 session: about 70 checks of the boot chain, drivers, GPU, video decode, display,
 audio, Wi-Fi, power and CPU, and short benchmarks. Before each run the agent installs
 the latest tool from the release the lab's own install line (`<Lab address>/install`)
@@ -1332,7 +1332,7 @@ disruptive sections (lid, Wi-Fi reload) don't happen. The run takes 1 to 3 minut
 
 - **On-screen video checks:** on 0.1.15, Lab-owned Macs skip `video.h264-on-screen`
   and `video.hevc-on-screen` in an unattended run. Once
-  maralcbr/omarchy-m-testing#61 ships they run again, and skip under a lock or a
+  maralcbr/sigmaos-m-testing#61 ships they run again, and skip under a lock or a
   full-screen overlay. A Volunteer's Mac leaves them out either way (`--skip video`).
 - **What else it uses:** the built-in microphone for 3 seconds and 30 camera frames,
   measured and not kept. Where passwordless sudo works, it sets the battery charge
@@ -1390,7 +1390,7 @@ disruptive sections (lid, Wi-Fi reload) don't happen. The run takes 1 to 3 minut
 labd                                 # publishes baselines and a weekly refresh by itself
 labd --omt-publish=false             # publish by hand only
 labd --omt-every 0                   # no scheduled refresh (it reboots the Mac)
-labd --omt=false                     # don't add omarchy-m-test to jobs
+labd --omt=false                     # don't add sigmaos-m-test to jobs
 ```
 
 ## Release packages from a PKGBUILD
@@ -1483,9 +1483,9 @@ t6034). M3 Ultra and M4 and later are not covered: those Macs are listed as not 
 
 Only plain runs count: ones that boot the Mac's known-good cmdline (no `--cmdline`,
 `--cmdline-strip` or `--cmdline-base` other than `known-good`; `--verbose-boot` is fine), run at
-least the tests every job on that Mac runs (`boot-health`, and `omarchy-m-test` where labd runs it,
+least the tests every job on that Mac runs (`boot-health`, and `sigmaos-m-test` where labd runs it,
 each known by its builtin whatever the job named it), and have no `--omt-allow`. Where labd runs
-`omarchy-m-test`, a pass counts only if its report was compared with the Mac's known-good run of
+`sigmaos-m-test`, a pass counts only if its report was compared with the Mac's known-good run of
 it: with nothing to compare with, nothing could regress, so such a pass is listed as not counted
 ("no OMT reference"; `lab baseline` makes the reference). A run with a changed cmdline boots
 something a release doesn't, so it counts neither way. A run that tested less counts when it
@@ -1494,7 +1494,7 @@ jobs say nothing about the kernel and are skipped, and so are crash tests, which
 purpose. So is a `tests_failed` job whose every failed test never started, because bash couldn't
 open the test's script, and whose kernel logged nothing fatal: the last thing the test printed is
 bash's own error for its `test-<name>.sh`, exiting 126 for `Permission denied` (as for
-`omarchy-m-test` when the desktop user can't read the job's directory) or 127 for `No such file or
+`sigmaos-m-test` when the desktop user can't read the job's directory) or 127 for `No such file or
 directory`. A test that ran and exited 126 or 127 itself, say for a binary it couldn't execute
 (`Exec format error`) or a command it couldn't find, failed like any other, and other trouble
 running a test (a script that didn't download, no desktop session) looks like the kernel's in the
@@ -1504,7 +1504,7 @@ outcome, with the cancel in its summary; tests the cancel cut short are the canc
 outcome but `pass` is a failure.
 
 Each job records its Mac as it was when the job was submitted: its chip family, whether it was a
-volunteer's, and whether labd ran `omarchy-m-test` in its jobs. The gate judges the job by that,
+volunteer's, and whether labd ran `sigmaos-m-test` in its jobs. The gate judges the job by that,
 so what the Mac became since (or another Mac enrolled under its name after `lab remove`) doesn't
 change the verdict; a job from before labd recorded it is judged by the Mac as it is now. A Mac
 the lab no longer has (`lab remove`) doesn't count: its runs are listed as not counted, "device gone",
@@ -1699,7 +1699,7 @@ Maintainer role those for Lab-owned Macs.
 
 ## Where the lab answers
 
-Everything crosses one address, `https://lab.omarchy-mac.org`, the Lab
+Everything crosses one address, `https://lab.sigmaos-mac.org`, the Lab
 address: the public results, the site, `lab`, the Macs' agents, uploads and
 downloads. It reaches the mini through one tunnel. No port is open at home,
 there is no second way in, and nothing needs Tailscale.
@@ -1710,7 +1710,7 @@ calls and big files cross it, and what a client checks.
   a Mac has its device secret, the Builder its own token. Where a request
   comes from is never who it is from.
 - **One name.** Through the tunnel labd answers only as the Lab address.
-  `maclab.omarchy.org` is an Alias: a page opened there lands on the same page
+  `maclab.sigmaos.org` is an Alias: a page opened there lands on the same page
   at the Lab address, anything under `/api/` is refused with a line naming the
   Lab address, and the lab never prints the Alias. Any other name gets 421.
 - **Other sites' pages** cannot act for you: labd refuses (403) any request
@@ -1718,9 +1718,9 @@ calls and big files cross it, and what a client checks.
   was sent to, or that comes marked cross-site with no matching `Origin`, and
   every form carries a token of your session.
 - **While Dark** (the tunnel, Cloudflare or the home link gone) the lab is out
-  of reach for everyone, Maintainers included. `lab` and `omarchy-m-test` say
+  of reach for everyone, Maintainers included. `lab` and `sigmaos-m-test` say
   "SigmaOS Mac Lab cannot be reached right now." and never print an error
-  page; a test still runs in full and its report waits (`omarchy-m-test
+  page; a test still runs in full and its report waits (`sigmaos-m-test
   --upload <path>` sends it later); Macs keep retrying. No reset is possible
   until the lab returns.
 - **`/status`** says how the lab is, to anyone.
