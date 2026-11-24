@@ -1,8 +1,8 @@
 # fk-omarchy-maclab
 
-> Forked from omacom/omarchy-maclab (MIT). See `SIGMAOS_FORK.md`.
+> Forked from AaryanSinghChauhan09/SigmaOS-maclab (MIT). See `SIGMAOS_FORK.md`.
 
-Omarchy Mac Lab tests Omarchy on real Apple Silicon Macs and publishes what it finds. This repository, `omarchy-maclab`, holds all of it.
+SigmaOS Mac Lab tests SigmaOS on real Apple Silicon Macs and publishes what it finds. This repository, `omarchy-maclab`, holds all of it.
 
 The code began as [maclab](https://github.com/chriskearney/maclab) by Chris Kearney and as omarchy-m-testing; both histories are kept here.
 
@@ -22,7 +22,7 @@ The code began as [maclab](https://github.com/chriskearney/maclab) by Chris Kear
 
 ## The lab
 
-A test lab for Omarchy Macs. Hand it a kernel, and it boots that kernel exactly
+A test lab for SigmaOS Macs. Hand it a kernel, and it boots that kernel exactly
 once on a real Apple Silicon Mac. It then runs tests (including Wayland GUI
 tests), collects logs, and puts the Mac back on its known-good kernel. When a
 kernel crashes or hangs the machine, the lab gets the Mac back itself. When it
@@ -39,7 +39,7 @@ AI agents get the same operations over MCP (`lab mcp`).
 | Binary | Runs on | Job |
 |---|---|---|
 | `labd` | any Linux box, or a Mac | Controller: devices, leases, job queue, recovery ladder, notifications, artifact and log store |
-| `lab-agent` | each test Mac (Omarchy/Asahi, aarch64) | Heartbeat. Stages kernels beside the known-good one, arms the one-shot boot, runs tests, uploads logs |
+| `lab-agent` | each test Mac (SigmaOS/Asahi, aarch64) | Heartbeat. Stages kernels beside the known-good one, arms the one-shot boot, runs tests, uploads logs |
 | `oobd` | the mini, as a root LaunchDaemon | The Out-of-band controller: a Hard reset for a Lab-owned Mac cabled to one of the mini's three rear USB-C ports, through the pinned `macvdmtool` |
 | `lab` | your machine | CLI, and `lab mcp` for agents |
 
@@ -50,7 +50,7 @@ AI agents get the same operations over MCP (`lab mcp`).
    itself), and writes the boot files for the Mac's bootloader. The
    known-good kernel is never touched.
    - **GRUB:** an initramfs and an entry in `/boot/grub/maclab.cfg`.
-   - **Limine** (Omarchy on Apple Silicon: U-Boot, then Limine, then a UKI on
+   - **Limine** (SigmaOS on Apple Silicon: U-Boot, then Limine, then a UKI on
      the ESP): a unified kernel image in `<esp>/maclab/<job>/uki.efi`, listed in
      a marked block at the end of `limine.conf`. Limine reads only FAT, so the
      ESP needs room for one UKI rounded up to its allocation unit, plus a
@@ -92,7 +92,7 @@ AI agents get the same operations over MCP (`lab mcp`).
    `tests_failed`. `pm_test` goes back to the mode it
    had, but to `none` only once nothing is left that could suspend the Mac; if
    a suspend that didn't finish in time never settles, it stays at `devices`
-   until the next boot, so a later suspend is a test one too. Omarchy locks the
+   until the next boot, so a later suspend is a test one too. SigmaOS locks the
    desktop before every suspend, and only the user's password unlocks it, so
    the test stops the GUI user's `omarchy-sleep-lock.service` for the cycle and
    starts it again after. All of it, putting things back too, ends within the
@@ -360,7 +360,7 @@ is stopped (`systemctl stop lab-agent`).
 
 ## Setup
 
-Omarchy Mac Lab answers at `https://lab.omarchy-mac.org`, the Lab address.
+SigmaOS Mac Lab answers at `https://lab.omarchy-mac.org`, the Lab address.
 The site is for everyone; `lab` is for the M team and Maintainers.
 
 ```sh
@@ -373,7 +373,7 @@ The install line takes the latest Lab release's `lab` for the machine (macOS
 on Apple Silicon, Linux on arm64 or x86-64), checks it against the pinned
 release key, and running it again updates `lab`. While the lab is in Preview
 it serves the Release candidate the mini runs, as `/install` does for the
-test tool. It never replaces a `lab` that is not Omarchy Mac Lab's: the
+test tool. It never replaces a `lab` that is not SigmaOS Mac Lab's: the
 install stops, and a person who also works in maclab's own lab keeps that
 build under a name they choose. `lab version` prints its release and the lab's. The lab
 refuses a `lab` older than its minimum release in one line, with the install
@@ -489,7 +489,7 @@ order:
 
 1. **Pre-checks.** They read the Mac, change nothing and reach no lab. One
    that fails stops setup, and the lab is told nothing: the Mac must be an
-   Apple Silicon Mac on Linux running Omarchy; the Join command must be run
+   Apple Silicon Mac on Linux running SigmaOS; the Join command must be run
    as yourself (it asks for sudo itself); the Mac must not be in this lab
    already, nor Lab-owned in another; it must not be running a lab kernel;
    its disk must not wait for a passphrase at every start (reinstall without
@@ -519,14 +519,14 @@ order:
    window (`mon-fri 19:00-07:00`); Enter decides later. A Mac with no window
    takes nothing from the lab.
 
-A system counts as Omarchy when pacman's records of installed packages
+A system counts as SigmaOS when pacman's records of installed packages
 (`/var/lib/pacman/local`) hold `omarchy` or `omarchy-mac` (a converged
 image), `omarchy-dev` (the omarchy-mx-mac fork) or `omarchy-mac-keyring` (a
-legacy omarchy-mac install), or when Omarchy's own `omarchy-version` is in
+legacy omarchy-mac install), or when SigmaOS's own `omarchy-version` is in
 `/usr/share/omarchy/bin` or in `~/.local/share/omarchy/bin` of whoever ran the
 Join command (a legacy install from a checkout). It is `omarchy-m-test`'s
 rule, read from files, since the pre-checks run nothing
-(`TestHowASystemIsRecognisedAsOmarchy`).
+(`TestHowASystemIsRecognisedAsSigmaOS`).
 
 The Join command holds the token, so keep it private. The token stays in the
 environment of your own shell (`LAB_JOIN`, readable by you and root only,
@@ -572,7 +572,7 @@ every Limine update enroll one; set it to `no` there, then run
 `sudo limine enroll-config --reset <binary>` for each enrolled binary.
 `lab-agent preflight` reports the same as problems, which hold jobs back, and
 warns about a journal that isn't kept across reboots: that loses the logs of a
-lab boot that fails, but doesn't hold jobs back. For an Omarchy Mac whose disk is
+lab boot that fails, but doesn't hold jobs back. For an SigmaOS Mac whose disk is
 encrypted, see [docs/encrypted-macs.md](docs/encrypted-macs.md).
 
 Then run the baseline:
@@ -995,7 +995,7 @@ mini's three rear USB-C ports: RID 0 is the middle one, 1 the left, 2 the
 right, facing the back. Any Lab-owned Mac goes on any port, with a
 Thunderbolt-capable cable, and nothing else goes on those ports.
 
-- **The tool** is the lab's fork `omacom/macvdmtool`, whose `--rid` is
+- **The tool** is the lab's fork `SigmaOS/macvdmtool`, whose `--rid` is
   required and strictly parsed. `deploy/pins` names its commit and the
   checksum of its source; the release workflow's macOS job builds it
   (`release/reset-tool.sh`) and it reaches the mini in the server bundle.
@@ -1094,7 +1094,7 @@ file names only.
 ### The Signal sender on the mini
 
 labd tells two Signal groups what happens, a line for each event: the Lab
-group ("Omarchy Mac Lab") hears of Leases, of every event of lending a Mac
+group ("SigmaOS Mac Lab") hears of Leases, of every event of lending a Mac
 and, at 08:00 Brisbane, the daily summary; the owner's group "Agents" hears
 of each change of who someone is, each new Lab token, each cut a Maintainer
 makes and the lab's alerts. Every line is recorded in `labd.db` first. A
@@ -1177,7 +1177,7 @@ The page has no serial console.
   `screen/after-boot.jpg` and `screen/after-tests.jpg`.
 - `GET /api/devices/{n}/logs?source=journal|kernel&lines=N`: live from the Mac.
 
-The serial console is not part of Omarchy Mac Lab: a Hard reset is the only out-of-band function.
+The serial console is not part of SigmaOS Mac Lab: a Hard reset is the only out-of-band function.
 `lab shell`, `lab console`, `lab serial` and `lab recovery-mode` say so, and labd refuses the console
 routes, the serial log, the serial-assisted recovery mode and a `lab exec` on a Mac that is off the
 network with the same line.
@@ -1719,7 +1719,7 @@ calls and big files cross it, and what a client checks.
   every form carries a token of your session.
 - **While Dark** (the tunnel, Cloudflare or the home link gone) the lab is out
   of reach for everyone, Maintainers included. `lab` and `omarchy-m-test` say
-  "Omarchy Mac Lab cannot be reached right now." and never print an error
+  "SigmaOS Mac Lab cannot be reached right now." and never print an error
   page; a test still runs in full and its report waits (`omarchy-m-test
   --upload <path>` sends it later); Macs keep retrying. No reset is possible
   until the lab returns.
@@ -1728,8 +1728,8 @@ calls and big files cross it, and what a client checks.
 ## License
 
 MIT; see [LICENSE](LICENSE). The interface bundles third-party files under their own
-licenses: Inter and JetBrains Mono (SIL OFL 1.1) and the Omarchy logo (MIT). See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Omarchy Mac Lab isn't an official
+licenses: Inter and JetBrains Mono (SIL OFL 1.1) and the SigmaOS logo (MIT). See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). SigmaOS Mac Lab isn't an official
 Asahi Linux project, and it isn't affiliated with Apple.
 
 ## Artifact package boot-test workflow
