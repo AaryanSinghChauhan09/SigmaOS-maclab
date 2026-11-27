@@ -520,10 +520,10 @@ order:
    takes nothing from the lab.
 
 A system counts as SigmaOS when pacman's records of installed packages
-(`/var/lib/pacman/local`) hold `omarchy` or `sigmaos-mac` (a converged
+(`/var/lib/pacman/local`) hold `sigmaos` or `sigmaos-mac` (a converged
 image), `sigmaos-dev` (the sigmaos-mx-mac fork) or `sigmaos-mac-keyring` (a
 legacy sigmaos-mac install), or when SigmaOS's own `sigmaos-version` is in
-`/usr/share/omarchy/bin` or in `~/.local/share/omarchy/bin` of whoever ran the
+`/usr/share/sigmaos/bin` or in `~/.local/share/sigmaos/bin` of whoever ran the
 Join command (a legacy install from a checkout). It is `sigmaos-m-test`'s
 rule, read from files, since the pre-checks run nothing
 (`TestHowASystemIsRecognisedAsSigmaOS`).
@@ -812,7 +812,7 @@ sees one line, on Candidates, beside the candidate set a Release matches:
 "Qualified by the lab", "Not qualified" or "Qualification revoked", with the
 date. A Release matches a set when a Verified run on the set lists every
 package of the Release at its version, or when the set is known by the
-Release's `omarchy` package (`internal/reports/candidate_sets.yml`).
+Release's `sigmaos` package (`internal/reports/candidate_sets.yml`).
 
 ### Leaving
 
@@ -1412,19 +1412,19 @@ downloads the rest. `--commit` repoints `_commit` (the PKGBUILD must download fr
 `--pkgrel` sets pkgrel, and either one refreshes the checksums with `updpkgsums`. Agents use
 `lab_package`, then `lab_build_log`, then `lab_run(build_id=...)`.
 
-The builder is `builder/pkg`. It is Arch Linux ARM, the release machine's `/etc/makepkg.conf`
+The builder is `builder/pkg`. It is Linux ARM, the release machine's `/etc/makepkg.conf`
 verbatim, and `maclab.conf` with the one difference: packages are `.pkg.tar.zst`. ccache stays
 off, as on the release machine: its base-dir path rewriting changes `__FILE__` strings inside
 modules. When the image is built, gcc, glibc, binutils, rustup, bindgen and pahole come out at the
-same versions as on an up-to-date Arch Linux ARM machine. Rebuild the image to follow the distribution:
+same versions as on an up-to-date Linux ARM machine. Rebuild the image to follow the distribution:
 
-The image starts from Arch Linux ARM's root file system, `ArchLinuxARM-aarch64-latest.tar.gz`, which
-no script of the lab downloads: Arch Linux ARM publishes it over plain http (`os.archlinuxarm.org/os/`),
+The image starts from Linux ARM's root file system, `ArchLinuxARM-aarch64-latest.tar.gz`, which
+no script of the lab downloads: Linux ARM publishes it over plain http (`os.archlinuxarm.org/os/`),
 so it counts only once its signature is checked. Fetch the archive and its `.sig` on any machine with
-gpg and check them against Arch Linux ARM's build key before the archive goes anywhere near a build:
+gpg and check them against Linux ARM's build key before the archive goes anywhere near a build:
 
 ```sh
-gpg --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6   # Arch Linux ARM Build System
+gpg --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6   # Linux ARM Build System
 gpg --verify ArchLinuxARM-aarch64-latest.tar.gz.sig ArchLinuxARM-aarch64-latest.tar.gz   # want: Good signature
 ```
 
@@ -1447,13 +1447,13 @@ container build -t maclab-pkgbuild:1 .
 container volume create -s 120G maclab-pkgcache   # once; a kernel tree needs ~35 GB while building
 ```
 
-Checked against a linux-aurora build of the same recipe on an Arch Linux ARM machine: the file
+Checked against a linux-aurora build of the same recipe on an Linux ARM machine: the file
 lists and package metadata are identical. Contents are byte-identical except where the build
 directory's path leaks in: ELF build-ids, the source paths Rust drivers embed for panics
 (`/cache/work/b/...` here), and the build timestamp in `vmlinuz`. A cold build takes 8 to 12
 minutes on a base M5.
 
-Recipes take their parallelism from `OMARCHY_BUILD_JOBS` (`make -j"${OMARCHY_BUILD_JOBS:-10}"`). lab-builder gives package builds
+Recipes take their parallelism from `SIGMAOS_BUILD_JOBS` (`make -j"${SIGMAOS_BUILD_JOBS:-10}"`). lab-builder gives package builds
 `--pkg-jobs` (default: its `--cpus`), and `builder/pkg/pkgbuild` passes it through to makepkg past sudo. An image built before this
 ignores it: rebuild the image, under a new tag if another lab-builder still uses the old one.
 
